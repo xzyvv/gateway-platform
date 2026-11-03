@@ -591,6 +591,126 @@ jobs:
   # 冻结不等于删除：workspace 仍包含它，check job 的 `cargo check --all-targets`
   # 会继续兜住编译腐烂；若未来要恢复，把本 job 从 git 历史中恢复即可。
 
+  # G5 交付链路进 CI：安装 → 验证 → 交付检查单。
+  # 此前 install.sh / verify-deploy.sh / deliver.sh 从未在任何 Linux 上执行过
+  # （开发机是 Windows，无 bash/WSL），语法错与路径错只能等交付现场才暴露。
+  # 这里把它们钉进 CI：deploy-lint 做静态检查，deploy-smoke 在 runner 上真跑一遍。
+  deploy-lint:
+    name: deploy script lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash syntax check
+        run: |
+          set -euo pipefail
+          for f in gateway-core/deploy/install.sh \
+                   deploy/verify-deploy.sh \
+                   deploy/deliver.sh \
+                   deploy/build-release.sh; do
+            echo "→ bash -n $f"
+            bash -n "$f"
+          done
+
+      # 先当告警看：把 shellcheck 的问题清单暴露出来，清零后再改成阻断门禁
+      - name: shellcheck (advisory)
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck -S warning gateway-core/deploy/install.sh \
+            deploy/verify-deploy.sh deploy/deliver.sh deploy/build-release.sh
+
+  # 真实交付冒烟：拼一个「发布包」目录 → sudo bash deliver.sh 一条命令走完
+  # 安装 → 等待就绪 → 验证 → 导出交付检查单。runner 上有 systemd + 免密 sudo，
+  # 因此 install.sh 的 useradd/systemctl/健康检查都是真跑，不是打桩。
+  deploy-smoke:
+    name: deploy smoke (install + verify)
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-deploy-${{ hashFiles('**/Cargo.lock') }}
+
+      # 与出厂口径一致：裁剪到 sku-standard（冒烟不追求全协议）
+      - name: Build gatewayd (sku-standard)
+        run: cargo build -p gatewayd --no-default-features --features sku-standard --quiet
+        env:
+          RUSTFLAGS: ""
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        run: |
+          cd gateway-web
+          npm ci
+          npm run build
+
+      # 复刻 build-release.sh 的包内布局（install.sh 只认「脚本同级」的二进制/前端）
+      - name: Assemble release-like package
+        run: |
+          set -euo pipefail
+          PKG="$RUNNER_TEMP/gw-pkg"
+          rm -rf "$PKG"; mkdir -p "$PKG"
+          cp target/debug/gatewayd "$PKG/gatewayd"
+          cp -r gateway-web/dist "$PKG/ui-dist"
+          cp gateway-core/deploy/gateway.service "$PKG/"
+          cp gateway-core/deploy/install.sh "$PKG/"
+          cp deploy/verify-deploy.sh deploy/deliver.sh "$PKG/"
+          cp -r templates "$PKG/templates"
+          cat > "$PKG/BUILD-INFO.txt" << 'EOF'
+          # 出厂镜像构建信息（CI 冒烟自造，格式对齐 deploy/build-release.sh）
+          build_time=ci-smoke
+          target=host
+          rust_target=x86_64-unknown-linux-gnu
+          sku=standard
+          protocols=modbus,dlt645,cjt188,iec104,opcua
+          feature_args=--no-default-features --features sku-standard
+          EOF
+          ls -l "$PKG"
+
+      - name: Run deliver.sh (install + wait + verify + checklist)
+        run: |
+          set -uo pipefail
+          sudo bash "$RUNNER_TEMP/gw-pkg/deliver.sh" --timeout 90 | tee "$RUNNER_TEMP/deliver.log"
+          test "${PIPESTATUS[0]}" -eq 0
+
+      # 失败时把现场留证：服务状态 + 日志 + 交付检查单
+      - name: Collect systemd snapshot
+        if: always()
+        run: |
+          sudo systemctl status gateway --no-pager || true
+          sudo journalctl -u gateway -n 80 --no-pager || true
+
+      - name: Upload delivery checklist
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-checklist
+          path: |
+            ${{ runner.temp }}/gw-pkg/out/*.md
+            ${{ runner.temp }}/deliver.log
+          if-no-files-found: warn
+
   # 性能基准：完整 criterion 基准仅在 main 合并或手动触发时运行。
   # PR 时由 check job 的 "cargo bench compile check" 保证 benches/ 能编译。
   # criterion 默认 100 samples，完整跑约 5-10 分钟，不阻塞 PR。
