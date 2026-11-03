@@ -36,7 +36,9 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list'], ['html', { open: 'on-failure' }]],
-  timeout: 30_000,
+  // 单用例 60s：首个用例要替全量用例付 vite 冷启动（按需预打包 element-plus），
+  // 登录往返实测可达 ~19s，30s 会把冷启动那条挤到超时边缘。
+  timeout: 60_000,
   expect: { timeout: 10_000 },
 
   use: {

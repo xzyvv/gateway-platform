@@ -195,7 +195,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # vitest 5 的 engines 要求 node ^22.12：Node 20 上 vmThreads 池会
+          # 整批报 ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING（212 个文件起不来）。
+          node-version: '22'
 
       - name: Lint frontend (gateway-web)
         run: |
@@ -557,7 +559,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 与前端作业保持一致：vite 8 / vitest 5 都要求 node ≥ 22.12
+          node-version: '22'
 
       - name: Install frontend deps
         run: |
@@ -668,7 +671,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # vite 8 要求 node ≥ 22.12（与前端作业同一运行时）
+          node-version: '22'
 
       - name: Build frontend
         run: |
