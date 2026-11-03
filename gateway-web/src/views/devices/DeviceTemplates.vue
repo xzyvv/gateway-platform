@@ -143,7 +143,7 @@ function addPoint() {
 
 async function load() {
   loading.value = true
-  try { templates.value = await listTemplates() } finally { loading.value = false }
+  try { templates.value = await listTemplates() } catch (e) { showToast(e, '加载设备模板失败') } finally { loading.value = false }
 }
 
 function openCreate() {

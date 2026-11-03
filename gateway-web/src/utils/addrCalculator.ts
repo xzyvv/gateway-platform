@@ -87,14 +87,17 @@ export async function calculate(
   const fc = FUNC_CODES.find((f) => f.code === funcCode)
   if (!fc) throw new Error(`不支持的功能码：${funcCode}`)
 
-  const n = Number.parseInt(manualAddr.trim(), 10)
-  if (Number.isNaN(n) || n < 0) {
+  const raw = manualAddr.trim()
+  if (!/^\d+$/.test(raw)) {
     throw new Error('地址格式无效，请输入如 40001 的十进制地址')
   }
-  const digits = String(n)
+  // 必须按原始字符串判长度：parseInt('00001') → 1，会把 0xxxx/1xxxx 区的
+  // 前导零吃掉，导致合法的 5 位区地址被判成「位数不足」而无法计算。
+  const digits = raw
   if (digits.length !== 5 || !(digits[0]! in ZONES)) {
     throw new Error('请输入 5 位区地址，区前缀须为 0/1/3/4（如 00001、10001、30001、40001）')
   }
+  const n = Number.parseInt(digits, 10)
 
   const zonePrefix = digits[0]!
   const expected = FC_ZONE[fc.code]!

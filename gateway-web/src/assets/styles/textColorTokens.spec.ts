@@ -33,7 +33,10 @@ const ALLOWED_SELECTOR_HINTS = [
  * 这些函数返回值用于 ElProgress stroke / ElTag background 等图形场景，
  * 不适用文字对比度要求；若新增文字色用途必须改用 --text-*。
  */
-const TS_NONTEXT_ALLOWLIST: string[] = []
+const TS_NONTEXT_ALLOWLIST: string[] = [
+  // 断言 ElProgress 的 color 属性（进度条填充色），属图形用途
+  'ConfigHealth.spec.ts',
+]
 
 /** 原色 → 对应的合规文字令牌 */
 const COLOR_TO_TEXT: Record<string, string> = {

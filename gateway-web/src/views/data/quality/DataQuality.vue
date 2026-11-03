@@ -197,12 +197,20 @@ const pointColumns: ColumnDef<PointQuality>[] = [
 ]
 
 async function loadRules() {
-  rules.value = await listQualityRules()
-  rulesSource.value = qualityRulesSource()
+  try {
+    rules.value = await listQualityRules()
+    rulesSource.value = qualityRulesSource()
+  } catch (e) {
+    showToast(e, '加载质量规则失败')
+  }
 }
 async function loadPoints() {
-  await loadQualities()
-  stats.value = await getQualityStats()
+  try {
+    await loadQualities()
+    stats.value = await getQualityStats()
+  } catch (e) {
+    showToast(e, '加载质量状态失败')
+  }
 }
 function resetForm() {
   Object.assign(form, { name: '', condition: 'range', min: 0, max: 100, maxRate: 100, staleSeconds: 60, resultQuality: 'bad' })
@@ -213,6 +221,8 @@ async function toggleRule(row: QualityRule) {
     await updateQualityRule(row.id, { enabled: row.enabled })
     rulesSource.value = qualityRulesSource()
   } catch (e) {
+    // 落库失败时把开关拨回去：否则界面显示「已启用」，网关实际仍按旧配置执行
+    row.enabled = !row.enabled
     showToast(e, '切换规则状态失败')
   }
 }

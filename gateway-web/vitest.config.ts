@@ -45,6 +45,13 @@ export default defineConfig({
     // 必须用顶层 maxWorkers/minWorkers；写成旧字段不会报错但**完全不生效**。
     maxWorkers: 4,
     minWorkers: 1,
+    // ── 2026-11-03 flaky 排查结论（别再重复追这个坑）──
+    // 现象：全量 vitest 偶发「每次换一个文件失败 1 条」，单独跑该文件必过。
+    // 结论：不是跨文件状态污染——isolate 默认开启，setup.ts 每例重置 Pinia 与共享调度器；
+    //       而是**文件正在被改写时并发跑了全量测试**：断言基于改写前的内容、组件已被改写，
+    //       叠加另一个 vitest 进程抢 CPU，期望与实现错位（失败文件每次都不同，正是特征）。
+    // 证据：写入停止后连续 5 次全量（215 文件 / 1978 用例）+ 一次 coverage 模式全绿。
+    // 规矩：改源码/批量生成用例期间不要跑全量；CI 是只读检出，不存在该问题。
     css: false,
     // 跨运行持久化 transform 结果（默认 node_modules/.vitest-cache，已随 node_modules 被 gitignore）。
     // 本仓 element-plus 走 server.deps.inline，每次冷跑 transform 占比高；开启后第二次起显著省时。
@@ -79,35 +86,36 @@ export default defineConfig({
       // src/app 下文件）适用顶层兜底阈值。
       // 未列出的指标（如 router/types 的 functions/branches 当前无意义）表示该组不检查。
       //
-      // 全量实测基线（2026-11-03，D1 第四批后，1915 tests / 209 files）：
-      //   total        lines 63.90 / funcs 56.98 / branches 54.57 / stmts 61.09
+      // 全量实测基线（2026-11-03，D1 第五批后，1978 tests / 215 files）：
+      //   total        lines 66.22 / funcs 59.87 / branches 56.64 / stmts 63.45
       //   api          lines 74.80 / funcs 67.55 / branches 75.00 / stmts 74.12
-      //   components   lines 72.44 / funcs 69.04 / branches 64.80 / stmts 70.86
-      //   composables  lines 62.93 / funcs 61.35 / branches 47.87 / stmts 59.87
+      //   components   lines 75.25 / funcs 70.29 / branches 67.04 / stmts 73.38
+      //   composables  lines 64.86 / funcs 62.49 / branches 48.65 / stmts 61.58
       //   mock         lines 21.74 / funcs 35.00 / branches  9.09 / stmts 24.32
       //   router       lines 40.32 / branches 42.11 / stmts 40.58
       //   stores       lines 72.73 / funcs 79.38 / branches 70.32 / stmts 72.77
       //   types        lines/statements 100
-      //   utils        lines 79.60 / funcs 73.73 / branches 67.12 / stmts 77.38
-      //   views        lines 58.33 / funcs 52.63 / branches 51.60 / stmts 55.44
-      //   （views 33.78 → 37.44 → 47.33 → 52.95 → 58.33：D1 第一批补采集调优/点位读写/健康报告，
+      //   utils        lines 79.72 / funcs 73.73 / branches 67.38 / stmts 77.52
+      //   views        lines 61.75 / funcs 56.64 / branches 54.68 / stmts 58.98
+      //   （views 33.78 → 37.44 → 47.33 → 52.95 → 58.33 → 61.75：D1 第一批补采集调优/点位读写/健康报告，
       //     第二批补交付验收/现场调试向导/通道转发/设备分组/实时监视五个 A 档页面，
       //     第三批补总线配置/配置导入导出/片段导入/读取性能测试/设备批量导入/批量写入，
-      //     第四批补步骤序列/虚拟点位公式/总线负载/点位批量导入/蜂窝网络/设备健康评分）
+      //     第四批补步骤序列/虚拟点位公式/总线负载/点位批量导入/蜂窝网络/设备健康评分，
+      //     第五批补配置版本历史/配置体检/地址偏移/地址换算/设备模板/数据质量概览）
       thresholds: {
-        lines: 60,
-        functions: 53,
-        branches: 51,
-        statements: 58,
+        lines: 63,
+        functions: 56,
+        branches: 53,
+        statements: 60,
         '**/src/api/**': { lines: 71, functions: 64, branches: 71, statements: 70 },
-        '**/src/components/**': { lines: 68, functions: 65, branches: 61, statements: 67 },
-        '**/src/composables/**': { lines: 60, functions: 58, branches: 45, statements: 57 },
+        '**/src/components/**': { lines: 72, functions: 67, branches: 64, statements: 70 },
+        '**/src/composables/**': { lines: 61, functions: 59, branches: 45, statements: 58 },
         '**/src/mock/**': { lines: 18, functions: 32, branches: 6, statements: 21 },
         '**/src/router/**': { lines: 37, statements: 37 },
         '**/src/stores/**': { lines: 69, functions: 76, branches: 67, statements: 69 },
         '**/src/types/**': { lines: 97, statements: 97 },
-        '**/src/utils/**': { lines: 76, functions: 71, branches: 63, statements: 74 },
-        '**/src/views/**': { lines: 55, functions: 49, branches: 48, statements: 52 },
+        '**/src/utils/**': { lines: 76, functions: 71, branches: 64, statements: 74 },
+        '**/src/views/**': { lines: 58, functions: 53, branches: 51, statements: 55 },
       },
     },
   },
