@@ -14,6 +14,15 @@
 //! （`GpioController::set_do`）与采集写路径（`write_do`，由 GPIO 采集器
 //! `Collector::write` 调用）都写入该位图，`/api/io/status` 也从此读取，
 //! 避免两条路径各自维护副本导致状态分歧（与 Bug 53 同类的静默不一致）。
+//!
+//! # gpiod API 说明（0.2.x 批量值 API）
+//!
+//! gpiod 0.2 起不再提供「按线」API（`Chip::open` / `get_line` /
+//! `LineRequestFlags` / `line.request()`），改为**一次 request 一批线**：
+//! `Chip::new()` → `request_lines(Options::input(..) | Options::output(..))`
+//! → `Lines<Input>` / `Lines<Output>`，读取用 `get_values(&mut [bool; N])`、
+//! 写入用 `set_values([bool; N])`。
+//! 本文件所有 Linux 分支都基于该 API；`Cargo.lock` 固定 `gpiod 0.2.3`。
 
 use std::sync::atomic::{AtomicU8, Ordering};
 #[cfg(target_os = "linux")]
@@ -88,20 +97,24 @@ pub struct IoStatus {
     pub platform_supported: bool,
 }
 
+/// DI 段线号（绝对线号 0..3）
+#[cfg(target_os = "linux")]
+const DI_LINES: [u32; 4] = [0, 1, 2, 3];
+
 /// GPIO 控制器
 pub struct GpioController {
     #[cfg(target_os = "linux")]
     chips: std::collections::HashMap<u32, gpiod::Chip>,
-    /// Bug r13-GPIO2 (fix): 缓存 4 个 DI 线的 LineHandle，避免每次采集周期
-    /// (默认 1Hz) 都重新 request + drop——既性能浪费（4 次 sys call），
-    /// 又与高频 set_gpio_output (DE/RE 切换) 共享 gpiochip0 时偶发
-    /// EBUSY (line 正在被前一次 request 持有)。
+    /// Bug r13-GPIO2 (fix): 缓存 4 个 DI 线的批量句柄，避免每次采集周期
+    /// (默认 1Hz) 都重新 request + drop——既性能浪费，也与高频
+    /// set_gpio_output (DE/RE 切换) 共享 gpiochip0 时偶发 EBUSY
+    /// (line 正在被前一次 request 持有)。
     ///
-    /// init() 时一次性 request 4 个 line 持有到本字段；
-    /// read_di_with_quality 直接 get_value，无新 request。
+    /// init() 时一次性 request 4 条 DI 输入线并持有到本字段；
+    /// read_di_with_quality 直接 get_values，无新 request。
     /// 非 Linux 平台字段类型用 ()，与 cfg(Linux) 字段布局对齐。
     #[cfg(target_os = "linux")]
-    di_handles: parking_lot::Mutex<Option<Vec<gpiod::lines::LineHandle>>>,
+    di_lines: parking_lot::Mutex<Option<gpiod::Lines<gpiod::Input>>>,
 }
 
 impl Drop for GpioController {
@@ -116,7 +129,7 @@ impl GpioController {
             #[cfg(target_os = "linux")]
             chips: std::collections::HashMap::new(),
             #[cfg(target_os = "linux")]
-            di_handles: parking_lot::Mutex::new(None),
+            di_lines: parking_lot::Mutex::new(None),
         }
     }
 
@@ -127,22 +140,10 @@ impl GpioController {
         // 现逐路将 DO 线（line index = DO 序号 + 4）实际写回 0。
         #[cfg(target_os = "linux")]
         {
-            if let Some(chip) = self.chips.get(&0) {
-                for i in 0..4u32 {
-                    match chip.get_line(i + 4) {
-                        Ok(line) => {
-                            let _ = line.request(gpiod::LineRequestFlags::OUTPUT, 0, "gatewayd");
-                            if let Err(e) = line.set_value(0) {
-                                tracing::warn!("GPIO failsafe: set DO{} low failed: {}", i, e);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("GPIO failsafe: get DO{} line failed: {}", i, e);
-                        }
-                    }
+            for i in 0..4u32 {
+                if let Err(e) = set_gpio_output(i + 4, false) {
+                    tracing::warn!("GPIO failsafe: set DO{} low failed: {}", i, e);
                 }
-            } else {
-                tracing::warn!("GPIO failsafe: gpiochip0 unavailable, DO not driven to low");
             }
         }
         // 同步单一状态源：无论各线驱动是否成功，内存态一并回安全值，
@@ -153,40 +154,27 @@ impl GpioController {
     pub fn init(&mut self) -> GatewayResult<()> {
         #[cfg(target_os = "linux")]
         {
-            let chip = gpiod::Chip::open("/dev/gpiochip0")
+            let chip = gpiod::Chip::new("/dev/gpiochip0")
                 .map_err(|e| GatewayError::Io(format!("open gpiochip0 failed: {}", e)))?;
             self.chips.insert(0, chip);
 
-            // Bug r13-GPIO2 (fix): 初始化时一次性 request 4 个 DI 线，
-            // 持有 LineHandle 缓存到 di_handles 字段。
-            // 后续 read_di_with_quality 直接用缓存的 LineHandle.get_value()，
+            // Bug r13-GPIO2 (fix): 初始化时一次性 request 4 条 DI 输入线，
+            // 持有批量句柄缓存到 di_lines 字段。
+            // 后续 read_di_with_quality 直接 get_values，
             // 不再每次循环 request/drop——既消除 4 次/秒的 sys call 开销，
             // 也消除与高频 set_gpio_output (DE/RE) 共享 chip 时的 EBUSY 竞争。
             //
-            // 失败不阻断：单条线 request 失败仅 warn，整体降级到"无缓存"路径
-            // （降级路径仍按 line.request/get_value 每次调用，但保留 request
-            // 错误传播，运维能立即看到哪条线有问题）。
-            let mut handles = Vec::with_capacity(4);
+            // 失败不阻断：request 失败仅 warn，整体降级到"按需 request"路径
+            // （降级路径仍把 request 错误传播出去，运维能立即看到问题）。
             let chip = self.chips.get(&0).expect("chip0 just inserted");
-            for i in 0..4u32 {
-                match chip.get_line(i) {
-                    Ok(line) => match line.request(gpiod::LineRequestFlags::INPUT, 0, "gatewayd") {
-                        Ok(h) => handles.push(h),
-                        Err(e) => tracing::warn!("GPIO init: request DI{} INPUT failed: {}", i, e),
-                    },
-                    Err(e) => {
-                        tracing::warn!("GPIO init: get DI{} line failed: {}", i, e)
-                    }
+            match chip.request_lines(gpiod::Options::input(DI_LINES).consumer("gatewayd")) {
+                Ok(lines) => {
+                    *self.di_lines.lock() = Some(lines);
+                    tracing::info!("GPIO init: cached 4 DI input lines");
                 }
-            }
-            if handles.len() == 4 {
-                *self.di_handles.lock() = Some(handles);
-                tracing::info!("GPIO init: cached 4 DI LineHandles");
-            } else {
-                tracing::warn!(
-                    "GPIO init: only {} / 4 DI LineHandles cached (fallback to per-call request)",
-                    handles.len()
-                );
+                Err(e) => {
+                    tracing::warn!("GPIO init: request DI INPUT lines failed: {}", e);
+                }
             }
         }
         Ok(())
@@ -196,7 +184,8 @@ impl GpioController {
         // Bug 47: 原实现 `let quality;` 在 Linux 分支当 chip 不可用或读取失败时
         // 可能未被赋值，导致返回未初始化内存。修复：显式初始化为 [false; 4]，
         // 仅在成功读取时置为 true。
-        let di = [false; 4];
+        #[allow(unused_mut)]
+        let mut di = [false; 4];
         #[cfg(target_os = "linux")]
         let mut quality = [false; 4];
         // 非 Linux 平台没有任何真实采样，质量位必须为 false；
@@ -206,63 +195,49 @@ impl GpioController {
 
         #[cfg(target_os = "linux")]
         {
-            // Bug r13-GPIO2 (fix): 优先使用 init() 阶段缓存的 4 个 LineHandle
-            // 直接 get_value()——避免每采集周期 4 次 request+drop 的 sys call 开销
+            // Bug r13-GPIO2 (fix): 优先使用 init() 阶段缓存的批量句柄
+            // 直接 get_values()——避免每采集周期 4 次 request+drop 的 sys call 开销
             // 和与高频 set_gpio_output (DE/RE) 共享 chip 时的 EBUSY 竞争。
-            // 缓存未命中（init 失败）时降级到原"每次 request"路径。
-            let mut used_cache = false;
+            // 缓存未命中（init 失败）时降级到"每次 request"路径。
             {
-                let cache = self.di_handles.lock();
-                if let Some(handles) = cache.as_ref() {
-                    if handles.len() == 4 {
-                        used_cache = true;
-                        for (i, h) in handles.iter().enumerate() {
-                            match h.get_value() {
-                                Ok(val) => {
-                                    di[i] = val != 0;
-                                    quality[i] = true;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "read DI{} cached handle value failed: {}",
-                                        i,
-                                        e
-                                    );
-                                }
+                let cache = self.di_lines.lock();
+                if let Some(lines) = cache.as_ref() {
+                    let mut vals = [false; 4];
+                    match lines.get_values(&mut vals) {
+                        Ok(_) => {
+                            for i in 0..4usize {
+                                di[i] = vals[i];
+                                quality[i] = true;
                             }
+                            return (di, quality);
+                        }
+                        Err(e) => {
+                            tracing::warn!("read DI cached lines failed: {}", e);
                         }
                     }
                 }
             }
-            if used_cache {
-                return (di, quality);
-            }
 
-            // 降级路径：原"每线 request + 立即 get_value"实现。
-            // r13-GPIO1 fix：request 错误已用 `?` 传播。
+            // 降级路径：按需重新 request 4 条输入线后读取。
+            // r13-GPIO1 fix：request 错误不再被静默吞掉（记录告警，质量位保持 false）。
             if let Some(chip) = self.chips.get(&0) {
-                for i in 0..4u32 {
-                    match chip.get_line(i) {
-                        Ok(line) => {
-                            if let Err(e) =
-                                line.request(gpiod::LineRequestFlags::INPUT, 0, "gatewayd")
-                            {
-                                tracing::warn!("request DI{} failed: {}", i, e);
-                                continue;
-                            }
-                            match line.get_value() {
-                                Ok(val) => {
-                                    di[i as usize] = val != 0;
-                                    quality[i as usize] = true;
-                                }
-                                Err(e) => {
-                                    tracing::warn!("read DI{} value failed: {}", i, e);
+                match chip.request_lines(gpiod::Options::input(DI_LINES).consumer("gatewayd")) {
+                    Ok(lines) => {
+                        let mut vals = [false; 4];
+                        match lines.get_values(&mut vals) {
+                            Ok(_) => {
+                                for i in 0..4usize {
+                                    di[i] = vals[i];
+                                    quality[i] = true;
                                 }
                             }
+                            Err(e) => {
+                                tracing::warn!("read DI values failed: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("get DI{} line failed: {}", i, e);
-                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("request DI lines failed: {}", e);
                     }
                 }
             } else {
@@ -311,7 +286,7 @@ static GPIO_CHIP: OnceCell<Mutex<gpiod::Chip>> = OnceCell::new();
 #[cfg(target_os = "linux")]
 fn get_gpio_chip() -> GatewayResult<&'static Mutex<gpiod::Chip>> {
     GPIO_CHIP.get_or_try_init(|| {
-        let chip = gpiod::Chip::open("/dev/gpiochip0")
+        let chip = gpiod::Chip::new("/dev/gpiochip0")
             .map_err(|e| GatewayError::Io(format!("open gpiochip0 failed: {}", e)))?;
         Ok(Mutex::new(chip))
     })
@@ -335,18 +310,18 @@ pub fn set_gpio_output(pin: u32, on: bool) -> GatewayResult<()> {
         let chip = chip_mutex
             .lock()
             .map_err(|e| GatewayError::Io(format!("gpio chip lock poisoned: {}", e)))?;
-        let line = chip
-            .get_line(pin)
-            .map_err(|e| GatewayError::Io(format!("get line {} failed: {}", pin, e)))?;
-        line.request(gpiod::LineRequestFlags::OUTPUT, 0, "gateway-de")
+        // gpiod 0.2 批量 API：一次 request 一条输出线，写完即释放（句柄 drop）
+        let out = chip
+            .request_lines(gpiod::Options::output([pin]).consumer("gateway-de"))
             .map_err(|e| {
                 GatewayError::Io(format!(
                     "gpio {} request OUTPUT failed: {} (line may be busy or permission denied)",
                     pin, e
                 ))
             })?;
-        line.set_value(if on { 1 } else { 0 })
-            .map_err(|e| GatewayError::Io(format!("set gpio {} value failed: {}", pin, e)))?;
+        out.set_values([on]).map_err(|e| {
+            GatewayError::Io(format!("set gpio {} value failed: {}", pin, e))
+        })?;
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -374,20 +349,18 @@ pub fn read_gpio_line(pin: u32) -> GatewayResult<u8> {
         let chip = chip_mutex
             .lock()
             .map_err(|e| GatewayError::Io(format!("gpio chip lock poisoned: {}", e)))?;
-        let line = chip
-            .get_line(pin)
-            .map_err(|e| GatewayError::Io(format!("get line failed: {}", e)))?;
-        line.request(gpiod::LineRequestFlags::INPUT, 0, "gatewayd")
+        let inp = chip
+            .request_lines(gpiod::Options::input([pin]).consumer("gatewayd"))
             .map_err(|e| {
                 GatewayError::Io(format!(
                     "gpio {} request INPUT failed: {} (line may be busy or permission denied)",
                     pin, e
                 ))
             })?;
-        let val = line
-            .get_value()
+        let mut vals = [false; 1];
+        inp.get_values(&mut vals)
             .map_err(|e| GatewayError::Io(format!("get value failed: {}", e)))?;
-        Ok(val)
+        Ok(u8::from(vals[0]))
     }
     #[cfg(not(target_os = "linux"))]
     {
