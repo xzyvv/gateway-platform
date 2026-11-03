@@ -319,9 +319,8 @@ pub fn set_gpio_output(pin: u32, on: bool) -> GatewayResult<()> {
                     pin, e
                 ))
             })?;
-        out.set_values([on]).map_err(|e| {
-            GatewayError::Io(format!("set gpio {} value failed: {}", pin, e))
-        })?;
+        out.set_values([on])
+            .map_err(|e| GatewayError::Io(format!("set gpio {} value failed: {}", pin, e)))?;
     }
     #[cfg(not(target_os = "linux"))]
     {
