@@ -253,15 +253,18 @@ if [ -n "$TOKEN" ]; then
   CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/devices" 2>/dev/null || echo "000")
   [ "$CODE" = "200" ] && ok "GET /api/devices → 200" || fail "GET /api/devices → $CODE"
 
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/points" 2>/dev/null || echo "000")
-  [ "$CODE" = "200" ] && ok "GET /api/points → 200" || fail "GET /api/points → $CODE"
+  # 点位：没有全局 GET /api/points（点位按设备挂载：GET /api/devices/:id/points），
+  # 这里用全局可用的回收站列表做契约探针——原来打 /api/points 恒 404，会让每次交付都判 FAIL。
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/points/trash" 2>/dev/null || echo "000")
+  [ "$CODE" = "200" ] && ok "GET /api/points/trash → 200" || fail "GET /api/points/trash → $CODE"
 
   CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/io/status" 2>/dev/null || echo "000")
   if [ "$CODE" = "200" ]; then
     ok "GET /api/io/status → 200"
     # 解析 JSON 结构
     IO_JSON=$(curl -s "${AUTH_HEADER[@]}" "$API/api/io/status" 2>/dev/null || echo "{}")
-    if echo "$IO_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'di' in d and 'do_state' in d and 'di_quality' in d and len(d['di'])==4 and len(d['do_state'])==4" 2>/dev/null; then
+    # 响应是 {code,data,message} 信封，di/do_state/di_quality 在 data 下
+    if echo "$IO_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); d=d.get('data',d) if isinstance(d,dict) else d; assert 'di' in d and 'do_state' in d and 'di_quality' in d and len(d['di'])==4 and len(d['do_state'])==4" 2>/dev/null; then
       ok "GPIO 状态 JSON 结构正确 (di[4] + di_quality[4] + do_state[4])"
     else
       fail "GPIO 状态 JSON 结构不正确: $(echo "$IO_JSON" | head -c 200)"
@@ -282,8 +285,9 @@ if [ -n "$TOKEN" ]; then
   CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/templates" 2>/dev/null || echo "000")
   [ "$CODE" = "200" ] && ok "GET /api/templates → 200" || fail "GET /api/templates → $CODE"
 
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/scheduled-tasks" 2>/dev/null || echo "000")
-  [ "$CODE" = "200" ] && ok "GET /api/scheduled-tasks → 200" || fail "GET /api/scheduled-tasks → $CODE"
+  # 计划任务在 access 命名空间下：GET /api/access/scheduled-tasks
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/access/scheduled-tasks" 2>/dev/null || echo "000")
+  [ "$CODE" = "200" ] && ok "GET /api/access/scheduled-tasks → 200" || fail "GET /api/access/scheduled-tasks → $CODE"
 
   # A4：协议裁剪一致性（BUILD-INFO.txt 的 protocols= 与线上 /api/protocols 比对）
   # 出厂镜像按协议清单裁剪后，线上注册的协议应恰好等于构建清单，多/少都说明发布物不对。

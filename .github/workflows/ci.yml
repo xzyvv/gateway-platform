@@ -677,6 +677,22 @@ jobs:
           cp gateway-core/deploy/install.sh "$PKG/"
           cp deploy/verify-deploy.sh deploy/deliver.sh "$PKG/"
           cp -r templates "$PKG/templates"
+          # 现场配置：走「install.sh 装配置 → root:gateway 权限 → verify 用 api_token 鉴权」这条真实路径。
+          # 结构对齐 gateway-core/src/config/fixtures/config/v0_minimal.json（buses/points/mqtt 必填）
+          cat > "$PKG/config.json" << 'EOF'
+          {
+            "buses": [],
+            "points": [],
+            "mqtt": {},
+            "web": {
+              "listen_addr": "127.0.0.1:8080",
+              "api_token": "ci-smoke-token-0123456789",
+              "username": "admin",
+              "password_hash": "",
+              "allow_anon_read": false
+            }
+          }
+          EOF
           cat > "$PKG/BUILD-INFO.txt" << 'EOF'
           # 出厂镜像构建信息（CI 冒烟自造，格式对齐 deploy/build-release.sh）
           build_time=ci-smoke
