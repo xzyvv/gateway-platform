@@ -11,7 +11,29 @@ all-features = true
 # RustSec 公告库扫描，发现漏洞即失败
 db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "deny"
-ignore = []
+# 豁免清单与 .cargo/audit.toml 保持一致（cargo audit 与 cargo deny 用同一套
+# RustSec 公告库，两边必须同步改，否则一个绿一个红）。
+# 全部为「上游尚未发布修复版本」的传递依赖，每条都写明来源与缓解措施。
+ignore = [
+    # rsa: Marvin Attack（async-opcua-client → rsa 0.9.10，无修复版本）
+    "RUSTSEC-2023-0071",
+    # rustls-webpki 0.102.x（rumqttc 0.25 硬编码 0.102，0.102 分支无补丁）
+    "RUSTSEC-2026-0049",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0382",
+    # unmaintained：atomic-polyfill / proc-macro-error / glib 来自冻结的桌面端
+    # （tauri → gtk 依赖链），桌面端不进交付链路
+    "RUSTSEC-2023-0089",
+    "RUSTSEC-2024-0370",
+    # unmaintained：rustls-pemfile（reqwest + rumqttc，仅用于读 PEM）
+    "RUSTSEC-2025-0134",
+    # unmaintained：unsafe-libyaml（async-opcua-core → serde_yaml 0.9）
+    "RUSTSEC-2024-0449",
+    # unsound：glib（冻结桌面端依赖链）
+    "RUSTSEC-2024-0429",
+]
 
 [licenses]
 # 允许宽松许可证；copyleft 与商业闭源衍生不兼容

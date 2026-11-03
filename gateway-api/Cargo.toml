@@ -13,7 +13,7 @@ name = "gateway_api"
 path = "src/lib.rs"
 
 [dependencies]
-gateway-core = { path = "../gateway-core", default-features = false }
+gateway-core = { path = "../gateway-core", version = "0.1.0", default-features = false }
 tokio = { workspace = true }
 # heal 自愈执行器停机使用 CancellationToken
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -38,7 +38,7 @@ ts-rs = { workspace = true }
 [dev-dependencies]
 # license 集成测试需要 gateway-core 的测试签发辅助（W2-#18 已改为 feature gate，
 # 发行构建不编译该模块）；dev-dependencies 的 feature 只对测试目标生效。
-gateway-core = { path = "../gateway-core", default-features = false, features = ["test-support"] }
+gateway-core = { path = "../gateway-core", version = "0.1.0", default-features = false, features = ["test-support"] }
 # 集成测试：临时目录授权路径（license_quota_checks）
 tempfile = { workspace = true }
 # 集成测试：端到端 SQLite 读写往返（integration::sqlite_e2e）

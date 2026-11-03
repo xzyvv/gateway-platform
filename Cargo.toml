@@ -46,7 +46,7 @@ axum = { version = "0.7", features = ["ws", "macros"] }
 tower = { version = "0.4", features = ["limit", "util"] }
 tower-http = { version = "0.5", features = ["compression-gzip", "catch-panic", "cors", "fs", "trace"] }
 once_cell = "1"
-rumqttc = { version = "0.24", features = ["use-rustls", "websocket"] }
+rumqttc = { version = "0.25", features = ["use-rustls", "websocket"] }
 ring = "0.17"
 # 默认使用标准 SQLite（开发机无 OpenSSL/Perl）
 # 生产构建启用加密：cargo build -p gateway-core --features encryption
@@ -56,7 +56,7 @@ tokio-serial = "5"
 rsntp = "3"
 thiserror = "1"
 evalexpr = "11"
-validator = { version = "0.18", features = ["derive"] }
+validator = { version = "0.21", features = ["derive"] }
 flate2 = "1.0"
 # OTA 差分升级：bsdiff 4.x 兼容的补丁应用（纯 Rust，无 C/交叉编译负担）
 qbsdiff = { version = "1.4", default-features = false }

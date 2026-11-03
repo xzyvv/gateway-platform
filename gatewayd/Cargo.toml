@@ -13,8 +13,8 @@ publish.workspace = true
 # `default = ["all-protocols"]` 会无条件把默认发行集全部编进来，
 # `cargo build -p gatewayd --no-default-features --features dlt645` 等于无效。
 # 默认行为由本 crate 的 `default = ["all-protocols"]` 恢复（见 [features]）。
-gateway-core = { path = "../gateway-core", default-features = false }
-gateway-api = { path = "../gateway-api", default-features = false }
+gateway-core = { path = "../gateway-core", version = "0.1.0", default-features = false }
+gateway-api = { path = "../gateway-api", version = "0.1.0", default-features = false }
 tokio = { workspace = true }
 # bootstrap 自愈执行器停机需要 CancellationToken（与 gateway-core 同一用法）
 tokio-util = { version = "0.7", features = ["rt"] }

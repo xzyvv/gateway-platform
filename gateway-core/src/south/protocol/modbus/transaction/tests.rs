@@ -60,7 +60,9 @@ fn max_size_request() -> ModbusRequest {
 async fn write_timeout_aborts_pool_and_returns_disconnected() {
     // 服务端：accept 后永不读取，也绝不关闭连接。
     // 客户端的写只能阻塞在发送缓冲上（而不是收到 RST 变成写错误）。
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定本地端口");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定本地端口");
     let addr = listener.local_addr().expect("取本地端口");
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("接受客户端连接");
@@ -83,7 +85,9 @@ async fn write_timeout_aborts_pool_and_returns_disconnected() {
     let mut handles = Vec::with_capacity(BURST);
     for _ in 0..BURST {
         let pool = Arc::clone(&pool);
-        handles.push(tokio::spawn(async move { pool.submit(max_size_request()).await }));
+        handles.push(tokio::spawn(async move {
+            pool.submit(max_size_request()).await
+        }));
     }
 
     let mut disconnected = 0usize;

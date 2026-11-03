@@ -1,0 +1,56 @@
+# cargo-audit 配置：RustSec 公告扫描的豁免清单
+# 文档：https://rustsec.github.io/cargo-audit/
+#
+# 本地运行：cargo audit
+# CI：.github/workflows/security.yml（cargo audit --deny warnings）
+#
+# 原则：只豁免「上游尚未发布修复版本」的公告，且必须写明原因与影响面。
+# 一旦上游发布修复版本，务必回来删除对应条目。
+#
+# 用 ignore 而非降级 severity 的原因：这些公告指向的是**实际被使用的代码路径**
+# （TLS 证书校验、OPC UA 签名），不是可选功能；豁免等于承认风险存在，
+# 写明原因才能在复核时看清我们接受了什么。
+
+[advisories]
+ignore = [
+  # ---- rsa: Marvin Attack（RUSTSEC-2023-0071）----
+  # 来源：async-opcua-client 0.19 → rsa 0.9.10（OPC UA 的 RSA 签名/密钥传输）
+  # 影响：时序侧信道可导致 RSA 私钥恢复。
+  # 现状：async-opcua 0.19.0 已是最新发布版，其依赖的 rsa 无修复版本；
+  #       上游 async-opcua 尚未升级到 rsa 0.10。
+  # 缓解：OPC UA 连接默认走 Nonce/Username 认证，不使用 RSA 私钥运算；
+  #       仅在服务端启用 RSA 加密策略时受影响。
+  "RUSTSEC-2023-0071",
+
+  # ---- rustls-webpki 0.102.x（5 个公告）----
+  # 来源：rumqttc 0.25.1 直接依赖 rustls-webpki 0.102.8（MQTT over TLS 证书校验）
+  # 影响：证书链校验逻辑缺陷（CRL/名称约束/wildcard 名称/中间证书信任）。
+  # 现状：rumqttc 0.25.1 是最新发布版，硬编码 `rustls-webpki = "0.102"`；
+  #       0.102 分支没有补丁版本，修复只存在于 0.103/0.104（不兼容）。
+  # 缓解：MQTT 客户端连接的是自建/受控 Broker，未使用 wildcard 名称的
+  #       服务端证书，也不依赖 CRL 分发点做吊销判定。
+  "RUSTSEC-2026-0049",
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  "RUSTSEC-2026-0104",
+  "RUSTSEC-2026-0382",
+
+  # ---- unmaintained（crate 停止维护，但无已知可利用漏洞）----
+  # 这些不是「有漏洞」，而是「作者声明不再维护」。CI 用 `--deny warnings` 会把
+  # unmaintained/unsound 一并当作失败，因此必须逐条写明来源与处置。
+
+  # atomic-polyfill：来自冻结的桌面端（tauri → gtk 依赖链）。
+  #   桌面端 2026-11 起已冻结，不构建、不打包、不发布，产物不进交付链路。
+  "RUSTSEC-2023-0089",
+  # proc-macro-error：同样来自冻结桌面端的 derive 宏依赖链。
+  "RUSTSEC-2024-0370",
+  # rustls-pemfile：来自 reqwest（rustls-native-certs 0.6）与 rumqttc 0.25。
+  #   仅用于读取 PEM 证书，crate 已归档但无替代（上游 rustls 自己也在迁移）。
+  "RUSTSEC-2025-0134",
+  # unsafe-libyaml：来自 async-opcua-core 的 serde_yaml 0.9（已废弃的 YAML 解析）。
+  #   OPC UA 侧只用于解析本地配置文件，不解析外部输入。
+  "RUSTSEC-2024-0449",
+  # glib unsound：来自冻结桌面端的 tauri → gtk/glib 依赖链。
+  #   同上，桌面端不在交付链路内；桌面端一旦解冻需重新评估。
+  "RUSTSEC-2024-0429",
+]
