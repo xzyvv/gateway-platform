@@ -305,38 +305,64 @@ fn test_supports_diag_only_for_implemented_protocols() {
 /// 新增协议只要在注册表声明 `supports_scan_slaves` /
 /// `supports_register_scan` / `supports_auto_detect`，工具端即可用；
 /// 未声明或协议未注册时由调用方给出区别化提示。
+///
+/// 断言按协议 feature 门控：协议裁剪构建（`--no-default-features`）与
+/// 「退役观察」协议（fins / bacnet-mstp 已移出默认发行集）下该协议根本未注册，
+/// 能力位无从谈起，故不参与本钉子。
 #[test]
 fn test_debug_scan_capabilities_are_registry_driven() {
-    let modbus = protocol_capabilities("modbus").expect("modbus 应已注册");
-    assert!(modbus.supports_scan_slaves);
-    assert!(modbus.supports_register_scan);
-    assert!(modbus.supports_auto_detect);
+    #[cfg(feature = "modbus")]
+    {
+        let modbus = protocol_capabilities("modbus").expect("modbus 应已注册");
+        assert!(modbus.supports_scan_slaves);
+        assert!(modbus.supports_register_scan);
+        assert!(modbus.supports_auto_detect);
+    }
 
     // mc / fins 声明 supports_register_scan 后，handler 才按软元件地址逐点探测；
     // 能力位与 handler 实现集合必须一致，否则前端显示入口但请求必被拒。
-    for name in ["mc", "fins"] {
-        let caps = protocol_capabilities(name).expect("mc/fins 应已注册");
+    #[cfg(feature = "mc")]
+    {
+        let caps = protocol_capabilities("mc").expect("mc 应已注册");
         assert!(
             caps.supports_register_scan,
-            "协议 '{name}' 已实现按软元件地址探测，必须声明 supports_register_scan"
+            "协议 'mc' 已实现按软元件地址探测，必须声明 supports_register_scan"
         );
         assert!(
             !caps.supports_scan_slaves,
-            "协议 '{name}' 未实现从站扫描，不得声明支持"
+            "协议 'mc' 未实现从站扫描，不得声明支持"
+        );
+    }
+    #[cfg(feature = "fins")]
+    {
+        let caps = protocol_capabilities("fins").expect("fins 应已注册");
+        assert!(
+            caps.supports_register_scan,
+            "协议 'fins' 已实现按软元件地址探测，必须声明 supports_register_scan"
+        );
+        assert!(
+            !caps.supports_scan_slaves,
+            "协议 'fins' 未实现从站扫描，不得声明支持"
         );
     }
 
-    let dlt = protocol_capabilities("dlt645").expect("dlt645 应已注册");
-    assert!(
-        !dlt.supports_scan_slaves,
-        "dlt645 未实现从站扫描，不得声明支持"
-    );
-    assert!(!dlt.supports_register_scan);
-    assert!(!dlt.supports_auto_detect);
-    assert!(dlt.supports_diag, "dlt645 已实现诊断（读通信地址）");
+    #[cfg(feature = "dlt645")]
+    {
+        let dlt = protocol_capabilities("dlt645").expect("dlt645 应已注册");
+        assert!(
+            !dlt.supports_scan_slaves,
+            "dlt645 未实现从站扫描，不得声明支持"
+        );
+        assert!(!dlt.supports_register_scan);
+        assert!(!dlt.supports_auto_detect);
+        assert!(dlt.supports_diag, "dlt645 已实现诊断（读通信地址）");
+    }
 
-    let mstp = protocol_capabilities("bacnet_mstp").expect("bacnet_mstp 应已注册");
-    assert!(mstp.supports_diag, "bacnet_mstp 已实现 Who-Is 广播探针诊断");
+    #[cfg(feature = "bacnet-mstp")]
+    {
+        let mstp = protocol_capabilities("bacnet_mstp").expect("bacnet_mstp 应已注册");
+        assert!(mstp.supports_diag, "bacnet_mstp 已实现 Who-Is 广播探针诊断");
+    }
 
     assert!(protocol_capabilities("no-such-protocol").is_none());
 }

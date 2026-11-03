@@ -15,6 +15,7 @@
 //!   可选签名后缀 [SIG_MAGIC:4][hmac_sha256:32]，签名覆盖 delta_payload。
 
 mod apply;
+mod bootenv;
 mod crypto;
 mod download;
 
@@ -24,6 +25,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use self::bootenv::BootEnv;
 use crate::engine::error::{GatewayError, GatewayResult};
 
 /// OTA 状态
@@ -85,11 +87,12 @@ pub struct OtaManager {
     signing_key: Option<Vec<u8>>,
     /// 1.2: 注入的指标实例
     metrics: Arc<crate::engine::metrics::Metrics>,
-    /// 测试接缝：记录 `set_boot_partition_slot` **即将写入** bootloader 环境的
-    /// (变量名, 值)。仅 `#[cfg(test)]` 编译——生产构建无此字段、零运行时开销，
-    /// 不改变任何平台的运行时行为。用于断言回滚写入的是当前运行槽。
-    #[cfg(test)]
-    boot_env_writes: Mutex<Vec<(String, String)>>,
+    /// bootloader 环境访问后端：写 env / 读 env / 刷盘 / 重启。
+    ///
+    /// 生产构建走真实 u-boot 工具（仅 Linux 目标机），测试构建走纯内存实现——
+    /// 后者保证单测既不触碰宿主机 bootloader 环境，也不会真的重启测试机
+    /// （在 CI runner 上执行真实 `reboot` 会直接终止整个作业）。
+    boot_env: BootEnv,
 }
 
 /// 固件包头布局：magic(4) + version(u32, 4) + crc32(u32, 4) = 12 字节，
@@ -145,7 +148,8 @@ impl OtaManager {
         // gatewayd 传入的 active_slot 硬编码为 'a'，若实际已从 b 分区启动，
         // 会把新固件写进正在运行的分区（第二次 OTA 覆盖活动分区 → 变砖）。
         let mut partition = partition;
-        if let Some(slot) = apply::read_boot_partition_env() {
+        let boot_env = BootEnv::for_current_build();
+        if let Some(slot) = boot_env.boot_partition_slot() {
             if slot != partition.active_slot {
                 tracing::warn!(
                     "ota: active slot corrected from '{}' to '{}' per bootloader env",
@@ -165,8 +169,7 @@ impl OtaManager {
             staging_dir: PathBuf::from(staging_dir),
             signing_key,
             metrics,
-            #[cfg(test)]
-            boot_env_writes: Mutex::new(Vec::new()),
+            boot_env,
         })
     }
 

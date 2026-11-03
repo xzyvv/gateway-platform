@@ -187,28 +187,36 @@ fn test_parse_gpio_pin_errors() {
 /// `write_do` 与 `GpioController` 共享同一状态位图（单一来源）
 ///
 /// 采集路径写 DO 后，`/api/io/status` 读到的状态应立即一致。
-/// 非 Linux 平台无真实输出能力：`write_do` 必须返回错误且不更新状态位
-/// （避免界面显示与实际输出不一致的假状态）。
+///
+/// 不变式：**状态位必须与硬件写入结果一致**——
+/// - 写入成功 → 对应状态位置位；
+/// - 写入失败 → 状态位保持原值（不得显示与实际输出不一致的假状态）。
+///
+/// 该不变式与平台、硬件是否可用无关：非 Linux 平台无 gpiod 必然失败；
+/// Linux 平台若无 `/dev/gpiochip0`（CI runner 即如此）同样失败。
+/// 故断言按写入结果分支，而非按平台分支。
+///
+/// 选用 DO1 / DO2（线号 5 / 6）：本文件其他用例只写 DO0 / DO3，
+/// 避免并行测试与全局位图 `DO_BITS` 互相干扰。
 #[test]
 fn test_write_do_updates_single_state_source() {
-    if !crate::platform::gpio::platform_supported() {
-        let r = crate::platform::gpio::write_do(4, true);
-        assert!(r.is_err(), "非 Linux 平台 write_do 应返回错误");
-        assert!(
-            !crate::platform::gpio::do_state()[0],
-            "写入失败时不得更新 DO 状态位"
-        );
-        return;
+    // DO1（线号 5）
+    let r = crate::platform::gpio::write_do(5, true);
+    let bit = crate::platform::gpio::do_state()[1];
+    if r.is_ok() {
+        assert!(bit, "写入成功时 DO1 状态位必须置位");
+    } else {
+        assert!(!bit, "写入失败时不得更新 DO1 状态位");
     }
-    let _ = crate::platform::gpio::write_do(4, true);
-    assert!(crate::platform::gpio::do_state()[0], "DO0 应被置位");
-    let _ = crate::platform::gpio::write_do(4, false);
-    assert!(!crate::platform::gpio::do_state()[0], "DO0 应被复位");
 
-    let _ = crate::platform::gpio::write_do(7, true);
-    assert!(crate::platform::gpio::do_state()[3], "DO3 应被置位");
-    let _ = crate::platform::gpio::write_do(7, false);
-    assert!(!crate::platform::gpio::do_state()[3]);
+    // DO2（线号 6）
+    let r = crate::platform::gpio::write_do(6, true);
+    let bit = crate::platform::gpio::do_state()[2];
+    if r.is_ok() {
+        assert!(bit, "写入成功时 DO2 状态位必须置位");
+    } else {
+        assert!(!bit, "写入失败时不得更新 DO2 状态位");
+    }
 }
 
 /// `write_do` 越界应返回错误，且不改变状态

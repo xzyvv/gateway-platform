@@ -47,6 +47,9 @@ pki/
 # 的 default_cert_dir = ./certs）。私钥永不进仓库。
 certs/
 **/certs/
+# 例外：前端「证书管理」页面的源码目录同名，必须入库。
+# git 不会进入被排除的目录，因此要显式把该目录本身重新纳入。
+!gateway-web/src/views/system/certs/
 # SQLite WAL 副产物：文件名以 -wal / -shm 结尾，不匹配上面的 *.db 规则
 *.db-wal
 *.db-shm

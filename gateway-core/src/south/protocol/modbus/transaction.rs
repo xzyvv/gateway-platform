@@ -46,6 +46,12 @@ use tokio::time::timeout;
 // 子模块（从原文件拆出）：帧编解码 + reader_loop
 mod frame;
 
+// 单元测试：写路径超时 → abort_all → Disconnected 的不变式。
+// 用例依赖 Linux socket 缓冲语义（tests.rs 内用文件级 `#![cfg(target_os = "linux")]` 剥离），
+// 非 Linux 平台上该模块为空，不产生任何用例。
+#[cfg(test)]
+mod tests;
+
 // 重导出以保持外部引用路径不变
 pub(crate) use frame::build_mbap_frame;
 

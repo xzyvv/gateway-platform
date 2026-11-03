@@ -1,0 +1,36 @@
+.cert-view { padding: 12px; }
+.top-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+.cert-card {
+  border-radius: var(--radius-card); border: 1px solid var(--border-base);
+}
+.cert-field {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 0; border-bottom: 1px solid var(--border-light);
+}
+.cert-field:last-child { border-bottom: none; }
+.field-label {
+  width: 120px; flex-shrink: 0;
+  font-size: 0.8125rem; color: var(--text-secondary);
+}
+.field-value {
+  font-size: 0.875rem; color: var(--text-primary);
+  word-break: break-all; font-weight: 500;
+}
+.fingerprint-field { align-items: flex-start; }
+.fingerprint {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.75rem; color: var(--text-regular);
+  background: var(--bg-fill); padding: 8px 12px; border-radius: var(--radius-button);
+  word-break: break-all; flex: 1; display: block;
+}
+.warn-alert { margin-top: 16px; border-radius: var(--radius-card); }
+.cert-path {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 16px; font-size: 0.75rem; color: var(--text-secondary);
+}
+.path-text { word-break: break-all; }
+
+/* 首屏骨架占位：沿用 cert-field 的 label / value 结构，避免数据到达时高度跳动 */
+.sk-label { width: 120px; height: 13px; flex-shrink: 0; }
+.sk-value { flex: 1; max-width: 320px; height: 14px; }
+.sk-fingerprint { max-width: 480px; height: 40px; border-radius: var(--radius-button); align-self: flex-start; }

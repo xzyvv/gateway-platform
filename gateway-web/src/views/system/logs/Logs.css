@@ -1,0 +1,323 @@
+.logs {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section-card {
+  border-radius: var(--radius-card);
+}
+
+/* W26: 与 VISUAL_SPEC §3.1 / Dashboard / Realtime 统一——渐变方向 90deg */
+
+.conn-tag {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.count-tag {
+  margin-left: 6px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  flex-shrink: 0;
+}
+.dot.active {
+  background: var(--color-success);
+  box-shadow: 0 0 0 0 rgba(var(--color-success-rgb), 0.5);
+  animation: pulse 1.8s ease-in-out 3;
+}
+.dot.reconnecting {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 0 rgba(var(--color-warning-rgb), 0.5);
+  animation: pulseWarn 1.2s ease-in-out 3;
+}
+@keyframes pulseWarn {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(var(--color-success-rgb), 0.5);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.15);
+    box-shadow: 0 0 0 6px rgba(var(--color-success-rgb), 0);
+  }
+}
+
+.filter-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.filter-input {
+  flex: 1;
+  min-width: 240px;
+}
+
+.level-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.level-filters .el-button {
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  transition: background-color, color, transform 0.2s;
+}
+.level-filters .el-button:hover:not(.is-active) {
+  transform: translateY(-1px);
+}
+
+.log-box {
+  background: var(--code-bg-alt);
+  color: var(--code-text);
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.75rem;
+  height: min(400px, calc(100vh - 280px));
+  min-height: 200px;
+  overflow-y: auto;
+  padding: 14px 16px;
+  border-radius: var(--radius-table);
+  line-height: 1.7;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  position: relative;
+  border: 1px solid var(--code-border);
+}
+.log-box::before {
+  content: '';
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  display: block;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-accent));
+  margin: -14px -16px 12px;
+}
+.log-box::-webkit-scrollbar {
+  width: 6px;
+}
+.log-box::-webkit-scrollbar-track {
+  background: transparent;
+}
+.log-box::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+.log-box::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid transparent;
+  line-height: 1.5;
+  transition: background 0.15s;
+}
+.log-line:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* 窗口化渲染的上下占位块：撑出真实滚动条，本身不可见 */
+.log-spacer {
+  content-visibility: hidden;
+}
+.log-error {
+  color: var(--code-danger);
+  border-left-color: var(--code-danger);
+  background: rgba(244, 135, 113, 0.08);
+}
+.log-warn {
+  color: var(--code-attr);
+  border-left-color: var(--code-attr);
+  background: rgba(230, 192, 123, 0.06);
+}
+.log-info {
+  color: var(--code-key);
+  border-left-color: var(--code-key);
+  background: rgba(156, 220, 254, 0.05);
+}
+.log-debug {
+  color: var(--code-muted);
+  border-left-color: var(--code-muted-border);
+  background: rgba(127, 132, 142, 0.04);
+}
+
+.log-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--code-muted);
+  gap: 8px;
+  font-size: 0.8125rem;
+  opacity: 0.8;
+}
+
+/* 回到最新浮动按钮 */
+.log-card .el-card__body {
+  position: relative;
+}
+.jump-to-bottom {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.35);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.jump-to-bottom:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(var(--color-primary-rgb), 0.45);
+}
+.jump-fade-enter-active,
+.jump-fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.jump-fade-enter-from,
+.jump-fade-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* 关键词匹配高亮 */
+.log-line mark.hl {
+  background: rgba(255, 215, 0, 0.35);
+  color: var(--code-warning);
+  padding: 0 2px;
+  border-radius: var(--radius-bar);
+  font-weight: 600;
+}
+
+.cmd-output {
+  background: var(--code-bg-alt);
+  color: var(--code-text);
+  padding: 14px 16px;
+  border-radius: var(--radius-table);
+  margin-top: 12px;
+  max-height: 300px;
+  overflow: auto;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  position: relative;
+  border: 1px solid var(--code-border);
+}
+.cmd-output::before {
+  content: '';
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  display: block;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-accent));
+  margin: -14px -16px 12px;
+}
+.cmd-output-wrap {
+  position: relative;
+  margin-top: 12px;
+}
+.cmd-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  background: rgba(30, 30, 46, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--code-text);
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s;
+}
+.cmd-copy-btn:hover {
+  background: rgba(var(--color-primary-rgb), 0.85) !important;
+  border-color: var(--color-primary) !important;
+  color: var(--text-inverse) !important;
+}
+.cmd-output-wrap:hover .cmd-copy-btn {
+  opacity: 1;
+}
+
+/* 告警规则 */
+.alert-rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.alert-input {
+  flex: 1;
+  min-width: 0;
+}
+.alert-count {
+  flex-shrink: 0;
+  animation: alertPulse 1.5s ease-in-out 3;
+}
+@keyframes alertPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.quick-cmds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+/* 长命令（如 dmesg | tail -20）在窄屏下截断显示，避免按钮溢出 */
+.quick-cmds .el-button {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.75rem;
+}
+.quick-cmds-label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+.cmd-input {
+  margin-bottom: 12px;
+}
+
+/* B2 修复：诊断命令预校验失败时的红字提示 */
+.cmd-precheck-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: -8px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  background: rgba(var(--color-danger-rgb), 0.08);
+  border: 1px solid rgba(var(--color-danger-rgb), 0.25);
+  border-radius: var(--radius-small);
+  color: var(--text-danger);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.cmd-precheck-error .el-icon {
+  flex-shrink: 0;
+}

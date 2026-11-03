@@ -162,19 +162,80 @@ mod tests {
         assert!(!roots.is_empty(), "白名单根不能为空");
     }
 
-    /// r33-PATH1 (回归)：当前工作目录下的文件路径通过校验（默认就是 cwd 派生）。
+    /// r33-PATH1 (回归)：白名单根目录与平台约定一致。
+    ///
+    /// - Linux 工业部署：FHS 标准三根（`/etc/gateway`、`/var/lib/gateway`、
+    ///   `/var/log/gateway`），**不含** cwd——设备上进程从 `/` 或 `/opt` 启动，
+    ///   cwd 落在仓库目录是开发机现象，不构成部署契约。
+    /// - 非 Linux（开发/测试/桌面端）：白名单根即 cwd，便于本地相对路径配置。
+    ///
     /// 注：canonicalize 在 Windows 上会把 cwd 加 `\\?\` UNC 前缀，与未加前缀的
-    /// root 路径比较会失败。因此本测试同时验证「在 cwd 派生白名单下、cwd 下子路径
-    /// 通过」——这两者共享同一 canonicalize 行为，避坑 platform 差异。
+    /// root 路径比较会失败，故非 Linux 分支两侧都走 canonicalize。
     #[test]
-    fn current_dir_paths_pass_whitelist() {
+    fn allowed_config_roots_match_platform_contract() {
         let roots = allowed_config_roots();
-        // cwd 派生根 = allowed_config_roots() 的第一个元素（非 Linux），
-        // 因此「cwd 自身」必等于（canonicalize 后）该根
-        let cwd = std::env::current_dir().expect("current_dir");
-        let cwd_canon = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
-        let root_canon = roots[0].canonicalize().unwrap_or_else(|_| roots[0].clone());
-        assert_eq!(cwd_canon, root_canon, "白名单根应等于 cwd (非 Linux 下)");
+        assert!(!roots.is_empty(), "白名单根不能为空");
+
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                roots,
+                ALLOWED_CONFIG_ROOTS_LINUX
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>(),
+                "Linux 部署的白名单根必须是 FHS 标准三根"
+            );
+            for root in &roots {
+                assert!(
+                    root.is_absolute(),
+                    "Linux 白名单根必须是绝对路径，实际 {:?}",
+                    root
+                );
+            }
+        } else {
+            let cwd = std::env::current_dir().expect("current_dir");
+            let cwd_canon = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
+            let root_canon = roots[0].canonicalize().unwrap_or_else(|_| roots[0].clone());
+            assert_eq!(cwd_canon, root_canon, "非 Linux 白名单根应等于 cwd");
+        }
+    }
+
+    /// r33-PATH1 (回归)：白名单根目录下的路径通过校验。
+    ///
+    /// 非 Linux：cwd 自身与其子路径都应通过（白名单根即 cwd）。
+    /// Linux：白名单根是 FHS 标准目录，取其下的相对路径做校验——
+    /// 目录未必已创建，`canonicalize` 失败时降级为字符串前缀比较，
+    /// 两种情况都应判定为「在白名单内」。
+    #[test]
+    fn paths_under_allowed_root_pass_whitelist() {
+        if cfg!(target_os = "linux") {
+            let root = &allowed_config_roots()[0];
+            let under = root.join("config.json");
+            assert!(
+                is_path_under_allowed_root(&under),
+                "白名单根下的路径应通过校验：{:?}",
+                under
+            );
+        } else {
+            let cwd = std::env::current_dir().expect("current_dir");
+            assert!(
+                is_path_under_allowed_root(&cwd),
+                "非 Linux 下 cwd 自身应通过白名单校验"
+            );
+            // 子路径必须从**已 canonical 的 root** 派生：Windows 上
+            // canonicalize 会加 `\\?\` 前缀，而白名单根在函数内部也走 canonicalize；
+            // 若从原始 cwd 派生，canonicalize 失败（文件不存在）时降级为无前缀路径，
+            // 与带前缀的 root 做 starts_with 必然失败。
+            let root_canon = allowed_config_roots()[0]
+                .canonicalize()
+                .unwrap_or_else(|_| allowed_config_roots()[0].clone());
+            let sub = root_canon.join("some_config.json");
+            assert!(
+                is_path_under_allowed_root(&sub),
+                "非 Linux 下 cwd 子路径应通过白名单校验：{:?}",
+                sub
+            );
+        }
     }
 
     /// r33-PATH1 (回归)：不存在的路径在白名单根目录下时仍通过。

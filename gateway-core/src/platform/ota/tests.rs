@@ -1,7 +1,9 @@
 //! OTA 关键路径测试（C2）
 //!
-//! 用临时文件充当 A/B 分区设备（`write_partition` / `verify_partition` 只做普通文件读写），
-//! 非 Linux 下 `set_boot_partition` 为 no-op，因此可在任意平台完整跑通升级流程。
+//! 用临时文件充当 A/B 分区设备（`write_partition` / `verify_partition` 只做普通文件读写）；
+//! bootloader 环境（写 env / 读 env / 刷盘 / 重启）由 `BootEnv` 的内存后端承担，
+//! 因此升级流程在任意平台（含无 u-boot 工具的 CI runner）都能完整跑通，
+//! 且测试永远不会真的重启宿主机。
 use super::*;
 use crate::engine::metrics::Metrics;
 use std::path::Path;
@@ -32,6 +34,19 @@ fn new_manager(dir: &Path, signing_key: Option<Vec<u8>>) -> Arc<OtaManager> {
     std::fs::write(dir.join("slot_a.bin"), b"").expect("create slot_a");
     std::fs::write(dir.join("slot_b.bin"), b"").expect("create slot_b");
     OtaManager::new(partition, staging, signing_key, Arc::new(Metrics::new()))
+}
+
+/// 取 bootloader 环境里**最后一次** `boot_partition` 写入的值。
+///
+/// 一次 `set_boot_partition_slot` 会写两个变量（`boot_partition` + `bootcount=0`），
+/// 故不能直接取写入历史的最后一项。
+fn last_boot_partition(mgr: &OtaManager) -> Option<String> {
+    mgr.boot_env
+        .writes()
+        .into_iter()
+        .rev()
+        .find(|(k, _)| k == "boot_partition")
+        .map(|(_, v)| v)
 }
 
 /// 构造无签名固件包：[magic][version][crc32][payload]
@@ -366,8 +381,8 @@ fn new_manager_active(dir: &Path, active: char) -> Arc<OtaManager> {
 /// 回归缺陷维度：修复前 `rollback()` 复用「写活动分区反面」的函数，把 `boot_partition`
 /// 指向**刚写入的新分区**而非正在运行的分区，回滚静默失效。
 ///
-/// 既有 `rollback_only_allowed_in_pending_reboot` 只断言状态机，且在非 Linux 平台
-/// 写入是 no-op，故「实际写入的槽位」不可观测。本测试借助 `boot_env_writes` 接缝断言：
+/// 既有 `rollback_only_allowed_in_pending_reboot` 只断言状态机，无法观测
+/// 「实际写入的槽位」。本测试借助 `BootEnv` 内存后端的写入历史断言：
 /// - 升级（apply）应把 `boot_partition` 指向**非活动槽**；
 /// - 回滚（rollback）应把 `boot_partition` 设回**当前运行槽**。
 ///
@@ -383,22 +398,20 @@ async fn rollback_boot_env_targets_active_slot_a() {
         .await
         .expect("ota ok");
 
-    let after_upgrade = mgr.boot_env_writes.lock().clone();
     assert_eq!(
-        after_upgrade.last().cloned(),
-        Some(("boot_partition".to_string(), "b".to_string())),
+        last_boot_partition(&mgr),
+        Some("b".to_string()),
         "升级应把 boot_partition 指向非活动槽 b，实际 {:?}",
-        after_upgrade
+        mgr.boot_env.writes()
     );
 
     mgr.rollback().expect("rollback ok");
 
-    let after_rollback = mgr.boot_env_writes.lock().clone();
     assert_eq!(
-        after_rollback.last().cloned(),
-        Some(("boot_partition".to_string(), "a".to_string())),
+        last_boot_partition(&mgr),
+        Some("a".to_string()),
         "回滚必须把 boot_partition 设回当前运行槽 a，实际 {:?}",
-        after_rollback
+        mgr.boot_env.writes()
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -415,22 +428,20 @@ async fn rollback_boot_env_targets_active_slot_b() {
         .await
         .expect("ota ok");
 
-    let after_upgrade = mgr.boot_env_writes.lock().clone();
     assert_eq!(
-        after_upgrade.last().cloned(),
-        Some(("boot_partition".to_string(), "a".to_string())),
+        last_boot_partition(&mgr),
+        Some("a".to_string()),
         "升级应把 boot_partition 指向非活动槽 a，实际 {:?}",
-        after_upgrade
+        mgr.boot_env.writes()
     );
 
     mgr.rollback().expect("rollback ok");
 
-    let after_rollback = mgr.boot_env_writes.lock().clone();
     assert_eq!(
-        after_rollback.last().cloned(),
-        Some(("boot_partition".to_string(), "b".to_string())),
+        last_boot_partition(&mgr),
+        Some("b".to_string()),
         "回滚必须把 boot_partition 设回当前运行槽 b，实际 {:?}",
-        after_rollback
+        mgr.boot_env.writes()
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -568,7 +579,7 @@ async fn boot_rollback_check_does_not_revert_after_upgrade_effective() {
         !mgr2.pending_reboot_marker_path().exists(),
         "升级生效后应清除 pending_reboot 标记"
     );
-    let writes = mgr2.boot_env_writes.lock().clone();
+    let writes = mgr2.boot_env.writes();
     assert!(
         !writes
             .iter()
@@ -590,16 +601,66 @@ async fn boot_rollback_check_reaffirms_target_slot_when_not_yet_effective() {
         .await
         .expect("ota ok");
 
-    mgr.boot_env_writes.lock().clear();
+    mgr.boot_env.clear_writes();
     mgr.boot_rollback_check();
     assert_eq!(
-        mgr.boot_env_writes.lock().last().cloned(),
-        Some(("boot_partition".to_string(), "b".to_string())),
-        "尚未切到目标槽时应重新确认 boot_partition=b"
+        last_boot_partition(&mgr),
+        Some("b".to_string()),
+        "尚未切到目标槽时应重新确认 boot_partition=b，实际 {:?}",
+        mgr.boot_env.writes()
     );
     assert!(
         mgr.pending_reboot_marker_path().exists(),
         "升级尚未生效时应保留标记"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `bootcount >= 3`（新分区连续启动失败）→ 启动自检必须触发自动回滚：
+/// 切到另一槽、重置 bootcount、并触发一次重启。
+///
+/// 这条路径在生产里会真的执行 `reboot`；测试用内存后端，只累加计数，
+/// 既验证语义又不会重启 CI runner。
+#[test]
+fn bootcount_over_threshold_triggers_auto_rollback_and_reboot() {
+    let dir = temp_dir("bootcount_rollback");
+    let mgr = new_manager(&dir, None); // active_slot = 'a'
+    mgr.boot_env.set_var("bootcount", "3");
+
+    assert!(mgr.check_bootcount_rollback(), "bootcount=3 应判定需要回滚");
+
+    mgr.perform_rollback().expect("自动回滚应成功");
+
+    let writes = mgr.boot_env.writes();
+    assert!(
+        writes
+            .iter()
+            .any(|(k, v)| k == "boot_partition" && v == "b"),
+        "回滚应把 boot_partition 切到另一槽 b，实际 {:?}",
+        writes
+    );
+    assert!(
+        writes.iter().any(|(k, v)| k == "bootcount" && v == "0"),
+        "回滚应重置 bootcount=0，实际 {:?}",
+        writes
+    );
+    assert_eq!(mgr.boot_env.reboot_count(), 1, "自动回滚必须触发一次重启");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `bootcount` 未达阈值 → 不回滚、不重启。
+#[test]
+fn bootcount_below_threshold_does_not_trigger_rollback() {
+    let dir = temp_dir("bootcount_ok");
+    let mgr = new_manager(&dir, None);
+    mgr.boot_env.set_var("bootcount", "1");
+
+    assert!(!mgr.check_bootcount_rollback(), "bootcount=1 不应触发回滚");
+    mgr.boot_rollback_check();
+    assert_eq!(
+        mgr.boot_env.reboot_count(),
+        0,
+        "bootcount 未达阈值不得重启设备"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

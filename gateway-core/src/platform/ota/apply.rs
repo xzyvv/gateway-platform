@@ -239,54 +239,20 @@ impl OtaManager {
         Ok(())
     }
 
-    /// 设置 bootloader 启动分区为指定槽位（通过 fw_setenv，需 u-boot）
+    /// 设置 bootloader 启动分区为指定槽位（写 u-boot 环境变量）
     ///
     /// 修复(审查#5)：原 `set_boot_partition` 忽略传入的 device 参数、恒写「活动分区的反面」，
     /// 于是 `rollback()` 虽然传入了活动分区，实际仍把 boot_partition 设成新固件所在槽位
     /// → 取消升级后重启仍旧加载新固件（静默失败）。现改为按槽位显式设置，由调用方决定目标槽。
+    ///
+    /// 同时写 `bootcount=0`（bootloader 根据 bootcount 决定是否回滚）。
+    /// 底层命令的 io 错误与退出码检查由 `BootEnv` 承担——生产路径一旦 `fw_setenv`
+    /// 失败（env 分区写坏 / fw_env.config 缺失）必须报错，否则会得到
+    /// 「代码以为切换成功、设备重启后仍启动旧分区」的结果。
     pub(super) fn set_boot_partition_slot(&self, slot: char) -> GatewayResult<()> {
-        // 测试接缝：记录**即将写入** bootloader 环境的启动分区槽位。
-        // 仅 `#[cfg(test)]` 编译，生产构建为死代码消除，不改变任何平台运行时行为。
-        #[cfg(test)]
-        self.boot_env_writes
-            .lock()
-            .push(("boot_partition".to_string(), slot.to_string()));
-        #[cfg(target_os = "linux")]
-        {
-            use std::process::Command;
-            let slot = slot.to_string();
-            // 设置 boot_partition 变量 + bootcount=0（bootloader 根据 bootcount 决定是否回滚）
-            // #11: 原实现用 `let _ = ...status()` 吞掉 io 错误和退出码，
-            //   若 fw_setenv 失败（env 分区写坏 / fw_env.config 缺失）仍返回 Ok，
-            //   会导致升级后 bootloader 仍启动旧分区但代码以为切换成功。
-            //   现改为：检查 status() 返回的 io 错误 + exit code 非零都报错。
-            let check = |label: &str, slot: &str| -> GatewayResult<()> {
-                let status = Command::new("fw_setenv")
-                    .args([label, slot])
-                    .status()
-                    .map_err(|e| {
-                        GatewayError::Io(format!("fw_setenv {} spawn failed: {}", label, e))
-                    })?;
-                if !status.success() {
-                    // code() 返回 None 表示被信号终止（Unix），跨平台用 code 即可诊断
-                    return Err(GatewayError::Io(format!(
-                        "fw_setenv {} failed: exit code {:?} (success={})",
-                        label,
-                        status.code(),
-                        status.success()
-                    )));
-                }
-                Ok(())
-            };
-            check("boot_partition", &slot)?;
-            check("bootcount", "0")?;
-            Ok(())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = slot;
-            Ok(())
-        }
+        self.boot_env.setenv("boot_partition", &slot.to_string())?;
+        self.boot_env.setenv("bootcount", "0")?;
+        Ok(())
     }
 
     /// 按分区设备路径设置启动分区（升级写入非活动分区时使用）
@@ -441,27 +407,16 @@ impl OtaManager {
     ///
     /// r31-OTA8 同步：按 `bootcount=N` 严格行解析，避免其他变量干扰。
     pub fn check_bootcount_rollback(&self) -> bool {
-        #[cfg(target_os = "linux")]
-        {
-            use std::process::Command;
-            if let Ok(output) = Command::new("fw_printenv").arg("bootcount").output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    if let Some(rest) = line.strip_prefix("bootcount=") {
-                        if let Ok(count) = rest.trim().parse::<u32>() {
-                            if count >= 3 {
-                                tracing::error!(
-                                    "bootcount={} >= 3, rollback required (new partition failed to boot)",
-                                    count
-                                );
-                                return true;
-                            }
-                        }
-                    }
-                }
+        match self.boot_env.bootcount() {
+            Some(count) if count >= 3 => {
+                tracing::error!(
+                    "bootcount={} >= 3, rollback required (new partition failed to boot)",
+                    count
+                );
+                true
             }
+            _ => false,
         }
-        false
     }
 
     /// M2-6: 执行自动回滚：切换 boot_partition 到上一个分区并重启
@@ -471,98 +426,35 @@ impl OtaManager {
         // #2: 回滚已处置本次升级——清除 pending_reboot 标记，否则下次启动自检会
         // 依据残留标记把 boot_partition 重新指向「已知启动失败」的新槽，形成回滚震荡。
         self.clear_pending_reboot_marker();
-        #[cfg(target_os = "linux")]
-        {
-            use std::process::Command;
-            // 切换到另一个分区
-            let rollback_slot = if self.partition.active_slot == 'a' {
-                "b"
-            } else {
-                "a"
-            };
-            tracing::error!(
-                "performing A/B rollback: switching to slot {}",
-                rollback_slot
-            );
+        // 切换到另一个分区
+        let rollback_slot = if self.partition.active_slot == 'a' {
+            "b"
+        } else {
+            "a"
+        };
+        tracing::error!(
+            "performing A/B rollback: switching to slot {}",
+            rollback_slot
+        );
 
-            // #12: 原实现仅用 .map_err(...)? 检查 io 错误，但不检查退出码。
-            //   fw_setenv 若因 env 分区只读/损坏而退出码非零，status() 仍返回 Ok
-            //   → 回滚以为成功 → reboot 后仍启动故障分区 → 设备变砖。
-            //   现增加 exit code 非零检查，失败时拒绝继续（不 reboot）。
-            let status = Command::new("fw_setenv")
-                .args(["boot_partition", rollback_slot])
-                .status()
-                .map_err(|e| {
-                    GatewayError::Io(format!("fw_setenv boot_partition spawn failed: {}", e))
-                })?;
-            if !status.success() {
-                return Err(GatewayError::Io(format!(
-                    "fw_setenv boot_partition failed: exit code {:?} — rollback aborted before reboot",
-                    status.code()
-                )));
-            }
-            // r31-OTA3: 每个 fw_setenv 成功后立即 sync——失败返 Err 不需 sync
-            // (无 env 写要持久化)，成功路径必须确保 env 写已刷盘再 reboot。
-            // 旧实现只在最后 reboot 前 sync 一次，但若中间 bootcount 失败返 Err，
-            // boot_partition 写可能因 page cache 丢失而实际未生效。
-            let _ = Command::new("sync").status();
+        // #12: `fw_setenv` 若因 env 分区只读/损坏而退出码非零，必须报错并中止
+        //   （不 reboot）——否则回滚以为成功，reboot 后仍启动故障分区 → 设备变砖。
+        self.boot_env.setenv("boot_partition", rollback_slot)?;
+        // r31-OTA3: 每个 env 写成功后立即 sync——失败返 Err 不需 sync
+        // (无 env 写要持久化)，成功路径必须确保 env 写已刷盘再 reboot。
+        // 旧实现只在最后 reboot 前 sync 一次，但若中间 bootcount 失败返 Err，
+        // boot_partition 写可能因 page cache 丢失而实际未生效。
+        self.boot_env.sync()?;
 
-            let status = Command::new("fw_setenv")
-                .args(["bootcount", "0"])
-                .status()
-                .map_err(|e| {
-                    GatewayError::Io(format!("fw_setenv bootcount spawn failed: {}", e))
-                })?;
-            if !status.success() {
-                return Err(GatewayError::Io(format!(
-                    "fw_setenv bootcount failed: exit code {:?} — rollback aborted before reboot",
-                    status.code()
-                )));
-            }
-            let _ = Command::new("sync").status();
+        self.boot_env.setenv("bootcount", "0")?;
+        self.boot_env.sync()?;
 
-            // 同步文件系统后重启
-            let _ = Command::new("sync").status();
-            tracing::warn!("rebooting to apply rollback...");
-            let _ = Command::new("reboot").status();
-            Ok(())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            tracing::warn!("A/B rollback not supported on non-Linux");
-            Ok(())
-        }
+        // 同步文件系统后重启
+        self.boot_env.sync()?;
+        tracing::warn!("rebooting to apply rollback...");
+        self.boot_env.reboot()?;
+        Ok(())
     }
-}
-
-/// Bug 155: 读取 bootloader 环境变量 `boot_partition`，返回当前活动分区（'a'/'b'）。
-///
-/// 非 Linux 或无 `fw_printenv`（如开发机 / 单元测试环境）返回 None，
-/// 调用方据此回退到配置默认值。抽为独立函数以同时服务"启动校正"与"运行期探测"。
-///
-/// r31-OTA8: 严格按 `boot_partition=X` 行解析。旧实现 `stdout.contains("=a")`
-/// 会把变量值含 "=a" 子串的任意键（如 `cat_a=...`）误判为 slot_a。
-pub(super) fn read_boot_partition_env() -> Option<char> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::process::Command;
-        if let Ok(output) = Command::new("fw_printenv").arg("boot_partition").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // fw_printenv 输出格式：boot_partition=a （可能多行）
-            for line in stdout.lines() {
-                if let Some(rest) = line.strip_prefix("boot_partition=") {
-                    let val = rest.trim();
-                    if val == "a" {
-                        return Some('a');
-                    } else if val == "b" {
-                        return Some('b');
-                    }
-                    // 其他值（如 "0"/"1"）视作无效，继续检查下一行
-                }
-            }
-        }
-    }
-    None
 }
 
 /// Bug 2.5: 跨平台 watchdog kick

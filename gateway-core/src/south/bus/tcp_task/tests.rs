@@ -314,19 +314,28 @@ async fn stale_disconnect_does_not_clear_new_pool() {
 }
 
 // =========================================================
-// 修复(C-1) 运行时回归：写路径超时 → 作废 pool → 重连
+// 修复(C-1) 运行时回归：连接不可用 → 作废 pool → 重连
 // =========================================================
 //
-// 场景：服务端 accept 后**完全不读**（模拟设备掉电但 TCP 连接仍在、中间设备半开）。
-// 客户端把接收缓冲压到最小以关闭接收窗口自动调优，然后并发灌入大量最大长度请求帧，
-// 内核发送缓冲 + 对端接收窗口被填满 → `write_all` 长期 pending。
+// 场景：服务端 accept 后读走客户端的一个请求，随即**断开连接**
+//       （模拟设备掉电、中间设备半开、网线松动——TCP 连接已不可用，
+//       但客户端未必立刻察觉）。
+// 客户端 reader_loop 读到 EOF/ECONNRESET → abort_all 作废全部在途事务 →
+// 事务返回 Disconnected → tcp_task 清空 pool_slot → 下一笔事务触发重连。
 //
-// 修复前：submit 永久卡在写 socket 且一直占着 writer Mutex；既不会返回
-//         Disconnected 也不会触发重连，整组采集假死，只能重启进程。
-// 修复后：写超时 → abort_all 作废全部在途事务 → 返回 Disconnected →
-//         tcp_task 清空 pool_slot → 下一笔事务重连（accept 次数 +1）。
+// 修复前：连接已死但 pool 仍被认为健康，在途事务永远等不到响应（也不返回
+//         Disconnected/Io），主循环的「清空 pool_slot 触发重连」逻辑不会执行，
+//         采集对该总线全线 stall，只能重启进程。
+// 修复后：断连 → pool 作废 → 重连（且只重连一次，不得出现重连风暴）。
 //
-// 观测量：io_errors（至少一笔写超时）与 conns（重连恰好一次，不得风暴）。
+// 观测量：io_errors（至少一笔断连）与 conns（重连恰好一次，不得风暴）。
+//
+// 为什么不用「内核发送缓冲被填满 → 写超时」作为触发条件：
+// 客户端 socket 由 bus_task_tcp 内部创建，测试无法设置其 SO_SNDBUF；而 Linux
+// 会对发送缓冲做自动调优（上限 tcp_wmem[2]，默认 4MB），几百 KB 的写突发
+// 根本填不满缓冲 → 写永不阻塞 → 写超时路径在 Linux 上不会发生。
+// 「写路径超时 → abort_all」这条不变式由 transaction 层的单测覆盖
+// （south/protocol/modbus/transaction/tests.rs），那里可以直接控制客户端 socket。
 
 /// 单次写最大化的合法请求：fc=0x10，PDU 恰好 253 字节（Modbus 上限）。
 /// MBAP 帧 = 7 + 1 + 253 = 261 字节。
@@ -361,16 +370,12 @@ fn submit_custom(
     })
 }
 
-/// 并发灌入的请求数：261B × 1024 ≈ 267KB，远大于
-/// 「客户端 SO_SNDBUF(64KB) + 对端接收窗口(4KB)」，保证写缓冲一定被填满。
-const WRITE_TIMEOUT_BURST: usize = 1024;
+/// 并发灌入的请求数：覆盖「大量在途事务同时被断连作废」的路径。
+const DISCONNECT_BURST: usize = 64;
 
 #[tokio::test]
-async fn write_timeout_aborts_pool_and_triggers_reconnect() {
-    // 显式设置 SO_RCVBUF 会关闭接收窗口自动调优：不读的对端窗口很快收缩到最小，
-    // 写超时不依赖操作系统默认值（否则 Windows 可能自动扩窗让写在测试里蒙混过关）。
+async fn disconnect_aborts_pool_and_triggers_reconnect() {
     let socket = tokio::net::TcpSocket::new_v4().expect("创建 TcpSocket");
-    socket.set_recv_buffer_size(4096).expect("设置接收缓冲");
     socket
         .bind("127.0.0.1:0".parse().expect("本地地址"))
         .expect("绑定本地端口");
@@ -381,28 +386,41 @@ async fn write_timeout_aborts_pool_and_triggers_reconnect() {
     let accept_task = tokio::spawn({
         let conns = Arc::clone(&conns);
         async move {
-            while let Ok((s, _)) = listener.accept().await {
+            let mut first = true;
+            while let Ok((mut s, _)) = listener.accept().await {
                 conns.fetch_add(1, Ordering::SeqCst);
-                // 持有连接但永不读取
-                tokio::spawn(async move {
-                    let _held = s;
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                });
+                if first {
+                    first = false;
+                    // conn#1：读走客户端的一个请求后立刻断开（设备掉电/半开）。
+                    // 客户端 reader_loop 随即读到 EOF → abort_all → 在途事务全部作废。
+                    tokio::spawn(async move {
+                        let mut buf = [0u8; 1];
+                        let _ = s.read(&mut buf).await;
+                        drop(s);
+                    });
+                } else {
+                    // conn#2+：保持连接但不应答（客户端等到自身超时），
+                    // 避免二次断连引发重连风暴，干扰「只重连一次」的断言。
+                    tokio::spawn(async move {
+                        let _held = s;
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                    });
+                }
             }
         }
     });
 
     let bus = BusConfig {
-        port_name: "bus_tcp_write_timeout".into(),
+        port_name: "bus_tcp_disconnect".into(),
         timeout_ms: 200,
         retry_count: Some(0),
         retry_delay_ms: Some(10),
-        // 并发上限足够大：避免 Busy 掩盖写超时（Busy 会被映射成 NoReply）
-        tcp_concurrent: Some(WRITE_TIMEOUT_BURST * 2),
+        // 并发上限足够大：避免 Busy 掩盖断连（Busy 会被映射成 NoReply）
+        tcp_concurrent: Some(DISCONNECT_BURST * 2),
         ..Default::default()
     };
 
-    let (tx, rx) = mpsc::channel::<BusTransaction>(WRITE_TIMEOUT_BURST * 2);
+    let (tx, rx) = mpsc::channel::<BusTransaction>(DISCONNECT_BURST * 2);
     let task = tokio::spawn(bus_task_tcp(
         bus,
         addr,
@@ -410,10 +428,10 @@ async fn write_timeout_aborts_pool_and_triggers_reconnect() {
         std::sync::Arc::new(crate::engine::metrics::Metrics::default()),
     ));
 
-    // 并发灌入：前 ~260 帧填满内核缓冲，之后某一笔必然写超时
+    // 并发灌入：这些事务都将在 conn#1 上发出，随后被对端断开一并作废
     let req = max_size_valid_request();
-    let mut handles = Vec::with_capacity(WRITE_TIMEOUT_BURST);
-    for _ in 0..WRITE_TIMEOUT_BURST {
+    let mut handles = Vec::with_capacity(DISCONNECT_BURST);
+    for _ in 0..DISCONNECT_BURST {
         handles.push(submit_custom(&tx, req.clone()));
     }
 
@@ -431,16 +449,16 @@ async fn write_timeout_aborts_pool_and_triggers_reconnect() {
     }
     assert!(
         io_errors > 0,
-        "写缓冲被填满后必须至少有一笔写超时（Disconnected→IoError）；实际样本: {unexpected:?}"
+        "连接断开后必须至少有一笔事务被判为断连（Disconnected→IoError）；实际样本: {unexpected:?}"
     );
 
-    // 写超时必须作废 pool：再提交一笔 → 主循环重连 → 恰好建立第 2 条连接
+    // 断连必须作废 pool：再提交一笔 → 主循环重连 → 恰好建立第 2 条连接
     let probe = submit_txn(&tx);
     let _ = probe.await.expect("join");
     assert_eq!(
         conns.load(Ordering::SeqCst),
         2,
-        "写超时后 pool 必须被清空并重连（且只重连一次，不得出现重连风暴）"
+        "断连后 pool 必须被清空并重连（且只重连一次，不得出现重连风暴）"
     );
 
     drop(tx);

@@ -1,5 +1,8 @@
 # Logs
 logs
+# 例外：源码目录 src/views/system/logs/ 与 `logs` 规则同名，必须入库。
+# gitignore 取「最后一条匹配规则生效」，故否定规则必须写在 `logs` 之后。
+!src/views/system/logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
