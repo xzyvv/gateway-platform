@@ -30,6 +30,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -54,6 +55,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true

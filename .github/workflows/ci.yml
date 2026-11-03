@@ -22,6 +22,7 @@ jobs:
       - name: Override cargo config for CI
         run: |
           # 移除 rsproxy 镜像配置，CI 直接使用 crates.io
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -269,6 +270,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -305,6 +307,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -411,6 +414,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -460,6 +464,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -522,6 +527,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -633,6 +639,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
@@ -748,6 +755,7 @@ jobs:
 
       - name: Override cargo config for CI
         run: |
+          mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [net]
           git-fetch-with-cli = true
