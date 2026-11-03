@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "网关调试控制台",
+  "version": "0.1.0",
+  "identifier": "com.gateway.desktop",
+  "build": {
+    "frontendDist": "../../gateway-web/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "cd ../gateway-web && npm run dev",
+    "beforeBuildCommand": "cd ../gateway-web && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "工业网关调试控制台",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "工业网关调试控制台",
+    "longDescription": "工业协议网关的桌面调试客户端，支持设备/点位配置、实时监控、报文调试、上送测试等功能。"
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": ["https://your-update-server.com/{{target}}/{{arch}}/{{current_version}}"],
+      "dialog": true,
+      "pubkey": "PLACEHOLDER_REPLACE_WITH_YOUR_PUBKEY"
+    }
+  }
+}

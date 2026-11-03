@@ -1,0 +1,287 @@
+/* Sidebar 样式（从 Layout.css 拆分）
+ * 本文件为 unscoped 全局 CSS，直接用后代选择器命中 Element Plus 组件内部类，
+ * 不需要 :deep() 穿透（:deep() 在非 scoped CSS 中是无效伪类，规则会被丢弃）。
+ * 选择器命名空间 + 子组件 root class 已隔离，实际不会污染其他组件。
+ */
+
+.sidebar {
+  background: linear-gradient(180deg, var(--dark-bg-deep) 0%, var(--dark-bg) 100%);
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: width 0.3s ease;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.12);
+  position: relative;
+}
+/* 侧边栏顶部微光装饰 */
+.sidebar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--dark-accent), transparent);
+  opacity: 0.6;
+}
+.sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+.sidebar.collapsed {
+  overflow-x: hidden;
+}
+/* 让 el-menu 区域可以滚动，避免侧边栏过长 */
+.sidebar .el-menu {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: none;
+  padding: 8px 0;
+}
+.sidebar .el-menu::-webkit-scrollbar {
+  width: 4px;
+}
+.sidebar .el-menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-bar);
+}
+.sidebar .el-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+/* 分组小标题点缀 */
+.sidebar .el-sub-menu__title .el-icon {
+  font-size: 1rem;
+}
+.sidebar .el-sub-menu__title .el-sub-menu__icon-arrow {
+  color: var(--dark-text-secondary);
+  font-size: 0.6875rem;
+}
+/* 折叠态：子菜单弹层（el-popper）的视觉与侧边栏一致 */
+.el-menu--popup {
+  background: var(--dark-bg) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 4px 4px 16px rgba(0, 0, 0, 0.4) !important;
+  border-radius: 8px !important;
+  padding: 6px 0 !important;
+}
+.el-menu--popup .el-menu-item {
+  background: transparent !important;
+  color: var(--dark-text-menu) !important;
+  margin: 2px 6px !important;
+  border-radius: 6px !important;
+  height: 36px !important;
+  line-height: 36px !important;
+  min-width: 160px;
+}
+.el-menu--popup .el-menu-item:hover {
+  background: rgba(var(--dark-accent-rgb), 0.12) !important;
+  color: var(--text-inverse) !important;
+}
+.el-menu--popup .el-menu-item.is-active {
+  background: linear-gradient(90deg, rgba(var(--dark-accent-rgb), 0.2) 0%, rgba(var(--dark-accent-rgb), 0.05) 100%) !important;
+  color: var(--dark-accent) !important;
+  font-weight: 600;
+}
+
+/* Logo */
+.logo {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+  padding: 0 16px;
+}
+.logo-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-card);
+  /* 品牌渐变与登录页 Logo、卡片顶条同一语言（侧栏常暗，直接用亮色品牌靛蓝→青） */
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-inverse);
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.35);
+}
+.logo-text {
+  color: var(--dark-text);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+/* 菜单搜索 */
+.menu-search {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.menu-search .el-input__wrapper {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+}
+.menu-search .el-input__inner {
+  color: var(--dark-text-menu);
+}
+.menu-search .el-input__inner::placeholder {
+  color: var(--dark-text-menu-group);
+}
+
+/* 搜索空态：明确告知没有匹配，并提示可换个关键词 */
+.menu-empty {
+  padding: 16px 14px;
+  color: var(--dark-text-menu-group);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.menu-empty span {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+/* 搜索结果里的层级路径「业务域 › 功能名」，弱化为次要信息 */
+.sidebar .menu-item-path {
+  display: inline-block;
+  max-width: 110px;
+  margin-left: 8px;
+  font-size: 0.6875rem;
+  color: var(--dark-text-menu-group);
+  vertical-align: bottom;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 窄屏抽屉：侧栏脱离文档流浮在内容之上，保留完整 220px 菜单（分组名可见）。
+ * 桌面端的 collapsed 折叠态仍由 el-aside 的 :width 控制，这里用 !important 覆盖。 */
+.sidebar.mobile-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 2100;
+  width: 220px !important;
+  transform: translateX(-100%);
+  transition: transform 0.25s ease;
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.35);
+}
+.sidebar.mobile-drawer.open {
+  transform: translateX(0);
+}
+
+/* 菜单 */
+.sidebar .el-menu--collapse {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sidebar .el-menu-item,
+.sidebar .el-sub-menu {
+  transition: background-color 0.2s, color 0.2s;
+}
+.sidebar .el-sub-menu__title {
+  margin: 4px 10px;
+  border-radius: var(--radius-table);
+  height: 44px;
+  line-height: 44px;
+  color: var(--dark-text-menu);
+  font-weight: 600;
+  transition: background-color, color 0.2s;
+}
+.sidebar .el-sub-menu__title:hover {
+  background: rgba(var(--dark-accent-rgb), 0.1) !important;
+  color: var(--text-inverse) !important;
+}
+.sidebar .el-sub-menu .el-menu-item {
+  margin: 2px 10px 2px 20px;
+  height: 38px;
+  line-height: 38px;
+  border-radius: var(--radius-button);
+}
+.sidebar .el-menu-item {
+  margin: 4px 10px;
+  border-radius: var(--radius-table);
+  height: 44px;
+  line-height: 44px;
+  transition: background-color, color, width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+/* 折叠状态下菜单项宽度撑满，去除左右留白使指示条紧贴 */
+.sidebar.collapsed .el-menu-item {
+  margin: 4px 0;
+  border-radius: 0;
+}
+.sidebar .el-menu-item:hover {
+  background: rgba(var(--dark-accent-rgb), 0.12) !important;
+  color: var(--dark-text) !important;
+  transform: translateX(2px);
+}
+/* 折叠态下取消水平位移，避免选中指示条跳动 */
+.sidebar.collapsed .el-menu-item:hover,
+.sidebar.collapsed .el-menu-item.is-active:hover {
+  transform: none;
+}
+.sidebar .el-menu-item:hover .el-icon {
+  color: var(--dark-accent);
+}
+.sidebar .el-menu-item.is-active {
+  background: linear-gradient(90deg, rgba(var(--dark-accent-rgb), 0.2) 0%, rgba(var(--dark-accent-rgb), 0.05) 100%) !important;
+  color: var(--dark-accent) !important;
+  font-weight: 600;
+}
+.sidebar .el-menu-item.is-active .el-icon {
+  color: var(--dark-accent);
+}
+.sidebar .el-menu-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 24px;
+  border-radius: 0 3px 3px 0;
+  background: var(--dark-accent);
+  box-shadow: 0 0 8px rgba(var(--dark-accent-rgb), 0.6);
+}
+/* 折叠状态下选中指示条紧贴侧边栏左缘 */
+.sidebar.collapsed .el-menu-item.is-active::before {
+  left: 0;
+  border-radius: 0 3px 3px 0;
+}
+/* 折叠态 hover 时取消整条 hover 背景，避免选中条被覆盖 */
+.sidebar.collapsed .el-menu-item.is-active {
+  box-shadow: inset 3px 0 0 var(--dark-accent);
+}
+
+/* 暗色补强（与既有 global.css 暗色块语义一致） */
+html.dark .menu-search .el-input__wrapper {
+  background: rgba(255, 255, 255, 0.08);
+}
+html.dark .sidebar .el-menu-item,
+html.dark .sidebar .el-sub-menu__title {
+  color: var(--dark-text-menu);
+}
+html.dark .sidebar .el-menu-item.is-active {
+  background: linear-gradient(90deg, rgba(var(--dark-accent-rgb), 0.25) 0%, rgba(var(--dark-accent-rgb), 0.05) 100%) !important;
+  color: var(--dark-accent) !important;
+}
+
+/* 窄屏：面包屑和顶栏时钟隐藏 */
+@media (max-width: 768px) {
+  .el-breadcrumb {
+    display: none;
+  }
+}

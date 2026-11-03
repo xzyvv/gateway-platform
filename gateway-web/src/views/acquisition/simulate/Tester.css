@@ -1,0 +1,31 @@
+/* 点位读写测试页（Tester.vue）主组件样式。
+   拆分子组件后，区块内的规则已随各自组件迁入 parts/*.vue 的 scoped 样式，
+   这里只保留主组件骨架（页面容器 + 左右两栏栅格）。 */
+
+.tester-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 与其他页面保持一致的 section-header：左侧色条 + 图标 + 标题 */
+/* W67: 与 VISUAL_SPEC §3.1 / Dashboard / Realtime / Logs / Devices / Points / History 统一——渐变方向 90deg */
+
+.tester-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  /* 两卡内容量差异大：左卡只有选择与操作，右卡含操作记录列表（min-height 300）。
+     默认 stretch 会把左卡拉到与右卡等高，在左卡下方留下 60% 以上空白。 */
+  align-items: start;
+}
+@media (max-width: 768px) {
+  .tester-grid { grid-template-columns: 1fr; }
+}
+
+.perf-result {
+  margin-top: 14px;
+  background: var(--bg-fill);
+  border-radius: var(--radius-table);
+  padding: 8px;
+}

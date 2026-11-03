@@ -1,0 +1,63 @@
+[package]
+name = "gatewayd"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# 网关守护进程：仅承载启动编排（13 步）+ main 入口。
+# 引擎能力全部来自 gateway-core；Web API 拆分后由 gateway-api 提供（见后续步骤）。
+
+[dependencies]
+# 协议裁剪：两处都必须关掉默认 feature，否则 gateway-core / gateway-api 的
+# `default = ["all-protocols"]` 会无条件把默认发行集全部编进来，
+# `cargo build -p gatewayd --no-default-features --features dlt645` 等于无效。
+# 默认行为由本 crate 的 `default = ["all-protocols"]` 恢复（见 [features]）。
+gateway-core = { path = "../gateway-core", default-features = false }
+gateway-api = { path = "../gateway-api", default-features = false }
+tokio = { workspace = true }
+# bootstrap 自愈执行器停机需要 CancellationToken（与 gateway-core 同一用法）
+tokio-util = { version = "0.7", features = ["rt"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+arc-swap = { workspace = true }
+
+[features]
+## 默认启用标准发行集（与 gateway-core / gateway-api 口径一致，保持现有 cargo build 行为）
+default = ["all-protocols"]
+## ===== 协议插件化 feature：必须双转发 core + api =====
+## 只转发 core 会漏掉 gateway-api 侧的路由/handler 切换，导致两 crate 编译视图不一致。
+## FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」，仅保留 feature 供显式启用。
+all-protocols = [
+    "gateway-core/all-protocols",
+    "gateway-api/all-protocols",
+]
+modbus = ["gateway-core/modbus", "gateway-api/modbus"]
+dlt645 = ["gateway-core/dlt645", "gateway-api/dlt645"]
+cjt188 = ["gateway-core/cjt188", "gateway-api/cjt188"]
+opcua = ["gateway-core/opcua", "gateway-api/opcua"]
+iec104 = ["gateway-core/iec104", "gateway-api/iec104"]
+bacnet = ["gateway-core/bacnet", "gateway-api/bacnet"]
+s7comm = ["gateway-core/s7comm", "gateway-api/s7comm"]
+## 退役观察：BACnet MS/TP
+bacnet-mstp = ["gateway-core/bacnet-mstp", "gateway-api/bacnet-mstp"]
+mc = ["gateway-core/mc", "gateway-api/mc"]
+## 退役观察：欧姆龙 FINS
+fins = ["gateway-core/fins", "gateway-api/fins"]
+iec101 = ["gateway-core/iec101", "gateway-api/iec101"]
+
+## ===== 行业 SKU 聚合 feature：发行构建直接选用 =====
+## 各 SKU 按南向协议互斥切片，定义见 gateway-core/Cargo.toml。
+sku-standard = ["gateway-core/sku-standard", "gateway-api/sku-standard"]
+sku-building = ["gateway-core/sku-building", "gateway-api/sku-building"]
+sku-power = ["gateway-core/sku-power", "gateway-api/sku-power"]
+sku-plc = ["gateway-core/sku-plc", "gateway-api/sku-plc"]
+sku-minimal = ["gateway-core/sku-minimal", "gateway-api/sku-minimal"]
+
+## 生产构建启用 SQLite 加密（rusqlite/bundled-sqlcipher）
+encryption = ["gateway-core/encryption", "gateway-api/encryption"]
+## OTLP 远程 trace 导出：转发至 gateway-core（启动编排引用该 cfg）+ gateway-api
+tracing-otlp = ["gateway-core/tracing-otlp", "gateway-api/tracing-otlp"]
+## 远程诊断只读 Shell（默认关闭）：转发至 gateway-core / gateway-api
+remote-shell = ["gateway-core/remote-shell", "gateway-api/remote-shell"]

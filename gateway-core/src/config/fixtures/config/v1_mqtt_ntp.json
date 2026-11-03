@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "buses": [],
+  "points": [],
+  "mqtt": {
+    "enabled": true,
+    "broker": "mqtt://broker.example.com:1883",
+    "topic": "gateway/plant1/data",
+    "publish_interval": 10,
+    "qos": 1,
+    "keep_alive": 30
+  },
+  "ntp": {
+    "server": "pool.ntp.org",
+    "sync_interval": 3600
+  }
+}

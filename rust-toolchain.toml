@@ -1,0 +1,6 @@
+﻿# 锁定 Rust 工具链版本，避免 CI / 本地 dev 因 stable 滚动升级导致 lint 失败或行为漂移。
+# 升级时修改此处的 channel，并在 CI 中同步 `dtolnay/rust-toolchain@<version>`。
+
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

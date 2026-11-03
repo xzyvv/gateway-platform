@@ -1,0 +1,90 @@
+import { defineStore } from 'pinia'
+import { ref, computed, watch } from 'vue'
+import type { LicenseState } from '@/api/generated/LicenseState'
+import { fetchLicense } from '@/api/license'
+import { scopedGet, scopedSet } from '../utils/gatewayStorage'
+
+/** license 档位。v2.0 起仅约束产能配额，不再控制页面可见性。 */
+export type Tier = 'core' | 'standard' | 'pro' | 'ultra'
+
+export const TIER_RANK: Record<Tier, number> = {
+  core: 0,
+  standard: 1,
+  pro: 2,
+  ultra: 3,
+}
+
+export const TIER_LABEL: Record<Tier, string> = {
+  core: '核心版',
+  standard: '标准版',
+  pro: '专业版',
+  ultra: '旗舰版',
+}
+
+export const TIER_DESCRIPTION: Record<Tier, string> = {
+  core: '日常监控 / 配置 / 上下载',
+  standard: '工程师调试 / 设备管理进阶',
+  pro: '高级协议分析 / 数据分析',
+  ultra: '专家级抓包 / 波形 / 单步',
+}
+
+const STORAGE_KEY = 'gateway_tier'
+
+function loadInitialTier(): Tier {
+  try {
+    // #6: 按激活网关隔离，避免多网关切换时档位串台
+    const raw = scopedGet(STORAGE_KEY)
+    if (raw === 'core' || raw === 'standard' || raw === 'pro' || raw === 'ultra') {
+      return raw
+    }
+  } catch { /* ignore */ }
+  // v2.0 起档位不再控制页面可见性，开发模式没有理由虚标为最高档
+  // （「旗舰版」徽章与真实 license 不符会让现场用户误判授权状态）。
+  // 统一从最低档起步，等 /api/license 返回后由 refreshFromLicense 校正。
+  return 'core'
+}
+
+export const useTierStore = defineStore('tier', () => {
+  const current = ref<Tier>(loadInitialTier())
+
+  /**
+   * 最近一次 GET /api/license 快照（null = 尚未拉取或拉取失败）。
+   * 驱动 Topbar license 状态徽章（生产模式）与 403 拦截提示中的授权编号。
+   */
+  const licenseState = ref<LicenseState | null>(null)
+  const licenseStatus = computed(() => licenseState.value?.status ?? null)
+
+  watch(current, (v) => {
+    try { scopedSet(STORAGE_KEY, v) } catch { /* ignore */ }
+  })
+
+  const rank = computed(() => TIER_RANK[current.value])
+  const label = computed(() => TIER_LABEL[current.value])
+
+  /**
+   * 拉取并应用 license 快照（§11.1：初始化来源改为 GET /api/license）。
+   * - current 一律以 license 为准（含开发模式）：档位已不再控制页面可见性，
+   *   开发模式下保留「手动切档」只会让徽章显示一个网关并不具备的档位；
+   * - setTier 仍保留给开发期在已加载后临时切换观察 UI。
+   *
+   * 拉取失败静默返回（网关未就绪 / 匿名禁读 / 旧版本无此端点），不阻断登录与首屏。
+   */
+  async function refreshFromLicense(): Promise<void> {
+    let s: LicenseState
+    try {
+      s = await fetchLicense()
+    } catch {
+      return
+    }
+    licenseState.value = s
+    current.value = s.tier
+  }
+
+  /** 手动切档：仅开发模式可用（生产档位以 license 为准，调用为 no-op） */
+  function setTier(t: Tier) {
+    if (!import.meta.env.DEV) return
+    current.value = t
+  }
+
+  return { current, rank, label, licenseState, licenseStatus, setTier, refreshFromLicense }
+})

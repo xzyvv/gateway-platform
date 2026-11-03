@@ -1,0 +1,88 @@
+﻿name: security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # 每周一 02:00 UTC 定期扫描（RustSec 公告库持续更新）
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-audit:
+    name: cargo audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: cargo audit
+        run: cargo audit --deny warnings
+
+  cargo-deny:
+    name: cargo deny (licenses / bans / sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: cargo deny check (advisories + licenses + bans + sources)
+        run: cargo deny check
+
+  npm-audit:
+    name: npm audit (frontend deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend deps
+        run: |
+          cd gateway-web
+          npm ci
+
+      - name: npm audit (production deps)
+        run: |
+          cd gateway-web
+          # 仅审计生产依赖，dev 依赖漏洞仅警告不阻断
+          npm audit --omit=dev --audit-level=high || {
+            echo "::warning::npm audit found vulnerabilities in production dependencies"
+            exit 1
+          }

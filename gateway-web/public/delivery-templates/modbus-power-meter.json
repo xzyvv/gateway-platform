@@ -1,0 +1,41 @@
+{
+  "kind": "gateway-project",
+  "schema_version": 1,
+  "exported_at": 0,
+  "buses": [
+    {
+      "port_name": "COM3",
+      "protocol": "modbus",
+      "baud_rate": 9600,
+      "parity": "none",
+      "data_bits": 8,
+      "stop_bits": 1,
+      "timeout_ms": 500,
+      "retry_count": 3,
+      "retry_delay_ms": 200,
+      "modbus_mode": "rtu"
+    }
+  ],
+  "northbound": {
+    "mqtt": {
+      "enabled": false,
+      "broker": "mqtt://127.0.0.1:1883",
+      "topic": "gateway/data"
+    }
+  },
+  "mappings": {
+    "points": [],
+    "devices": [
+      {
+        "id": "meter_1",
+        "name": "1号电表",
+        "template": "通用Modbus三相电力仪表",
+        "bus": "COM3",
+        "protocol": "modbus",
+        "address": "1",
+        "slave_id": 1,
+        "interval": 5
+      }
+    ]
+  }
+}

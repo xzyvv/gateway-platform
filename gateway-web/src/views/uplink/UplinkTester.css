@@ -1,0 +1,73 @@
+.uplink-tester {
+  padding: 0;
+}
+/* 卡片体内的小节标题：沿用 SectionHeader，仅补段落下间距 */
+.section-header-block {
+  margin-bottom: 12px;
+}
+.meta {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.template-textarea textarea {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.compile-error {
+  margin-top: 8px;
+}
+.quick-templates {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.quick-label {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  margin-right: 4px;
+}
+.preview-result {
+  margin-top: 12px;
+}
+.preview-label {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  margin-bottom: 6px;
+}
+.preview-code {
+  background: var(--bg-fill);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-button);
+  padding: 12px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0;
+}
+.footer-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-extralight);
+  padding-top: 16px;
+}
+.history-payload {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.75rem;
+  background: var(--bg-fill);
+  padding: 2px 6px;
+  border-radius: 3px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  display: inline-block;
+  max-width: 100%;
+}

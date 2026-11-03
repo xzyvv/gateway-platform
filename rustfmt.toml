@@ -1,0 +1,15 @@
+# rustfmt 配置：稳定优先，避免协作格式漂移
+# 文档：https://rust-lang.github.io/rustfmt/
+#
+# 仅使用 stable 通道稳定的选项。如启用 nightly，可解开下方注释进一步规范 import 排序。
+
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# ===== nightly-only（stable 下解开会被忽略并警告，建议跳过）=====
+# imports_granularity = "Crate"
+# group_imports = "StdValueCrate"

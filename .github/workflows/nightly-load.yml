@@ -1,0 +1,54 @@
+name: nightly-load
+
+# 夜间负载/soak 回归：执行平时从不运行的 3 个 `#[ignore]` 负载用例
+# （T2a 串口农场满载 soak / 波特率保真 / 瞬时静默恢复）。
+# 这些用例依赖时间与真实定时语义，不适合塞进 PR 门禁；放入夜间定时任务
+# 使长期 soak 退化、节流失真、卡死类回归能在 MQTT/协议/队列改动后及时暴露。
+#
+# 定时：UTC 18:00 = 北京时间次日 02:00，避开 main 合并高峰。
+# 设计为**独立工作流**而非给 ci.yml 加 schedule——否则 check/chaos/e2e/coverage
+# 等全部会跟着 nightly 跑，成本过高。
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  # 支持手动触发：Actions → nightly-load → Run workflow
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: ""
+
+jobs:
+  load:
+    name: load / soak scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          # 移除 rsproxy 镜像配置，CI 直接使用 crates.io
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # 独立 key（-cargo-load-）：instrumented/generic 构建产物与其他 job 缓存互不干扰
+          key: ${{ runner.os }}-cargo-load-${{ hashFiles('**/Cargo.lock') }}
+
+      # 负载规模可用环境变量覆盖；此处用默认值（300 点 / 4800 baud / soak 30s）。
+      # 默认 `LOAD_SOAK_SECS=30s` 会拉长单测时长，故由夜间任务独占执行
+      # （显式串行 `--test-threads=1`，避免定时器语义互相干扰）。
+      - name: Run overnight load / soak scenarios
+        run: cargo test -p gateway-core --test load --quiet -- --ignored --test-threads=1

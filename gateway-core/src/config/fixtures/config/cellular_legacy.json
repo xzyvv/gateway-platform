@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "buses": [],
+  "points": [],
+  "mqtt": { "enabled": false },
+  "cellular": {
+    "enabled": true,
+    "apn": "cmnet",
+    "username": "",
+    "password": ""
+  }
+}

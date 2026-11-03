@@ -1,0 +1,409 @@
+/* Topbar 样式（从 Layout.css 拆分） */
+
+/* 顶栏 */
+.header {
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-extralight);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  z-index: 10;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* P2 溢出策略：左侧允许收缩，面包屑超长转省略号，不挤压右侧控件 */
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+.collapse-btn {
+  font-size: 1.125rem;
+  color: var(--text-regular);
+  border-radius: var(--radius-table);
+  transition: background 0.2s;
+}
+.collapse-btn:hover {
+  background: var(--bg-fill) !important;
+  color: var(--color-primary) !important;
+}
+
+/* 面包屑 */
+.header-breadcrumb {
+  font-size: 0.875rem;
+  min-width: 0;
+}
+.header-breadcrumb .el-breadcrumb__inner {
+  color: var(--text-secondary);
+  transition: color 0.2s;
+  /* 长标题截断：顶栏控件再多也不被面包屑推出屏幕 */
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+.header-breadcrumb .el-breadcrumb__inner.is-link:hover {
+  color: var(--color-primary);
+}
+.header-breadcrumb .el-breadcrumb__item:last-child .el-breadcrumb__inner {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.header-breadcrumb .el-breadcrumb__separator {
+  color: var(--text-placeholder);
+  margin: 0 6px;
+}
+/* 网关切换器 */
+.gateway-switcher {
+  color: var(--text-regular);
+  border-radius: var(--radius-table);
+  transition: background-color, color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+}
+.gateway-switcher:hover {
+  color: var(--color-primary) !important;
+  background: var(--color-primary-lightest) !important;
+}
+.gateway-switcher .gateway-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+.gw-active-tag {
+  margin-left: auto;
+  color: var(--text-success);
+  font-size: 0.6875rem;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  /* P2 溢出策略：右侧控件组永不收缩换行，配合左侧收缩 + 下方断点渐进隐藏 */
+  flex-shrink: 0;
+}
+
+/* 健康状态徽章 */
+.health-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  /* 200% 字号缩放时不压缩文字（否则徽章会被挤成竖排） */
+  flex-shrink: 0;
+  white-space: nowrap;
+  background: var(--color-danger-bg);
+  color: var(--text-danger);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid var(--color-danger-border);
+  transition: background-color, color, border-color 0.3s ease;
+}
+
+/* 断连态下拉包裹：健康徽章 + caret 合并，整段可点击 */
+.badge-with-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+}
+.gw-triage .el-dropdown-selfdefine.is-disabled .badge-with-actions {
+  cursor: default;
+}
+.triage-caret {
+  font-size: 0.625rem;
+  color: var(--text-secondary);
+}
+
+/* 顶栏时钟 */
+.topbar-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  background: var(--bg-fill);
+  color: var(--text-regular);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid var(--border-light);
+  font-variant-numeric: tabular-nums;
+  transition: background-color, border-color, color, box-shadow, transform 0.2s;
+}
+html.dark .topbar-clock { color: var(--text-primary); }
+/* 暗色：顶栏分隔靠阴影，底部边框在深底上几乎不可见 —— 阴影加深 + 底边描边提亮 */
+html.dark .header {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  border-bottom-color: var(--border-base);
+}
+.topbar-clock:hover {
+  background: linear-gradient(135deg, var(--color-primary-bg) 0%, var(--color-primary-lighter) 100%);
+  border-color: var(--color-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(var(--color-primary-rgb), 0.15);
+}
+.topbar-clock .el-icon {
+  font-size: 0.8125rem;
+}
+.health-badge.healthy {
+  background: var(--color-success-bg);
+  color: var(--text-success);
+  border-color: var(--color-success-border);
+}
+/* W13: 删除未使用的 .health-badge.unhealthy（healthOkClass 只返回 healthy/warning/unknown）。
+   unknown 状态下圆点已在 .health-dot 默认 error 脉冲；恢复此分支需扩展 healthOkClass。 */
+.health-badge.unknown {
+  background: var(--color-info-bg);
+  color: var(--text-secondary);
+  border-color: var(--border-base);
+}
+/* 可达但有异常项（组件降级 / 队列积压）：黄色提醒，不抢占「断连」的红色优先级 */
+.health-badge.warning {
+  background: var(--color-warning-bg);
+  color: var(--text-warning);
+  border-color: var(--color-warning-border);
+}
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  animation: healthPulseError 1.5s ease-in-out 3;
+}
+.health-badge.healthy .health-dot {
+  background: var(--color-success);
+  animation: healthPulse 2s ease-in-out 3;
+}
+.health-badge.unknown .health-dot {
+  background: var(--color-warning);
+  animation: healthPulse 2s ease-in-out 3;
+}
+.health-badge.warning .health-dot {
+  background: var(--color-warning);
+  animation: healthPulse 2s ease-in-out 3;
+}
+/* ===== License 状态徽章（生产模式，§11.2：ok 绿 / expiring 黄 / 降级红）===== */
+/* 可点击：打开授权管理对话框（设备码复制 / .lic 导入） */
+.health-badge.license-badge {
+  cursor: pointer;
+}
+/* 用钥匙图标区分「授权」语义；健康徽章的圆点只属于在线状态 */
+.health-badge.license-badge .license-icon {
+  font-size: 0.875rem;
+}
+.health-badge.license-badge.ok {
+  background: var(--color-success-bg);
+  color: var(--text-success);
+  border-color: var(--color-success-border);
+}
+.health-badge.license-badge.expiring {
+  background: var(--color-warning-bg);
+  color: var(--text-warning);
+  border-color: var(--color-warning-border);
+}
+.health-badge.license-badge.invalid {
+  background: var(--color-danger-bg);
+  color: var(--text-danger);
+  border-color: var(--color-danger-border);
+}
+/* ===== 安全风险徽章 ===== */
+/* 语义：黄色警示（不阻断使用，但接入生产前应收敛），与健康/授权的绿-黄-红体系一致；
+   用 warning 色而非 danger，避免与「网关断连」抢同一视觉优先级。 */
+.security-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 4px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--color-warning-border);
+  background: var(--color-warning-bg);
+  color: var(--text-warning);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color, color, border-color 0.2s ease;
+}
+.security-badge:hover {
+  border-color: var(--color-warning);
+}
+.security-badge:focus-visible {
+  outline: 2px solid var(--color-warning);
+  outline-offset: 2px;
+}
+
+@keyframes healthPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--color-success-rgb), 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(var(--color-success-rgb), 0); }
+}
+@keyframes healthPulseError {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--color-danger-rgb), 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(var(--color-danger-rgb), 0); }
+}
+
+.logout-btn {
+  color: var(--text-regular);
+  border-radius: var(--radius-table);
+  transition: background-color, color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.logout-btn:hover {
+  color: var(--color-primary) !important;
+  background: var(--color-primary-lightest) !important;
+}
+.logout-btn .el-icon--right {
+  font-size: 0.75rem;
+  transition: transform 0.2s ease;
+}
+.logout-text {
+  margin-left: 2px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tier 切换器（仅 dev 可见）：与网关切换器/退出按钮同款圆角按钮风格 */
+.tier-switcher { margin-left: 4px; }
+.tier-btn {
+  color: var(--text-regular);
+  border-radius: var(--radius-table);
+  padding: 6px 10px;
+}
+.tier-btn:hover {
+  color: var(--color-primary) !important;
+  background: var(--color-primary-lightest) !important;
+}
+.tier-btn .tier-label {
+  margin-left: 4px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.tier-hint {
+  margin-left: 8px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+/* 顶栏账户下拉菜单：图标与文字对齐，hover 更柔和 */
+.header-right .el-dropdown-menu {
+  padding: 6px;
+  border-radius: var(--radius-table);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+}
+/* 暗色：弹层阴影纯黑在深底上不可见，弹层与页面「糊」在一起看不出层级 */
+html.dark .header-right .el-dropdown-menu {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.header-right .el-dropdown-menu__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius-button);
+  padding: 8px 14px;
+  font-size: 0.8125rem;
+  transition: background 0.15s, color 0.15s;
+}
+.header-right .el-dropdown-menu__item .el-icon {
+  font-size: 0.9375rem;
+  color: var(--text-regular);
+  transition: color 0.15s;
+}
+.header-right .el-dropdown-menu__item:not(.is-disabled):hover {
+  background: var(--color-primary-lightest);
+  color: var(--color-primary);
+}
+.header-right .el-dropdown-menu__item:not(.is-disabled):hover .el-icon {
+  color: var(--color-primary);
+}
+.header-right .el-dropdown-menu__item--divided {
+  margin-top: 4px;
+  position: relative;
+}
+
+/* 顶栏图标按钮（主题切换 / 全局搜索） */
+.icon-btn {
+  margin-left: 4px;
+  padding: 8px;
+  border-radius: var(--radius-table);
+  color: var(--text-regular);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.icon-btn:hover {
+  color: var(--color-primary);
+  background: var(--bg-fill);
+}
+
+/* ===== 顶栏溢出策略（P2）：右侧最多 9 个控件，按优先级随宽度渐进收缩 =====
+ * 结构性保障（上方）：header-left 收缩 + 面包屑省略号，header-right 不换行不收缩。
+ * 断点统一为两档（与 VISUAL_SPEC 一致）：
+ *   ≤1200px  压缩间距与网关名宽度；藏时钟（纯信息）与密度按钮；健康徽章只留圆点
+ *   ≤768px   网关名 / 档位文字只留图标；用户名文字隐藏
+ * 保留到最后的：折叠按钮、面包屑、健康圆点、通知、主题、用户图标。 */
+
+/* 宽屏压缩：间距与网关名宽度 */
+@media (max-width: 1200px) {
+  .header-right {
+    gap: 10px;
+  }
+  .gateway-switcher .gateway-name {
+    max-width: 80px;
+  }
+}
+
+/* 笔记本/小窗口：藏纯信息型控件 */
+@media (max-width: 1200px) {
+  .topbar-clock {
+    display: none;
+  }
+  .density-btn {
+    display: none;
+  }
+}
+
+/* 中等屏幕（平板）：隐藏健康状态文字只保留圆点，避免顶栏拥挤 */
+@media (max-width: 1200px) and (min-width: 769px) {
+  .health-badge {
+    padding: 4px;
+  }
+  .health-badge > span:last-child {
+    display: none;
+  }
+  .header-right {
+    gap: 10px;
+  }
+}
+
+/* 更窄：切换器只留图标 */
+@media (max-width: 768px) {
+  .gateway-switcher .gateway-name {
+    display: none;
+  }
+  .tier-btn .tier-label {
+    display: none;
+  }
+}
+
+/* 窄屏：用户名文字隐藏（时钟已在 ≤1280px 隐藏） */
+@media (max-width: 768px) {
+  .logout-text {
+    display: none;
+  }
+}

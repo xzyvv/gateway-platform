@@ -1,0 +1,21 @@
+/* GatewayScanDialog 样式（从 Layout.css 拆分） */
+
+/* LAN 扫描弹窗 */
+.scan-loading, .scan-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 12px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+.scan-loading .is-loading {
+  animation: rotating 1.5s linear infinite;
+}
+@keyframes rotating {
+  from { transform: rotate(0); }
+  to { transform: rotate(360deg); }
+}
+.scan-empty .el-icon {
+  color: var(--color-warning);
+}

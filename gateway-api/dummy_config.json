@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "buses": [
+    {
+      "port_name": "/dev/ttyS0",
+      "baud_rate": 9600,
+      "parity": "none",
+      "data_bits": 8,
+      "stop_bits": 1,
+      "timeout_ms": 500,
+      "protocol": "modbus",
+      "retry_count": 2,
+      "retry_delay_ms": 200,
+      "de_pin": null,
+      "modbus_mode": "rtu",
+      "dlt645_version": "2007",
+      "variant": null,
+      "tcp_addr": null,
+      "tcp_concurrent": null,
+      "channel_capacity": null,
+      "asdu_addr_len": null,
+      "reconnect_backoff": {
+        "seconds": [
+          1,
+          2,
+          5,
+          10,
+          30
+        ],
+        "jitter_ratio": 0.0
+      }
+    }
+  ],
+  "points": [
+    {
+      "id": "proj_p1",
+      "name": "P1",
+      "device_id": null,
+      "bus": "/dev/ttyS0",
+      "protocol": "modbus",
+      "address": "1",
+      "slave_id": null,
+      "address_num": 1,
+      "data_id": null,
+      "function_code": null,
+      "data_type": null,
+      "byte_order": null,
+      "register_count": null,
+      "interval": 10,
+      "scale": 1.0,
+      "offset": 0.0,
+      "formula": null,
+      "ct_ratio": null,
+      "pt_ratio": null,
+      "deadband": 0.0,
+      "on_change": false,
+      "unit": null,
+      "alarm_high": null,
+      "alarm_low": null,
+      "aggregation": null,
+      "modbus_register": null,
+      "writable": false
+    }
+  ],
+  "devices": null,
+  "mqtt": {
+    "enabled": false,
+    "broker": "proj.broker",
+    "topic": "proj/topic",
+    "publish_interval": 5,
+    "qos": 1,
+    "keep_alive": 30,
+    "ack_timeout_secs": null,
+    "username": null,
+    "password": null,
+    "compression": null,
+    "compression_threshold": null,
+    "resume_rate_limit": null,
+    "payload_template": null,
+    "tls": null,
+    "reconnect_backoff": {
+      "seconds": [
+        2,
+        4,
+        8,
+        16,
+        32,
+        60
+      ],
+      "jitter_ratio": 0.4
+    }
+  },
+  "ntp": {
+    "server": "ntp.aliyun.com",
+    "sync_interval": 3600
+  },
+  "web": {
+    "api_token": "enc:RU5DMsdJWtHYG0Lv1OeepolcfimvW+NsGPFrC3yraBtE9eAiPFU=",
+    "username": "admin",
+    "password_hash": "enc:RU5DMiV7YcOqTB1hTT+QMwsC16fEbxfGtHGiXTj40W5mSjW+ahSB",
+    "listen_addr": "127.0.0.1:0",
+    "allow_anon_read": true,
+    "realtime_buffer": 1024,
+    "ota_signing_key": null,
+    "rate_limit_per_sec": null,
+    "cors_origins": null,
+    "allow_default_token": true,
+    "users": []
+  },
+  "webhook": null,
+  "cellular": null,
+  "opcua": null,
+  "modbus_server": null,
+  "modbus_passthrough": null,
+  "device_groups": null,
+  "device_assets": null,
+  "virtual_points": null,
+  "telemetry": null,
+  "license": null,
+  "self_heal": null
+}

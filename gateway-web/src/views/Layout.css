@@ -1,0 +1,66 @@
+/* Layout 薄壳样式
+ *
+ * 各子组件样式已拆分到：
+ *   - ./layout/Sidebar.css
+ *   - ./layout/Topbar.css
+ *   - ./layout/GatewayScanDialog.css
+ *   - ./layout/ShortcutHelpDialog.vue（自带 scoped 样式）
+ *
+ * 本文件仅保留容器壳层（layout/main-content/页面过渡）+ 对应的媒体查询。
+ */
+
+.layout {
+  height: 100vh;
+}
+
+/* 窄屏抽屉遮罩：盖住顶栏与内容区，仅低于抽屉本身 */
+.sidebar-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.main-content {
+  background:
+    radial-gradient(ellipse at top right, rgba(var(--color-primary-rgb), 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at bottom left, rgba(var(--dark-accent-rgb), 0.03) 0%, transparent 50%),
+    linear-gradient(180deg, var(--bg-fill) 0%, var(--bg-fill) 100%);
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* 超宽屏内容上限：1760px 之后表格/卡片的行长继续拉长只会降低可读性，
+ * 让两侧留白吸收多余宽度（背景仍由 .main-content 铺满整屏）。 */
+.main-inner {
+  width: 100%;
+  max-width: 1760px;
+  margin: 0 auto;
+}
+
+/* 页面过渡 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* 常规笔记本宽度：收紧主内容留白，把横向空间让给表格与图表 */
+@media (max-width: 1440px) {
+  .main-content {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 768px) {
+  .main-content {
+    padding: 12px;
+  }
+}

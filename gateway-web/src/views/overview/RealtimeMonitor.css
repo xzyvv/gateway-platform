@@ -1,0 +1,245 @@
+.realtime {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section-card {
+  border-radius: var(--radius-card);
+}
+
+/* 断连但仍有数据时的陈旧值提示条 */
+.stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-warning-border);
+  border-left: 3px solid var(--color-warning);
+  border-radius: var(--radius-button);
+  background: var(--color-warning-bg);
+  color: var(--text-warning);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.stale-ico {
+  flex: none;
+  font-size: 1rem;
+}
+.stale-text {
+  flex: 1;
+  min-width: 0;
+}
+/* W19: 与 VISUAL_SPEC §3.1 / Dashboard 一致——渐变方向 90deg */
+
+.conn-tag {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.count-badge {
+  font-weight: 400;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  flex-shrink: 0;
+}
+.dot.active {
+  background: var(--color-success);
+  box-shadow: 0 0 0 0 rgba(var(--color-success-rgb), 0.5);
+  animation: pulse 1.8s ease-in-out 3;
+}
+.dot.reconnecting {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 0 rgba(var(--color-warning-rgb), 0.5);
+  animation: pulseWarn 1.2s ease-in-out 3;
+}
+@keyframes pulseWarn {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(var(--color-success-rgb), 0.5);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.15);
+    box-shadow: 0 0 0 6px rgba(var(--color-success-rgb), 0);
+  }
+}
+
+.chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 360px;
+  background: linear-gradient(180deg, var(--bg-card-header) 0%, var(--bg-fill) 100%);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-table);
+  overflow: hidden;
+}
+.chart {
+  width: 100%;
+  height: 360px;
+}
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-placeholder);
+  pointer-events: none;
+}
+.chart-empty .el-icon {
+  opacity: 0.4;
+}
+.chart-empty p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.quality-good {
+  color: var(--text-success);
+  font-weight: 600;
+}
+.quality-stale {
+  color: var(--text-warning);
+  font-weight: 500;
+}
+.quality-uncertain {
+  color: var(--text-warning);
+  font-weight: 500;
+  opacity: 0.85;
+}
+.quality-bad {
+  color: var(--text-danger);
+  font-weight: 600;
+}
+
+/* 表格单元格样式 */
+.point-id {
+  font-family: 'Consolas', monospace;
+  color: var(--text-primary);
+}
+.value-cell {
+  font-family: 'Consolas', monospace;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.raw-value {
+  font-family: 'Consolas', monospace;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.time-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.time-cell > span:first-child {
+  font-family: 'Consolas', monospace;
+  color: var(--text-primary);
+}
+
+/* 点位行新数据脉冲高亮：值变化时短暂闪动 */
+@keyframes valueFlash {
+  0% { background: rgba(var(--color-primary-rgb), 0.18); }
+  100% { background: transparent; }
+}
+.value-cell.is-flash {
+  animation: valueFlash 0.8s ease-out;
+}
+
+/* 行级异常标记：el-table 背景画在 td 上，el-table-v2 画在行 div 上，两处都要覆盖 */
+.row-quality-bad td,
+.el-table-v2__row.row-quality-bad {
+  background: var(--color-danger-bg);
+}
+.row-quality-warn td,
+.el-table-v2__row.row-quality-warn {
+  background: var(--color-warning-bg);
+}
+
+/* 深链跳入的定位行：呼吸闪烁提示位置 */
+@keyframes rowHighlight {
+  0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
+  50% { box-shadow: inset 0 0 0 2px rgba(var(--color-primary-rgb), 0.6); }
+}
+.row-highlight {
+  animation: rowHighlight 1.2s ease-in-out 3;
+}
+
+/* 突变标记 */
+.value-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.surge-icon {
+  margin-left: 2px;
+}
+.surge-up {
+  color: var(--color-danger);
+}
+.surge-down {
+  color: var(--color-primary);
+}
+
+/* 暂停刷新 */
+.pause-btn {
+  margin-left: 8px;
+}
+.paused-tag {
+  margin-left: 4px;
+}
+
+/* 收藏相关 */
+.header-spacer { flex: 1; }
+.fav-filter {
+  margin-left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.fav-btn {
+  color: var(--text-secondary);
+  transition: color 0.2s, transform 0.2s;
+}
+.fav-btn:hover {
+  color: var(--color-warning);
+  transform: scale(1.15);
+}
+.fav-btn.active {
+  color: var(--color-warning);
+}
+
+/* 窄屏适配：标题/按钮换行，列宽自动缩窄 */
+@media (max-width: 768px) {
+  /* 头部固定元素腾出空间，避免被挤压 */
+  .header-spacer {
+    display: none;
+  }
+  .fav-filter {
+    margin-left: 0;
+  }
+  /* 表格外层加横向滚动，避免列被压扁丢失可读性 */
+  .el-table {
+    font-size: 0.75rem;
+  }
+  .el-table .cell {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+}

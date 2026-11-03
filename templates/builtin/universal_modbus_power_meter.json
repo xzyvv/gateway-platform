@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "name": "通用Modbus三相电力仪表",
+  "vendor": "通用",
+  "model": "三相多功能电力仪表（Modbus-RTU）",
+  "protocol": "modbus",
+  "default_interval": 5,
+  "default_byte_order": "big-endian",
+  "points": [
+    {
+      "name": "A相电压",
+      "unit": "V",
+      "data_type": "u16",
+      "default_address": 0,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.1,
+      "offset": 0.0,
+      "deadband": 0.0
+    },
+    {
+      "name": "B相电压",
+      "unit": "V",
+      "data_type": "u16",
+      "default_address": 1,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.1,
+      "offset": 0.0,
+      "deadband": 0.0
+    },
+    {
+      "name": "C相电压",
+      "unit": "V",
+      "data_type": "u16",
+      "default_address": 2,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.1,
+      "offset": 0.0,
+      "deadband": 0.0
+    },
+    {
+      "name": "A相电流",
+      "unit": "A",
+      "data_type": "u16",
+      "default_address": 3,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.001,
+      "offset": 0.0,
+      "deadband": 0.0
+    },
+    {
+      "name": "B相电流",
+      "unit": "A",
+      "data_type": "u16",
+      "default_address": 4,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.001,
+      "offset": 0.0,
+      "deadband": 0.0
+    },
+    {
+      "name": "C相电流",
+      "unit": "A",
+      "data_type": "u16",
+      "default_address": 5,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.001,
+      "offset": 0.0,
+      "deadband": 0.0
+    },
+    {
+      "name": "总有功功率",
+      "unit": "kW",
+      "data_type": "f32",
+      "default_address": 11,
+      "function_code": 3,
+      "register_count": 2,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.05
+    },
+    {
+      "name": "总无功功率",
+      "unit": "kVar",
+      "data_type": "f32",
+      "default_address": 13,
+      "function_code": 3,
+      "register_count": 2,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.05
+    },
+    {
+      "name": "正向有功电能",
+      "unit": "kWh",
+      "data_type": "u32",
+      "default_address": 32,
+      "function_code": 3,
+      "register_count": 2,
+      "scale": 0.01,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "反向有功电能",
+      "unit": "kWh",
+      "data_type": "u32",
+      "default_address": 34,
+      "function_code": 3,
+      "register_count": 2,
+      "scale": 0.01,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "总功率因数",
+      "unit": "",
+      "data_type": "u16",
+      "default_address": 48,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.001,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "电网频率",
+      "unit": "Hz",
+      "data_type": "u16",
+      "default_address": 49,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.01,
+      "offset": 0.0,
+      "deadband": 0.01
+    }
+  ]
+}

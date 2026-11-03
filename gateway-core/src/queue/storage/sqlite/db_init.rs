@@ -1,0 +1,389 @@
+//! 队列数据库初始化（建表、索引、备份、完整性检查）
+
+use crate::engine::metrics::Metrics;
+use std::path::Path;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
+
+use rusqlite::Connection;
+
+use crate::engine::error::{GatewayError, GatewayResult};
+
+use super::wal::backup_db_consistent;
+
+/// 初始化队列数据库：打开/恢复连接、设置 WAL、建表/索引、校准计数器
+///
+/// 包含：
+/// - SQLite 连接打开 + integrity_check + 备份恢复
+/// - WAL 模式设置
+/// - data_queue 表 + 兼容性 ALTER 列
+/// - in_flight 恢复 + 队列深度计数器校准
+/// - 索引创建 + 降采样聚合表
+pub(super) fn init_queue_db(
+    db_path: &Path,
+    backup_path: &Path,
+    depth: &AtomicI64,
+    key_hex: &str,
+    metrics: &Arc<Metrics>,
+) -> GatewayResult<Connection> {
+    let mut conn = match open_with_key(db_path, key_hex) {
+        Ok(conn) => {
+            let integrity_ok: bool = conn
+                .query_row("PRAGMA integrity_check", [], |row| {
+                    let result: String = row.get(0)?;
+                    Ok(result == "ok")
+                })
+                .unwrap_or(false);
+            if integrity_ok {
+                conn
+            } else {
+                tracing::error!("SQLite integrity check failed, attempting restore from backup...");
+                drop(conn);
+                if backup_path.exists() {
+                    std::fs::copy(backup_path, db_path).map_err(|e| {
+                        GatewayError::Queue(format!("restore from backup failed: {}", e))
+                    })?;
+                    tracing::warn!("restored data_queue.db from backup");
+                    open_with_key(db_path, key_hex).map_err(|e| {
+                        GatewayError::Queue(format!("reopen after restore failed: {}", e))
+                    })?
+                } else {
+                    tracing::error!("no backup available, recreating empty database");
+                    let _ = std::fs::remove_file(db_path);
+                    open_with_key(db_path, key_hex)
+                        .map_err(|e| GatewayError::Queue(format!("recreate db failed: {}", e)))?
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                "open sqlite failed ({}), attempting restore from backup...",
+                e
+            );
+            if backup_path.exists() {
+                std::fs::copy(backup_path, db_path).map_err(|e2| {
+                    GatewayError::Queue(format!("restore from backup failed: {}", e2))
+                })?;
+                tracing::warn!("restored data_queue.db from backup after open failure");
+                open_with_key(db_path, key_hex).map_err(|e2| {
+                    GatewayError::Queue(format!("reopen after restore failed: {}", e2))
+                })?
+            } else {
+                return Err(GatewayError::Queue(format!(
+                    "open sqlite failed and no backup: {}",
+                    e
+                )));
+            }
+        }
+    };
+
+    // r42-Q3: 启动备份必须先 checkpoint（TRUNCATE）把 -wal 中已 commit 但未落主库
+    // 的行刷回主库，再复制。旧实现直接 fs::copy 只复制主库文件：上一生命周期若异常
+    // 退出、-wal 残留已提交数据，备份会漏掉这些行并覆盖掉上一轮维护备份 → 之后从
+    // 备份恢复将丢失最近一次运行的数据。与维护路径（maintenance 第 5 步）保持同序。
+    let _ = backup_db_consistent(&mut conn, db_path, backup_path);
+
+    // WAL 调优：综合设置 journal_mode + synchronous + busy_timeout + cache_size + wal_autocheckpoint + mmap_size
+    // - journal_mode=WAL: 写入不阻塞读，崩溃恢复由 WAL 保证
+    // - synchronous=FULL: 计费场景必须保证已 commit 数据不丢——NORMAL 下 WAL 不 fsync，
+    //   嵌入式设备掉电会丢最近未 checkpoint 的计费行；FULL 在每事务 commit 时 fsync 写盘，
+    //   性能开销对秒级采集网关可忽略，符合产品「稳定性第一」原则。
+    // - busy_timeout=5000ms: 多连接争用时等待 5s 而非立即返回 SQLITE_BUSY（避免读池与主连接冲突）
+    // - cache_size=-65536: 64MB 页缓存（负值=KB 单位），减少磁盘 I/O
+    // - wal_autocheckpoint=1000: 每 1000 页（约 4MB）自动 checkpoint，防止 WAL 增长过大
+    // - mmap_size=268435456: 256MB 内存映射，提升读取性能（仅在 64 位系统生效）
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; \
+         PRAGMA synchronous=FULL; \
+         PRAGMA busy_timeout=5000; \
+         PRAGMA cache_size=-65536; \
+         PRAGMA wal_autocheckpoint=1000; \
+         PRAGMA mmap_size=268435456;",
+    )
+    .map_err(|e| GatewayError::Queue(format!("set WAL mode failed: {}", e)))?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS data_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                point_id TEXT NOT NULL,
+                device_id TEXT NOT NULL DEFAULT '',
+                value REAL NOT NULL,
+                raw_value REAL NOT NULL,
+                raw_type TEXT NOT NULL,
+                quality TEXT NOT NULL,
+                quality_reason TEXT NOT NULL DEFAULT '',
+                timestamp INTEGER NOT NULL,
+                source_ts INTEGER NOT NULL DEFAULT 0,
+                stale_count INTEGER NOT NULL DEFAULT 0,
+                in_flight INTEGER NOT NULL DEFAULT 0,
+                dequeued_at INTEGER NOT NULL DEFAULT 0,
+                delivered INTEGER NOT NULL DEFAULT 0,
+                value_text TEXT
+            )",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create table failed: {}", e)))?;
+
+    // 兼容旧表：逐步添加新列。列已存在视为已迁移（幂等），其余错误必须中止启动——
+    // 磁盘满 / 锁库导致的 ALTER 失败若被吞掉，后续查询会报 "no such column"，
+    // 错误现场离根因很远（E-1）。
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN device_id TEXT NOT NULL DEFAULT ''",
+        "device_id",
+    )?;
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN quality_reason TEXT NOT NULL DEFAULT ''",
+        "quality_reason",
+    )?;
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN source_ts INTEGER NOT NULL DEFAULT 0",
+        "source_ts",
+    )?;
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN stale_count INTEGER NOT NULL DEFAULT 0",
+        "stale_count",
+    )?;
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN in_flight INTEGER NOT NULL DEFAULT 0",
+        "in_flight",
+    )?;
+    // Bug 163: 新增 dequeued_at 列——记录每行"出队时刻"，使 stale in_flight 超时
+    // 以出队时间为基准判定，而非采集时间戳（详见 sqlite_storage 的清理 SQL）。
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN dequeued_at INTEGER NOT NULL DEFAULT 0",
+        "dequeued_at",
+    )?;
+    // P0-3: 新增 delivered 列（0=未送达，1=已 ack 等待 retention 删除）。
+    // 旧表无此列，回填为 0（语义"未送达"），与恢复时统一清 in_flight 的处理一致：
+    // 重启后未 ack 的行一律按"未送达"对待，由 outbox 持久层或 replay 路径重新投递。
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN delivered INTEGER NOT NULL DEFAULT 0",
+        "delivered",
+    )?;
+    // 批次 C：新增 value_text 列（枚举转换的文本标签，如 "运行"/"停机"）。
+    // 可空、无 DEFAULT——旧行迁移后为 NULL，语义为「该行写入时尚未支持标签」；
+    // 查询期不做规则回查，如实返回 NULL。
+    ensure_column(
+        &conn,
+        "ALTER TABLE data_queue ADD COLUMN value_text TEXT",
+        "value_text",
+    )?;
+
+    // Bug r08-DB2 (fix): 加 WHERE delivered = 0 限定只重置"未送达"的行。
+    // 旧实现更新全表（包括 delivered=1 等 ack 等待 retention 删除的行），
+    // 功能无影响（delivered=1 行不出队）但语义混乱，干扰后续读代码者。
+    conn.execute(
+        "UPDATE data_queue SET in_flight = 0 WHERE delivered = 0",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("recover in_flight failed: {}", e)))?;
+
+    // P3: 启动时校准内存队列深度计数器（一次性 COUNT，之后纯内存维护）。
+    //
+    // 必须只统计 `delivered = 0` 的行：运行时 depth 的增减就是
+    // 「enqueue_batch 加 inserted / ack_batch 减 ids_len」，语义恒等于
+    // 「尚未送达（含 in_flight=1）的行数」。P0-3 之后 ack 不再删行，而是置
+    // delivered=1 并保留到 retention 回收；若此处按 COUNT(*) 记账，重启后 depth
+    // 会把已 ack 的行重新算进来 → 长期虚高且不可自愈（retention 删行不扣 depth）：
+    // 指标失真、drain_and_wait 可能永不返回、enforce_queue_limit 误删仍在
+    // 保留期内的历史行。
+    let initial_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM data_queue WHERE delivered = 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    depth.store(initial_count, Ordering::Relaxed);
+    metrics.set_queue_depth(initial_count);
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_ts ON data_queue(timestamp)",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create index failed: {}", e)))?;
+
+    // 复合索引：覆盖 history 查询 (point_id 等值 + timestamp 范围 + DESC 排序)
+    // 原 idx_queue_ts(timestamp) 仅支持时间范围扫描，多点位场景退化为近全表扫描
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_point_ts ON data_queue(point_id, timestamp DESC)",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create point_ts index failed: {}", e)))?;
+
+    // F5: 降采样聚合表（按分钟存储 avg/min/max，用于长期历史查询）
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS data_queue_aggregated (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                point_id TEXT NOT NULL,
+                window_start INTEGER NOT NULL,
+                avg_value REAL NOT NULL,
+                min_value REAL NOT NULL,
+                max_value REAL NOT NULL,
+                sample_count INTEGER NOT NULL,
+                UNIQUE(point_id, window_start)
+            )",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create aggregated table failed: {}", e)))?;
+
+    conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agg_point_ts ON data_queue_aggregated(point_id, window_start)",
+            [],
+        ).map_err(|e| GatewayError::Queue(format!("create aggregated index failed: {}", e)))?;
+    Ok(conn)
+}
+
+/// 幂等执行 `ALTER TABLE ... ADD COLUMN`。
+///
+/// E-1：SQLite 没有 `ADD COLUMN IF NOT EXISTS`，旧实现用 `let _ =` 吞掉所有错误。
+/// 只有「列已存在」（duplicate column name，正常升级/重复启动）可以继续；
+/// 磁盘满、锁库、语法错误等一律返回 Err 中止启动，避免表结构与代码版本不一致后
+/// 才在业务查询处报 `no such column`。
+fn ensure_column(conn: &Connection, ddl: &str, column: &str) -> GatewayResult<()> {
+    match conn.execute(ddl, []) {
+        Ok(_) => {
+            tracing::info!("migrated data_queue: added column `{}`", column);
+            Ok(())
+        }
+        Err(e) if e.to_string().contains("duplicate column name") => {
+            tracing::debug!("data_queue column `{}` already exists (idempotent)", column);
+            Ok(())
+        }
+        Err(e) => Err(GatewayError::Queue(format!(
+            "migrate data_queue column `{}` failed: {}",
+            column, e
+        ))),
+    }
+}
+
+/// 打开 SQLite 连接并设置 SQLCipher 加密密钥
+///
+/// 必须在任何其他 PRAGMA 或查询之前执行 `PRAGMA key`。
+fn open_with_key(db_path: &Path, key_hex: &str) -> Result<Connection, rusqlite::Error> {
+    let conn = Connection::open(db_path)?;
+    if !key_hex.is_empty() {
+        conn.pragma_update(None, "key", key_hex)?;
+    }
+    Ok(conn)
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use crate::queue::storage::QueueStorage;
+
+    /// 批次 C：迁移前（旧 schema）的 `data_queue` 列定义。
+    /// 刻意不含 `value_text`——用于模拟升级前已落库的历史库。
+    const OLD_SCHEMA: &str = "CREATE TABLE data_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        point_id TEXT NOT NULL,
+        device_id TEXT NOT NULL DEFAULT '',
+        value REAL NOT NULL,
+        raw_value REAL NOT NULL,
+        raw_type TEXT NOT NULL,
+        quality TEXT NOT NULL,
+        quality_reason TEXT NOT NULL DEFAULT '',
+        timestamp INTEGER NOT NULL,
+        source_ts INTEGER NOT NULL DEFAULT 0,
+        stale_count INTEGER NOT NULL DEFAULT 0,
+        in_flight INTEGER NOT NULL DEFAULT 0,
+        dequeued_at INTEGER NOT NULL DEFAULT 0,
+        delivered INTEGER NOT NULL DEFAULT 0
+    )";
+
+    /// 批次 C 迁移测试：旧 schema 库被 `SqliteStorage::new` 打开后
+    /// 1) `value_text` 列存在（ALTER TABLE ADD COLUMN 生效）；
+    /// 2) 旧行读出 `value_text = None`（NULL 表示「写入时尚未支持标签」）。
+    ///
+    /// 用 `tempfile::tempdir` 把库放在系统临时目录，避免污染仓库。
+    #[test]
+    fn value_text_column_added_to_legacy_schema() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db_path = dir.path().join("queue.db");
+
+        // 1) 手工建「旧 schema」库并写入一行历史数据
+        {
+            let conn = Connection::open(&db_path).expect("open legacy db");
+            conn.execute_batch(OLD_SCHEMA).expect("create legacy table");
+            conn.execute(
+                "INSERT INTO data_queue (point_id, device_id, value, raw_value, raw_type, quality, timestamp)
+                 VALUES ('p-old', 'dev1', 1.0, 1.0, 'u16', 'good', 1700000000000)",
+                [],
+            )
+            .expect("insert legacy row");
+        }
+
+        // 2) 用生产入口打开（触发 init_queue_db → 幂等 ALTER 迁移）
+        let storage = crate::queue::storage::SqliteStorage::new(
+            db_path.to_str().expect("db path utf8"),
+            Arc::new(Metrics::new()),
+        )
+        .expect("open storage on legacy db");
+
+        // 3) 断言列存在
+        {
+            let conn = Connection::open(&db_path).expect("open migrated db");
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(data_queue)")
+                .expect("prepare table_info");
+            let mut rows = stmt.query([]).expect("query table_info");
+            let mut columns: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().expect("next row") {
+                columns.push(row.get::<_, String>(1).expect("column name"));
+            }
+            columns.sort();
+            assert!(
+                columns.iter().any(|c| c == "value_text"),
+                "迁移后 data_queue 必须存在 value_text 列，实际列: {:?}",
+                columns
+            );
+        }
+
+        // 4) 旧行读出 value_text = None（不因迁移被回填成空串或默认值）
+        let items = storage
+            .history_query("p-old", 0, i64::MAX, 10)
+            .expect("history query legacy row");
+        assert_eq!(items.len(), 1, "旧行应仍在库中");
+        assert_eq!(
+            items[0].value_text, None,
+            "迁移前的行没有标签，应读出 None（NULL）"
+        );
+    }
+
+    /// 批次 C 迁移幂等性：对同一库连续两次打开（第二次 ALTER 必然报「列已存在」），
+    /// 不应报错，且列定义保持唯一。
+    #[test]
+    fn value_text_migration_is_idempotent() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db_path = dir.path().join("queue.db");
+
+        for _ in 0..2 {
+            let storage = crate::queue::storage::SqliteStorage::new(
+                db_path.to_str().expect("db path utf8"),
+                Arc::new(Metrics::new()),
+            )
+            .expect("open storage twice");
+            let items = storage
+                .history_query("p-none", 0, i64::MAX, 10)
+                .expect("history query");
+            assert!(items.is_empty());
+        }
+
+        let conn = Connection::open(&db_path).expect("open db");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('data_queue') WHERE name = 'value_text'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count value_text columns");
+        assert_eq!(count, 1, "value_text 列应唯一");
+    }
+}

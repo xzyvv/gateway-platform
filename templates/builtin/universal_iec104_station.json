@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "name": "通用IEC104标准站",
+  "vendor": "通用",
+  "model": "IEC 60870-5-104 变电站（公共地址 1）",
+  "protocol": "iec104",
+  "default_interval": 5,
+  "points": [
+    {
+      "name": "A相电压",
+      "unit": "kV",
+      "data_type": "float",
+      "default_address": 1001,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "B相电压",
+      "unit": "kV",
+      "data_type": "float",
+      "default_address": 1002,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "C相电压",
+      "unit": "kV",
+      "data_type": "float",
+      "default_address": 1003,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "A相电流",
+      "unit": "A",
+      "data_type": "float",
+      "default_address": 1004,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "B相电流",
+      "unit": "A",
+      "data_type": "float",
+      "default_address": 1005,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "C相电流",
+      "unit": "A",
+      "data_type": "float",
+      "default_address": 1006,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "有功功率",
+      "unit": "MW",
+      "data_type": "float",
+      "default_address": 1007,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "无功功率",
+      "unit": "MVar",
+      "data_type": "float",
+      "default_address": 1008,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "频率",
+      "unit": "Hz",
+      "data_type": "float",
+      "default_address": 1009,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "功率因数",
+      "unit": "",
+      "data_type": "float",
+      "default_address": 1010,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.01
+    },
+    {
+      "name": "断路器位置",
+      "unit": "",
+      "data_type": "single",
+      "default_address": 2001,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.0
+    },
+    {
+      "name": "保护总信号",
+      "unit": "",
+      "data_type": "single",
+      "default_address": 2002,
+      "scale": 1.0,
+      "offset": 0.0,
+      "deadband": 0.0
+    }
+  ]
+}

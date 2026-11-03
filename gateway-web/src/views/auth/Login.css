@@ -1,0 +1,375 @@
+/* 背景随主题：亮色=浅靛蓝渐变，暗色=深藏青渐变（见底部 html.dark 覆盖） */
+.login-container {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--color-primary-bg) 0%, var(--bg-page) 55%, var(--color-primary-bg) 100%);
+  position: relative;
+  overflow: hidden;
+}
+/* 网格纹理叠加 */
+.login-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(var(--color-primary-rgb), 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(var(--color-primary-rgb), 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
+/* 背景装饰圆 */
+.login-bg-shape {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(var(--color-primary-rgb), 0.08);
+  pointer-events: none;
+}
+/* 背景圆仅作静态构图，不再常驻漂浮（省去 3 个永不停止的合成层动画） */
+.shape-1 {
+  width: 500px;
+  height: 500px;
+  top: -200px;
+  right: -150px;
+}
+.shape-2 {
+  width: 400px;
+  height: 400px;
+  bottom: -150px;
+  left: -100px;
+}
+.shape-3 {
+  width: 200px;
+  height: 200px;
+  top: 30%;
+  left: 15%;
+  background: rgba(var(--color-accent-rgb), 0.08);
+}
+/* 中心径向光晕 */
+.login-container::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(var(--color-primary-rgb), 0.1) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* 卡片顶部品牌渐变条：与全站表头/装饰条同一语言（靛蓝→青） */
+.login-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  z-index: 2;
+}
+
+.login-card {
+  width: 400px;
+  max-width: 90vw;
+  padding: 40px 36px;
+  border-radius: 16px !important;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3) !important;
+  position: relative;
+  z-index: 1;
+  animation: cardIn 0.5s ease;
+  background: rgba(255, 255, 255, 0.95) !important;
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-logo {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 20px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-inverse);
+  box-shadow: 0 8px 24px rgba(var(--color-primary-rgb), 0.4);
+}
+
+/* 登录页品牌标识：六边形网关汇聚节点（白描边随渐变底反色） */
+.login-logo-mark {
+  width: 44px;
+  height: 44px;
+  /* 去掉视觉锯齿：细描边在渐变底上更容易糊 */
+  shape-rendering: geometricPrecision;
+}
+
+/* 浏览器直连模式：替代「网关地址」输入框，只做信息确认（不占交互） */
+.direct-gateway {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: -6px 0 18px;
+  padding: 7px 12px;
+  border-radius: var(--radius-card);
+  background: var(--bg-fill);
+  border: 1px dashed var(--border-light);
+  font-size: 0.8125rem;
+  color: var(--text-regular);
+}
+
+.direct-gateway-icon {
+  color: var(--color-primary);
+  font-size: 0.9375rem;
+}
+
+.direct-gateway-host {
+  font-family: Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* 输入框聚焦发光 */
+.login-card .el-input__wrapper {
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+.login-card .el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--color-primary) inset, 0 0 0 4px rgba(var(--color-primary-rgb), 0.15) !important;
+}
+.login-card .el-input__wrapper.is-focus .el-input__inner {
+  color: var(--text-primary);
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 28px;
+}
+.login-header h1 {
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 1.625rem;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+/* 标题下品牌渐变短线：呼应全站 SectionHeader 装饰条 */
+.login-header h1::after {
+  content: '';
+  display: block;
+  width: 28px;
+  height: 3px;
+  margin: 10px auto 0;
+  border-radius: var(--radius-bar);
+  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-accent) 100%);
+}
+.login-header p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  letter-spacing: 4px;
+}
+
+.login-btn {
+  width: 100%;
+  height: 44px;
+  font-size: 1rem;
+  letter-spacing: 8px;
+  border-radius: var(--radius-table);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  border: none;
+  transition: opacity 0.2s, transform 0.2s, box-shadow 0.2s, outline-color 0.2s;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+.login-btn:hover {
+  opacity: 0.92;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.4);
+}
+.login-btn:focus-visible {
+  outline-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(var(--color-primary-rgb), 0.25);
+}
+.login-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(var(--color-primary-rgb), 0.3);
+  opacity: 0.95;
+}
+.login-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
+.login-tip {
+  margin-top: 20px;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.login-tip .el-icon {
+  font-size: 0.875rem;
+}
+
+/* 桌面端网关地址输入：补充视觉强调 */
+.gateway-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-regular);
+  font-weight: 500;
+}
+.gateway-input .el-input__inner {
+  font-variant-numeric: tabular-nums;
+}
+.gateway-icon {
+  transition: color 0.2s, transform 0.3s;
+}
+.gateway-icon.active {
+  color: var(--color-success);
+  /* 连通提示只做 3 次呼吸，之后静止，避免常驻动画 */
+  animation: gatewayPulse 2s ease-in-out 3;
+}
+@keyframes gatewayPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.login-card .el-form-item.is-error .gateway-icon {
+  color: var(--color-danger);
+}
+
+/* ===== 局域网自动发现候选列表 ===== */
+.discovered-list {
+  margin-bottom: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-table);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 10px 12px;
+}
+.discovered-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+.discovered-header > span:first-of-type {
+  flex: 1;
+}
+.discovered-scanning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.8125rem;
+  color: var(--el-text-color-secondary);
+}
+.discovered-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.discovered-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.discovered-item:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+.discovered-item:hover {
+  background: rgba(var(--color-primary-rgb), 0.12);
+}
+.discovered-item.active {
+  background: rgba(var(--color-primary-rgb), 0.2);
+}
+.discovered-item .item-icon {
+  color: var(--el-color-success);
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+.discovered-item .item-info {
+  flex: 1;
+  min-width: 0;
+}
+.discovered-item .item-url {
+  font-size: 0.8125rem;
+  color: var(--el-text-color-primary);
+  font-family: var(--el-font-family-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discovered-item .item-meta {
+  font-size: 0.6875rem;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
+}
+.discovered-item .item-check {
+  color: var(--el-color-primary);
+  font-size: 1rem;
+}
+.discover-cta {
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+/* ===== 暗色模式适配：背景/网格/光晕回深色系；卡片/标题/聚焦输入文字换暗色系 ===== */
+html.dark .login-container {
+  background: linear-gradient(135deg, var(--dark-bg-deep) 0%, var(--dark-bg) 50%, var(--dark-bg-deeper) 100%);
+}
+html.dark .login-container::before {
+  background-image:
+    linear-gradient(rgba(var(--dark-accent-rgb), 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(var(--dark-accent-rgb), 0.04) 1px, transparent 1px);
+}
+html.dark .login-container::after {
+  background: radial-gradient(circle, rgba(var(--dark-accent-rgb), 0.1) 0%, transparent 70%);
+}
+html.dark .login-card {
+  background: var(--bg-card) !important;
+  border-color: var(--el-border-color-lighter) !important;
+  /* 暗色：卡片浮在深藏青渐变上，阴影加深才能拉开层次（亮色 0.3 在深底上完全看不见） */
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6) !important;
+}
+html.dark .login-header h1 {
+  color: var(--el-text-color-primary);
+}
+html.dark .login-card .el-input__wrapper.is-focus .el-input__inner {
+  color: var(--el-text-color-primary);
+}

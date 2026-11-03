@@ -1,0 +1,146 @@
+﻿.points {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section-card {
+  border-radius: var(--radius-card);
+}
+/* 卡片头工具栏：页面标题由 HubShell 承担，这里只放数量与操作 */
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.list-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* W35: 与 VISUAL_SPEC §3.1 / Dashboard / Realtime / Logs / Devices 统一——渐变方向 90deg */
+.count-badge {
+  margin-left: 4px;
+  font-weight: 400;
+}
+/* 加载失败提示：与设备列表一致，紧贴表格上方 */
+.load-error {
+  margin-bottom: 12px;
+}
+/* 窄屏下拉框占满整行，按钮自动堆叠 */
+@media (max-width: 768px) {
+}
+
+/* 搜索框：比设备下拉略窄，避免挤掉右侧动作按钮 */
+.search-input {
+  width: 200px;
+}
+
+/* 深链跳转定位的高亮行（蓝左边 + 浅蓝背景，与设备列表一致） */
+.points .el-table__row.is-highlighted td {
+  background: var(--color-primary-lightest) !important;
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+.points .el-table__row.is-highlighted:hover td {
+  background: var(--color-primary-lighter) !important;
+}
+/* 跳转后临时闪烁强调（3 秒后自动移除） */
+.points .el-table__row.is-highlighted.is-highlighted-flash td {
+  animation: pointHighlightFlash 1.5s ease-in-out 2;
+  box-shadow: inset 3px 0 0 var(--color-primary), 0 0 0 2px var(--color-primary-shadow);
+}
+@keyframes pointHighlightFlash {
+  0%, 100% { background: var(--color-primary-lightest) !important; }
+  50% { background: var(--color-primary-lighter) !important; }
+}
+
+/* 分页已下沉到 DataTable（含 .table-pager 样式），页面不再重复声明 */
+
+/* 表格显示设置面板：列多选 + 密度，两列排布避免面板拉太长 */
+.table-settings {
+  font-size: 0.8125rem;
+}
+.ts-title {
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.ts-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 8px;
+}
+
+.import-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding: 10px 12px;
+  background: var(--color-info-bg);
+  border-radius: var(--radius-button);
+  margin-bottom: 12px;
+}
+.import-tip .el-icon {
+  color: var(--color-info);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* 批量修改对话框 */
+.batch-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-regular);
+  padding: 10px 12px;
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-button);
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+.batch-tip .el-icon {
+  color: var(--color-warning);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.batch-tip strong {
+  color: var(--text-warning);
+  font-weight: 600;
+}
+.batch-check-side {
+  margin-top: 6px;
+}
+/* 批量生成 */
+.gen-preview {
+  margin: 8px 0; padding: 10px; background: var(--bg-fill); border-radius: var(--radius-button);
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+.gen-chip {
+  background: var(--color-primary-bg); color: var(--color-primary);
+  padding: 2px 8px; border-radius: var(--radius-card); font-size: 0.75rem;
+}
+/* 模板展开点位的只读单元格：弱化颜色，与可编辑的行内编辑框视觉区分 */
+.cell-readonly {
+  color: var(--text-secondary);
+}
+/* N3: 点位弹窗中继承自设备的字段说明（总线/协议只读，指向设备列表调整） */
+.point-inherit-hint {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+/* BUG-B: 弹窗中成对出现的数值输入（倍率/偏移、死区、告警限值、聚合） */
+.point-pair {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}

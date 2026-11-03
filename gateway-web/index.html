@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="工业网关调试控制台 - Modbus/OPC UA 设备配置、采集、诊断、转发一体化" />
+    <meta name="theme-color" content="#16213e" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="工业网关" />
+    <title>工业网关调试控制台</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/app/main.ts"></script>
+    <script>
+      // PWA Service Worker 注册（生产环境生效；dev 与 Tauri 内嵌页跳过避免热更新冲突）
+      if ('serviceWorker' in navigator && location.protocol === 'https:') {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then((reg) => {
+              console.log('[PWA] SW registered:', reg.scope)
+
+              // 新构建就绪：已存在 controller 说明这是「更新」而非首次安装，
+              // 通知应用层弹出提示。不自动刷新，避免丢掉用户正在填写的表单。
+              reg.addEventListener('updatefound', () => {
+                const sw = reg.installing
+                if (!sw) return
+                sw.addEventListener('statechange', () => {
+                  if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+                    window.dispatchEvent(new CustomEvent('gateway:update-available'))
+                  }
+                })
+              })
+
+              // 现场设备常年不关页面：回到前台时主动复查一次 sw.js（60s 内不重复请求）
+              let lastCheck = 0
+              document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState !== 'visible') return
+                if (Date.now() - lastCheck < 60000) return
+                lastCheck = Date.now()
+                reg.update().catch(() => { /* 复查失败不打扰用户 */ })
+              })
+            })
+            .catch((err) => console.warn('[PWA] SW registration failed:', err))
+        })
+      }
+    </script>
+  </body>
+</html>

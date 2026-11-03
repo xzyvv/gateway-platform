@@ -1,0 +1,47 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+
+# ===== 构建产物（CI 自产，release artifact 通过 ui-dist/ 转发）=====
+# Vite 默认输出目录；本地 build / `vite preview` 写到此处。
+# CI 流程：npm run build → check:bundle → cp -r dist/ ui-dist/ → artifact。
+# Release job 从 artifact 恢复 `gateway-web/dist/`，见 .github/workflows/ci.yml。
+dist
+dist-ssr
+*.local
+*.tsbuildinfo
+
+# ===== 测试产物 =====
+# coverage/ 为 vitest 生成的 HTML 覆盖率报告；.vitest/ 为 json reporter 输出。
+coverage
+.vitest
+
+# Playwright E2E 产物（trace/screenshot/video 失败时保留在本地，CI 另传 artifact）
+playwright-report
+test-results
+
+# ===== 临时/缓存 =====
+.cache
+.parcel-cache
+.eslintcache
+.vite
+.turbo
+*.tgz
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

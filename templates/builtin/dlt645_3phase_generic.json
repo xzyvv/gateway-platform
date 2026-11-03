@@ -1,0 +1,21 @@
+{
+  "name": "DLT645_三相电表通用",
+  "vendor": "通用",
+  "model": "DLT645-2007",
+  "protocol": "dlt645",
+  "default_interval": 10,
+  "points": [
+    {"name": "正向有功总电能", "unit": "kWh", "data_id": "00010000", "scale": 0.01, "offset": 0, "deadband": 0.01},
+    {"name": "反向有功总电能", "unit": "kWh", "data_id": "00020000", "scale": 0.01, "offset": 0, "deadband": 0.01},
+    {"name": "组合有功总电能", "unit": "kWh", "data_id": "00000000", "scale": 0.01, "offset": 0, "deadband": 0.01},
+    {"name": "A相电压", "unit": "V", "data_id": "02010100", "scale": 0.1, "offset": 0, "deadband": 0.1},
+    {"name": "B相电压", "unit": "V", "data_id": "02010200", "scale": 0.1, "offset": 0, "deadband": 0.1},
+    {"name": "C相电压", "unit": "V", "data_id": "02010300", "scale": 0.1, "offset": 0, "deadband": 0.1},
+    {"name": "A相电流", "unit": "A", "data_id": "02020100", "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "B相电流", "unit": "A", "data_id": "02020200", "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "C相电流", "unit": "A", "data_id": "02020300", "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "有功功率", "unit": "kW", "data_id": "02030000", "scale": 0.0001, "offset": 0, "deadband": 0.01},
+    {"name": "无功功率", "unit": "kvar", "data_id": "02040000", "scale": 0.0001, "offset": 0, "deadband": 0.01},
+    {"name": "功率因数", "unit": "", "data_id": "02060000", "scale": 0.001, "offset": 0, "deadband": 0.001}
+  ]
+}

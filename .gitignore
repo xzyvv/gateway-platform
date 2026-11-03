@@ -1,0 +1,96 @@
+# === Rust ===
+target/
+**/*.bak
+**/*.rs.bk
+**/Cargo.lock.bak
+# 覆盖率产物（cargo-llvm-cov，见 gateway-core/scripts/coverage.*）
+lcov.info
+*.lcov
+
+# === Node ===
+node_modules/
+dist/
+.vite/
+auto-imports.d.ts
+components.d.ts
+# 前端测试产物（vitest 覆盖率 / Playwright 报告），禁止入库
+coverage/
+**/coverage/
+playwright-report/
+test-results/
+
+# === Editor ===
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === 日志 / 临时 ===
+*.log
+# 日志轮转产物（gateway.log.1 / gateway.log.gz 等）
+**/gateway.log.*
+*.tmp
+
+# === 运行时数据 ===
+*.db
+config.json
+# 浸泡测试产物（scripts/soak.ps1 默认输出到 gateway-core/soak-out）
+soak-out/
+**/soak-out/
+# OPC UA Server 的 PKI 存储（运行期自动生成的证书/私钥）
+pki/
+# 设备证书目录（运行期自动生成的自签名证书 + **私钥**，见 support/paths.rs
+# 的 default_cert_dir = ./certs）。私钥永不进仓库。
+certs/
+**/certs/
+# SQLite WAL 副产物：文件名以 -wal / -shm 结尾，不匹配上面的 *.db 规则
+*.db-wal
+*.db-shm
+# F-07：运行期副本文件名为 license_clock.db.replica（点号分隔，见
+# license/clock.rs::replica_path_for）。旧规则写成 *.db-replica（连字符）不匹配。
+*.db.replica
+*.db-replica
+# Python 字节码缓存（脚本工具链副产物）
+__pycache__/
+*.pyc
+
+# === Tauri 生成产物（cargo tauri build/dev 自动生成） ===
+**/src-tauri/gen/
+**/src-tauri/Cargo.lock
+
+# === 个人调试输出 ===
+# 推荐统一写到 scratch/ 目录下，整个目录会被忽略
+scratch/
+# 兼容历史习惯：散落在根目录/gateway-core 下的临时 txt 调试输出
+**/check_*.txt
+**/test_r*.txt
+**/clippy*.txt
+**/cargo_err.txt
+**/chk.txt
+**/build_*.txt
+**/build.json
+**/final_test.txt
+**/vue-tsc-errors*.txt
+# 审计/布局/流程一次性分析产物（R5-08）
+**/audit-r*.json
+**/audit-r*-sum.txt
+**/flow-r*.json
+**/layout-r*.json
+**/f[0-9]_*.txt
+**/build-log*.txt
+**/dev-frontend.log
+**/deploy_build.log
+
+# === UI 静态产物（CI copy 的前端 dist） ===
+ui-dist/
+
+# === 交付产物（deploy/build-release.sh 的输出、交付检查单） ===
+deploy/out/
+
+# === License 签发私钥（红线：永不进 git / CI / 产物，说明见 tools/license-issuer/src/main.rs 模块注释） ===
+tools/license-issuer/keys/
+*.pk8

@@ -1,0 +1,76 @@
+[Unit]
+Description=Industrial Gateway Service
+Documentation=https://github.com/your-org/gateway
+After=network-online.target time-sync.target
+Wants=network-online.target
+# 等待串口设备就绪（可选：根据实际设备名调整）
+# After=dev-ttyUSB0.device
+
+[Service]
+Type=simple
+User=gateway
+Group=gateway
+
+# 运行目录与启动命令
+WorkingDirectory=/opt/gatewayd
+ExecStart=/opt/gatewayd/gatewayd
+
+# 优雅退出：SIGTERM 触发 flush pipeline + drain 队列
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 崩溃后自动重启
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+# 环境变量
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+# Environment=GATEWAY_CONFIG=/etc/gateway/config.json
+
+# 启动前确保目录存在
+ExecStartPre=/bin/mkdir -p /var/lib/gateway/certs /var/lib/gateway/ota /var/log/gateway
+ExecStartPre=/bin/chown -R gateway:gateway /var/lib/gateway /var/log/gateway
+
+# 文件描述符上限（MQTT/WebSocket/SQLite 连接池）
+LimitNOFILE=65536
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=false
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictNamespaces=true
+
+# 可写路径
+ReadWritePaths=/var/lib/gateway /var/log/gateway /tmp
+
+# 设备访问：硬件看门狗 + 串口
+DeviceAllow=/dev/watchdog rw
+DeviceAllow=/dev/ttyUSB rw
+DeviceAllow=/dev/ttyS rw
+
+# 资源限制
+MemoryMax=512M
+CPUQuota=200%
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gateway
+
+# 串口权限：补充 dialout 组以访问 /dev/ttyUSB* /dev/ttyS*
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target
+

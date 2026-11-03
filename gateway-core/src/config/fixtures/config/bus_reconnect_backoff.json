@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "buses": [
+    {
+      "port_name": "/dev/ttyS1",
+      "protocol": "modbus",
+      "baud_rate": 9600,
+      "reconnect_backoff": { "seconds": [1, 2, 5, 10, 30], "jitter_ratio": 0.0 }
+    },
+    {
+      "port_name": "/dev/ttyS2",
+      "protocol": "dlt645"
+    }
+  ],
+  "points": [
+    {
+      "id": "p1",
+      "name": "总有功",
+      "bus": "/dev/ttyS1",
+      "protocol": "modbus",
+      "address": "1",
+      "slave_id": 1,
+      "address_num": 0,
+      "function_code": 3,
+      "register_count": 2,
+      "interval": 5,
+      "formula": null,
+      "unit": "kWh",
+      "aggregation": null
+    }
+  ],
+  "mqtt": { "enabled": false }
+}

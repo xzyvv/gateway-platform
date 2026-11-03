@@ -1,0 +1,14 @@
+{
+  "name": "modbus-sim-meter",
+  "vendor": "sim",
+  "model": "modbus-sim",
+  "protocol": "modbus",
+  "default_interval": 2,
+  "default_byte_order": "ABCD",
+  "points": [
+    { "name": "voltage", "unit": "V", "data_type": "u16", "default_address": 0, "function_code": 3, "register_count": 1, "scale": 1, "offset": 0, "deadband": 0 },
+    { "name": "current", "unit": "A", "data_type": "u16", "default_address": 1, "function_code": 3, "register_count": 1, "scale": 1, "offset": 0, "deadband": 0 },
+    { "name": "power",   "unit": "W", "data_type": "u16", "default_address": 2, "function_code": 3, "register_count": 1, "scale": 1, "offset": 0, "deadband": 0 },
+    { "name": "counter", "unit": "",  "data_type": "u16", "default_address": 3, "function_code": 3, "register_count": 1, "scale": 1, "offset": 0, "deadband": 0 }
+  ]
+}

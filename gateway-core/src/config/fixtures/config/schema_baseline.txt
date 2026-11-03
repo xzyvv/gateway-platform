@@ -1,0 +1,265 @@
+AggregationConfig#required function
+AggregationConfig#required window
+AggregationConfig.function = AggFn
+AggregationConfig.window = integer
+BusConfig#required port_name
+BusConfig#required protocol
+BusConfig.asdu_addr_len = integer|null
+BusConfig.baud_rate = integer
+BusConfig.channel_capacity = integer|null
+BusConfig.data_bits = integer
+BusConfig.de_pin = integer|null
+BusConfig.dlt645_version = string
+BusConfig.modbus_mode = string
+BusConfig.parity = string
+BusConfig.port_name = string
+BusConfig.protocol = string
+BusConfig.reconnect_backoff = ReconnectBackoffConfig
+BusConfig.retry_count = integer|null
+BusConfig.retry_delay_ms = integer|null
+BusConfig.stop_bits = integer
+BusConfig.tcp_addr = null|string
+BusConfig.tcp_concurrent = integer|null
+BusConfig.timeout_ms = integer
+BusConfig.variant = null|string
+CellularConfig.apn = string
+CellularConfig.at_cmd_timeout_secs = integer
+CellularConfig.at_port = string
+CellularConfig.baud_rate = integer
+CellularConfig.connect_cmd_timeout_secs = integer
+CellularConfig.data_port = string
+CellularConfig.dial_timeout_secs = integer
+CellularConfig.enabled = boolean
+CellularConfig.eth_iface = string
+CellularConfig.failover_enabled = boolean
+CellularConfig.heartbeat_secs = integer
+CellularConfig.password = string
+CellularConfig.pin = null|string
+CellularConfig.ppp_bringup_timeout_secs = integer
+CellularConfig.ppp_iface = string
+CellularConfig.ppp_stop_timeout_secs = integer
+CellularConfig.register_timeout_secs = integer
+CellularConfig.retry_backoff_secs = integer
+CellularConfig.username = string
+ConvertEnumItemConfig#required key
+ConvertEnumItemConfig#required label
+ConvertEnumItemConfig.key = string
+ConvertEnumItemConfig.label = string
+ConvertRuleConfig#required created_at_ms
+ConvertRuleConfig#required enabled
+ConvertRuleConfig#required id
+ConvertRuleConfig#required name
+ConvertRuleConfig#required source_point_id
+ConvertRuleConfig#required source_proto
+ConvertRuleConfig#required target_proto
+ConvertRuleConfig#required transform
+ConvertRuleConfig.created_at_ms = integer
+ConvertRuleConfig.enabled = boolean
+ConvertRuleConfig.enum_map = array|null
+ConvertRuleConfig.id = string
+ConvertRuleConfig.name = string
+ConvertRuleConfig.offset = null|number
+ConvertRuleConfig.scale = null|number
+ConvertRuleConfig.source_point_id = string
+ConvertRuleConfig.source_point_name = string
+ConvertRuleConfig.source_proto = string
+ConvertRuleConfig.target_proto = string
+ConvertRuleConfig.target_tag = string
+ConvertRuleConfig.transform = string
+DeviceAsset#required device_id
+DeviceAsset.asset_no = string
+DeviceAsset.calibrated_at = string
+DeviceAsset.device_id = string
+DeviceAsset.location = string
+DeviceAsset.model = string
+DeviceAsset.owner = string
+DeviceAsset.purchased_at = string
+DeviceAsset.tags = array
+DeviceAsset.vendor = string
+DeviceConfig#required address
+DeviceConfig#required bus
+DeviceConfig#required name
+DeviceConfig#required protocol
+DeviceConfig#required template
+DeviceConfig.address = string
+DeviceConfig.address_map = null|object
+DeviceConfig.bus = string
+DeviceConfig.id = string
+DeviceConfig.interval = integer|null
+DeviceConfig.name = string
+DeviceConfig.protocol = string
+DeviceConfig.slave_id = integer|null
+DeviceConfig.template = string
+DeviceGroup#required created_at
+DeviceGroup#required id
+DeviceGroup#required name
+DeviceGroup.color = string
+DeviceGroup.created_at = integer
+DeviceGroup.description = string
+DeviceGroup.device_ids = array
+DeviceGroup.id = string
+DeviceGroup.name = string
+GatewayConfig#required buses
+GatewayConfig#required mqtt
+GatewayConfig#required points
+GatewayConfig.buses = array
+GatewayConfig.cellular = CellularConfig
+GatewayConfig.convert_rules = array|null
+GatewayConfig.device_assets = array|null
+GatewayConfig.device_groups = array|null
+GatewayConfig.devices = array|null
+GatewayConfig.license = LicenseConfig
+GatewayConfig.modbus_passthrough = ModbusPassthroughConfig
+GatewayConfig.modbus_server = ModbusServerConfig
+GatewayConfig.mqtt = MqttConfig
+GatewayConfig.ntp = NtpConfig
+GatewayConfig.opcua = OpcuaConfig
+GatewayConfig.point_trash = array|null
+GatewayConfig.points = array
+GatewayConfig.schema_version = integer
+GatewayConfig.self_heal = SelfHealConfig
+GatewayConfig.sim_consumer = SimConsumerConfig
+GatewayConfig.telemetry = TelemetryConfig
+GatewayConfig.virtual_points = array|null
+GatewayConfig.web = WebConfig
+GatewayConfig.webhook = WebhookConfig
+LicenseConfig.absent_quota = Quota
+LicenseConfig.path = null|string
+LicenseConfig.tier_quotas = array|null
+ModbusPassthroughConfig#required enabled
+ModbusPassthroughConfig#required listen_addr
+ModbusPassthroughConfig#required target_bus
+ModbusPassthroughConfig.enabled = boolean
+ModbusPassthroughConfig.listen_addr = string
+ModbusPassthroughConfig.target_bus = string
+ModbusPassthroughConfig.timeout_ms = integer
+ModbusServerConfig.base_register = integer
+ModbusServerConfig.enabled = boolean
+ModbusServerConfig.endpoint = string
+ModbusServerConfig.mode = string
+MqttConfig.ack_timeout_secs = integer|null
+MqttConfig.broker = string
+MqttConfig.compression = null|string
+MqttConfig.compression_threshold = integer|null
+MqttConfig.enabled = boolean
+MqttConfig.keep_alive = integer|null
+MqttConfig.password = null|string
+MqttConfig.payload_template = null|string
+MqttConfig.publish_interval = integer
+MqttConfig.qos = integer
+MqttConfig.reconnect_backoff = ReconnectBackoffConfig
+MqttConfig.resume_rate_limit = integer|null
+MqttConfig.tls = MqttTlsConfig
+MqttConfig.topic = string
+MqttConfig.username = null|string
+MqttTlsConfig.ca_cert_path = null|string
+MqttTlsConfig.insecure_skip_verify = boolean
+NtpConfig.server = string
+NtpConfig.sync_interval = integer
+OpcuaConfig.allow_anonymous = boolean
+OpcuaConfig.enabled = boolean
+OpcuaConfig.endpoint = string
+PointConfig#required address
+PointConfig#required bus
+PointConfig#required id
+PointConfig#required interval
+PointConfig#required protocol
+PointConfig.address = string
+PointConfig.address_num = integer|null
+PointConfig.aggregation = AggregationConfig
+PointConfig.alarm_high = null|number
+PointConfig.alarm_low = null|number
+PointConfig.bus = string
+PointConfig.byte_order = null|string
+PointConfig.ct_ratio = null|number
+PointConfig.data_id = null|string
+PointConfig.data_type = null|string
+PointConfig.deadband = number
+PointConfig.device_id = null|string
+PointConfig.formula = null|string
+PointConfig.function_code = integer|null
+PointConfig.id = string
+PointConfig.interval = integer
+PointConfig.modbus_register = integer|null
+PointConfig.name = null|string
+PointConfig.offset = number
+PointConfig.on_change = boolean
+PointConfig.protocol = string
+PointConfig.pt_ratio = null|number
+PointConfig.register_count = integer|null
+PointConfig.scale = number
+PointConfig.slave_id = integer|null
+PointConfig.unit = null|string
+PointConfig.writable = boolean
+PointTrashEntry#required deleted_at_ms
+PointTrashEntry#required point
+PointTrashEntry.deleted_at_ms = integer
+PointTrashEntry.point = PointConfig
+Quota.max_points = integer|null
+Quota.max_protocols = integer|null
+Quota.northbound_channels = integer|null
+Quota.storage_days = integer|null
+ReconnectBackoffConfig.jitter_ratio = number
+ReconnectBackoffConfig.seconds = array
+SelfHealConfig.check_interval_secs = integer
+SelfHealConfig.cooldown_secs = integer
+SelfHealConfig.debounce_k = integer
+SelfHealConfig.enabled = boolean
+SelfHealConfig.fail_streak_to_fuse = integer
+SelfHealConfig.max_actions_per_window = integer
+SelfHealConfig.window_secs = integer
+SimConsumerConfig.batch_size = integer
+SimConsumerConfig.enabled = boolean
+SimConsumerConfig.interval_ms = integer
+SimConsumerConfig.log_every = integer
+TelemetryConfig.enabled = boolean
+TelemetryConfig.metrics_interval_secs = integer
+TelemetryConfig.otlp_endpoint = string
+TelemetryConfig.sample_ratio = number
+TelemetryConfig.service_name = string
+TierQuotaEntry#required quota
+TierQuotaEntry#required tier
+TierQuotaEntry.quota = Quota
+TierQuotaEntry.tier = Tier
+VirtualPoint#required created_at
+VirtualPoint#required formula
+VirtualPoint#required id
+VirtualPoint#required name
+VirtualPoint.created_at = integer
+VirtualPoint.decimals = integer
+VirtualPoint.device_id = null|string
+VirtualPoint.enabled = boolean
+VirtualPoint.formula = string
+VirtualPoint.id = string
+VirtualPoint.name = string
+VirtualPoint.unit = string
+WebConfig.allow_anon_read = boolean
+WebConfig.allow_default_token = boolean
+WebConfig.api_token = string
+WebConfig.cors_origins = array|null
+WebConfig.listen_addr = string
+WebConfig.ota_signing_key = null|string
+WebConfig.password_hash = string
+WebConfig.rate_limit_per_sec = integer|null
+WebConfig.realtime_buffer = integer
+WebConfig.username = string
+WebConfig.users = array
+WebUser#required created_at
+WebUser#required display_name
+WebUser#required id
+WebUser#required username
+WebUser.created_at = integer
+WebUser.display_name = string
+WebUser.enabled = boolean
+WebUser.id = string
+WebUser.last_login_at = integer|null
+WebUser.role_id = UserRole
+WebUser.username = string
+WebhookConfig#required url
+WebhookConfig.batch_size = integer
+WebhookConfig.enabled = boolean
+WebhookConfig.headers = object
+WebhookConfig.interval_ms = integer
+WebhookConfig.max_retries = integer
+WebhookConfig.timeout_secs = integer
+WebhookConfig.url = string

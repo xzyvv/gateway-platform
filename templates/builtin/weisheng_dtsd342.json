@@ -1,0 +1,103 @@
+{
+  "name": "威盛电表_DTSD342",
+  "vendor": "威盛",
+  "model": "DTSD342",
+  "protocol": "modbus",
+  "default_interval": 5,
+  "default_byte_order": "ABCD",
+  "points": [
+    {
+      "name": "A相电压",
+      "unit": "V",
+      "data_type": "u16",
+      "default_address": 0,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.1,
+      "offset": 0,
+      "deadband": 0.1
+    },
+    {
+      "name": "B相电压",
+      "unit": "V",
+      "data_type": "u16",
+      "default_address": 1,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.1,
+      "offset": 0,
+      "deadband": 0.1
+    },
+    {
+      "name": "C相电压",
+      "unit": "V",
+      "data_type": "u16",
+      "default_address": 2,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.1,
+      "offset": 0,
+      "deadband": 0.1
+    },
+    {
+      "name": "A相电流",
+      "unit": "A",
+      "data_type": "u16",
+      "default_address": 3,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.001,
+      "offset": 0,
+      "deadband": 0.01
+    },
+    {
+      "name": "总有功功率",
+      "unit": "kW",
+      "data_type": "f32",
+      "default_address": 10,
+      "function_code": 3,
+      "register_count": 2,
+      "scale": 1,
+      "offset": 0,
+      "deadband": 0.1,
+      "aggregation": {
+        "window": 60,
+        "function": "avg"
+      }
+    },
+    {
+      "name": "总无功功率",
+      "unit": "kvar",
+      "data_type": "f32",
+      "default_address": 12,
+      "function_code": 3,
+      "register_count": 2,
+      "scale": 1,
+      "offset": 0,
+      "deadband": 0.1
+    },
+    {
+      "name": "总用电量",
+      "unit": "kWh",
+      "data_type": "u32",
+      "default_address": 20,
+      "function_code": 3,
+      "register_count": 2,
+      "scale": 0.01,
+      "offset": 0,
+      "deadband": 0.01,
+      "on_change": true
+    },
+    {
+      "name": "功率因数",
+      "unit": "",
+      "data_type": "u16",
+      "default_address": 30,
+      "function_code": 3,
+      "register_count": 1,
+      "scale": 0.001,
+      "offset": 0,
+      "deadband": 0.001
+    }
+  ]
+}

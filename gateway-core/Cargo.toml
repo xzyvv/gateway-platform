@@ -1,0 +1,149 @@
+[package]
+name = "gateway-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "gateway_core"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+# A6: cellular 模块使用 CancellationToken
+tokio-util = { version = "0.7", features = ["rt"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+once_cell = { workspace = true }
+rumqttc = { workspace = true }
+ring = { workspace = true }
+rusqlite = { workspace = true }
+tokio-serial = { workspace = true }
+rsntp = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+evalexpr = { workspace = true }
+validator = { workspace = true }
+flate2 = { workspace = true }
+# OTA 差分升级：bsdiff 4.x 兼容补丁应用（纯 Rust）
+qbsdiff = { workspace = true }
+libc = { workspace = true }
+# F2: OPC UA Server（freeopcua async-opcua，纯 Rust + tokio 原生异步）
+async-opcua = { workspace = true }
+# X.509 证书管理（自签名生成 + PEM/DER 编解码，纯 Rust，无 OpenSSL 依赖）
+rcgen = { workspace = true }
+pem = { workspace = true }
+# S4: 加载系统 CA 证书（mTLS 场景）
+rustls-native-certs = { workspace = true }
+# B9: X.509 证书字段解析（subject/issuer/validity/fingerprint）
+x509-parser = { workspace = true }
+# 配置热加载原子替换（无锁读）
+arc-swap = { workspace = true }
+# HTTP Webhook 北向上报
+reqwest = { workspace = true }
+# 1.2: NorthConnector trait (async trait needed in non-test code)
+async-trait = { workspace = true }
+# 前后端类型共享：Rust struct -> TypeScript interface（编译期生成）
+ts-rs = { workspace = true }
+# 配置 JSON Schema 校验（schemars 派生 + jsonschema 运行时校验）
+schemars = { workspace = true }
+jsonschema = { workspace = true }
+# C-1: 真正零化敏感缓冲区（手写循环会被 LLVM 优化掉）
+zeroize = { workspace = true }
+# feature-gated：OTLP 远程 trace 导出（默认关闭，tracing-otlp 启用）
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpiod = { workspace = true }
+
+# N-2: Windows 网卡枚举需 GetAdaptersAddresses / GetIfTable2 的系统结构体定义
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[features]
+## 生产构建启用 SQLite 加密：cargo build --features encryption
+encryption = ["rusqlite/bundled-sqlcipher"]
+default = ["all-protocols"]
+## 可观测性链路追踪：为数据管道注入 #[instrument] / info_span!。
+## tracing crate 已是 mandatory 依赖，本 feature 不引入新 crate，仅展开 cfg_attr(...)。
+## 关闭时编译期完全剥离，零运行时成本。
+tracing = []
+## OTLP 远程 trace 导出（→ Jaeger/Tempo/Grafana）。隐含 tracing。
+## 配置走 OTEL_* 环境变量，无需改 config 文件。
+tracing-otlp = ["tracing", "dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+## 远程诊断只读 Shell（默认关闭）：发行版只保留日志 tail / 归档下载，
+## 需要在现场实时跑 df/free/top 等只读命令时显式启用。
+## cargo build --features remote-shell
+remote-shell = []
+## 测试签发辅助（license::issuer_support）：仅集成测试启用，发行二进制不编译。
+## W2-#18：该模块内含 4 处 `unwrap`（一次性随机 Ed25519 钥对生成），
+## 是 license 路径上唯一被 clippy 豁免的生产可编译 panic 点；
+## 改为 feature gate 后，生产构建（gatewayd / gateway-desktop）不再包含它，
+## panic 面彻底移出运行二进制。gateway-api 的 dev-dependencies 会自动启用。
+test-support = []
+
+## ===== 协议插件化 feature gate（编译期可选协议）=====
+## 默认启用标准发行集（default = ["all-protocols"]），不破坏现有 cargo build 行为。
+## 最小构建：cargo build --no-default-features --features modbus,dlt645
+## 单协议测试：cargo test --no-default-features --features modbus
+## 关闭时协议模块、注册项、工厂函数在编译期完全剥离，零运行时成本。
+##
+## 注意：FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」——feature 仍保留，
+## 仅用于存量项目/回归测试显式启用（`--features fins` / `--features bacnet-mstp`），
+## 连续两个版本无项目需求后删除模块、注册项、测试与文档。
+all-protocols = ["modbus", "dlt645", "cjt188", "opcua", "iec104", "bacnet", "s7comm", "mc", "iec101"]
+modbus = []
+dlt645 = []
+cjt188 = []
+opcua = []
+iec104 = []
+bacnet = []
+s7comm = []
+## 退役观察：BACnet MS/TP（依赖 BACnet/IP 的 BacnetCollector，仅显式启用）
+bacnet-mstp = ["bacnet"]
+## 三菱 MC（Melsec 通信协议，QnA 3E 二进制帧，TCP）
+mc = []
+## 退役观察：欧姆龙 FINS（FINS/TCP，仅显式启用）
+fins = []
+## IEC 60870-5-101（串行链路 FT1.2，复用 iec104 ASDU 结构）
+iec101 = []
+
+## ===== 行业 SKU 聚合 feature（发行构建入口）=====
+## 各 SKU 按南向协议互斥切片：只装本行业需要的协议，不再以标准版为底座叠加。
+## 标准版（默认发行）：通用计量 + IEC104 远动 + OPC UA Client；GPIO 始终可用。
+sku-standard = ["modbus", "dlt645", "cjt188", "iec104", "opcua"]
+## 楼宇版：BACnet/IP 楼控 + 现场计量 + OPC UA 集成（不含 BACnet MS/TP）。
+sku-building = ["modbus", "bacnet", "cjt188", "opcua"]
+## 电力版：电能量采集 + 远动（IEC104 优先，IEC101 仅存量串口远动项目）。
+sku-power = ["modbus", "dlt645", "iec104", "iec101", "opcua"]
+## PLC 版：主流 PLC 私有协议（西门子 S7comm + 三菱 MC）+ Modbus 兼容接入。
+sku-plc = ["modbus", "s7comm", "mc", "opcua"]
+## 精简版：仅计量三件套（Modbus / DL/T 645 / CJ/T 188），不含 OPC UA 与行业协议。
+sku-minimal = ["modbus", "dlt645", "cjt188"]
+
+[dev-dependencies]
+rand = { workspace = true }
+tempfile = { workspace = true }
+# cargo bench 基准测试依赖（harness=false 使用自定义 main）
+criterion = { workspace = true }
+
+# 基准测试目标：cargo bench --workspace
+# - protocol_decode: 协议帧解码吞吐量（modbus/dlt645/cjt188 CRC + 帧解析）
+# - queue_push_pop: 队列 push/pop/ack 性能
+[[bench]]
+name = "protocol_decode"
+harness = false
+
+[[bench]]
+name = "queue_push_pop"
+harness = false

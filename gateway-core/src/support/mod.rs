@@ -1,0 +1,14 @@
+//! 启动期共享支撑（启动编排已迁至 gatewayd 二进制）
+//!
+//! 完整的 13 步启动流程位于 `gatewayd::bootstrap`；本模块仅保留被引擎内部
+//! （`north::server`、`gateway_api::web`、`engine::logging`）复用的两类支撑：
+//! - [`app`]：`Gateway` 组件管理器（总线 / MQTT / NTP 热更新），北向 Server 与 Web 调试面均依赖它；
+//! - 路径解析：`default_xxx()`（env var 优先 + 平台默认，见 [paths]）。
+//!
+//! 之所以留在 gateway-core 而非并入 gatewayd：这两类被引擎侧反向引用，
+//! 迁入二进制会形成 core -> bin 的非法依赖。
+
+pub mod app;
+pub mod cron;
+mod paths;
+pub use paths::*;

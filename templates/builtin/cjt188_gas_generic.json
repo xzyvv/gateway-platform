@@ -1,0 +1,12 @@
+{
+  "name": "CJT188_燃气表通用",
+  "vendor": "通用",
+  "model": "CJT188-2004",
+  "protocol": "cjt188",
+  "default_interval": 60,
+  "points": [
+    {"name": "累计流量", "unit": "m3", "data_id": "00000000", "scale": 0.01, "offset": 0, "deadband": 0.01},
+    {"name": "剩余金额", "unit": "yuan", "data_id": "00000001", "scale": 0.01, "offset": 0, "deadband": 0.01},
+    {"name": "本月用量", "unit": "m3", "data_id": "00000002", "scale": 0.01, "offset": 0, "deadband": 0.01}
+  ]
+}

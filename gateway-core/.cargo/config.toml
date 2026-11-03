@@ -1,0 +1,23 @@
+﻿[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[registries.rsproxy]
+index = "https://rsproxy.cn/crates.io-index"
+
+[net]
+git-fetch-with-cli = true
+
+# GNU 目标使用 rustup 自带的 self-contained MinGW 工具链
+# （x86_64-w64-mingw32-gcc.exe / ld.exe / dlltool.exe）
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\Users\\xzy35\\.rustup\\toolchains\\stable-x86_64-pc-windows-gnu\\lib\\rustlib\\x86_64-pc-windows-gnu\\bin\\self-contained\\x86_64-w64-mingw32-gcc.exe"
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=lld-link"]

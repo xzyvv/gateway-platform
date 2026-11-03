@@ -1,0 +1,17 @@
+[package]
+name = "license-issuer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "license-issuer"
+path = "src/main.rs"
+
+[dependencies]
+ring = { workspace = true }
+serde_json = { workspace = true }
+# 复用网关侧 license 模块的哈希/编码/校验实现，杜绝签发侧与校验侧格式漂移
+# 显式声明 version 以满足 cargo-deny 的 wildcard 门禁（path 依赖无版本会被判为 wildcard）
+gateway-core = { path = "../../gateway-core", version = "0.1.0" }

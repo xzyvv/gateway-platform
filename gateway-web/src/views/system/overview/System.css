@@ -1,0 +1,143 @@
+.system {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.system-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+@media (max-width: 768px) {
+  .system-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.section-card {
+  border-radius: var(--radius-card);
+}
+/* W46: 与 VISUAL_SPEC §3.1 / Dashboard / Realtime / Logs / Devices / Points / History 统一——渐变方向 90deg */
+
+.ntp-btn {
+  margin-top: 16px;
+}
+/* S9: 1366×768 上系统页纵向滚动约 744px。这里统一收紧卡片间距与按钮上边距，
+ * 信息项本身不删（系统信息已改为两列排布，见 SystemOverview.vue）。 */
+@media (max-height: 800px) {
+  .system-grid { gap: 14px; }
+  .ntp-btn { margin-top: 10px; }
+  .metrics { max-height: 260px; }
+}
+
+.live-clock {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: linear-gradient(135deg, var(--color-primary-lightest) 0%, var(--color-primary-bg) 100%);
+  padding: 4px 12px;
+  border-radius: var(--radius-button);
+  display: inline-block;
+  border: 1px solid var(--color-primary-lighter);
+  font-variant-numeric: tabular-nums;
+  transition: background-color, box-shadow 0.2s;
+}
+.live-clock:hover {
+  background: linear-gradient(135deg, var(--color-primary-lighter) 0%, var(--color-primary-lightest) 100%);
+  box-shadow: 0 2px 6px rgba(var(--color-primary-rgb), 0.15);
+}
+
+.metrics {
+  background: var(--code-bg-alt);
+  color: var(--code-text);
+  padding: 14px 16px;
+  border-radius: var(--radius-table);
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  max-height: 400px;
+  overflow: auto;
+  margin: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  position: relative;
+  border: 1px solid var(--code-border);
+}
+.metrics::before {
+  content: '';
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  display: block;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-accent));
+  margin: -14px -16px 12px;
+}
+.metrics::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.metrics::-webkit-scrollbar-track {
+  background: transparent;
+}
+.metrics::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+.metrics::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+.metrics .json-key { color: var(--code-key); }
+.metrics .json-string { color: var(--code-string); }
+.metrics .json-number { color: var(--code-number); }
+.metrics .json-boolean { color: var(--code-boolean); }
+.metrics .json-null { color: var(--code-boolean); }
+
+/* Webhook */
+.webhook-desc {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+.webhook-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.webhook-form .el-input {
+  flex: 1;
+}
+
+/* 审计日志卡片头 */
+
+/* 审计操作列 */
+.audit-action {
+  font-weight: 500;
+  color: var(--text-regular);
+}
+.dlq-actions { display: flex; gap: 8px; }
+.diag-tip { font-size: 0.8125rem; color: var(--text-secondary); margin: 0 0 12px; line-height: 1.6; }
+/* 主按钮组之后的补充说明：与上方说明拉开层次，不重复主文案的强调色 */
+.diag-tip-sub { font-size: 0.75rem; margin: 8px 0 0; opacity: 0.85; }
+.backup-actions { display: flex; gap: 8px; align-items: center; }
+
+/* 骨架占位：与真实 section-card 内 el-descriptions / DataTable 等高 */
+.sk-system {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.sk-block-md { height: 140px; border-radius: var(--radius-button); }
+.sk-block-lg { height: 220px; border-radius: var(--radius-button); }
+.sk-block-xl { height: 360px; border-radius: var(--radius-button); }
+.sk-metrics-card { height: 420px; }
+.sk-hint {
+  margin: 0 0 8px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+

@@ -1,0 +1,89 @@
+/* LicenseDialog 样式（.lic-* 命名空间，非 scoped 弹窗样式约定同 GatewayScanDialog） */
+
+.lic-section-title {
+  margin: 4px 0 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.lic-section-title + .lic-empty {
+  margin-top: 0;
+}
+
+.lic-empty {
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+/* 状态文字色（对齐 Topbar 徽章语义：绿/黄/红） */
+.lic-status.ok {
+  color: var(--text-success);
+}
+.lic-status.warn {
+  color: var(--text-warning);
+}
+.lic-status.bad {
+  color: var(--text-danger);
+}
+
+/* v2.0 产能配额（描述列表内 2×2 紧凑排列） */
+.lic-quota {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+}
+.lic-quota-item {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.lic-quota-item b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* 导入行 */
+.lic-import-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.lic-file-input {
+  display: none;
+}
+.lic-import-hint {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.lic-alert {
+  margin-top: 10px;
+}
+
+/* 设备码列表 */
+.lic-hint {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.lic-machine-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.lic-machine-label {
+  flex: 0 0 110px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+.lic-machine-value {
+  flex: 1;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 0.75rem;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.lic-copy-all {
+  margin-top: 8px;
+}

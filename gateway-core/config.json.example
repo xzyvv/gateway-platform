@@ -1,0 +1,13 @@
+{
+  "_comment": "本文件是配置片段示例，不会被网关加载（网关只读同目录的 config.json）。把需要的片段合并进 config.json 即可。",
+  "sim_consumer": {
+    "_comment": "内置模拟消费者：无北向 MQTT 时用于本地演练 / 消除「队列积压 has_consumer=false」告警歧义。开启后队列数据会走完「出队 → 处理 → ack」链路，但不会被上报到任何外部通道。与 mqtt.enabled 互斥（同时开会分流同一批数据导致静默丢数），MQTT 已启用时本开关会被忽略。",
+    "enabled": false,
+    "_comment_batch_size": "单批出队条数（默认 100）。",
+    "batch_size": 100,
+    "_comment_interval_ms": "队列为空时的轮询间隔（毫秒，默认 1000）。",
+    "interval_ms": 1000,
+    "_comment_log_every": "每消费满该条数打一条 INFO 摘要日志（默认 100，设为 0 关闭摘要日志）。",
+    "log_every": 100
+  }
+}

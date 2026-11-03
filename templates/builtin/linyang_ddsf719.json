@@ -1,0 +1,15 @@
+{
+  "name": "林洋_DDSF719",
+  "vendor": "林洋",
+  "model": "DDSF719",
+  "protocol": "modbus",
+  "default_interval": 5,
+  "default_byte_order": "ABCD",
+  "points": [
+    {"name": "U", "unit": "V", "data_type": "u16", "default_address": 0, "function_code": 3, "register_count": 1, "scale": 0.1, "offset": 0, "deadband": 0.1},
+    {"name": "I", "unit": "A", "data_type": "u16", "default_address": 1, "function_code": 3, "register_count": 1, "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "P", "unit": "kW", "data_type": "f32", "default_address": 2, "function_code": 3, "register_count": 2, "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "PF", "unit": "", "data_type": "u16", "default_address": 4, "function_code": 3, "register_count": 1, "scale": 0.001, "offset": 0, "deadband": 0.001},
+    {"name": "EP", "unit": "kWh", "data_type": "u32", "default_address": 5, "function_code": 3, "register_count": 2, "scale": 0.01, "offset": 0, "deadband": 0.01}
+  ]
+}

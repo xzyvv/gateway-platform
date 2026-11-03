@@ -1,0 +1,677 @@
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+/* S9: 1366×768 笔记本上本页纵向滚动约 452px。只收起卡片自身的冗余留白
+ * （卡片内边距与下边距），保持卡片数量与信息不变，避免为了「首屏」删信息。 */
+@media (min-width: 1200px) and (max-height: 800px) {
+  .dashboard { gap: 14px; }
+  .sum-card { padding: 12px; margin-bottom: 8px; }
+  .sum-val { font-size: 1.5rem; }
+  .summary-row { margin-bottom: 0; }
+}
+
+/* N7: 设备概览与组件健康状态并排（≥1200px）。两卡等高，避免右侧卡片下方留出空白 */
+.lower-row { align-items: stretch; }
+.lower-row .el-col { display: flex; }
+.lower-row .el-col > .el-card { width: 100%; }
+
+/* 页头：与 HubShell 的页头同一视觉层级（18px/600 标题 + 13px 副标题） */
+.dash-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dash-head-text { min-width: 0; }
+.dash-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+/* B1：页头健康结论徽章，与标题同行，不额外占纵向空间 */
+.dash-health-tag { margin-left: 8px; vertical-align: middle; }
+/* 现状摘要固定单行：过长的设备名/错误文案不应把首屏卡片继续往下推 */
+.dash-sub {
+  margin: 6px 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-toolbar { display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+
+@media (max-width: 768px) {
+  /* 窄屏工具栏换到标题下方，避免标题被两个按钮挤成两行 */
+  .dash-head { flex-direction: column; align-items: stretch; }
+  .dash-toolbar { justify-content: flex-start; }
+  .dash-sub { white-space: normal; }
+}
+
+/* 全局汇总概览 */
+.summary-row { margin-bottom: 4px; }
+
+.sum-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  overflow: hidden;
+  transition: transform .2s, box-shadow .2s;
+  margin-bottom: 12px;
+}
+.sum-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08); }
+/* 暗色：纯黑阴影在深底上不可见，卡片浮起反馈消失 */
+html.dark .sum-card:hover { box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5); }
+
+/* 汇总卡改为 button 后要抹掉浏览器默认的按钮外观，但保留聚焦可见性 */
+button.sum-card {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+button.sum-card:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+.sum-ic {
+  width: 40px; height: 40px;
+  border-radius: var(--radius-card);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+.sum-c1 .sum-ic { background: rgba(var(--color-primary-rgb), .12); color: var(--el-color-primary); }
+.sum-c2 .sum-ic { background: rgba(var(--color-success-rgb), .12); color: var(--el-color-success); }
+.sum-c3 .sum-ic { background: rgba(var(--color-warning-rgb), .12); color: var(--el-color-warning); }
+.sum-c4 .sum-ic { background: rgba(var(--color-danger-rgb), .12); color: var(--el-color-danger); }
+.sum-c5 .sum-ic { background: rgba(var(--color-info-rgb), .12); color: var(--el-color-info); }
+.sum-c6 .sum-ic { background: rgba(var(--color-accent-rgb), .12); color: var(--color-accent); }
+.sum-body { flex: 1; min-width: 0; }
+.sum-val { font-size: 1.75rem; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
+.sum-sub { font-size: 0.8125rem; font-weight: 500; color: var(--text-secondary); margin-left: 2px; }
+.sum-lbl { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+.sum-ring {
+  position: absolute;
+  right: -16px; top: -16px;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  opacity: .5;
+}
+.sum-c6.ok .sum-val { color: var(--text-success); }
+.sum-c6.bad .sum-val { color: var(--text-danger); }
+html.dark .sum-card {
+  background: var(--bg-card);
+  border-color: var(--border-base);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+html.dark .sum-card:hover {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+html.dark .sum-c1 .sum-ic { background: rgba(var(--color-primary-rgb), .18); }
+html.dark .sum-c2 .sum-ic { background: rgba(var(--color-success-rgb), .18); }
+html.dark .sum-c3 .sum-ic { background: rgba(var(--color-warning-rgb), .18); }
+html.dark .sum-c4 .sum-ic { background: rgba(var(--color-danger-rgb), .18); }
+html.dark .sum-c5 .sum-ic { background: rgba(var(--color-info-rgb), .18); }
+html.dark .sum-c6 .sum-ic { background: rgba(var(--color-accent-rgb), .18); }
+
+/* 指标卡网格 */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+@media (max-width: 1200px) {
+  .metric-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 768px) {
+  .metric-grid { grid-template-columns: 1fr; }
+}
+
+.metric-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 12px;
+  color: var(--text-inverse);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  cursor: default;
+  position: relative;
+  /* 注意：不能 overflow:hidden，否则 metric-bar-tip（top:-18px）会被裁掉
+     改为仅在 ::after 光效元素层级保留 mask（光效元素本身已在 ::after 中控制） */
+  animation: metricEnter 0.5s ease both;
+}
+.metric-card:nth-child(1) { animation-delay: 0.05s; }
+.metric-card:nth-child(2) { animation-delay: 0.12s; }
+.metric-card:nth-child(3) { animation-delay: 0.19s; }
+.metric-card:nth-child(4) { animation-delay: 0.26s; }
+@keyframes metricEnter {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.metric-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  transition: left 0.6s ease;
+}
+.metric-card:hover::after {
+  left: 100%;
+}
+.metric-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+.metric-blue:hover   { box-shadow: 0 8px 24px rgba(var(--color-primary-rgb), 0.35); }
+.metric-orange:hover { box-shadow: 0 8px 24px rgba(var(--color-warning-rgb), 0.35); }
+.metric-green:hover  { box-shadow: 0 8px 24px rgba(var(--color-success-rgb), 0.35); }
+.metric-purple:hover { box-shadow: 0 8px 24px rgba(var(--color-accent-rgb), 0.35); }
+
+.metric-blue   { background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%); }
+.metric-orange { background: linear-gradient(135deg, var(--color-warning) 0%, var(--color-warning-light) 100%); }
+.metric-green  { background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-light) 100%); }
+.metric-purple { background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-primary) 100%); }
+
+/* 指标卡片状态覆盖：警告/危险 */
+.metric-card.metric-warning {
+  background: linear-gradient(135deg, var(--color-warning) 0%, var(--color-warning-light) 100%) !important;
+  box-shadow: 0 4px 14px rgba(var(--color-warning-rgb), 0.35);
+}
+.metric-card.metric-danger {
+  background: linear-gradient(135deg, var(--color-danger) 0%, var(--color-danger-light) 100%) !important;
+  box-shadow: 0 4px 14px rgba(var(--color-danger-rgb), 0.35);
+  animation: metricPulse 1.8s ease-in-out 3;
+}
+@keyframes metricPulse {
+  0%, 100% { box-shadow: 0 4px 14px rgba(var(--color-danger-rgb), 0.35); }
+  50% { box-shadow: 0 4px 22px rgba(var(--color-danger-rgb), 0.6); }
+}
+
+.metric-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  flex-shrink: 0;
+  backdrop-filter: blur(4px);
+  transition: transform 0.3s ease, background 0.3s ease;
+}
+.metric-card:hover .metric-icon {
+  transform: scale(1.1);
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.metric-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.metric-label {
+  font-size: 0.8125rem;
+  opacity: 0.9;
+  margin-bottom: 4px;
+}
+
+.metric-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-trend {
+  font-size: 0.75rem;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+.metric-bar {
+  position: relative;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: var(--radius-bar);
+  margin-top: 8px;
+  overflow: visible;
+}
+
+.metric-bar-inner {
+  position: relative;
+  height: 100%;
+  background: linear-gradient(90deg, var(--text-inverse) 0%, rgba(var(--text-inverse-rgb), 0.85) 100%);
+  border-radius: var(--radius-bar);
+  transition: width 0.6s ease;
+  box-shadow: 0 0 8px rgba(var(--text-inverse-rgb), 0.4);
+}
+
+.metric-bar-tip {
+  position: absolute;
+  right: 0;
+  top: -18px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.98);
+  background: rgba(0, 0, 0, 0.45);
+  padding: 1px 6px;
+  border-radius: var(--radius-button);
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.25s, transform 0.25s;
+  pointer-events: none;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.metric-card:hover .metric-bar-tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+/* 警告/危险背景下让 tip 始终可见，避免白色 bar 模糊 */
+.metric-card.metric-warning .metric-bar-tip,
+.metric-card.metric-danger .metric-bar-tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* 区块卡片 */
+/* W5: 与 VISUAL_SPEC §8.2 一致，section-card 入场动画 */
+.section-card {
+  border-radius: var(--radius-card);
+  animation: cardEnter 0.4s ease-out both;
+}
+@keyframes cardEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.last-update-hint {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-fill);
+  padding: 2px 10px;
+  border-radius: var(--radius-card);
+  transition: background 0.2s;
+}
+.last-update-hint:hover {
+  background: var(--color-primary-lightest);
+  color: var(--color-primary);
+}
+.last-update-hint .el-icon {
+  font-size: 0.75rem;
+}
+
+/* 设备概览 */
+.count-badge {
+  margin-left: 4px;
+}
+
+.empty-devices {
+  padding: 20px 0;
+}
+
+.device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.device-card {
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+  background: var(--bg-card-header);
+  transition: background, border-color, box-shadow, transform 0.2s ease;
+  animation: deviceCardEnter 0.4s ease both;
+  position: relative;
+  cursor: pointer;
+}
+.device-card::after {
+  content: '前往管理 →';
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: 0.75rem;
+  color: var(--color-primary);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+}
+.device-card:hover::after {
+  opacity: 1;
+  transform: translateX(0);
+}
+@keyframes deviceCardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.device-card:hover {
+  border-color: var(--color-primary);
+  background: var(--bg-card);
+  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.1);
+  transform: translateY(-2px);
+}
+
+.device-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-light);
+}
+.device-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.device-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.device-status-dot.online {
+  background: var(--color-success);
+  box-shadow: 0 0 0 2px rgba(var(--color-success-rgb), 0.2);
+  animation: devicePulse 2s ease-in-out 3;
+}
+.device-status-dot.offline {
+  /* 离线用空心环而非纯灰实心：色觉障碍用户也能通过形状区分在线/离线，
+     不只依赖颜色（WCAG 1.4.1）。 */
+  background: transparent;
+  border: 2px solid var(--text-placeholder);
+  width: 6px;
+  height: 6px;
+}
+@keyframes devicePulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(var(--color-success-rgb), 0.2); }
+  50% { box-shadow: 0 0 0 5px rgba(var(--color-success-rgb), 0.05); }
+}
+
+.device-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.device-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+}
+
+.info-row .el-icon {
+  color: var(--color-primary);
+  font-size: 0.875rem;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.info-label {
+  color: var(--text-secondary);
+  min-width: 32px;
+  font-size: 0.75rem;
+}
+
+.info-value {
+  color: var(--text-primary);
+  font-family: 'Consolas', monospace;
+  font-weight: 500;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 组件健康表格的样式已随组件搬到 HealthStatus.vue（该表格现在同时用在运行总览页
+   与「系统 → 网关信息」页，样式必须跟着组件走，不能留在页面级 scoped css 里）。 */
+
+.trend-chart {
+  width: 100%;
+  height: 280px;
+}
+
+/* 系统资源仪表盘 + 采集统计 */
+.gauge-stats-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+@media (max-width: 768px) {
+  .gauge-stats-grid { grid-template-columns: 1fr; }
+}
+.gauge-group {
+  display: flex;
+  gap: 8px;
+  background: var(--bg-fill);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-card);
+  padding: 12px;
+}
+.gauge-chart {
+  flex: 1;
+  height: 200px;
+  min-width: 0;
+}
+.stats-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.stat-panel {
+  background: var(--bg-fill);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+}
+.stat-panel-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-regular);
+  margin-bottom: 10px;
+}
+.stat-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8125rem;
+}
+.stat-row-label { color: var(--text-secondary); }
+.stat-row-value {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'Consolas', monospace;
+}
+.stat-ok { color: var(--text-success); }
+.stat-err { color: var(--text-danger); }
+.stat-divider {
+  margin: 6px 0 !important;
+  border-color: var(--border-light) !important;
+}
+
+/* 组件健康汇总 */
+.health-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+/* 窄屏下健康汇总改为 2x2 网格，避免单元格被压缩 */
+@media (max-width: 768px) {
+  .health-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .hs-item {
+    padding: 10px 6px;
+  }
+}
+.hs-item {
+  text-align: center;
+  padding: 8px 4px;
+  border-radius: var(--radius-table);
+  background: var(--bg-card);
+  border: 1px solid var(--border-base);
+}
+.hs-value {
+  font-size: 1.375rem;
+  font-weight: 700;
+  font-family: 'Consolas', monospace;
+}
+.hs-label {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.hs-ok .hs-value { color: var(--text-success); }
+.hs-warn .hs-value { color: var(--text-warning); }
+.hs-err .hs-value { color: var(--text-danger); }
+.hs-total .hs-value { color: var(--text-primary); }
+
+.overall-health {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius-table);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.overall-health.ok { background: var(--color-success-bg); color: var(--text-success); }
+.overall-health.warn { background: var(--color-warning-bg); color: var(--text-warning); }
+.overall-health.err { background: var(--color-danger-bg); color: var(--text-danger); }
+.overall-health.empty { background: var(--color-info-bg); color: var(--text-secondary); }
+
+/* 版本信息页脚：与正文弱分隔，只提供追溯线索，不参与日常扫读 */
+.dash-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+  padding: 10px 2px 4px;
+  border-top: 1px solid var(--border-extralight);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.df-label { font-weight: 600; color: var(--text-regular); }
+.df-sep { opacity: .6; }
+.df-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* 新鲜度信息（更新时间 + 离线旧数据）统一右对齐 */
+.df-freshness {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 离线旧数据：SW 回退缓存时的警示标记，与"刚刚更新"必须在视觉上区分 */
+.stale-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-card);
+  font-weight: 500;
+  color: var(--text-warning);
+  background: var(--color-warning-bg);
+}
+.stale-hint .el-icon { font-size: 0.75rem; }
+
+/* N10: 1366×768 首屏收敛。
+ * 此前只压缩了汇总卡留白，实测仍要滚 328px——「组件健康状态」整卡（512px）
+ * 落在首屏外，而它正是本页第二重要的信息。这里只做两件事：
+ *   1) 压掉各块自身的冗余留白（卡片内边距、块间距）；
+ *   2) 下区两卡并排（见 N7），高度砍半。
+ * 高度保持「内容自然撑开」，不锁 100vh：本页每块的内容都是数据驱动的
+ * （设备数、异常条数都会变），锁死高度会把表/列表挤破卡片（实测 329px 的表
+ * 塞进 281px 的卡）。紧排后自然高度约 663px，1366×768 有 668px 可用空间，
+ * 正好落在首屏内；内容变多时照常滚动，不做裁剪。
+ * 注意：必须放在文件末尾——媒体查询本身不带特异性加成，若写在基础规则之前，
+ * 会被后面的同优先级声明覆盖（实测 .sum-card 内边距回退到 16px、下边距 12px）。 */
+@media (min-width: 1200px) and (max-height: 820px) {
+  .dashboard { gap: 10px; }
+  .summary-row { margin-bottom: 0; }
+  .sum-card { padding: 10px 12px; margin-bottom: 0; }
+  .sum-ic { width: 34px; height: 34px; font-size: 1.0625rem; }
+  .sum-val { font-size: 1.375rem; }
+
+  .attention-card :deep(.el-card__header) { padding: 8px 14px; }
+  .attention-card :deep(.el-card__body) { padding: 10px 14px; }
+
+  .dash-footer { margin-top: 0; padding: 4px 2px 0; }
+
+  .lower-row :deep(.el-card__header) { padding: 8px 14px; }
+  .lower-row :deep(.el-card__body) { padding: 10px 14px; }
+
+  /* 本机首次会话顶部还有一条安全横幅（40px + 12px 外边距，展示一次后不再出现），
+     会把已经压过一轮的首屏再顶出 39px。横幅存在时只再收一档「纯留白」：
+     不动任何信息项、不做内部裁剪，内容与可读性都不变；横幅关闭或以后不再出现
+     （v-if 移除节点）时这些规则自动失效，回到上面那档间距。 */
+  .security-notice ~ .route-page .dashboard { gap: 6px; }
+  .security-notice ~ .route-page .sum-card { padding: 8px 12px; }
+  .security-notice ~ .route-page .dash-footer { padding: 0 2px; }
+  .security-notice ~ .route-page .attention-card :deep(.el-card__header),
+  .security-notice ~ .route-page .lower-row :deep(.el-card__header) { padding: 6px 14px; }
+  .security-notice ~ .route-page .attention-card :deep(.el-card__body),
+  .security-notice ~ .route-page .lower-row :deep(.el-card__body) { padding: 6px 14px; }
+}

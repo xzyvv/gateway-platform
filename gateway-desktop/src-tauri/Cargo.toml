@@ -1,0 +1,32 @@
+[package]
+name = "gateway-desktop"
+version.workspace = true
+description = "工业网关调试控制台（桌面客户端）"
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "gateway_desktop"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { workspace = true }
+serde_json = { workspace = true }
+
+[dependencies]
+tauri = { workspace = true }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-updater = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+# opt-4: 去掉重复 features——json/stream 已在 workspace.dependencies 统一声明，
+# 原单独加 features 会被 Cargo unification 合并到 gateway-core，造成 sibling 泄漏。
+reqwest = { workspace = true }
+tokio = { workspace = true }
+futures-util = { version = "0.3", features = ["std"] }
+tracing = { workspace = true }
+dirs = { workspace = true }
+# Bug-D2: 出站 URL 校验（SSRF 黑名单 + scheme 白名单）
+url = "2"

@@ -1,0 +1,631 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # 支持手动触发完整 bench job（见 bench job 的 if 条件）
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: check / clippy / fmt / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          # 移除 rsproxy 镜像配置，CI 直接使用 crates.io
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # N-12：五阶段门禁（fmt → check → clippy → test --lib → build）只在
+      # `gateway-core/scripts/ci.sh` 维护一份，CI 直接调用，避免 workflow 内联
+      # 副本与本地脚本逐步漂移。RUSTFLAGS 置空：脚本内的 clippy 自带 -D warnings；
+      # 测试编译保持原有"不因警告阻断"的宽松口径。
+      - name: Local gate (scripts/ci.sh)
+        run: bash gateway-core/scripts/ci.sh
+        env:
+          RUSTFLAGS: ""
+
+      # dead_code 严格门禁：禁止 #![allow(dead_code)] 掩盖未来回归
+      # 一旦发现 dead_code 立即失败，强制开发者删除或显式 #[allow(dead_code)] + 注释
+      - name: dead_code strict check
+        run: cargo check --all-targets --all-features
+        env:
+          RUSTFLAGS: "-D dead_code"
+
+      # R2: tracing-otlp 分支回归。
+      # 此前 OTLP 相关代码只被 `cargo check --all-features` 编译、**从未被执行**：
+      # `shutdown_logging()` 的 provider flush、`make_json_file_layer_with_span`、
+      # `make_stderr_layer_with_span` 全部落在 `cfg(feature = "tracing-otlp")` /
+      # `cfg(feature = "tracing")` 下，默认 feature 的 lib 测试完全绕开它们。
+      # 此步让这些分支进入真实运行路径；未启用 encryption，无需 OPENSSL。
+      - name: cargo test (unit, tracing-otlp)
+        run: cargo test -p gateway-core --lib --quiet --features tracing-otlp
+        env:
+          RUSTFLAGS: ""
+
+      # F1: 协议 feature 编译矩阵。
+      # gateway-core 的每个协议（modbus/dlt645/cjt188/opcua/...）都挂在一组
+      # 独立 feature 下，并已有 30+ 处 `#[cfg(feature = "...")]`。但 CI 历史上只
+      # 跑 `default = ["all-protocols"]` 一组配置——意味着 `--no-default-features
+      # --features <某个协议>` 这种裁剪构建路径**从未被编译过**，任何残留 `use`、
+      # 类型假设错误都会在生产做轻量化部署时才暴露。本矩阵覆盖四条代表性路径：
+      #   1) --no-default-features：仅零依赖，剥离所有协议
+      #   2) --features modbus,dlt645：常见数据链路最小组合
+      #   3) --features opcua：最重的 NorthConnector 服务端，单独验依赖隔离
+      #   4) --features bacnet,bacnet-mstp：BACnet IP+MSTP 双栈（含依赖关系）
+      # 仅 `cargo check`，不重复 `cargo test --lib`，控制 CI 时长。
+      #
+      # RUSTFLAGS="-D dead_code"：裁剪构建最容易遗留死代码——只被 dlt645/cjt188
+      # 使用的 frame_extract、只被 modbus/mc/s7comm/bacnet 使用的
+      # clone_collector_error，在其它 feature 组合下就是无调用方的死符号。
+      # 共享层已按调用方加 `#[cfg(any(feature = ...))]` 门控（照 asdu 先例），
+      # 此处把该契约锁进 CI：任何人不补门控就删调用方，立刻编译失败。
+      # 注：cargo 对 registry 依赖传 --cap-lints allow，故 -D 只作用于本仓 crate。
+      # 反证闭环：删掉 common/mod.rs 上 frame_extract 的 cfg 门 → 路径 1/3/4
+      # 报 dead_code error；删掉 clone_collector_error 的 cfg 门 → 路径 1 报错。
+      #
+      # `--all-targets`：把集成测试（tests/chaos、tests/load、tests/soak）也纳入
+      # 裁剪构建的编译检查。此前矩阵只编译 lib，集成测试里对协议模块的
+      # 无条件 import（如 `south::protocol::modbus::transaction`）在裁剪构建下
+      # 直接 E0432/E0433 失败——这些测试二进制只有默认 features 才编译过。
+      # 现在集成测试按协议 feature 门控（chaos 场景逐个 cfg，load/soak 农场
+      # 整体 cfg），裁剪构建下相关场景被剥离，其余场景照常编译。
+      - name: protocol feature matrix (cargo check --all-targets, -D dead_code)
+        run: |
+          set -euo pipefail
+          cargo check -p gateway-core --all-targets --no-default-features --quiet
+          cargo check -p gateway-core --all-targets --no-default-features --features modbus,dlt645 --quiet
+          cargo check -p gateway-core --all-targets --no-default-features --features opcua --quiet
+          cargo check -p gateway-core --all-targets --no-default-features --features bacnet,bacnet-mstp --quiet
+        env:
+          RUSTFLAGS: "-D dead_code"
+
+      # SKU 发行矩阵：5 个行业 SKU 的聚合 feature 此前只在发版脚本里被用到，
+      # CI 从未编译过 `--no-default-features --features sku-<name>` 路径。
+      # SKU 表单一来源 = gateway-core/Cargo.toml 的 `sku-*` 定义；此处从该文件
+      # 动态取清单，新增 SKU 自动纳入，无需再改 CI。
+      # 选 `-p gatewayd`：它是实际发行入口，且已对 gateway-core / gateway-api
+      # 关闭 default-features 并双转发每个 SKU，能覆盖三层转发是否一致。
+      # RUSTFLAGS="-D dead_code"：裁剪构建最容易留下只被其它 SKU 使用的死符号。
+      - name: SKU feature matrix (cargo check -p gatewayd, -D dead_code)
+        run: |
+          set -euo pipefail
+          skus=$(awk -F'=' '/^sku-[a-z0-9-]+[[:space:]]*=/ { k=$1; gsub(/[[:space:]]/, "", k); sub(/^sku-/, "", k); print k }' gateway-core/Cargo.toml)
+          echo "SKU matrix: $(echo $skus)"
+          for sku in $skus; do
+            echo "==> sku-$sku"
+            cargo check -p gatewayd --all-targets --no-default-features --features "sku-$sku" --quiet
+          done
+        env:
+          RUSTFLAGS: "-D dead_code"
+
+      # S1: 集成/契约测试此前从未在 CI 执行（仅靠 --all-targets 编译检查），
+      # 导致 api_contract（HTTP 契约）/ arch_deps（分层依赖守卫）/ license 等防线未上锁。
+      # 此处纳入门禁；chaos 时序测试见下方独立的 chaos job（R1 后同为强制门禁）。
+      # 新增 tests/*.rs 测试二进制时请同步追加到下方 --test 列表。
+      - name: cargo test (integration & contract)
+        run: |
+          # 引擎侧分层守卫（north/queue/south）
+          cargo test -p gateway-core --quiet --test arch_deps
+          # Web 调试面拆分至 gateway-api：HTTP 契约 / 自愈 / license / 分层守卫
+          cargo test -p gateway-api --quiet \
+            --test integration \
+            --test api_contract \
+            --test arch_deps \
+            --test self_heal \
+            --test license_api \
+            --test license_feature_free \
+            --test license_quota_checks
+        env:
+          RUSTFLAGS: ""
+
+      # 基准编译检查：确保 benches/ 不腐烂。完整基准见 bench job（仅 main/手动）。
+      - name: cargo bench compile check
+        run: cargo bench --no-run --workspace --quiet
+        env:
+          RUSTFLAGS: ""
+
+      # F2: 本地预推送同款 supply-chain 检查接入 CI
+      # `security.yml` 的 cargo-audit / cargo-deny 仍由该 job 单独跑全量、
+      # 跨平台覆盖；此处只是把 scripts/f2_supply_chain_check 集成到日常 PR 检查流，
+      # 让 deny 与 audit 的命中点也出现在 check job 的失败页里（更靠近 PR 上下文）。
+      # 脚本在工具缺失时优雅 skip，不阻断；CI runner 上 cargo 已是 PATH 一部分，
+      # `cargo install cargo-deny --locked` 会快速命中缓存（actions/cache 已留位置）。
+      - name: F2 supply-chain check (local mirror)
+        run: |
+          set -euo pipefail
+          bash scripts/f2_supply_chain_check.sh || echo "F2 check exited $? -- see f2_supply_chain_report.txt"
+        env:
+          RUSTFLAGS: ""
+        continue-on-error: true
+
+      - name: Verify ts-rs bindings are up to date
+        run: |
+          # ts-rs 通过 build.rs 注入 TS_RS_EXPORT_DIR，直接导出到 gateway-web/src/api/generated/，cargo test --lib 触发
+          # 用 git status --porcelain 而非 git diff --exit-code：
+          # diff 只能捕获"已跟踪文件内容变化"，捕获不到"新增 #[ts(export)] 类型产生的未跟踪 .ts 文件"——
+          # 开发者提交了 Rust 类型但忘了提交生成的绑定，旧检查会漏过。
+          status=$(git status --porcelain -- gateway-web/src/api/generated/)
+          if [ -n "$status" ]; then
+            echo "::error::ts-rs generated types are out of date. Run 'cargo test --lib' and commit the updated generated/."
+            echo "$status"
+            exit 1
+          fi
+
+      - name: Verify build order prerequisites
+        # Q7: gateway-core 与 gateway-api 为库、先编译，gatewayd 依赖二者；构建顺序 gateway-web -> gatewayd
+        # gateway-desktop 已冻结（不再构建/发布），但目录必须保留，防止合并时误删
+        run: |
+          echo "Build order: gateway-web -> gatewayd (depends on libs gateway-core + gateway-api)；gateway-desktop 已冻结"
+          for d in gateway-web gateway-core gateway-api gatewayd gateway-desktop; do
+            test -d "$d" || { echo "::error::missing required directory $d"; exit 1; }
+          done
+          test -f gateway-web/package.json || { echo "::error::missing gateway-web/package.json"; exit 1; }
+          test -f gateway-core/Cargo.toml || { echo "::error::missing gateway-core/Cargo.toml"; exit 1; }
+          test -f gateway-api/Cargo.toml || { echo "::error::missing gateway-api/Cargo.toml"; exit 1; }
+          test -f gatewayd/Cargo.toml || { echo "::error::missing gatewayd/Cargo.toml"; exit 1; }
+          test -f gateway-desktop/src-tauri/Cargo.toml || { echo "::error::missing gateway-desktop/src-tauri/Cargo.toml"; exit 1; }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Lint frontend (gateway-web)
+        run: |
+          cd gateway-web
+          npm ci
+          npm run lint -- --max-warnings 0
+        # #15: lint 错误/警告必须阻断 CI（warning 零容忍，防止持续累积）
+
+      - name: Build frontend (gateway-web)
+        run: |
+          cd gateway-web
+          # B9: vite build 不会触发 vue-tsc 严格类型检查；
+          # 显式跑 npm run type-check（vue-tsc --noEmit）单独拦类型错误。
+          npm run type-check
+          npm run build
+
+      - name: Check bundle size budget (gateway-web)
+        run: |
+          cd gateway-web
+          # 前端 gzip 产物体积门禁：超预算即失败，防止体积无声漂移（约束：500KB–1MB）
+          npm run check:bundle
+
+      - name: Run frontend tests with coverage (vitest)
+        run: |
+          cd gateway-web
+          npm run test:coverage -- --reporter=dot
+        # #8/#15/#16: 测试失败或覆盖率低于阈值必须阻断 CI
+
+      - name: Upload web coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage-report
+          path: gateway-web/coverage/
+          retention-days: 7
+
+      - name: Copy frontend dist to ui-dist/
+        run: |
+          rm -rf ui-dist/*
+          cp -r gateway-web/dist/* ui-dist/
+
+      - name: Upload web dist artifact
+        # 交付包构建 / 本地复现按需取用（desktop 已冻结，不再消费此 artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-web-dist
+          path: ui-dist/
+          retention-days: 1
+
+      - name: cargo build
+        run: cargo build --quiet
+        env:
+          RUSTFLAGS: ""
+
+      - name: Repo health scan
+        run: pwsh scripts/check_repo_health.ps1
+
+      # W2-#19：API 端点清单防漂移
+      # 路由源码（web/api/*/routes.rs + web/mod.rs）是唯一事实来源，
+      # docs/api-surface.md 必须由 scripts/gen_api_surface.py 重新生成后提交；
+      # 新增/删除路由却忘记更新文档时在此失败。
+      - name: API surface check
+        run: python3 scripts/gen_api_surface.py --check
+
+  # S1 / R1: chaos 场景（当前 42 项真路径恢复测试）由观察期转为**强制门禁**。
+  # 观察期内 `continue-on-error: true` 意味着这些用例失败从不阻塞合并——而它们
+  # 覆盖的恰恰是总线/协议重构最易回归的故障恢复路径。现直接作为合并门禁。
+  chaos:
+    name: chaos scenarios
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-chaos-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo test (chaos)
+        run: cargo test -p gateway-core --test chaos --quiet
+        env:
+          RUSTFLAGS: ""
+
+  # S2: 后端 Rust 覆盖率（cargo-llvm-cov）。
+  # 统计 gateway-core（引擎）+ gateway-api（Web 面，拆分后）且使用默认 features——切勿追加 --all-features：
+  # encryption 会拉入 bundled-sqlcipher，需 OPENSSL_DIR，CI 默认环境不可用。
+  # 基线期只产出 lcov/HTML artifact + 文本摘要，不设覆盖率阈值门禁（避免立即阻塞合并）；
+  # 待基线稳定后，参照 gateway-web/vitest.config.ts 的分目录阈值落"防回落地板"。
+  coverage:
+    name: backend coverage (baseline)
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Add llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # 独立 key（-cargo-cov-）：instrumented 构建产物与 check job 的缓存互不干扰
+          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: cargo llvm-cov (lcov)
+        run: cargo llvm-cov -p gateway-core -p gateway-api --lcov --output-path lcov.info
+        env:
+          RUSTFLAGS: ""
+
+      - name: Coverage summary
+        run: cargo llvm-cov report -p gateway-core -p gateway-api --summary-only
+        env:
+          RUSTFLAGS: ""
+
+      - name: HTML coverage report
+        run: cargo llvm-cov report -p gateway-core -p gateway-api --html
+        env:
+          RUSTFLAGS: ""
+
+      - name: Upload backend coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-report
+          path: |
+            lcov.info
+            target/llvm-cov/html/
+          retention-days: 7
+          if-no-files-found: warn
+
+  # 跨平台编译检查（仅 check，不 build）
+  cross-platform-check:
+    name: check on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo check
+        run: cargo check --all-targets --quiet
+        env:
+          RUSTFLAGS: ""
+
+      - name: dead_code strict check
+        run: cargo check --all-targets --quiet
+        env:
+          RUSTFLAGS: "-D dead_code"
+
+  # G2: ARM64 / armv7 交叉编译纳入 CI。
+  # 此前 ARM 产物只靠开发机 `deploy/build-release.sh --target linux-arm64` 手工构建：
+  # check / 跨平台 / linux-runtime 矩阵全是 x86（win/mac），ARM 上的 cfg 分支
+  # （GPIO 字符设备、串口波特率、watchdog、64K 页等）与需要 C 工具链的依赖
+  # （rusqlite bundled 的 sqlite3.c）一旦链不上，要等出厂镜像部署到网关才暴露。
+  # 这里用发行入口 `-p gatewayd` + `--no-default-features --features sku-standard`
+  # 与出厂包同口径构建，只装 ubuntu 官方交叉 gcc（自带目标 libc 头文件），
+  # 不引入 Docker/cross，避免额外网络与镜像依赖。
+  # armv7 用 gnueabihf（硬浮点 ABI），与网关板卡的软硬浮点约定一致。
+  cross-arm:
+    name: cross build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            cc: aarch64-linux-gnu-gcc
+            pkg: gcc-aarch64-linux-gnu
+          - target: armv7-unknown-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc
+            pkg: gcc-arm-linux-gnueabihf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # 独立 key（-cargo-${{ matrix.target }}-）：交叉产物与宿主构建缓存互不干扰
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cross gcc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.pkg }}
+
+      - name: cargo build (gatewayd, release features)
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          # cc-rs 读 CC_<target，rustc 读 CARGO_TARGET_<TARGET>_LINKER（大写、连字符转下划线）
+          export "CC_${TARGET//-/_}=${{ matrix.cc }}"
+          export "CARGO_TARGET_$(echo "$TARGET" | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.cc }}"
+          cargo build -p gatewayd --target "$TARGET" \
+            --no-default-features --features sku-standard --locked
+          # 产物必须是目标架构的 ELF：只编译通过不代表链接出来的 ABI 正确
+          file "target/$TARGET/debug/gatewayd"
+
+  # L1: encryption feature 编译验证。
+  # 生产构建通过 `--features encryption` 启用 SQLite 加密（bundled-sqlcipher），但历史上
+  # 该路径只在开发者本机手工构建过，CI 的默认 feature 构建完全绕开它——加密相关的
+  # cfg 分支（cipher 打开/密钥处理）一旦编译失败，要到发生产包时才暴露。
+  # bundled-sqlcipher 需要 OpenSSL 头文件与 perl，故先安装依赖再单独 check 两个库 crate。
+  encryption-check:
+    name: encryption feature build
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-enc-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install OpenSSL build deps
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config perl
+
+      - name: cargo check (encryption)
+        run: |
+          set -euo pipefail
+          cargo check -p gateway-core --all-targets --features encryption --quiet
+          cargo check -p gateway-api --all-targets --features encryption --quiet
+        env:
+          RUSTFLAGS: ""
+
+  # Linux 专用：硬件 watchdog / gpiod / 串口权限测试
+  linux-runtime:
+    name: linux runtime checks
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # 仅编译，不跑需要硬件的测试
+      - name: build linux variant
+        run: cargo build --quiet --target x86_64-unknown-linux-gnu
+        env:
+          RUSTFLAGS: ""
+
+  # Playwright E2E 冒烟（阶段 3：强制门禁）
+  # ─────────────────────────────────────────────────────────
+  # S5: 由观察期转为强制门禁——用例失败将阻塞合并。
+  # 编排细节见 gateway-web/playwright.config.ts：webServer 自动拉起空配置
+  # gatewayd（scripts/e2e/start-gateway.mjs，二进制取 target/debug/gatewayd）
+  # 与 vite:5199，测试结束自动回收。
+  e2e:
+    name: e2e smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      # 独立 key（-cargo-e2e-）：与其他 job 的 target 缓存互不干扰
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+
+      # 只编译 E2E 需要的 gatewayd（web 静态目录运行时解析，无构建期 ui-dist 依赖）
+      - name: Build gatewayd
+        run: cargo build -p gatewayd --quiet
+        env:
+          RUSTFLAGS: ""
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend deps
+        run: |
+          cd gateway-web
+          npm ci
+
+      - name: Install Playwright chromium
+        run: |
+          cd gateway-web
+          npx playwright install --with-deps chromium
+
+      # --with-deps 不含中文字体；装上后失败截图/视频里的中文才可读，方便排障
+      - name: Install CJK fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+
+      - name: Run E2E smoke
+        run: |
+          cd gateway-web
+          npm run e2e
+
+      # e2e 已是强制门禁（见本 job 顶部 S5 说明），此处用 always() 是为了
+      # **用例失败时仍上传**报告/trace（默认 success() 会跳过）。
+      # test-results 仅失败时有内容，用 if-no-files-found: ignore 兜底
+      - name: Upload Playwright report & traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-playwright-report
+          path: |
+            gateway-web/playwright-report/
+            gateway-web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # gateway-desktop 已冻结（2026-11）：
+  # 桌面端只服务早期现场调试，现统一由 Web 控制台承担；冻结含义是**不再构建/打包/
+  # 发布**，代码保留在原地避免历史分支合并丢文件。原 desktop-build job（windows
+  # 上 npm ci + cargo check/clippy）已移除，不再消耗 CI 分钟。
+  # 冻结不等于删除：workspace 仍包含它，check job 的 `cargo check --all-targets`
+  # 会继续兜住编译腐烂；若未来要恢复，把本 job 从 git 历史中恢复即可。
+
+  # 性能基准：完整 criterion 基准仅在 main 合并或手动触发时运行。
+  # PR 时由 check job 的 "cargo bench compile check" 保证 benches/ 能编译。
+  # criterion 默认 100 samples，完整跑约 5-10 分钟，不阻塞 PR。
+  bench:
+    name: performance benchmarks
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Override cargo config for CI
+        run: |
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: cargo bench
+        run: cargo bench --workspace
+        env:
+          RUSTFLAGS: ""
+
+      - name: Upload criterion HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-bench-report
+          path: target/criterion/
+          retention-days: 30

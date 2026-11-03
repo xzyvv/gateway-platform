@@ -1,0 +1,207 @@
+.devices {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section-card {
+  border-radius: var(--radius-card);
+}
+/* 卡片头工具栏：页面标题由 HubShell 承担，这里只放数量与操作 */
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.list-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 列表加载失败提示条 */
+.load-error {
+  margin-bottom: 12px;
+}
+/* W30: 与 VISUAL_SPEC §3.1 / Dashboard / Realtime / Logs 统一——渐变方向 90deg */
+.count-badge {
+  margin-left: 4px;
+  font-weight: 400;
+}
+
+/* 搜索框：与点位页保持一致；分页已下沉到 DataTable */
+.search-input {
+  width: 200px;
+}
+
+/* ===== 模板选择器（S3）=====
+ * 下拉项右侧展示「协议 · N 点位」，让用户在选择阶段就知道这个模板会采哪些点；
+ * 输入框下的一行提示解释模板作用，模板库为空时改为红色告警文案。
+ */
+.tpl-opt-meta {
+  float: right;
+  margin-left: 16px;
+  font-size: 0.75rem;
+  color: var(--text-placeholder);
+}
+.tpl-hint {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.tpl-hint--err {
+  color: var(--text-danger);
+}
+/* 无总线时的直达入口：让用户从设备弹窗一键跳到运行参数新增总线 */
+.tpl-hint__link {
+  margin-left: 6px;
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+/* 来自 Dashboard 跳转定位的高亮行（蓝边 + 浅蓝背景） */
+.device-table .el-table__row.is-highlighted td {
+  background: var(--color-primary-lightest) !important;
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+.device-table .el-table__row.is-highlighted:hover td {
+  background: var(--color-primary-lighter) !important;
+}
+/* 跳转后临时闪烁强调（3 秒后自动移除） */
+.device-table .el-table__row.is-highlighted.is-highlighted-flash td {
+  animation: highlightFlash 1.5s ease-in-out 2;
+  box-shadow: inset 3px 0 0 var(--color-primary), 0 0 0 2px var(--color-primary-shadow);
+}
+@keyframes highlightFlash {
+  0%, 100% { background: var(--color-primary-lightest) !important; }
+  50% { background: var(--color-primary-lighter) !important; }
+}
+
+/* 设备状态点 + 文字（与 Dashboard 设备卡统一） */
+.device-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 通信质量单元格 */
+.comms-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.comms-latency {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+/* 设备标签单元格换行控制：避免单个 tag 过宽导致溢出 */
+.dev-tag {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.state-dot.online {
+  background: var(--color-success);
+  box-shadow: 0 0 0 2px rgba(var(--color-success-rgb), 0.2);
+  animation: devicePulse 2s ease-in-out 3;
+}
+.state-dot.offline {
+  background: var(--text-placeholder);
+}
+/* 未知态：灰黄空心点，避免在无采集记录时误报「在线」 */
+.state-dot.unknown {
+  background: transparent;
+  border: 1px solid var(--color-warning);
+}
+.state-label {
+  font-size: 0.75rem;
+  color: var(--text-regular);
+}
+@keyframes devicePulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(var(--color-success-rgb), 0.2); }
+  50% { box-shadow: 0 0 0 5px rgba(var(--color-success-rgb), 0.05); }
+}
+
+.empty-tip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 0;
+  gap: 4px;
+}
+
+/* ===== 诊断证据列（设备维度证据，P2 #5）=====
+ * 目标：让「某设备为什么离线」在一屏可答——
+ * 连续失败次数 + 最近一帧原始报文 hex + 失败原因。
+ */
+.ev-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* 原始帧 hex：等宽字体，便于肉眼比对报文 */
+.ev-hex {
+  font-family: monospace;
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  cursor: help;
+  word-break: break-all;
+}
+/* 失败的帧标红：一眼区分「正常帧」与「异常帧」 */
+.ev-hex.is-failed {
+  color: var(--text-danger);
+}
+.ev-fail-tag,
+.ev-err-tag {
+  font-size: 0.6875rem;
+}
+
+.empty-tip .el-empty {
+  padding: 0;
+}
+.empty-tip .el-button {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* 设备扫描发现 */
+.discover-form {
+  margin-bottom: 16px;
+}
+.discover-form .el-form--inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+}
+.discover-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  background: var(--color-info-bg);
+  border-radius: var(--radius-button);
+  margin-top: 4px;
+  line-height: 1.6;
+}
+.discover-tip .el-icon {
+  color: var(--color-info);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.discover-tip strong {
+  color: var(--color-primary);
+  font-weight: 600;
+}

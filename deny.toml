@@ -1,0 +1,65 @@
+# cargo-deny 配置：供应链安全门禁
+# 文档：https://embarkstudios.github.io/cargo-deny/
+#
+# 本地运行：cargo install cargo-deny --locked && cargo deny check
+# CI：.github/workflows/security.yml
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec 公告库扫描，发现漏洞即失败
+db-urls = ["https://github.com/RustSec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# 允许宽松许可证；copyleft 与商业闭源衍生不兼容
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "OpenSSL",
+    "MPL-2.0",
+    # OTA 差分升级（qbsdiff → bzip2 → libbz2-rs-sys 纯 Rust bz2 后端）间接引入。
+    # bzip2-1.0.6 为 BSD 风格宽松许可（OSI 批准，允许闭源商用再分发），仅此一处使用。
+    "bzip2-1.0.6",
+    # 以下三项均为宽松许可，来自桌面端（tauri）与 reqwest 的依赖链：
+    # Unlicense = 公共领域弃权；MIT-0 = MIT 无署名版；CDLA-Permissive-2.0 = 数据许可宽松版。
+    "Unlicense",
+    "MIT-0",
+    "CDLA-Permissive-2.0",
+]
+# workspace 内部 crate 均 publish=false（私有，不发布到 registry），跳过其许可证检查
+private = { ignore = true }
+# 以下许可证需人工复核（出现即警告，不阻断 CI）
+confidence-threshold = 0.8
+
+# 显式允许的特例（按需追加）。
+# 注意：新版 cargo-deny 的 exceptions 使用 `crate` 字段（旧版为 name/version），
+# 空表会因缺少必填字段导致配置解析失败，故此处仅保留注释示例：
+# [[licenses.exceptions]]
+# crate = "ring"
+# allow = ["OpenSSL"]
+
+[bans]
+# 重复依赖：警告（不阻断，便于审计）
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+# 强烈建议使用 rename 避免同 crate 多版本
+deny = []
+
+[sources]
+# 仅允许 crates.io 与已知可信 git 源
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

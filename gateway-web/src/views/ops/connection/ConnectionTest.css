@@ -1,0 +1,25 @@
+/* S4 重构后容器仅保留自身模板用到的样式；
+   section / ok / error / muted 类已随设备、通道表格迁入子组件，
+   summary / stat 类已迁入 TestSummaryPanel。 */
+.ct-page { padding: 16px; }
+.ct-header-card { margin-bottom: 16px; }
+.ct-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.ct-title { display: flex; gap: 12px; align-items: center; }
+.ct-title-icon {
+  font-size: 1.75rem;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  padding: 10px;
+  border-radius: var(--radius-card);
+}
+.ct-title h3 { margin: 0; font-size: 1.125rem; }
+.ct-title p { margin: 4px 0 0; color: var(--text-secondary); font-size: 0.8125rem; }
+.ct-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.ct-error-card { margin-bottom: 16px; }
+/* 嵌入的异常码组件自带页面级内边距，展开后与外层卡片内边距会叠加，这里清零 */
+.ct-error-card :deep(.me) { padding: 0; }

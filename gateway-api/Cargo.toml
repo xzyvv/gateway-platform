@@ -1,0 +1,95 @@
+[package]
+name = "gateway-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Web 调试面：axum + tower 路由装配与 HTTP handler。
+# 引擎能力全部来自 gateway-core，本 crate 不直连硬件/协议实现。
+
+[lib]
+name = "gateway_api"
+path = "src/lib.rs"
+
+[dependencies]
+gateway-core = { path = "../gateway-core", default-features = false }
+tokio = { workspace = true }
+# heal 自愈执行器停机使用 CancellationToken
+tokio-util = { version = "0.7", features = ["rt"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+once_cell = { workspace = true }
+arc-swap = { workspace = true }
+reqwest = { workspace = true }
+# cert SHA-256 fingerprint
+ring = { workspace = true }
+# X.509 cert field parsing
+x509-parser = { workspace = true }
+ts-rs = { workspace = true }
+
+[dev-dependencies]
+# license 集成测试需要 gateway-core 的测试签发辅助（W2-#18 已改为 feature gate，
+# 发行构建不编译该模块）；dev-dependencies 的 feature 只对测试目标生效。
+gateway-core = { path = "../gateway-core", default-features = false, features = ["test-support"] }
+# 集成测试：临时目录授权路径（license_quota_checks）
+tempfile = { workspace = true }
+# 集成测试：端到端 SQLite 读写往返（integration::sqlite_e2e）
+rusqlite = { workspace = true }
+
+[features]
+default = ["all-protocols"]
+## 加密存储：转发至 gateway-core（rusqlite/bundled-sqlcipher）
+encryption = ["gateway-core/encryption"]
+## OTLP 远程 trace 导出
+tracing-otlp = ["gateway-core/tracing-otlp"]
+## 远程诊断只读 Shell（默认关闭）：转发至 gateway-core
+remote-shell = ["gateway-core/remote-shell"]
+
+## ===== 协议插件化 feature（与 gateway-core 同口径转发）=====
+## 默认发行集 = 本 crate 的每个协议 feature（各自再转发 gateway-core）。
+## 注意：不能只写 `gateway-core/all-protocols`——那样只打开 core 的 feature，
+## 本 crate 代码里的 `#[cfg(feature = "modbus")]` 仍为 false，形成「core 有协议、
+## api 编译视图里没有」的分裂，正是协议裁剪断链的根因。
+##
+## FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」，仅保留 feature 供存量
+## 项目/回归测试显式启用。
+all-protocols = [
+    "modbus",
+    "dlt645",
+    "cjt188",
+    "opcua",
+    "iec104",
+    "bacnet",
+    "s7comm",
+    "mc",
+    "iec101",
+]
+modbus = ["gateway-core/modbus"]
+dlt645 = ["gateway-core/dlt645"]
+cjt188 = ["gateway-core/cjt188"]
+opcua = ["gateway-core/opcua"]
+iec104 = ["gateway-core/iec104"]
+bacnet = ["gateway-core/bacnet"]
+s7comm = ["gateway-core/s7comm"]
+## 退役观察：BACnet MS/TP
+bacnet-mstp = ["gateway-core/bacnet-mstp"]
+mc = ["gateway-core/mc"]
+## 退役观察：欧姆龙 FINS
+fins = ["gateway-core/fins"]
+iec101 = ["gateway-core/iec101"]
+
+## ===== 行业 SKU 聚合 feature（与 gateway-core 同口径转发）=====
+## 各 SKU 按南向协议互斥切片，定义见 gateway-core/Cargo.toml。
+sku-standard = ["gateway-core/sku-standard"]
+sku-building = ["gateway-core/sku-building"]
+sku-power = ["gateway-core/sku-power"]
+sku-plc = ["gateway-core/sku-plc"]
+sku-minimal = ["gateway-core/sku-minimal"]

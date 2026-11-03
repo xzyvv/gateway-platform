@@ -1,0 +1,7 @@
+/* 单步调试两个面板共用的卡片外观（卡片间距 + 卡片标题栏）。
+   执行区（StepSequencePanel.vue）与日志区（StepRunLogPanel.vue）各自
+   以 <style scoped src="./stepDebugShared.css"> 引入，规则不重复也不漂移。 */
+
+.section-card { margin-bottom: 16px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.head-actions { display: flex; align-items: center; gap: 4px; }

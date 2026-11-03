@@ -1,0 +1,20 @@
+{
+  "name": "威胜_DSSD331",
+  "vendor": "威胜",
+  "model": "DSSD331",
+  "protocol": "modbus",
+  "default_interval": 5,
+  "default_byte_order": "ABCD",
+  "points": [
+    {"name": "Ua", "unit": "V", "data_type": "u16", "default_address": 1024, "function_code": 3, "register_count": 2, "scale": 0.01, "offset": 0, "deadband": 0.1},
+    {"name": "Ub", "unit": "V", "data_type": "u16", "default_address": 1026, "function_code": 3, "register_count": 2, "scale": 0.01, "offset": 0, "deadband": 0.1},
+    {"name": "Uc", "unit": "V", "data_type": "u16", "default_address": 1028, "function_code": 3, "register_count": 2, "scale": 0.01, "offset": 0, "deadband": 0.1},
+    {"name": "Ia", "unit": "A", "data_type": "u16", "default_address": 1030, "function_code": 3, "register_count": 2, "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "Ib", "unit": "A", "data_type": "u16", "default_address": 1032, "function_code": 3, "register_count": 2, "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "Ic", "unit": "A", "data_type": "u16", "default_address": 1034, "function_code": 3, "register_count": 2, "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "P", "unit": "kW", "data_type": "f32", "default_address": 1036, "function_code": 3, "register_count": 2, "scale": 0.0001, "offset": 0, "deadband": 0.01},
+    {"name": "Q", "unit": "kvar", "data_type": "f32", "default_address": 1038, "function_code": 3, "register_count": 2, "scale": 0.0001, "offset": 0, "deadband": 0.01},
+    {"name": "PF", "unit": "", "data_type": "u16", "default_address": 1040, "function_code": 3, "register_count": 2, "scale": 0.001, "offset": 0, "deadband": 0.001},
+    {"name": "EP", "unit": "kWh", "data_type": "u32", "default_address": 1042, "function_code": 3, "register_count": 4, "scale": 0.01, "offset": 0, "deadband": 0.01}
+  ]
+}

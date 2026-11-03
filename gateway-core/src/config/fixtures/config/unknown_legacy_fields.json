@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "buses": [],
+  "points": [],
+  "mqtt": { "enabled": false },
+  "future_feature_x": { "a": 1, "b": [1, 2, 3] },
+  "mqtt_legacy_field": true
+}

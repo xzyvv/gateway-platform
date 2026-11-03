@@ -1,0 +1,13 @@
+{
+  "name": "CJT188_水表通用",
+  "vendor": "通用",
+  "model": "CJT188-2004",
+  "protocol": "cjt188",
+  "default_interval": 30,
+  "points": [
+    {"name": "累计流量", "unit": "m3", "data_id": "00000000", "scale": 0.01, "offset": 0, "deadband": 0.01},
+    {"name": "瞬时流量", "unit": "m3/h", "data_id": "00000001", "scale": 0.001, "offset": 0, "deadband": 0.01},
+    {"name": "本月用量", "unit": "m3", "data_id": "00000002", "scale": 0.01, "offset": 0, "deadband": 0.01},
+    {"name": "上月用量", "unit": "m3", "data_id": "00000003", "scale": 0.01, "offset": 0, "deadband": 0.01}
+  ]
+}
