@@ -2,6 +2,18 @@
 members = ["gateway-core", "gateway-api", "gatewayd", "gateway-desktop/src-tauri", "tools/license-issuer"]
 resolver = "2"
 
+# 默认成员不含 gateway-desktop（2026-11 起桌面端已冻结，不再构建/打包/发布）。
+# 原因：Tauri 在 Linux 上编译需要 libwebkit2gtk / libgtk-3 等系统开发包，
+# 而 Linux CI（check / bench / 交付冒烟）全部是交付链路的地基，不该被一个
+# 已冻结的调试端拖住。目录与代码仍保留在 workspace members 里（防历史分支
+# 合并丢文件），需要时用 `cargo check -p gateway-desktop` 在本地单独编译。
+default-members = [
+  "gateway-core",
+  "gateway-api",
+  "gatewayd",
+  "tools/license-issuer",
+]
+
 # 统一包元信息，子 crate 用 version.workspace = true / edition.workspace = true 引用
 [workspace.package]
 version = "0.1.0"

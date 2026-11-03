@@ -144,8 +144,10 @@ jobs:
           RUSTFLAGS: ""
 
       # 基准编译检查：确保 benches/ 不腐烂。完整基准见 bench job（仅 main/手动）。
+      # --exclude gateway-desktop：桌面端已冻结，其 Tauri 依赖在 Linux 上需要
+      # libwebkit2gtk / libgtk-3 系统开发包，不该拖住交付链路的门禁。
       - name: cargo bench compile check
-        run: cargo bench --no-run --workspace --quiet
+        run: cargo bench --no-run --workspace --exclude gateway-desktop --quiet
         env:
           RUSTFLAGS: ""
 
@@ -762,7 +764,7 @@ jobs:
           EOF
 
       - name: cargo bench
-        run: cargo bench --workspace
+        run: cargo bench --workspace --exclude gateway-desktop
         env:
           RUSTFLAGS: ""
 
