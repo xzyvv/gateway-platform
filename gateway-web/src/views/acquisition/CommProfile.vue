@@ -229,7 +229,6 @@ async function load() {
         : health === 'poor' ? currentMs * 3
         : currentMs
       const lossRate = d.successRate == null ? null : Math.round((100 - d.successRate) * 10) / 10
-      // eslint-disable-next-line no-useless-assignment
       let suggestion = ''
       if (health === 'unknown') suggestion = '统计窗口内无采集数据，无法评估'
       else if (health === 'excellent') suggestion = `响应稳定(${d.avgLatency}ms)，可考虑缩短采集周期`

@@ -596,8 +596,10 @@ jobs:
   # 桌面端只服务早期现场调试，现统一由 Web 控制台承担；冻结含义是**不再构建/打包/
   # 发布**，代码保留在原地避免历史分支合并丢文件。原 desktop-build job（windows
   # 上 npm ci + cargo check/clippy）已移除，不再消耗 CI 分钟。
-  # 冻结不等于删除：workspace 仍包含它，check job 的 `cargo check --all-targets`
-  # 会继续兜住编译腐烂；若未来要恢复，把本 job 从 git 历史中恢复即可。
+  # 冻结不等于删除：目录与代码仍在 workspace members 里，但已从 default-members
+  # 移出——Tauri 在 Linux 上需要 libwebkit2gtk / libgtk-3 系统开发包，会把交付
+  # 链路的门禁拖死。兜底改为本地 `cargo check -p gateway-desktop`；
+  # 若未来要恢复，把本 job 从 git 历史中恢复即可。
 
   # G5 交付链路进 CI：安装 → 验证 → 交付检查单。
   # 此前 install.sh / verify-deploy.sh / deliver.sh 从未在任何 Linux 上执行过

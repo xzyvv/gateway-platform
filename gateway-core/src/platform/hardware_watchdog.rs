@@ -161,10 +161,10 @@ impl Watchdog {
             }
         }
         // 关闭硬件看门狗（发送魔法字符 V 停止）
-        ///
-        /// Bug r15-WD2 (fix): 写 magic char 后必须 flush——
-        /// 否则进程退出时 magic char 留在 buffer，硬件 watchdog 收不到，
-        /// 下次启动时 watchdog 已 timeout → 整机误复位。
+        //
+        // Bug r15-WD2 (fix): 写 magic char 后必须 flush——
+        // 否则进程退出时 magic char 留在 buffer，硬件 watchdog 收不到，
+        // 下次启动时 watchdog 已 timeout → 整机误复位。
         #[cfg(target_os = "linux")]
         {
             if let Ok(mut guard) = self.inner.hw_fd.lock() {

@@ -299,6 +299,11 @@ pub fn read_rss_bytes() -> GatewayResult<u64> {
 }
 
 /// 检查指定目录所在分区的剩余空间百分比
+///
+/// `as u64` 转换在 32 位平台（如 armv7）是必要的：statvfs 的 f_frsize 类型跟随
+/// c_ulong，在 32 位上仍是 32 位无符号数。64 位平台上 clippy 会判其为「同类型
+/// 转换」，故在此局部放行该 lint，保留跨宽度可编译性。
+#[allow(clippy::unnecessary_cast)]
 fn check_disk_space(path: &str) -> GatewayResult<f64> {
     #[cfg(unix)]
     {

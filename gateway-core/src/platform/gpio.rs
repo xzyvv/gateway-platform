@@ -156,7 +156,6 @@ impl GpioController {
         {
             let chip = gpiod::Chip::new("/dev/gpiochip0")
                 .map_err(|e| GatewayError::Io(format!("open gpiochip0 failed: {}", e)))?;
-            self.chips.insert(0, chip);
 
             // Bug r13-GPIO2 (fix): 初始化时一次性 request 4 条 DI 输入线，
             // 持有批量句柄缓存到 di_lines 字段。
@@ -166,7 +165,9 @@ impl GpioController {
             //
             // 失败不阻断：request 失败仅 warn，整体降级到"按需 request"路径
             // （降级路径仍把 request 错误传播出去，运维能立即看到问题）。
-            let chip = self.chips.get(&0).expect("chip0 just inserted");
+            //
+            // 注意：这里直接用局部 chip 变量 request，而不是 insert 后再 get 回来——
+            // crate 顶部 deny(clippy::expect_used)，不允许用 expect 兜底。
             match chip.request_lines(gpiod::Options::input(DI_LINES).consumer("gatewayd")) {
                 Ok(lines) => {
                     *self.di_lines.lock() = Some(lines);
@@ -176,6 +177,8 @@ impl GpioController {
                     tracing::warn!("GPIO init: request DI INPUT lines failed: {}", e);
                 }
             }
+
+            self.chips.insert(0, chip);
         }
         Ok(())
     }
