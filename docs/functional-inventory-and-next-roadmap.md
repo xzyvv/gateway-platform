@@ -130,13 +130,17 @@
 
 | SKU | 协议数 | 协议清单 | 唯一依赖 crate | 产物体积 | 相对精简版 |
 |---|---|---|---|---|---|
-| `sku-standard` | 5 | modbus,dlt645,cjt188,iec104,opcua | 335 | 26.7 MiB | +3.2% |
+| `sku-standard` | 5 | modbus,dlt645,cjt188,iec104,opcua-client | 335 | 26.7 MiB | +3.2% |
 | `sku-building` | 4 | modbus,bacnet,cjt188,opcua | 335 | 26.7 MiB | +3.2% |
 | `sku-power` | 5 | modbus,dlt645,iec104,iec101,opcua | 335 | 26.7 MiB | +3.2% |
 | `sku-plc` | 4 | modbus,s7comm,mc,opcua | 335 | 26.7 MiB | +3.2% |
 | `sku-minimal` | 3 | modbus,dlt645,cjt188 | 335 | 25.9 MiB | 基准 |
 
-**结论：SKU 裁剪目前基本无效**。四个非精简 SKU 的体积彼此相差 ≤ 11 KB（等价于同一份二进制），
+> 上表是 **commit `5947fcd`（拆分前）** 的基线。拆分 OPC UA 双向能力后本地实测唯一依赖 crate：
+> `sku-minimal` 288（不再链接 `async-opcua`）、`sku-standard` 323（只拉 client 侧，
+> 不再带 `async-opcua-server/nodes/core-namespace`）；Linux 体积新值待下一次 `sku size matrix` 回填。
+
+**结论（拆分前）：SKU 裁剪基本无效**。四个非精简 SKU 的体积彼此相差 ≤ 11 KB（等价于同一份二进制），
 5 个 SKU 的唯一依赖 crate 数**完全相同（335）**。根因是 `async-opcua` 在 `gateway-core/Cargo.toml` 是
 **硬依赖（非 optional）**，而 `gateway-core/src/north/` 下 **0 处 `cfg(feature = ...)`**——
 北向 OPC UA Server 恒被链接进每一个 SKU；`opcua` feature 实际只门控了南向 Client。

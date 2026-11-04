@@ -171,7 +171,7 @@ mod entries;
     feature = "modbus",
     feature = "dlt645",
     feature = "cjt188",
-    feature = "opcua",
+    feature = "opcua-client",
     feature = "iec104",
     feature = "bacnet",
     feature = "s7comm",

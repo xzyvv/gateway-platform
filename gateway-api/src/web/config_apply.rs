@@ -179,6 +179,10 @@ fn count_northbound_channels(cfg: &GatewayConfig) -> u32 {
     if cfg.cellular.as_ref().is_some_and(|c| c.enabled) {
         n += 1;
     }
+    // 北向 OPC UA Server 未编入当前发行版时，即使配置里 enabled=true 也不会启动
+    // （见 north::server::registry 的告警分支），因此不能占授权配额：
+    // 否则现场会看到「北向通道超限」，而实际运行的通道数是 0。
+    #[cfg(feature = "opcua-server")]
     if cfg.opcua.as_ref().is_some_and(|o| o.enabled) {
         n += 1;
     }
@@ -256,7 +260,32 @@ pub(crate) fn validate_template_expansion(
 /// 避免「仅 `POST /api/config` 校验、增量端点放行非法配置」的覆盖缺口。
 pub(crate) fn validate_config(cfg: &GatewayConfig) -> Result<(), ApiError> {
     gateway_core::config::validate_collection_config(cfg)
-        .map_err(|e| ApiError::bad_request(format!("invalid config: {}", e.join("; "))))
+        .map_err(|e| ApiError::bad_request(format!("invalid config: {}", e.join("; "))))?;
+    reject_unbuilt_capabilities(cfg)?;
+    Ok(())
+}
+
+/// 拒绝启用「当前二进制未编入」的北向通道。
+///
+/// 南向协议由 `domain::VALID_PROTOCOLS` 按 feature 裁剪，配置里写未编译的协议
+/// 会立刻报错；而北向通道的能力位只来自配置字段（如 `opcua.enabled`），
+/// 裁剪后配置依然"合法"，表现为**保存成功、端口不开、只在启动日志里一行 warn**，
+/// 现场会去查网络 / 防火墙。因此在保存路径上直接拒绝，并给出可操作原因。
+#[cfg(not(feature = "opcua-server"))]
+fn reject_unbuilt_capabilities(cfg: &GatewayConfig) -> Result<(), ApiError> {
+    if cfg.opcua.as_ref().is_some_and(|o| o.enabled) {
+        return Err(ApiError::bad_request(
+            "config 启用了北向 OPC UA Server（opcua.enabled=true），但当前发行版未编入该能力\
+             （feature 'opcua-server'）。请关闭该项，或改用包含 opcua-server 的发行包 / SKU。"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "opcua-server")]
+fn reject_unbuilt_capabilities(_cfg: &GatewayConfig) -> Result<(), ApiError> {
+    Ok(())
 }
 
 /// GET 响应中敏感配置字段的脱敏占位值（P0-2/P0-3 修复）。

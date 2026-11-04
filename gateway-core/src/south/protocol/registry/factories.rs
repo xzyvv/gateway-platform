@@ -21,7 +21,7 @@ use super::super::iec104::Iec104Collector;
 use super::super::mc::McCollector;
 #[cfg(feature = "modbus")]
 use super::super::modbus::ModbusCollector;
-#[cfg(feature = "opcua")]
+#[cfg(feature = "opcua-client")]
 use super::super::opcua::OpcUaCollector;
 #[cfg(feature = "s7comm")]
 use super::super::s7comm::S7CommCollector;
@@ -70,7 +70,7 @@ pub(super) fn create_cjt188(
 }
 
 /// OPC UA 客户端采集器（TCP，端点取自 bus.tcp_addr）
-#[cfg(feature = "opcua")]
+#[cfg(feature = "opcua-client")]
 pub(super) fn create_opcua(
     port_name: &str,
     bus: Arc<BusManager>,

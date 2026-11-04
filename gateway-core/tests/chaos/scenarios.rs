@@ -2199,7 +2199,7 @@ async fn scenario_bacnet_mstp_anomaly_family() {
 /// + wait_for_connection）与 `read`（NodeId 解析 + Read 服务 + DataValue 提取），
 /// 并验证同一会话可连续读取、值随服务端更新变化。
 /// 需要真实 OPC UA **服务端**（harness 里用 ServerBuilder 起），故要求 opcua-server。
-#[cfg(all(feature = "opcua", feature = "opcua-server"))]
+#[cfg(all(feature = "opcua-client", feature = "opcua-server"))]
 #[tokio::test]
 async fn scenario_opcua_client_end_to_end_roundtrip() {
     use gateway_core::south::protocol::opcua::OpcUaCollector;
@@ -2241,7 +2241,7 @@ async fn scenario_opcua_client_end_to_end_roundtrip() {
 ///
 /// - 47a 未 `connect` 直接 `read` → IoError（不 panic、不误判成功）
 /// - 47b 服务端不可达（端口已释放）→ `connect` 返回 IoError，且不标记为已连接
-#[cfg(feature = "opcua")]
+#[cfg(feature = "opcua-client")]
 #[tokio::test]
 async fn scenario_opcua_client_fault_family() {
     use gateway_core::south::protocol::opcua::OpcUaCollector;

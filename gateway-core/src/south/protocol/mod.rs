@@ -47,7 +47,7 @@ pub mod iec104;
 pub mod mc;
 #[cfg(feature = "modbus")]
 pub mod modbus;
-#[cfg(feature = "opcua")]
+#[cfg(feature = "opcua-client")]
 pub mod opcua;
 pub mod registry;
 #[cfg(feature = "s7comm")]

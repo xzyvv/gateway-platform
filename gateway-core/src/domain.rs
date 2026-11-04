@@ -27,7 +27,7 @@ pub const VALID_PROTOCOLS: &[&str] = &[
     "fins",
     #[cfg(feature = "cjt188")]
     "cjt188",
-    #[cfg(feature = "opcua")]
+    #[cfg(feature = "opcua-client")]
     "opcua",
     #[cfg(feature = "iec104")]
     "iec104",
@@ -72,11 +72,14 @@ pub const KNOWN_PROTOCOLS: &[&str] = &[
 pub fn protocol_error_message(protocol: &str) -> String {
     let lower = protocol.to_ascii_lowercase();
     if KNOWN_PROTOCOLS.contains(&lower.as_str()) {
-        // 配置协议名 bacnet_mstp 对应 Cargo feature bacnet-mstp
-        let feature = if lower == "bacnet_mstp" {
-            "bacnet-mstp"
-        } else {
-            lower.as_str()
+        // 配置协议名与 Cargo feature 名的两处不一致：
+        // - bacnet_mstp → bacnet-mstp
+        // - opcua → opcua-client：`opcua` 配置项是**南向采集**，由 opcua-client 编译；
+        //   `opcua` feature 只是 client+server 的合并别名，不能直接作为提示
+        let feature = match lower.as_str() {
+            "bacnet_mstp" => "bacnet-mstp",
+            "opcua" => "opcua-client",
+            _ => lower.as_str(),
         };
         format!(
             "协议 '{}' 未包含在当前发行版（已按 SKU 裁剪或处于退役观察）。本版可用协议: {:?}；\
@@ -105,6 +108,30 @@ mod tests {
                 p
             );
         }
+    }
+
+    /// `opcua-client` 必须真的编译出南向采集器，而不只是把 async-opcua 拉进依赖树。
+    ///
+    /// 回归背景：拆分 OPC UA 双向能力时，南向模块的门控一度停留在合并别名 `opcua`，
+    /// 结果 `--features opcua-client` 只激活了 crate、模块与注册项全部被裁掉——
+    /// 构建通过、零告警，但现场配不了 OPC UA 采集。引用类型即可在编译期证伪。
+    #[cfg(feature = "opcua-client")]
+    #[test]
+    fn opcua_client_feature_compiles_south_collector() {
+        let _ = std::any::type_name::<crate::south::protocol::opcua::OpcUaCollector>();
+        assert!(
+            VALID_PROTOCOLS.contains(&"opcua"),
+            "opcua-client 已启用，但 VALID_PROTOCOLS 中没有 opcua：注册表与 feature 门控不一致"
+        );
+    }
+
+    /// 未编入 opcua-client 时，提示必须指向真正需要启用的 feature（而非合并别名）。
+    #[cfg(not(feature = "opcua-client"))]
+    #[test]
+    fn disabled_opcua_points_to_opcua_client_feature() {
+        let msg = protocol_error_message("opcua");
+        assert!(msg.contains("未包含在当前发行版"), "实际信息: {msg}");
+        assert!(msg.contains("feature 'opcua-client'"), "实际信息: {msg}");
     }
 
     /// 已知但未编入当前发行版的协议必须给出「未包含在本版本」的可操作提示。

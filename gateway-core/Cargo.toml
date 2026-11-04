@@ -132,7 +132,10 @@ iec101 = []
 ## ===== 行业 SKU 聚合 feature（发行构建入口）=====
 ## 各 SKU 按南向协议互斥切片：只装本行业需要的协议，不再以标准版为底座叠加。
 ## 标准版（默认发行）：通用计量 + IEC104 远动 + OPC UA Client；GPIO 始终可用。
-sku-standard = ["modbus", "dlt645", "cjt188", "iec104", "opcua"]
+## 按 opcua-client 切片（注释口径本就是「Client」）：不链接 async-opcua-server/nodes，
+## 标准版体积因此真正下降。需要给 SCADA 暴露 UA 服务端的项目追加 `opcua-server`：
+##   cargo build --no-default-features --features sku-standard,opcua-server
+sku-standard = ["modbus", "dlt645", "cjt188", "iec104", "opcua-client"]
 ## 楼宇版：BACnet/IP 楼控 + 现场计量 + OPC UA 集成（不含 BACnet MS/TP）。
 sku-building = ["modbus", "bacnet", "cjt188", "opcua"]
 ## 电力版：电能量采集 + 远动（IEC104 优先，IEC101 仅存量串口远动项目）。

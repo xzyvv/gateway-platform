@@ -14,9 +14,9 @@ FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」：feature
 | `modbus` | Modbus RTU/TCP | 串行 + TCP | — | 默认 / 全部 SKU |
 | `dlt645` | DL/T 645 电力仪表 | 串行 (RS485) | — | 默认 / 标准版 / 电力版 / 精简版 |
 | `cjt188` | CJ/T 188 水气热仪表 | 串行 (RS485) | — | 默认 / 标准版 / 楼宇版 / 精简版 |
-| `opcua` | OPC UA **双向合并别名**（= `opcua-client` + `opcua-server`） | TCP | — | 默认 / 标准版 / 楼宇版 / 电力版 / PLC 版 |
-| `opcua-client` | OPC UA **南向客户端**（采集外部 OPC UA 服务端） | TCP | — | 需要采集 UA 设备时 |
-| `opcua-server` | OPC UA **北向服务端**（把点位暴露给 SCADA） | TCP | — | 需要给 SCADA/组态看数时 |
+| `opcua` | OPC UA **双向合并别名**（= `opcua-client` + `opcua-server`） | TCP | — | 默认 / 楼宇版 / 电力版 / PLC 版 |
+| `opcua-client` | OPC UA **南向客户端**（采集外部 OPC UA 服务端） | TCP | — | 标准版 / 需要采集 UA 设备时 |
+| `opcua-server` | OPC UA **北向服务端**（把点位暴露给 SCADA） | TCP | — | 需要给 SCADA/组态看数时（标准版需显式追加） |
 | `iec104` | IEC 60870-5-104 | TCP | — | 默认 / 标准版 / 电力版 |
 | `bacnet` | BACnet/IP | UDP | — | 楼宇版 |
 | `s7comm` | S7comm 西门子 PLC | TCP | — | PLC 版 |

@@ -32,7 +32,7 @@ use super::factories::create_iec104;
 use super::factories::create_mc;
 #[cfg(feature = "modbus")]
 use super::factories::create_modbus;
-#[cfg(feature = "opcua")]
+#[cfg(feature = "opcua-client")]
 use super::factories::create_opcua;
 #[cfg(feature = "s7comm")]
 use super::factories::create_s7comm;
@@ -119,7 +119,7 @@ pub(crate) const PROTOCOL_ENTRIES: &[ProtocolEntry] = &[
         frame_extractor: Some(extract_cjt188_frame),
         capabilities: ProtocolCapabilities::serial_bcd_meter_writable(),
     },
-    #[cfg(feature = "opcua")]
+    #[cfg(feature = "opcua-client")]
     ProtocolEntry {
         name: "opcua",
         label: "OPC UA",
