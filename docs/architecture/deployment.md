@@ -93,7 +93,25 @@ ssh gateway@<target> 'cd /tmp/gw-out && sudo bash deliver.sh'
 计划任务（系统中心 → 计划任务）的 cron 表达式按**网关设备本地时区**计算：
 「每天 02:00」指设备本地凌晨 2 点，不是 UTC 2 点，也不是浏览器所在时区的 2 点。
 
-- 设备时区取自操作系统（`chrono::Local`）：Linux 由 `TZ` 环境变量或 `/etc/localtime` 决定；未设置时通常为 UTC
+设备时区按以下优先级解析：
+
+| 优先级 | 来源 | 形式 | 依赖 tzdata | 含夏令时 |
+|---|---|---|---|---|
+| 1 | `GATEWAY_TZ` 环境变量 | 固定 UTC 偏移：`+08:00` / `+0800` / `UTC+8` / `Z` | 否 | 否 |
+| 2 | `TZ` 环境变量 | IANA 时区名：`Asia/Shanghai` | 是 | 是 |
+| 3 | 操作系统 | `/etc/localtime` | 是 | 是 |
+| 4 | 兜底 | UTC（启动日志打告警） | — | — |
+
+- `GATEWAY_TZ` 是**运维可控的显式项**：固定偏移不依赖时区数据库，工业现场常用的精简镜像（无 `tzdata`）也能正确执行「每天凌晨 2 点」
+- `TZ` 走 IANA 时区名，含夏令时切换；`TZ` 指向的时区文件缺失时日志会告警（否则会静默退化成 UTC）
+- 兜底到 UTC 的场景：既没有 `GATEWAY_TZ`，也没有 `TZ`，且系统既无 `/etc/localtime` 也无 zoneinfo 目录 —— 这种情况**一定会在日志里出现告警**，不允许静默
+- 生效时区在启动日志里打印，运维可据此核对「每天 02:00」到底是哪儿的 02:00：
+
+```text
+device timezone: Asia/Shanghai (UTC+08:00)
+device timezone: 固定偏移 UTC+08:00（来源 GATEWAY_TZ）
+```
+
 - **容器/Docker 部署必须显式设置时区**（镜像默认多为 UTC），否则计划任务整体偏移：
 
 ```bash
@@ -105,9 +123,12 @@ environment:
 # systemd 单元
 [Service]
 Environment=TZ=Asia/Shanghai
+# 无 tzdata 的精简镜像：用固定偏移，不依赖时区数据库
+Environment=GATEWAY_TZ=+08:00
 ```
 
-- 验证：设备上执行 `date`，确认输出的时区缩写/偏移符合预期
+- `install.sh` 会自动把时区写进 systemd 单元（`GATEWAY_TZ` > `TZ` > 探测系统时区），探测不到时打印告警并提示修复命令
+- 验证：设备上执行 `date`，确认输出的时区缩写/偏移符合预期；再查 `journalctl -u gateway | grep "device timezone"` 确认网关实际采用的时区
 - 前端「下次执行时间」显示的是同一时刻在**浏览器时区**下的墙钟读数；设备与浏览器时区不一致时读数不同属正常现象，实际触发时刻不变
 
 ### 8.5 反向代理与限流

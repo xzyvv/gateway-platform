@@ -183,6 +183,13 @@ pub(crate) async fn init_collection_chain(
     // ===== Step 2: 日志 =====
     gateway_core::engine::logging::init_logging(config.telemetry.as_ref());
 
+    // 生效时区必须在日志里可见：计划任务按**墙钟**解释 cron 表达式，
+    // 设备时区与客户预期差 8 小时会导致「每天 02:00」整体偏移，且无任何报错。
+    info!(
+        "device timezone: {}",
+        gateway_core::support::cron::tz_description()
+    );
+
     // ===== Step 3: Watchdog =====
     #[cfg(target_os = "linux")]
     {

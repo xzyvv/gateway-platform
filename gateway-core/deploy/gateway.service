@@ -29,6 +29,13 @@ Environment=RUST_LOG=info
 Environment=RUST_BACKTRACE=1
 # Environment=GATEWAY_CONFIG=/etc/gateway/config.json
 
+# 时区（计划任务按**墙钟**解释 cron 表达式）
+# 优先级：GATEWAY_TZ（固定 UTC 偏移，不依赖 tzdata） > TZ（IANA 时区名，含夏令时）
+# 两者都不设时跟随 /etc/localtime；精简镜像缺 tzdata 会静默退化成 UTC，
+# 表现为「每天凌晨 2 点」整体差 8 小时。install.sh 会自动探测并写入下面一行。
+# Environment=TZ=Asia/Shanghai
+# Environment=GATEWAY_TZ=+08:00
+
 # 启动前确保目录存在
 ExecStartPre=/bin/mkdir -p /var/lib/gateway/certs /var/lib/gateway/ota /var/log/gateway
 ExecStartPre=/bin/chown -R gateway:gateway /var/lib/gateway /var/log/gateway

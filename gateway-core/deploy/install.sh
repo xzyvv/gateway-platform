@@ -2,6 +2,29 @@
 set -euo pipefail
 
 # ────────────────────────────────────────────────────────────
+# 探测系统时区名（用于写进 systemd 服务的 Environment=TZ=）
+# 依次尝试：timedatectl → /etc/timezone → /etc/localtime 软链目标。
+# 都拿不到时返回空串（调用方给出「按 UTC 运行」的告警）。
+detect_system_tz() {
+  local tz=""
+  if command -v timedatectl >/dev/null 2>&1; then
+    tz="$(timedatectl show --property=Timezone --value 2>/dev/null || true)"
+  fi
+  if [ -z "$tz" ] && [ -f /etc/timezone ]; then
+    tz="$(tr -d '[:space:]' < /etc/timezone)"
+  fi
+  if [ -z "$tz" ] && [ -L /etc/localtime ]; then
+    # /etc/localtime -> /usr/share/zoneinfo/Asia/Shanghai
+    tz="$(readlink /etc/localtime 2>/dev/null | sed -n 's#.*zoneinfo/##p' || true)"
+  fi
+  # UTC 本身不算「探测到时区」：它正是需要告警的场景
+  case "$tz" in
+    UTC|Etc/UTC|Etc/GMT|"") echo "" ;;
+    *) echo "$tz" ;;
+  esac
+}
+
+# ────────────────────────────────────────────────────────────
 # 工业网关一键部署脚本
 # 用法: sudo bash install.sh [binary_path] [ui_dist_path] [--no-start]
 #
@@ -234,6 +257,34 @@ SERVICE_CONTENT="$(cat "$SERVICE_SRC")"
 # 如果 service 里没写 Environment=GATEWAY_WEB_DIR，补上
 if ! echo "$SERVICE_CONTENT" | grep -q "GATEWAY_WEB_DIR"; then
     SERVICE_CONTENT="$(echo "$SERVICE_CONTENT" | sed '/^Environment=RUST_LOG=/a Environment=GATEWAY_WEB_DIR='"$UI_DIR"'')"
+fi
+# 把时区显式注入 service：计划任务按**墙钟**解释 cron 表达式，
+# systemd 服务不带 TZ 时跟随 /etc/localtime；精简镜像缺 tzdata 时会静默退化成 UTC，
+# 表现为「每天凌晨 2 点」整体差 8 小时且无任何报错。
+# 优先级：GATEWAY_TZ（固定偏移，不依赖 tzdata） > TZ（系统时区名，含夏令时）
+if [ -n "${GATEWAY_TZ:-}" ]; then
+    TZ_ENV_LINE="Environment=GATEWAY_TZ=${GATEWAY_TZ}"
+    echo "  ✓ 时区: GATEWAY_TZ=${GATEWAY_TZ}（固定 UTC 偏移）"
+elif [ -n "${TZ:-}" ]; then
+    TZ_ENV_LINE="Environment=TZ=${TZ}"
+    echo "  ✓ 时区: TZ=${TZ}（系统时区名）"
+else
+    # 现场没给 TZ：探测系统时区并显式写入，避免服务跟随不到 /etc/localtime
+    SYSTEM_TZ="$(detect_system_tz)"
+    if [ -n "$SYSTEM_TZ" ]; then
+        TZ_ENV_LINE="Environment=TZ=${SYSTEM_TZ}"
+        echo "  ✓ 时区: TZ=${SYSTEM_TZ}（自动探测）"
+    else
+        # 探测不到就不写空值：Environment=TZ= 会被 systemd 当成空时区，反而更糟
+        TZ_ENV_LINE=""
+        echo "  ⚠ 未探测到系统时区，服务将按 UTC 运行"
+        echo "    计划任务「每天 02:00」会按 UTC 解释（本地为 UTC+8 时差 8 小时）"
+        echo "    修复: 重新执行时带上 GATEWAY_TZ=+08:00，或在 /etc/systemd/system/gateway.service"
+        echo "          里加 Environment=TZ=Asia/Shanghai 后 systemctl restart gateway"
+    fi
+fi
+if [ -n "$TZ_ENV_LINE" ] && ! echo "$SERVICE_CONTENT" | grep -qE "^Environment=(GATEWAY_TZ|TZ)="; then
+    SERVICE_CONTENT="$(echo "$SERVICE_CONTENT" | sed '/^Environment=RUST_LOG=/a '"$TZ_ENV_LINE")"
 fi
 echo "$SERVICE_CONTENT" > "$SERVICE_FILE"
 systemctl daemon-reload

@@ -92,6 +92,7 @@ write_report() {
     echo "- 生成时间：$(date -Is)"
     echo "- 目标地址：$API"
     echo "- 监听绑定：${BIND_ADDR:-（未取到）}"
+    echo "- 生效时区：${TZ_LINE:-（未取到，请人工核对 journalctl -u gateway | grep 'device timezone'）}"
     echo "- 主机：$(uname -s) / $(uname -m)"
     echo "- 结论：$verdict"
     echo "- 统计：PASS $PASS / FAIL $FAIL / WARN $WARN"
@@ -178,6 +179,33 @@ if systemctl is-active --quiet gateway; then
 else
   fail "gateway.service 未运行 (systemctl is-active: $(systemctl is-active gateway 2>&1 || true))"
   echo "    诊断: sudo journalctl -u gateway -n 50 --no-pager"
+fi
+
+# ── 1.5 时区（计划任务按墙钟解释 cron，时区错了就是整体差 8 小时）──
+echo "${BOLD}[1b] 时区${RESET}"
+TZ_LINE=$(journalctl -u gateway -n 200 --no-pager 2>/dev/null | grep -o "device timezone: .*" | tail -n 1 || true)
+if [ -n "$TZ_LINE" ]; then
+  ok "网关生效时区: ${TZ_LINE#device timezone: }"
+else
+  warn "未在日志中找到 \"device timezone:\"（服务刚启动或日志已轮转），请人工执行 journalctl -u gateway | grep 'device timezone' 核对"
+fi
+# 服务实际采用的时区偏移 vs 系统时区偏移：不一致说明存在静默偏移
+SYS_OFF=$(date "+%z" 2>/dev/null || echo "")
+if [ -n "$TZ_LINE" ]; then
+  case "$TZ_LINE" in
+    *"UTC+00:00"*|*"UTC-00:00"*)
+      # 网关按 UTC 运行：只有在系统本身也是 UTC 时才正常
+      case "$SYS_OFF" in
+        "+0000"|"-0000"|"") ok "网关按 UTC 运行，与系统时区一致（$SYS_OFF）" ;;
+        *) warn "网关按 UTC 运行，但系统时区偏移为 $SYS_OFF：计划任务「每天 02:00」会与现场预期错位；请在 gateway.service 加 Environment=TZ=<时区名> 或 Environment=GATEWAY_TZ=<+HH:MM> 后重启" ;;
+      esac
+      ;;
+    *)
+      ok "系统时区偏移 $SYS_OFF"
+      ;;
+  esac
+else
+  [ -n "$SYS_OFF" ] && info "系统时区偏移 $SYS_OFF（未能取到网关生效时区，无法比对）" || true
 fi
 
 # ── 2. 端口监听 ──
