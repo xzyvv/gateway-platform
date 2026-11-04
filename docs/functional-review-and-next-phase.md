@@ -27,7 +27,7 @@
 | 前端页面 | 页面路由 24 条 = 13 个业务页面 + 11 条旧址重定向别名；顶层另有 5 条（登录/改密/加载失败/无权/404）+ 1 条 catch-all |
 | 南向协议 | 12 族：modbus / dlt645 / cjt188 / gpio / bacnet / bacnet_mstp / fins / iec101 / iec104 / mc / opcua / s7comm（另有 common / registry / skeleton 三个基础设施模块，非协议族） |
 | 北向通道 | mqtt（含 broker/outbox/template）、webhook、server 族（modbus_server / opcua_server / mqtt 透传 / modbus 网关桥）、server_sinks、sim_consumer、conversion |
-| 测试 | 后端 lib 1494 个（另 1 ignored）+ 集成/契约 22 个文件；前端 219 个 `*.spec.ts`（vitest 收集 215 文件 / 1978 用例）；chaos 47 场景；E2E 4 套 / 16 用例；最大非测试源文件 999 行（`remote_diag.rs`） |
+| 测试 | 后端 lib 1494 个（另 1 ignored）+ 集成/契约 22 个文件；前端 219 个 `*.spec.ts`（vitest 收集 215 文件 / 1978 用例）；chaos 47 场景（默认发行集实跑 45）；E2E 4 套 / 16 用例；最大非测试源文件 999 行（`remote_diag.rs`） |
 
 ---
 

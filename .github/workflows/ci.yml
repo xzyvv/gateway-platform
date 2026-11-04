@@ -82,6 +82,9 @@ jobs:
       #   2) --features modbus,dlt645：常见数据链路最小组合
       #   3) --features opcua：最重的 NorthConnector 服务端，单独验依赖隔离
       #   4) --features bacnet,bacnet-mstp：BACnet IP+MSTP 双栈（含依赖关系）
+      #   5) --features fins：FINS（退役观察）单独路径——它已移出默认发行集，
+      #      注册表条目按 #[cfg(feature = "fins")] 门控；不带该 feature 的组合
+      #      编译不到这条路径，门控一旦写错只有显式开启时才暴露。
       # 仅 `cargo check`，不重复 `cargo test --lib`，控制 CI 时长。
       #
       # RUSTFLAGS="-D dead_code"：裁剪构建最容易遗留死代码——只被 dlt645/cjt188
@@ -106,6 +109,7 @@ jobs:
           cargo check -p gateway-core --all-targets --no-default-features --features modbus,dlt645 --quiet
           cargo check -p gateway-core --all-targets --no-default-features --features opcua --quiet
           cargo check -p gateway-core --all-targets --no-default-features --features bacnet,bacnet-mstp --quiet
+          cargo check -p gateway-core --all-targets --no-default-features --features fins --quiet
         env:
           RUSTFLAGS: "-D dead_code"
 
@@ -131,20 +135,36 @@ jobs:
       # S1: 集成/契约测试此前从未在 CI 执行（仅靠 --all-targets 编译检查），
       # 导致 api_contract（HTTP 契约）/ arch_deps（分层依赖守卫）/ license 等防线未上锁。
       # 此处纳入门禁；chaos 时序测试见下方独立的 chaos job（R1 后同为强制门禁）。
-      # 新增 tests/*.rs 测试二进制时请同步追加到下方 --test 列表。
+      #
+      # 测试二进制清单**动态取自 tests/ 目录**，不再手工维护 --test 白名单：
+      # 白名单的人工同步约定已经漏过一次（新增的 core_domains_api /
+      # protocol_capability_routing 未被列入，直到 coverage 作业跑全量才暴露，
+      # 问题被"连锁"推迟到流水线末端才发现）。动态取目录后，新增 tests/*.rs
+      # 自动进入门禁，无需改 workflow。
+      #
+      # 排除项（各自有独立归属，不在此重复跑）：
+      #   chaos → 独立的 chaos job（时序场景，独立计时与失败定位）
+      #   load / soak → 压测农场，用例整体 #[ignore]，由 scripts/soak.ps1 驱动
       - name: cargo test (integration & contract)
         run: |
-          # 引擎侧分层守卫（north/queue/south）
-          cargo test -p gateway-core --quiet --test arch_deps
-          # Web 调试面拆分至 gateway-api：HTTP 契约 / 自愈 / license / 分层守卫
-          cargo test -p gateway-api --quiet \
-            --test integration \
-            --test api_contract \
-            --test arch_deps \
-            --test self_heal \
-            --test license_api \
-            --test license_feature_free \
-            --test license_quota_checks
+          set -euo pipefail
+          # 引擎侧：除 chaos/load/soak 外的全部集成测试二进制
+          # （arch_deps 分层守卫 / virtual_point_pipeline / north_single_delivery）
+          core_tests=""
+          for f in gateway-core/tests/*.rs; do
+            name=$(basename "$f" .rs)
+            case "$name" in chaos|load|soak) continue ;; esac
+            core_tests="$core_tests --test $name"
+          done
+          echo "gateway-core test binaries:$core_tests"
+          cargo test -p gateway-core --quiet $core_tests
+          # Web 调试面：全部集成测试二进制（HTTP 契约 / 自愈 / license / 协议能力路由…）
+          api_tests=""
+          for f in gateway-api/tests/*.rs; do
+            api_tests="$api_tests --test $(basename "$f" .rs)"
+          done
+          echo "gateway-api test binaries:$api_tests"
+          cargo test -p gateway-api --quiet $api_tests
         env:
           RUSTFLAGS: ""
 
@@ -307,8 +327,9 @@ jobs:
   # S2: 后端 Rust 覆盖率（cargo-llvm-cov）。
   # 统计 gateway-core（引擎）+ gateway-api（Web 面，拆分后）且使用默认 features——切勿追加 --all-features：
   # encryption 会拉入 bundled-sqlcipher，需 OPENSSL_DIR，CI 默认环境不可用。
-  # 基线期只产出 lcov/HTML artifact + 文本摘要，不设覆盖率阈值门禁（避免立即阻塞合并）；
-  # 待基线稳定后，参照 gateway-web/vitest.config.ts 的分目录阈值落"防回落地板"。
+  # 基线已稳定（首个全绿 run 的 artifact 落盘为分目录阈值），按 ci.yml 同源的
+  # scripts/check_coverage.py 落"防回落地板"：低于阈值即失败，
+  # 对标前端 gateway-web/vitest.config.ts 的分目录 thresholds 口径。
   coverage:
     name: backend coverage (baseline)
     runs-on: ubuntu-latest
@@ -350,6 +371,9 @@ jobs:
         run: cargo llvm-cov report -p gateway-core -p gateway-api --summary-only
         env:
           RUSTFLAGS: ""
+
+      - name: Coverage floor (anti-regression)
+        run: python3 scripts/check_coverage.py lcov.info
 
       - name: HTML coverage report
         run: cargo llvm-cov report -p gateway-core -p gateway-api --html

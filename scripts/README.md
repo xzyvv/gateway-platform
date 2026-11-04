@@ -15,6 +15,7 @@
 | `e2e_smoke.ps1` | 真实进程端到端冒烟：临时配置 + 独立端口拉起 `gatewayd.exe` → 探活 → 登录 → 状态/配置校验/回放会话/协议/诊断/健康 → 清理；退出码 0 通过 / 1 失败（`-Build` 先编译、`-Port` 换端口、`-KeepTemp` 保留日志） |
 | `release_gate.ps1` | 发版前 Windows 一键门禁：按 CI 同口径串起仓库健康度 / api-surface / Rust fmt+check+clippy+test / gatewayd 构建 / 前端 lint+类型+构建+体积+单测覆盖率 / Playwright E2E / 真实进程冒烟，输出每步日志与 `summary.md`；默认 fail-fast，`-KeepGoing` 全跑汇总，`-Only` 重跑单项，退出码 0 通过 / 1 失败 |
 | `gen_api_surface.py` | 从 `gateway-api/src/web/**/routes.rs` 解析路由，生成 `docs/api-surface.md`（端点/方法/鉴权/handler）；`--check` 只校验不一致并以退出码 1 失败（CI 门禁，防路由与文档漂移） |
+| `check_coverage.py` | 后端覆盖率"防回落地板"：解析 `lcov.info` 并按目录分桶（core 各模块 / api/web / total），低于阈值即退出码 1（CI 门禁）；`--print` 只打印实测值。口径对标前端 `gateway-web/vitest.config.ts` 的分目录 thresholds——下取整留约 3pp 余量，补测试只许上调不许下调。后端 lcov 无分支数据（`BRF` 恒 0），故只对 lines / functions 设阈值 |
 
 **何时用这里：** 需要同时操作多个子项目、或扫描整个仓库一致性时。
 
