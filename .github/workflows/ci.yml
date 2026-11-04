@@ -812,3 +812,190 @@ jobs:
           name: criterion-bench-report
           path: target/criterion/
           retention-days: 30
+
+  # L4: 内存泄漏冒烟门禁。
+  # 浸泡农场此前只能在 Windows 本机用 scripts/soak.ps1 跑，CI 完全不覆盖：
+  # 内存泄漏 / 句柄泄漏这类回退在 PR 阶段无人把关，只能上线后暴雷。
+  # 这里用 scripts/soak.sh（soak.ps1 的 Linux 等价实现）跑一轮短时浸泡，
+  # 由 soak_verdict 判定器给出通过 / 不通过，作为硬门禁。
+  #
+  # 时长下限 600s：判定会剔除「故障窗口 + 60s 恢复期」的采样，
+  # 时长过短会让稳态样本对为空，成功率 / 队列 / 北向判定退化成 note 而非失败，
+  # 门禁形同虚设。600s / 4 总线 × 10 从站 × 25 点 = 1000 点，是本地实测全绿的一组参数。
+  soak-smoke:
+    name: soak smoke (memory leak gate)
+    runs-on: ubuntu-latest
+    needs: check
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: ""
+      SOAK_DURATION_SECS: "600"
+      SOAK_BUSES: "4"
+      SOAK_SLAVES_PER_BUS: "10"
+      SOAK_POINTS_PER_SLAVE: "25"
+      SOAK_INTERVAL_SECS: "5"
+      SOAK_SAMPLE_MS: "10000"
+      SOAK_OUT_DIR: gateway-core/soak-out
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # 独立 key（-cargo-soak-）：soak 编译产物与其它作业互不干扰
+          key: ${{ runner.os }}-cargo-soak-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Override cargo config for CI
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Run soak and judge
+        run: bash scripts/soak.sh
+
+      # 判定器在 proc.jsonl 样本不足时只记 note、不判失败——那会让「内存泄漏门禁」
+      # 静默退化成空跑。这里显式断言样本数，确保 RSS / 句柄判定确实被执行。
+      - name: Assert process-level samples captured
+        run: |
+          set -euo pipefail
+          proc="$SOAK_OUT_DIR/proc.jsonl"
+          if [ ! -f "$proc" ]; then
+            echo "proc.jsonl 未生成：Linux /proc 采样失效，RSS / 句柄判定会被跳过" >&2
+            exit 1
+          fi
+          n=$(wc -l < "$proc")
+          echo "proc.jsonl 样本数 = $n"
+          if [ "$n" -lt 2 ]; then
+            echo "proc.jsonl 样本不足 2 条：RSS / 句柄判定会被跳过" >&2
+            exit 1
+          fi
+          head -n 2 "$proc"
+          tail -n 2 "$proc"
+
+      - name: Publish verdict to job summary
+        if: always()
+        run: |
+          if [ -f "$SOAK_OUT_DIR/report.md" ]; then
+            {
+              echo "### soak smoke 判定报告"
+              echo
+              cat "$SOAK_OUT_DIR/report.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-smoke-report
+          path: gateway-core/soak-out/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # SKU 体积观测：docs/functional-inventory-and-next-roadmap.md §1.6 待办第 1 条。
+  # 5 个 SKU 的 release 产物体积此前从未实测，裁剪决策建立在估算上。
+  # 这里跑 release 构建，出一张「协议数 / 唯一依赖 crate / 产物体积」的表，
+  # 纯观测项：只出数据，不改门禁判定，结论由人工判断。
+  # 仅在 main 合并后 / 手动触发时运行，不阻塞 PR。
+  sku-size-matrix:
+    name: sku size matrix
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-skusize-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Override cargo config for CI
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Build SKUs (release) and measure size
+        run: |
+          set -euo pipefail
+          SKU_TOML="gateway-core/Cargo.toml"
+          OUT_DIR="$RUNNER_TEMP/sku-size"
+          mkdir -p "$OUT_DIR"
+
+          # SKU 表单一来源 = gateway-core/Cargo.toml 的 sku-* 定义，新增 SKU 自动纳入
+          skus=$(awk -F'=' '/^sku-[a-z0-9-]+[[:space:]]*=/ { k=$1; gsub(/[[:space:]]/, "", k); sub(/^sku-/, "", k); print k }' "$SKU_TOML")
+          echo "SKU matrix: $skus"
+
+          # 单个 SKU 的协议清单（与 deploy/build-release.sh 的 sku_protocols 同口径）
+          sku_protocols() {
+            awk -v key="sku-$1" '
+              $0 ~ "^" key "[[:space:]]*=" {
+                v = $0
+                sub(/^[^=]*=[[:space:]]*\[/, "", v)
+                sub(/\].*$/, "", v)
+                gsub(/[",]/, "", v)
+                gsub(/[[:space:]]+/, ",", v)
+                gsub(/,+/, ",", v)
+                sub(/^,/, "", v)
+                sub(/,$/, "", v)
+                print v
+                exit
+              }
+            ' "$SKU_TOML"
+          }
+
+          for sku in $skus; do
+            echo "==> building sku-$sku"
+            cargo build --release -p gatewayd --no-default-features --features "sku-$sku" --quiet
+            bin="target/release/gatewayd"
+            if [ ! -f "$bin" ]; then
+              echo "missing artifact: $bin" >&2
+              exit 1
+            fi
+            size=$(stat -c %s "$bin")
+            protos=$(sku_protocols "$sku")
+            deps=$(cargo tree -p gatewayd --no-default-features --features "sku-$sku" --prefix none 2>/dev/null \
+                   | awk '{print $1}' | sort -u | wc -l)
+            printf '%s|%s|%s|%s\n' "$sku" "$size" "$protos" "$deps" >> "$OUT_DIR/sizes.tsv"
+          done
+
+          base=$(awk -F'|' '{ if (min == "" || $2 < min) min = $2 } END { print min }' "$OUT_DIR/sizes.tsv")
+          {
+            echo "### SKU 体积矩阵（release 构建）"
+            echo
+            echo "| SKU | 协议数 | 协议清单 | 唯一依赖 crate | 产物体积 | 相对最小 SKU |"
+            echo "|---|---|---|---|---|---|"
+            while IFS='|' read -r sku size protos deps; do
+              n=$(printf '%s' "$protos" | tr ',' '\n' | grep -c . || true)
+              pct=$(awk -v s="$size" -v b="$base" 'BEGIN { printf "%+.1f%%", (s - b) * 100.0 / b }')
+              mib=$(awk -v s="$size" 'BEGIN { printf "%.1f MiB", s / 1048576 }')
+              printf '| `sku-%s` | %s | %s | %s | %s | %s |\n' "$sku" "$n" "$protos" "$deps" "$mib" "$pct"
+            done < "$OUT_DIR/sizes.tsv"
+          } > "$OUT_DIR/sku-size.md"
+
+          cat "$OUT_DIR/sku-size.md"
+          cat "$OUT_DIR/sku-size.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload size matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sku-size-matrix
+          path: ${{ runner.temp }}/sku-size/
+          retention-days: 30
+          if-no-files-found: warn
