@@ -1,0 +1,91 @@
+#!/usr/bin/env sh
+# 本地 pre-push 门禁（0 成本替代 GitHub required checks）
+#
+# 背景：私有仓库的 rulesets / required checks 需要 GitHub Team（或 Enterprise），
+# 个人账户上创建了也不生效。因此把「推之前就发现问题」这一步放到本地：
+# 推送前跑 格式 / 编译 / clippy / 单元测试，不通过就拒绝推送。
+#
+# 安装（一次性，在仓库根目录执行）：
+#   cp scripts/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+# 卸载：
+#   rm .git/hooks/pre-push
+#
+# 紧急绕过（例如线上抢修，事后仍会由 CI 兜底）：
+#   SKIP_GATE=1 git push
+#
+# 说明：
+# - 只对「本次真正要推送的提交」里涉及代码/构建/CI 的变更生效；
+#   纯文档推送（*.md 等）直接放行，避免为了改一行文档等几分钟。
+# - 不复用 gateway-core/scripts/ci.sh：该脚本带 `--all-features`，其中 sqlite/加密
+#   feature 在无 Linux 交叉 C 工具链的机器上无法本地编译；这里用与开发机兼容的子集，
+#   `--all-features` 的全量口径仍由 CI 覆盖。
+
+set -eu
+
+# 有代码变更时才跑门禁
+has_code=0
+zero=0000000000000000000000000000000000000000
+
+# 去掉 Windows 管道可能带入的 CR（git 本身传 LF，这里仅作兼容）
+strip_cr() {
+    printf '%s' "$1" | tr -d '\r'
+}
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    local_sha=$(strip_cr "${local_sha:-}")
+    remote_sha=$(strip_cr "${remote_sha:-}")
+    # 空行 / 字段不全（非 git 传入的正常格式）直接跳过
+    if [ -z "${local_sha:-}" ]; then
+        continue
+    fi
+    # 删除远端分支：没有内容要校验
+    if [ "$local_sha" = "$zero" ]; then
+        continue
+    fi
+    # 新分支或拿不到远端 sha：无法增量比较，按有变更处理
+    if [ -z "${remote_sha:-}" ] || [ "$remote_sha" = "$zero" ]; then
+        has_code=1
+        break
+    fi
+    if git diff --name-only "$remote_sha" "$local_sha" \
+        | grep -Eq '\.(rs|toml|lock|yml|yaml)$|^scripts/'; then
+        has_code=1
+        break
+    fi
+done
+
+if [ "$has_code" -eq 0 ]; then
+    echo "[pre-push] 本次推送无代码变更，跳过门禁"
+    exit 0
+fi
+
+if [ "${SKIP_GATE:-0}" = "1" ]; then
+    echo "[pre-push] SKIP_GATE=1：跳过本地门禁（CI 仍会校验）"
+    exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+fail() {
+    echo ""
+    echo "[pre-push] ✗ $1"
+    echo "[pre-push] 修复后重新推送；确需绕过：SKIP_GATE=1 git push"
+    exit 1
+}
+
+start=$(date +%s)
+
+echo "[pre-push] 1/4 格式检查（cargo fmt --check）"
+cargo fmt --all -- --check || fail "代码格式不符，运行 cargo fmt --all 后重试"
+
+echo "[pre-push] 2/4 编译检查（cargo check --workspace --all-targets）"
+cargo check --workspace --all-targets --quiet || fail "编译失败"
+
+echo "[pre-push] 3/4 clippy（-D warnings）"
+cargo clippy --workspace --all-targets --quiet -- -D warnings || fail "clippy 告警（CI 同样以 -D warnings 判定）"
+
+echo "[pre-push] 4/4 单元测试（cargo test --workspace --lib）"
+cargo test --workspace --lib --quiet || fail "单元测试失败"
+
+echo "[pre-push] ✓ 全部通过（$(($(date +%s) - start))s）"
