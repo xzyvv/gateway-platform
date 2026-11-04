@@ -39,7 +39,9 @@ FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」：feature
 server → `async-opcua-server`、`async-opcua-nodes`、`async-opcua-core-namespace`）。
 此前 `async-opcua` 是非 optional 硬依赖、北向 Server 又无 `cfg` 门控，
 导致 5 个 SKU 依赖树完全相同（335 crate）、体积只差 ≤11 KB；
-拆分后 `sku-minimal` 依赖树降到 288 crate，不再链接任何 OPC UA 代码。
+拆分后（CI `sku size matrix` 实测，Linux x86_64 release，commit `4e02b47`）：
+`sku-minimal` 291 crate / 15.7 MiB（-39%，不再链接任何 OPC UA 代码），
+`sku-standard` 328 crate / 18.6 MiB（-30%，只带 client 侧）。
 
 > 未编译 `opcua-server` 的构建若在配置里启用了北向 OPC UA Server，启动时会打
 > `warn`（而不是静默不启动）——现场据此判断「是二进制没带能力」还是「网络问题」。

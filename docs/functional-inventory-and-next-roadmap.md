@@ -126,25 +126,27 @@
 （客户付了钱发现内存没降会直接投诉），也不用 License 做功能开关（v2.0 已删除 6 个 feature gate，调试功能全免费）。
 详见 [docs/design/license-v2-quota.md](design/license-v2-quota.md)。
 
-**实测体积基线**（CI 作业 `sku size matrix`，Linux x86_64 release 构建，commit `5947fcd`）：
+**实测体积基线**（CI 作业 `sku size matrix`，Linux x86_64 release 构建，commit `4e02b47`，OPC UA 双向拆分后）：
 
 | SKU | 协议数 | 协议清单 | 唯一依赖 crate | 产物体积 | 相对精简版 |
 |---|---|---|---|---|---|
-| `sku-standard` | 5 | modbus,dlt645,cjt188,iec104,opcua-client | 335 | 26.7 MiB | +3.2% |
-| `sku-building` | 4 | modbus,bacnet,cjt188,opcua | 335 | 26.7 MiB | +3.2% |
-| `sku-power` | 5 | modbus,dlt645,iec104,iec101,opcua | 335 | 26.7 MiB | +3.2% |
-| `sku-plc` | 4 | modbus,s7comm,mc,opcua | 335 | 26.7 MiB | +3.2% |
-| `sku-minimal` | 3 | modbus,dlt645,cjt188 | 335 | 25.9 MiB | 基准 |
+| `sku-standard` | 5 | modbus,dlt645,cjt188,iec104,opcua-client | 328 | 18.6 MiB | +19.0% |
+| `sku-building` | 4 | modbus,bacnet,cjt188,opcua | 335 | 26.7 MiB | +70.8% |
+| `sku-power` | 5 | modbus,dlt645,iec104,iec101,opcua | 335 | 26.7 MiB | +70.9% |
+| `sku-plc` | 4 | modbus,s7comm,mc,opcua | 335 | 26.7 MiB | +70.8% |
+| `sku-minimal` | 3 | modbus,dlt645,cjt188 | 291 | 15.7 MiB | 基准 |
 
-> 上表是 **commit `5947fcd`（拆分前）** 的基线。拆分 OPC UA 双向能力后本地实测唯一依赖 crate：
-> `sku-minimal` 288（不再链接 `async-opcua`）、`sku-standard` 323（只拉 client 侧，
-> 不再带 `async-opcua-server/nodes/core-namespace`）；Linux 体积新值待下一次 `sku size matrix` 回填。
+**对比拆分前（commit `5947fcd`，全部 335 crate）**：
 
-**结论（拆分前）：SKU 裁剪基本无效**。四个非精简 SKU 的体积彼此相差 ≤ 11 KB（等价于同一份二进制），
-5 个 SKU 的唯一依赖 crate 数**完全相同（335）**。根因是 `async-opcua` 在 `gateway-core/Cargo.toml` 是
-**硬依赖（非 optional）**，而 `gateway-core/src/north/` 下 **0 处 `cfg(feature = ...)`**——
-北向 OPC UA Server 恒被链接进每一个 SKU；`opcua` feature 实际只门控了南向 Client。
-所以 SKU 之间唯一的体积差就是被 cfg 剥离的南向协议模块，精简版省下的 0.8 MiB 全部来自这一点。
+| SKU | 拆分前 | 拆分后 | 变化 |
+|---|---|---|---|
+| `sku-minimal` | 25.9 MiB | **15.7 MiB** | **-10.2 MiB（-39%）**：彻底不链接 `async-opcua` |
+| `sku-standard` | 26.7 MiB | **18.6 MiB** | **-8.1 MiB（-30%）**：只带 `opcua-client`，不再带 server/nodes/core-namespace |
+| `sku-building` / `sku-power` / `sku-plc` | 26.7 MiB | 26.7 MiB | 无变化（仍为 `opcua` 双向） |
+
+结论：拆分前 5 个 SKU 依赖树完全相同（335 crate）、体积只差 ≤11 KB，**SKU 裁剪基本无效**；
+拆分后精简版与标准版分别下降 39% / 30%，SKU 之间体积差从 ≤11 KB 拉开到 **11 MiB**，
+「按行业切体积」第一次真正成立。楼宇 / 电力 / PLC 三版尚未切 client-only，是本杠杆的剩余空间。
 
 **待办（不阻塞主线 C）**：
 
