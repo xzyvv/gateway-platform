@@ -271,8 +271,19 @@ pub(crate) fn validate_config(cfg: &GatewayConfig) -> Result<(), ApiError> {
 /// 会立刻报错；而北向通道的能力位只来自配置字段（如 `opcua.enabled`），
 /// 裁剪后配置依然"合法"，表现为**保存成功、端口不开、只在启动日志里一行 warn**，
 /// 现场会去查网络 / 防火墙。因此在保存路径上直接拒绝，并给出可操作原因。
-#[cfg(not(feature = "opcua-server"))]
 fn reject_unbuilt_capabilities(cfg: &GatewayConfig) -> Result<(), ApiError> {
+    // 能力位由构建期决定；`cfg!` 让本函数在两种构建下都有同一份可测实现。
+    reject_unbuilt_with(cfg, cfg!(feature = "opcua-server"))
+}
+
+/// `reject_unbuilt_capabilities` 的纯函数内核：能力是否编入由参数传入。
+///
+/// 这样两条分支都能被单测覆盖 —— 若直接按 `cfg(feature)` 分叉实现，
+/// 默认构建下永远 `Ok`、裁剪构建又跑不到单测，等于两条分支都没人守。
+fn reject_unbuilt_with(cfg: &GatewayConfig, opcua_server_built: bool) -> Result<(), ApiError> {
+    if opcua_server_built {
+        return Ok(());
+    }
     if cfg.opcua.as_ref().is_some_and(|o| o.enabled) {
         return Err(ApiError::bad_request(
             "config 启用了北向 OPC UA Server（opcua.enabled=true），但当前发行版未编入该能力\
@@ -280,11 +291,6 @@ fn reject_unbuilt_capabilities(cfg: &GatewayConfig) -> Result<(), ApiError> {
                 .to_string(),
         ));
     }
-    Ok(())
-}
-
-#[cfg(feature = "opcua-server")]
-fn reject_unbuilt_capabilities(_cfg: &GatewayConfig) -> Result<(), ApiError> {
     Ok(())
 }
 
@@ -544,6 +550,34 @@ mod tests {
             }));
         }
         values
+    }
+
+    /// 未编入 `opcua-server` 的发行版：配置启用北向 UA Server 必须在保存时拒绝。
+    ///
+    /// 否则现场是「保存成功、UA 端口不开、只在启动日志一行 warn」，运维会去查网络。
+    /// 同时验证编入该能力的构建不得误拒 —— 否则楼宇/电力/PLC 版一保存就报错。
+    #[test]
+    fn unbuilt_opcua_server_is_rejected_and_built_one_is_allowed() {
+        let cfg = sample_config();
+        assert!(
+            reject_unbuilt_with(&cfg, false).is_err(),
+            "未编入 opcua-server 时必须拒绝启用北向 UA Server"
+        );
+        assert!(
+            reject_unbuilt_with(&cfg, true).is_ok(),
+            "已编入 opcua-server 时不得误拒"
+        );
+    }
+
+    /// 关闭状态不拒绝：字段存在但 `enabled=false` 是合法配置。
+    #[test]
+    fn disabled_opcua_server_passes_in_trimmed_build() {
+        let mut cfg = sample_config();
+        if let Some(o) = cfg.opcua.as_mut() {
+            o.enabled = false;
+        }
+        assert!(reject_unbuilt_with(&cfg, false).is_ok());
+        assert!(reject_unbuilt_with(&cfg, true).is_ok());
     }
 
     /// 清单快照：这是脱敏与还原的唯一来源，任何增删都必须同步更新本测试与

@@ -424,10 +424,16 @@ jobs:
           if-no-files-found: warn
 
   # 跨平台编译检查（仅 check，不 build）
+  # macOS runner 是 GitHub 上最紧缺的资源，排队超时会被调度器直接取消（表现为灰/红，
+  # 与代码无关）。两点降噪：①只跑一遍 `-D dead_code`（原先"普通 check +严格 check"
+  # 要编译两遍，RUSTFLAGS 变化会让缓存全失效，耗时翻倍；严格版已包含普通版的覆盖）；
+  # ②macOS 结果设为 advisory，runner 短缺不再阻塞合并；Windows 仍为硬门禁。
   cross-platform-check:
     name: check on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     needs: check
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -443,12 +449,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: cargo check
-        run: cargo check --all-targets --quiet
-        env:
-          RUSTFLAGS: ""
-
-      - name: dead_code strict check
+      - name: cargo check (dead_code strict)
         run: cargo check --all-targets --quiet
         env:
           RUSTFLAGS: "-D dead_code"
@@ -957,6 +958,40 @@ jobs:
           set -uo pipefail
           sudo bash "$RUNNER_TEMP/gw-pkg/deliver.sh" --timeout 90 | tee "$RUNNER_TEMP/deliver.log"
           test "${PIPESTATUS[0]}" -eq 0
+
+      # 常驻内存基线：SKU 裁剪省下的是磁盘体积，而 ARM 小内存机型选型看的是 RSS。
+      # 在真实 systemd 服务上采样，超阈值即失败，防止「体积降了、内存涨了」这类静默回退。
+      - name: Measure resident memory (RSS gate)
+        run: |
+          set -euo pipefail
+          PID="$(sudo systemctl show -p MainPID --value gateway)"
+          if [ "$PID" = "0" ] || [ ! -d "/proc/$PID" ]; then
+            echo "gateway 未运行，无法测量 RSS" >&2
+            exit 1
+          fi
+          rss() { awk '/^VmRSS:/{print $2}' "/proc/$PID/status"; }
+          sleep 5
+          base="$(rss)"
+          sleep 15
+          now="$(rss)"
+          mib="$(awk -v k="$now" 'BEGIN{printf "%.1f", k/1024}')"
+          grow_kib=$(( now - base ))
+          {
+            echo "### 常驻内存（sku-standard，真实 systemd 服务）"
+            echo ""
+            echo "| 指标 | 实测 | 阈值 |"
+            echo "|---|---|---|"
+            echo "| 稳态 RSS | ${mib} MiB | 128 MiB |"
+            echo "| 15s 内 RSS 增长 | ${grow_kib} KiB | 4096 KiB |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$now" -gt 131072 ]; then
+            echo "RSS ${mib} MiB 超过 128 MiB 上限（部署到 ARM 小内存机型会 OOM）" >&2
+            exit 1
+          fi
+          if [ "$grow_kib" -gt 4096 ]; then
+            echo "15s 内 RSS 增长 ${grow_kib} KiB：疑似启动后仍在分配或泄漏" >&2
+            exit 1
+          fi
 
       # 失败时把现场留证：服务状态 + 日志 + 交付检查单
       - name: Collect systemd snapshot

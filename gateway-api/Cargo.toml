@@ -92,8 +92,15 @@ iec101 = ["gateway-core/iec101"]
 
 ## ===== 行业 SKU 聚合 feature（与 gateway-core 同口径转发）=====
 ## 各 SKU 按南向协议互斥切片，定义见 gateway-core/Cargo.toml。
-sku-standard = ["gateway-core/sku-standard"]
-sku-building = ["gateway-core/sku-building"]
-sku-power = ["gateway-core/sku-power"]
-sku-plc = ["gateway-core/sku-plc"]
-sku-minimal = ["gateway-core/sku-minimal"]
+##
+## 必须展开成本 crate **自己的**协议 feature，而不是只写 `gateway-core/sku-*`：
+## 本 crate 里存在 `#[cfg(feature = "modbus")]` / `#[cfg(feature = "mc")]` /
+## `#[cfg(feature = "opcua-server")]` 等门控（web/services.rs、web/debug_bus.rs、
+## web/config_apply.rs），只转发 core 会让这些代码在 SKU 构建里全部消失，
+## 而 core 认为协议存在 —— 形成「core 有协议、api 视图没有」的分裂：
+## 现场表现为配了 Modbus 却不采集、北向 UA Server 一保存就被拒，且零告警。
+sku-standard = ["modbus", "dlt645", "cjt188", "iec104", "opcua-client"]
+sku-building = ["modbus", "bacnet", "cjt188", "opcua"]
+sku-power = ["modbus", "dlt645", "iec104", "iec101", "opcua"]
+sku-plc = ["modbus", "s7comm", "mc", "opcua"]
+sku-minimal = ["modbus", "dlt645", "cjt188"]
