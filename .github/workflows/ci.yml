@@ -688,6 +688,130 @@ jobs:
           # 生产代码的 warning 仍由 check job 的 -D warnings 严格把关。
           RUSTFLAGS: ""
 
+  # A: musl 静态链接构建（消除交付物与设备 glibc 版本的耦合）。
+  # 问题：cross-arm 产出的是 *-linux-gnu 动态链接二进制，它带着「构建机 glibc 版本」
+  # 这个隐藏要求 —— CI 跑在 ubuntu-latest（glibc 2.39），而现场常见 Debian 10(2.28)/
+  # 11(2.31)、Buildroot/Yocto（musl）。这类设备上连启动都到不了，直接
+  # "GLIBC_2.39 not found"，但所有 CI 作业会全绿。
+  # 做法：用 musl target 静态链接（不依赖任何目标机 libc），并**真的运行一次**。
+  # 为什么用 cross：bundled sqlite3.c 需要目标 ABI 的 musl C 工具链，Ubuntu 的 apt
+  # 只提供宿主 musl-gcc，没有 aarch64/armv7 的 musl 交叉编译器，cross 镜像自带。
+  static-musl:
+    name: static musl (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            emu: ""
+            pkg: qemu-user-static
+          - target: aarch64-unknown-linux-musl
+            emu: qemu-aarch64
+            pkg: qemu-user-static
+          - target: armv7-unknown-linux-musleabihf
+            emu: qemu-arm
+            pkg: qemu-user-static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-musl-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      # 安装 cross（自带 musl 交叉工具链镜像）；ARM 还需要 qemu user-mode 来运行产物
+      - uses: taiki-e/install-action@cross
+      - name: Install QEMU user-mode emulator
+        if: matrix.emu != ''
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # qemu-user-static 在新版 Ubuntu 上是虚拟包，实际由 binfmt 包提供；逐个试
+          sudo apt-get install -y ${{ matrix.pkg }} || sudo apt-get install -y qemu-user-binfmt
+          command -v "${{ matrix.emu }}" >/dev/null 2>&1 || command -v "${{ matrix.emu }}"-static
+
+      - name: cross build (gatewayd, release features)
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          cross build --release -p gatewayd --target "$TARGET" \
+            --no-default-features --features sku-standard --locked
+          BIN="target/$TARGET/release/gatewayd"
+          file "$BIN"
+          # 必须是静态链接：动态链接就失去 musl 的全部意义，等于白做
+          file "$BIN" | grep -q "statically linked" || {
+            echo "✗ 产物不是静态链接，仍会依赖目标机 glibc" >&2
+            exit 1
+          }
+
+      # ===== 运行时验证 =====
+      # 静态链接只证明"不需要目标机 libc"，不证明"能起来"。这里用最小配置真跑一次，
+      # 探 /health/live；ARM 产物走 QEMU user-mode（不模拟硬件，只验证 ABI 与启动路径）。
+      - name: Runtime smoke (start + /health/live)
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          BIN="target/$TARGET/release/gatewayd"
+          WORK="$(mktemp -d)"
+          cat > "$WORK/config.json" <<'JSON'
+          {"buses": [], "points": [], "mqtt": {}, "web": {"allow_anon_read": true, "listen_addr": "127.0.0.1:18099"}}
+          JSON
+          export GATEWAY_CONFIG_PATH="$WORK/config.json" \
+            GATEWAY_DB_PATH="$WORK/data_queue.db" \
+            GATEWAY_VERSION_DB="$WORK/config_versions.db" \
+            GATEWAY_OUTBOX_DB="$WORK/mqtt_outbox.db" \
+            GATEWAY_AUDIT_LOG="$WORK/audit.log" \
+            GATEWAY_DIAG_LOG="$WORK/gateway.log" \
+            GATEWAY_LOG_DIR="$WORK/logs" \
+            GATEWAY_OTA_STAGING="$WORK/ota" \
+            GATEWAY_TEMPLATE_BUILTIN="$WORK/templates/builtin" \
+            GATEWAY_TEMPLATE_CUSTOM="$WORK/templates/custom" \
+            GATEWAY_LUA_SCRIPT="$WORK/process.lua" \
+            GATEWAY_CERT_DIR="$WORK/certs" \
+            GATEWAY_LICENSE_CLOCK_DB="$WORK/license_clock.db"
+          EMU="${{ matrix.emu }}"
+          if [ -n "$EMU" ]; then
+            QEMU="$EMU"
+            command -v "$QEMU" >/dev/null 2>&1 || QEMU="$EMU-static"
+            "$QEMU" "$BIN" >"$WORK/out.log" 2>&1 &
+          else
+            "$BIN" >"$WORK/out.log" 2>&1 &
+          fi
+          PID=$!
+          READY=0
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18099/health/live >/dev/null 2>&1; then
+              READY=1; break
+            fi
+            kill -0 "$PID" 2>/dev/null || break
+            sleep 1
+          done
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          if [ "$READY" != "1" ]; then
+            echo "✗ 静态产物未能启动并通过 /health/live（$TARGET）" >&2
+            tail -n 40 "$WORK/out.log" >&2 || true
+            exit 1
+          fi
+          echo "✓ 静态产物启动成功并通过 /health/live（$TARGET）"
+
   # L1: encryption feature 编译验证。
   # 生产构建通过 `--features encryption` 启用 SQLite 加密（bundled-sqlcipher），但历史上
   # 该路径只在开发者本机手工构建过，CI 的默认 feature 构建完全绕开它——加密相关的

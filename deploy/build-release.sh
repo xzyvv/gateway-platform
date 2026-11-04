@@ -15,6 +15,17 @@ set -euo pipefail
 #   ./deploy/build-release.sh --protocols modbus,cjt188,dlt645
 #   ./deploy/build-release.sh --protocols all    # 默认发行集全部协议（仅调试/自测）
 #
+# 静态链接（musl）：现场设备的 glibc 版本千差万别（Debian 10 = 2.28、
+# Debian 11 = 2.31、Yocto 常见 musl），gnu 动态产物会带着构建机的 glibc 版本要求，
+# 在旧系统上直接报 "GLIBC_2.xx not found"。要免掉这层耦合用 musl target：
+#   ./deploy/build-release.sh --target linux-x86_64-musl
+#   ./deploy/build-release.sh --target linux-arm64-musl
+#   ./deploy/build-release.sh --target linux-armv7-musl
+# 构建机需有对应 musl C 工具链（bundled sqlite3.c 要过 C 编译器）：
+#   x86_64: apt install musl-tools        → CC_x86_64_unknown_linux_musl=musl-gcc
+#   ARM64/armv7: 建议用 cross（自带 musl 交叉工具链）
+# 构建结束后会自动做二进制兼容性自检，见下方 MAX_GLIBC。
+#
 # A4 出厂镜像按协议清单裁剪：默认不再依赖 `default = ["all-protocols"]`，
 # 而是显式传 `--no-default-features --features <清单>`。清单会写入产物目录的
 # BUILD-INFO.txt，作为发布检查项（verify-deploy.sh 会据此核对线上协议表）。
@@ -131,12 +142,20 @@ case "$TARGET" in
   "linux-arm64")  RUST_TARGET="aarch64-unknown-linux-gnu" ;;
   "linux-armv7")  RUST_TARGET="armv7-unknown-linux-gnueabihf" ;;
   "linux-x86_64") RUST_TARGET="x86_64-unknown-linux-gnu" ;;
+  # musl = 静态链接，产物不依赖设备 glibc 版本（现场兼容性首选）
+  "linux-x86_64-musl") RUST_TARGET="x86_64-unknown-linux-musl" ;;
+  "linux-arm64-musl")  RUST_TARGET="aarch64-unknown-linux-musl" ;;
+  "linux-armv7-musl")  RUST_TARGET="armv7-unknown-linux-musleabihf" ;;
   *)
     echo "错误: 未知 target '$TARGET'"
     echo "支持: host (默认) | linux-arm64 | linux-armv7 | linux-x86_64"
+    echo "      linux-x86_64-musl | linux-arm64-musl | linux-armv7-musl（静态链接）"
     exit 1
     ;;
 esac
+
+# 允许现场按目标系统放宽/收紧 glibc 基线（默认 2.31 ≈ Debian 11 / Ubuntu 20.04）
+MAX_GLIBC="${MAX_GLIBC:-2.31}"
 
 mkdir -p "$OUT"
 
@@ -153,6 +172,24 @@ echo "  ✓ 前端产物: $FRONTEND/dist/"
 # ── 2. Rust release 构建 ──
 echo "[2/3] 构建 Rust gatewayd..."
 cd "$RUST_ROOT"
+
+# musl target 需要 musl C 工具链来编译 bundled sqlite3.c。
+# cc-rs 通过 CC_<target> 找编译器；找到就显式指定，找不到交给 cargo 报错。
+if [ -n "$RUST_TARGET" ] && [[ "$RUST_TARGET" == *musl* ]]; then
+  MUSL_CC=""
+  case "$RUST_TARGET" in
+    x86_64-*)  MUSL_CC="musl-gcc" ;;
+    aarch64-*) MUSL_CC="aarch64-linux-musl-gcc" ;;
+    armv7-*)   MUSL_CC="arm-linux-musleabihf-gcc" ;;
+  esac
+  if [ -n "$MUSL_CC" ] && command -v "$MUSL_CC" >/dev/null 2>&1; then
+    export "CC_${RUST_TARGET//-/_}=$MUSL_CC"
+    echo "  musl C 工具链: $MUSL_CC"
+  else
+    echo "  ⚠ 未找到 ${MUSL_CC:-musl 交叉工具链}：bundled sqlite3.c 可能编译失败"
+    echo "    x86_64 可 apt install musl-tools；ARM 建议用 cross 构建"
+  fi
+fi
 
 # A4：协议 feature 参数。all 显式走 all-protocols（等价默认，但参数形态统一，
 # 避免空数组在 bash 3.2 + `set -u` 下展开报 unbound variable）；行业 SKU 走聚合
@@ -207,6 +244,48 @@ else
 fi
 echo "  ✓ 二进制: $BIN_SRC"
 
+# ── 二进制兼容性自检（B） ──
+# 两件事必须在上机前就确定，而不是等设备上执行时报错：
+#   1) 是静态链接还是动态链接；
+#   2) 动态链接时，产物要求的最低 glibc 版本（= 构建机的 glibc）。
+# 现场设备若是 Debian 10(2.28)/11(2.31)，在 ubuntu-latest 上构建的 gnu 产物
+# （glibc 2.39）会直接 "GLIBC_2.39 not found"，连启动都到不了。
+LINK_MODE="unknown"
+GLIBC_REQ=""
+if command -v file >/dev/null 2>&1; then
+  if file "$BIN_SRC" | grep -q "statically linked"; then
+    LINK_MODE="static"
+  else
+    LINK_MODE="dynamic"
+  fi
+fi
+if [ "$LINK_MODE" = "dynamic" ]; then
+  # 取产物引用到的最高 GLIBC 符号版本（objdump/readelf 二者取其一）
+  if command -v objdump >/dev/null 2>&1; then
+    GLIBC_REQ="$(objdump -T "$BIN_SRC" 2>/dev/null \
+      | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -V | tail -n1 || true)"
+  elif command -v readelf >/dev/null 2>&1; then
+    GLIBC_REQ="$(readelf --version-info "$BIN_SRC" 2>/dev/null \
+      | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -V | tail -n1 || true)"
+  fi
+fi
+if [ "$LINK_MODE" = "static" ]; then
+  echo "  ✓ 链接方式: 静态（不依赖设备 glibc，任意 Linux 发行版可运行）"
+elif [ -n "$GLIBC_REQ" ]; then
+  echo "  链接方式: 动态，要求设备 glibc ≥ $GLIBC_REQ（基线 $MAX_GLIBC）"
+  # 用 sort -V 判大小：把两个版本排序后，较大者若等于产物要求则说明超基线
+  BIGGER="$(printf '%s\n%s\n' "$MAX_GLIBC" "$GLIBC_REQ" | sort -V | tail -n1)"
+  if [ "$BIGGER" = "$GLIBC_REQ" ] && [ "$GLIBC_REQ" != "$MAX_GLIBC" ]; then
+    echo "  ✗ 产物要求的 glibc 高于基线 $MAX_GLIBC：旧设备（Debian 10/11、Yocto）会启动失败"
+    echo "    解决：改用静态链接 target（--target linux-x86_64-musl / -arm64-musl / -armv7-musl），"
+    echo "          在更旧的构建环境里构建，或显式放宽基线 MAX_GLIBC=$GLIBC_REQ"
+    exit 1
+  fi
+  echo "  ✓ glibc 基线满足（≤ $MAX_GLIBC）"
+else
+  echo "  ⚠ 未能检测链接方式与 glibc 版本（构建机缺 file/objdump/readelf），请人工核对"
+fi
+
 # ── 3. 打产物包 ──
 echo "[3/3] 打产物包..."
 # 先清掉上次的产物：ui-dist 已存在时 `cp -r dist ui-dist` 会变成 ui-dist/dist
@@ -252,6 +331,9 @@ rust_target=${RUST_TARGET:-host}
 sku=$SKU
 protocols=$PROTOCOLS
 feature_args=$FEATURE_DESC
+link_mode=$LINK_MODE
+glibc_min=${GLIBC_REQ:-none}
+glibc_policy=$MAX_GLIBC
 verify=包内 sudo bash deliver.sh 可一键完成 install + verify-deploy 并导出交付检查单
 EOF
 echo "  ✓ 构建信息: $OUT/BUILD-INFO.txt (sku=$SKU, protocols=$PROTOCOLS)"

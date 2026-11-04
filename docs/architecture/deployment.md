@@ -131,7 +131,35 @@ Environment=GATEWAY_TZ=+08:00
 - 验证：设备上执行 `date`，确认输出的时区缩写/偏移符合预期；再查 `journalctl -u gateway | grep "device timezone"` 确认网关实际采用的时区
 - 前端「下次执行时间」显示的是同一时刻在**浏览器时区**下的墙钟读数；设备与浏览器时区不一致时读数不同属正常现象，实际触发时刻不变
 
-### 8.5 反向代理与限流
+### 8.5 二进制兼容性（glibc 与静态链接）
+
+gnu 动态链接的产物会把**构建机的 glibc 版本**变成隐藏的运行要求。CI 与常见的构建机是 Ubuntu 22.04/24.04（glibc 2.35/2.39），而现场设备常见 Debian 10（2.28）、Debian 11（2.31）、Buildroot/Yocto（musl）——这类设备上二进制连启动都到不了，直接 `GLIBC_2.39 not found`。
+
+**交付优先用静态链接**（musl target，产物不依赖目标机任何 libc）：
+
+| 构建目标 | 链接方式 | 适用 |
+|---|---|---|
+| `--target linux-x86_64-musl` | 静态 | x86_64 网关（首选） |
+| `--target linux-arm64-musl` | 静态 | ARM64 网关（首选） |
+| `--target linux-armv7-musl` | 静态 | ARMv7 网关（首选） |
+| `--target linux-arm64` / `linux-armv7` / `linux-x86_64` | 动态（gnu） | 仅当确认目标系统 glibc ≥ 构建机版本 |
+
+```bash
+# 静态包（推荐）
+./deploy/build-release.sh --target linux-arm64-musl
+# 目标系统与构建机 glibc 一致时才用动态包
+./deploy/build-release.sh --target linux-arm64
+```
+
+构建结束会自动做兼容性自检，超基线直接失败：
+
+- 静态：打印「不依赖设备 glibc」并写入 `BUILD-INFO.txt` 的 `link_mode=static`
+- 动态：解析产物引用的最高 `GLIBC_x.y` 符号，与基线 `MAX_GLIBC`（默认 **2.31** ≈ Debian 11）比较，超出则报错并提示改用 musl target 或显式放宽 `MAX_GLIBC`
+- 设备侧 `verify-deploy.sh` 的 `[1c] 二进制兼容性` 会核对已安装产物与设备 glibc，结论写入交付检查单
+
+CI 中的 `static musl (*)` 作业会为三个架构实际构建静态包，并**启动产物探 `/health/live`**（ARM 走 QEMU user-mode），确保"静态能编出来"和"静态能跑起来"都被验证。
+
+### 8.6 反向代理与限流
 
 访问日志的 `client_ip` 与按 IP 分桶的限流规则，默认取 TCP 对端地址。网关前面挂反向代理时行为如下：
 
@@ -151,7 +179,7 @@ location / {
 
 ---
 
-### 8.6 Windows 部署的指标限制
+### 8.7 Windows 部署的指标限制
 
 工业现场主部署形态为 Linux。在 Windows 上运行时，「运行指标」页有三项**如实显示未知**，不是缺陷：
 

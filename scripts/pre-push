@@ -48,7 +48,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
         break
     fi
     if git diff --name-only "$remote_sha" "$local_sha" \
-        | grep -Eq '\.(rs|toml|lock|yml|yaml)$|^scripts/'; then
+        | grep -Eq '\.(rs|toml|lock|yml|yaml|sh)$|^scripts/'; then
         has_code=1
         break
     fi

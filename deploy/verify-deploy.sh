@@ -93,6 +93,7 @@ write_report() {
     echo "- 目标地址：$API"
     echo "- 监听绑定：${BIND_ADDR:-（未取到）}"
     echo "- 生效时区：${TZ_LINE:-（未取到，请人工核对 journalctl -u gateway | grep 'device timezone'）}"
+    echo "- 二进制链接：${LINK_KIND:-unknown}${BIN_GLIBC:+（要求 glibc ≥ $BIN_GLIBC）}${SYS_GLIBC:+，本机 glibc $SYS_GLIBC}"
     echo "- 主机：$(uname -s) / $(uname -m)"
     echo "- 结论：$verdict"
     echo "- 统计：PASS $PASS / FAIL $FAIL / WARN $WARN"
@@ -206,6 +207,59 @@ if [ -n "$TZ_LINE" ]; then
   esac
 else
   [ -n "$SYS_OFF" ] && info "系统时区偏移 $SYS_OFF（未能取到网关生效时区，无法比对）" || true
+fi
+
+# ── 1.5 二进制兼容性（静态链接 / glibc 版本）──
+# 服务能起来不代表这个产物能装到别的设备上：gnu 动态链接的二进制会带上
+# 构建机的 glibc 版本要求，换到更旧的发行版就直接 "GLIBC_2.xx not found"。
+# 这里核对已安装产物，让「能装到哪些设备」变成可交付的结论，而不是现场试错。
+echo "${BOLD}[1c] 二进制兼容性${RESET}"
+GW_BIN="${GW_BIN:-/opt/gatewayd/gatewayd}"
+if [ -x "$GW_BIN" ]; then
+  LINK_KIND="unknown"
+  if command -v file >/dev/null 2>&1; then
+    case "$(file "$GW_BIN" 2>/dev/null)" in
+      *"statically linked"*) LINK_KIND="static" ;;
+      *"ELF"*) LINK_KIND="dynamic" ;;
+    esac
+  fi
+  if [ "$LINK_KIND" = "static" ]; then
+    ok "产物静态链接：不依赖设备 glibc，任意 Linux 发行版可运行"
+  elif [ "$LINK_KIND" = "dynamic" ]; then
+    BIN_GLIBC=""
+    if command -v objdump >/dev/null 2>&1; then
+      BIN_GLIBC=$(objdump -T "$GW_BIN" 2>/dev/null | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -V | tail -n1 || true)
+    elif command -v readelf >/dev/null 2>&1; then
+      BIN_GLIBC=$(readelf --version-info "$GW_BIN" 2>/dev/null | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -V | tail -n1 || true)
+    fi
+    SYS_GLIBC=$(ldd --version 2>/dev/null | head -n1 | grep -o '[0-9][0-9.]*[0-9]' | tail -n1 || true)
+    if [ -n "$BIN_GLIBC" ] && [ -n "$SYS_GLIBC" ]; then
+      # sort -V 比大小：较大者等于产物要求 → 设备 glibc 不够
+      BIGGER=$(printf '%s\n%s\n' "$BIN_GLIBC" "$SYS_GLIBC" | sort -V | tail -n1)
+      if [ "$BIGGER" = "$BIN_GLIBC" ] && [ "$BIN_GLIBC" != "$SYS_GLIBC" ]; then
+        warn "产物要求 glibc ≥ $BIN_GLIBC，本机仅 $SYS_GLIBC：此包无法在本机运行；换设备前务必确认目标系统 glibc，或改用 musl 静态包（--target linux-*-musl）"
+      else
+        ok "动态链接，产物要求 glibc ≥ $BIN_GLIBC，本机 $SYS_GLIBC 满足；换到更旧的系统（Debian 10/11、Yocto）可能需静态包"
+      fi
+    else
+      warn "无法解析 glibc 版本（缺 objdump/readelf/ldd），请人工确认目标系统 glibc"
+    fi
+  else
+    warn "无法识别产物链接方式（缺 file 命令），请人工执行 file $GW_BIN 核对"
+  fi
+  # BUILD-INFO.txt 若随包提供，直接给出构建时的自检结论
+  for f in "$SCRIPT_DIR/BUILD-INFO.txt" /opt/gatewayd/BUILD-INFO.txt; do
+    if [ -f "$f" ]; then
+      BI_LINK=$(grep -E '^link_mode=' "$f" 2>/dev/null | cut -d= -f2 || true)
+      BI_GLIBC=$(grep -E '^glibc_min=' "$f" 2>/dev/null | cut -d= -f2 || true)
+      if [ -n "$BI_LINK" ]; then
+        info "构建信息: link_mode=${BI_LINK}, glibc_min=${BI_GLIBC:-none}"
+      fi
+      break
+    fi
+  done
+else
+  warn "未找到可执行产物 $GW_BIN，跳过二进制兼容性检查"
 fi
 
 # ── 2. 端口监听 ──
