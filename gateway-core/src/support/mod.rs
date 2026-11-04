@@ -9,6 +9,7 @@
 //! 迁入二进制会形成 core -> bin 的非法依赖。
 
 pub mod app;
+pub mod clock;
 pub mod cron;
 mod paths;
 pub use paths::*;
