@@ -119,19 +119,38 @@
 
 | 层 | 载体 | 决定什么 | 现状 |
 |---|---|---|---|
-| 行业 SKU | `gateway-core/Cargo.toml` 的 `sku-*` 聚合 feature（**编译期**） | **二进制体积**：装不装得下（flash / RAM） | 5 档：standard（modbus/dlt645/cjt188/iec104/opcua）、building（+bacnet）、power（+iec101）、plc（+s7comm/mc）、minimal（仅计量三件套）；`fins` / `bacnet-mstp` 为退役观察；`--protocols` 可自定义 |
+| 行业 SKU | `gateway-core/Cargo.toml` 的 `sku-*` 聚合 feature（**编译期**） | **二进制体积**：装不装得下（flash / RAM） | 5 档（互为并行切片，不是叠加）：standard（modbus/dlt645/cjt188/iec104/opcua）、building（modbus/bacnet/cjt188/opcua）、power（modbus/dlt645/iec104/iec101/opcua）、plc（modbus/s7comm/mc/opcua）、minimal（modbus/dlt645/cjt188 三件套）；`fins` / `bacnet-mstp` 为退役观察；`--protocols` 可自定义。**实测 5 档产物仅 25.9~26.7 MiB、依赖 crate 均为 335，裁剪当前基本无效（见下方实测基线）** |
 | 授权档 | License `tier` + `Quota`（**运行时**） | **卖多少钱**：点位 / 并发协议数 / 历史保留天数 / 北向通道数 | tier = core / standard / pro / ultra；配额数值载体是 `config.json` 的 `license.tier_quotas`，**仓库未内置默认表**，出厂配置必须写全四档 |
 
 分工原则（与主流厂商一致）：**编译期只裁体积，License 只卖规模**——不用 License 去卖「二进制里已经没有的东西」
 （客户付了钱发现内存没降会直接投诉），也不用 License 做功能开关（v2.0 已删除 6 个 feature gate，调试功能全免费）。
 详见 [docs/design/license-v2-quota.md](design/license-v2-quota.md)。
 
+**实测体积基线**（CI 作业 `sku size matrix`，Linux x86_64 release 构建，commit `5947fcd`）：
+
+| SKU | 协议数 | 协议清单 | 唯一依赖 crate | 产物体积 | 相对精简版 |
+|---|---|---|---|---|---|
+| `sku-standard` | 5 | modbus,dlt645,cjt188,iec104,opcua | 335 | 26.7 MiB | +3.2% |
+| `sku-building` | 4 | modbus,bacnet,cjt188,opcua | 335 | 26.7 MiB | +3.2% |
+| `sku-power` | 5 | modbus,dlt645,iec104,iec101,opcua | 335 | 26.7 MiB | +3.2% |
+| `sku-plc` | 4 | modbus,s7comm,mc,opcua | 335 | 26.7 MiB | +3.2% |
+| `sku-minimal` | 3 | modbus,dlt645,cjt188 | 335 | 25.9 MiB | 基准 |
+
+**结论：SKU 裁剪目前基本无效**。四个非精简 SKU 的体积彼此相差 ≤ 11 KB（等价于同一份二进制），
+5 个 SKU 的唯一依赖 crate 数**完全相同（335）**。根因是 `async-opcua` 在 `gateway-core/Cargo.toml` 是
+**硬依赖（非 optional）**，而 `gateway-core/src/north/` 下 **0 处 `cfg(feature = ...)`**——
+北向 OPC UA Server 恒被链接进每一个 SKU；`opcua` feature 实际只门控了南向 Client。
+所以 SKU 之间唯一的体积差就是被 cfg 剥离的南向协议模块，精简版省下的 0.8 MiB 全部来自这一点。
+
 **待办（不阻塞主线 C）**：
 
-1. **缺真实体积数据**：CI 的 feature 矩阵跑的是 debug 变体，5 个 SKU 各占多少 MB 从未实测，
-   裁剪决策目前建立在估算上。应加 `sku-size-matrix` 作业跑 release 构建出表。
+1. ~~**缺真实体积数据**~~ **已闭环**：CI 新增 `sku-size-matrix` 作业（`if: push || workflow_dispatch`，
+   纯观测不阻塞 PR），每次 main 合并后自动跑 5 个 SKU 的 release 构建并出表，
+   产物见 Actions artifact `sku-size-matrix`。数据来源见上表。
 2. **`opcua` feature 同时打包南向 Client（`south/protocol/opcua`）与北向 Server（`north/server/opcua_server.rs`）**，
    两者客户群几乎不重叠（现场多只要「采集 + MQTT 上送」）；拆成 `opcua-client` / `opcua-server` 是体积上最大的一个杠杆。
+   实测佐证：北向 Server 无条件编译，导致 5 个 SKU 依赖树完全一致（335 crate），
+   仅此一项就锁死了「按行业切体积」的可能性。
 3. **行业 SKU 与授权档目前完全独立**（`sku-minimal` 也能配 ultra 授权），缺推荐组合；
    `tier_quotas` 的默认值也未随 SKU 场景给建议值。
 

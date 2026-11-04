@@ -30,10 +30,18 @@
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` 在 `push` / `pull_request` 时自动运行：
+`.github/workflows/ci.yml` 在 `push` / `pull_request` 时自动运行（`ci` workflow 共 15 个 job）：
 
-- `check` job：fmt + check + clippy + test + build
-- `linux-runtime` job：仅编译 Linux 版本（硬件 watchdog / gpiod）
+- `check / clippy / fmt / test`：fmt + check + clippy + test + build + 前端 lint/构建/单测 + ts-rs 校验 + API surface 校验（**其它 job 全部依赖它**）
+- `linux runtime checks`：仅编译 Linux 版本（硬件 watchdog / gpiod）
+- `cross build (aarch64-unknown-linux-gnu)` / `cross build (armv7-unknown-linux-gnueabihf)`：ARM 交叉编译
+- `encryption feature build` / `chaos scenarios` / `backend coverage (baseline)` / `performance benchmarks`
+- `e2e smoke`：Playwright 端到端；`deploy smoke (install + verify)`：出厂包安装 + 部署校验；`deploy script lint`：交付脚本静态检查
+- `soak smoke (memory leak gate)`：短时浸泡 + 判定，兜住内存 / 句柄泄漏回退（Linux 走 `scripts/soak.sh`）
+- `sku size matrix`：release 构建 5 个 SKU 出体积表（纯观测，仅 `push` / 手动触发时跑，不阻塞 PR）
+- 跨平台矩阵：`check on macos-latest` / `check on windows-latest`
+
+`.github/workflows/security.yml` 另跑供应链门禁：`cargo audit (RustSec)` / `npm audit (frontend deps)` / `cargo deny (licenses / bans / sources)`。
 
 ## 强制要求
 
