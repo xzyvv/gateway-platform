@@ -72,6 +72,33 @@ jobs:
         env:
           RUSTFLAGS: ""
 
+      # 时区矩阵：cron 调度、授权防回拨、点位质量判定都涉及"本地时间"。
+      # CI runner 的 TZ 恒为 UTC，而工业网关出厂常常也是 UTC，
+      # 客户却按北京时间理解"每天凌晨 2 点采集"——这类偏差只有换一档时区
+      # 跑同一批用例才会暴露：若某条断言只在 UTC 下成立，
+      # 说明实现偷偷依赖了运行环境时区。
+      # 这里在同一台 runner 上换 TZ 重跑同一批用例，把"与运行环境时区无关"
+      # 钉成契约。成本极低：用的是上一步已编译好的单测二进制，只重跑不重编。
+      - name: Timezone matrix (UTC / Asia/Shanghai / America/New_York)
+        run: |
+          set -euo pipefail
+          for tz in UTC Asia/Shanghai America/New_York; do
+            echo "=== TZ=$tz ==="
+            log="$(TZ="$tz" cargo test -p gateway-core --lib --quiet --features tracing-otlp -- \
+                    support::cron:: license::clock:: engine::util::model:: \
+                    south::scheduler::device_state:: 2>&1)"
+            echo "$log"
+            # 过滤条件失配时 cargo 报 "0 passed" 并返回 0，
+            # 那会让这道门禁静默退化成空跑——显式卡住"至少跑了一个用例"。
+            printf '%s' "$log" | grep -Eq 'test result: ok\. [1-9][0-9]* passed' || {
+              echo "TZ=$tz 下一条用例都没跑到（过滤条件可能失配）" >&2
+              exit 1
+            }
+            echo "TZ=$tz 通过"
+          done
+        env:
+          RUSTFLAGS: ""
+
       # F1: 协议 feature 编译矩阵。
       # gateway-core 的每个协议（modbus/dlt645/cjt188/opcua/...）都挂在一组
       # 独立 feature 下，并已有 30+ 处 `#[cfg(feature = "...")]`。但 CI 历史上只

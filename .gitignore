@@ -38,9 +38,10 @@ Thumbs.db
 # === 运行时数据 ===
 *.db
 config.json
-# 浸泡测试产物（scripts/soak.ps1 默认输出到 gateway-core/soak-out）
+# 浸泡测试产物（scripts/soak.ps1 默认输出到 gateway-core/soak-out，
+# 本地调试常用 soak-out-ci / soak-out-ci2 等变体名，统一按前缀忽略）
 soak-out/
-**/soak-out/
+**/soak-out*/
 # OPC UA Server 的 PKI 存储（运行期自动生成的证书/私钥）
 pki/
 # 设备证书目录（运行期自动生成的自签名证书 + **私钥**，见 support/paths.rs

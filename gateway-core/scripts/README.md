@@ -32,7 +32,7 @@
 
 `.github/workflows/ci.yml` 在 `push` / `pull_request` 时自动运行（`ci` workflow 共 15 个 job）：
 
-- `check / clippy / fmt / test`：fmt + check + clippy + test + build + 前端 lint/构建/单测 + ts-rs 校验 + API surface 校验（**其它 job 全部依赖它**）
+- `check / clippy / fmt / test`：fmt + check + clippy + test + build + 前端 lint/构建/单测 + ts-rs 校验 + API surface 校验 + **时区矩阵**（UTC / Asia/Shanghai / America/New_York 下重跑时间敏感单测）（**其它 job 全部依赖它**）
 - `linux runtime checks`：仅编译 Linux 版本（硬件 watchdog / gpiod）
 - `cross build (aarch64-unknown-linux-gnu)` / `cross build (armv7-unknown-linux-gnueabihf)`：ARM 交叉编译 **+ QEMU 运行时验证**（ARM 产物装载冒烟 + 在 ARM 上真跑架构敏感单测与采集→北向端到端接线测试）
 - `encryption feature build` / `chaos scenarios` / `backend coverage (baseline)` / `performance benchmarks`
