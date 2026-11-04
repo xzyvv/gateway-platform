@@ -107,10 +107,14 @@ pub(crate) async fn ntp_sync(
 ///
 /// 时钟不可信期间调度器会暂停全部计划任务；现场需要能直接看到原因，
 /// 而不是去翻日志。
+///
+/// NTP 原有字段以 JSON 值整体展开，不在此处声明其 Rust 类型：
+/// `web/api` 层只允许引用 gateway-core 的白名单模块（见 tests/arch_deps.rs）。
 #[derive(serde::Serialize)]
 struct NtpStatusResponse {
+    /// NTP 原有字段（整体展开，保持与旧契约一致）
     #[serde(flatten)]
-    ntp: gateway_core::platform::NtpStatus,
+    ntp: serde_json::Value,
     /// 系统时钟是否可信（不可信时计划任务暂停）
     clock_trusted: bool,
     /// 不可信原因；可信时为 null
@@ -136,7 +140,7 @@ pub(crate) async fn ntp_status(State(state): State<Arc<AppState>>) -> impl IntoR
         clock_trusted: reason.is_none(),
         scheduled_tasks_paused: reason.is_some(),
         clock_untrust_reason: reason,
-        ntp,
+        ntp: serde_json::to_value(ntp).unwrap_or(serde_json::Value::Null),
     })
 }
 
@@ -160,22 +164,17 @@ pub(crate) async fn ota_rollback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_core::platform::NtpStatus;
-
-    fn sample_ntp() -> NtpStatus {
-        NtpStatus {
-            last_sync: Some(1_790_000_000_000),
-            status: "synced".to_string(),
-            source: "NTP".to_string(),
-            offset_ms: 3_600_000,
-        }
-    }
 
     #[test]
     fn ntp_response_keeps_old_fields_and_adds_clock_trust() {
         // flatten 后旧字段位置不变（前端/脚本按原契约解析），新增三个时钟字段
         let resp = NtpStatusResponse {
-            ntp: sample_ntp(),
+            ntp: serde_json::json!({
+                "last_sync": 1_790_000_000_000i64,
+                "status": "synced",
+                "source": "NTP",
+                "offset_ms": 3_600_000i64,
+            }),
             clock_trusted: false,
             clock_untrust_reason: Some("系统时间与 NTP 偏差 3600 秒".to_string()),
             scheduled_tasks_paused: true,

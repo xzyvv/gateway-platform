@@ -12,5 +12,4 @@ pub use gpio::GpioController;
 #[cfg(target_os = "linux")]
 pub use hardware_watchdog::Watchdog;
 pub use ntp::NtpManager;
-pub use ntp::NtpStatus;
 pub use ota::OtaManager;
