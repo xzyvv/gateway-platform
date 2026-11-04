@@ -173,6 +173,15 @@ export function evalNorth(status: NorthStatus): CheckItem {
 /** 时钟：NTP 已校时且偏差在可接受范围 */
 export function evalClock(ntp: NtpStatus): CheckItem {
   const title = '时钟'
+  // 时钟不可信时网关会暂停全部计划任务：这是比「偏差多少 ms」更重要的结论
+  if (ntp.clock_trusted === false) {
+    return {
+      id: 'clock',
+      title,
+      level: 'fail',
+      detail: `系统时钟不可信：${ntp.clock_untrust_reason ?? '原因未知'}；计划任务已暂停（校时恢复后自动重排）`,
+    }
+  }
   const status = String(ntp.status ?? '')
   if (status.startsWith('error')) {
     return { id: 'clock', title, level: 'fail', detail: `NTP 校时失败：${status}` }
@@ -207,7 +216,7 @@ export function evalClock(ntp: NtpStatus): CheckItem {
     title,
     level: 'pass',
     detail: `NTP 已同步（${ntp.source ?? 'NTP'}），偏差 ${offset} ms${
-      ntp.last_sync ? `，最近校时 ${formatDateTime(ntp.last_sync * 1000)}` : ''
+      ntp.last_sync ? `，最近校时 ${formatDateTime(ntp.last_sync)}` : ''
     }`,
   }
 }

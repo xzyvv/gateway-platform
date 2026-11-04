@@ -103,8 +103,41 @@ pub(crate) async fn ntp_sync(
     Ok(Json(serde_json::json!({"status": "synced"})))
 }
 
+/// `/api/ntp/status` 响应：NTP 字段保持原结构（flatten），额外附上时钟可信度。
+///
+/// 时钟不可信期间调度器会暂停全部计划任务；现场需要能直接看到原因，
+/// 而不是去翻日志。
+#[derive(serde::Serialize)]
+struct NtpStatusResponse {
+    #[serde(flatten)]
+    ntp: gateway_core::platform::NtpStatus,
+    /// 系统时钟是否可信（不可信时计划任务暂停）
+    clock_trusted: bool,
+    /// 不可信原因；可信时为 null
+    clock_untrust_reason: Option<String>,
+    /// 计划任务当前是否处于暂停
+    scheduled_tasks_paused: bool,
+}
+
 pub(crate) async fn ntp_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(state.platform.ntp.status())
+    use gateway_core::support::clock::{evaluate_clock, NtpObservation};
+
+    let ntp = state.platform.ntp.status();
+    let observation = NtpObservation {
+        // NtpStatus.last_sync 本身是毫秒时间戳（sync_ntp 返回 timestamp_millis）
+        last_sync_ms: ntp.last_sync,
+        synced: ntp.source == "NTP",
+        offset_ms: ntp.offset_ms,
+    };
+    // 用与调度器相同的判据（gateway-core::support::clock）
+    let reason = evaluate_clock(chrono::Utc::now().timestamp_millis(), observation);
+
+    Json(NtpStatusResponse {
+        clock_trusted: reason.is_none(),
+        scheduled_tasks_paused: reason.is_some(),
+        clock_untrust_reason: reason,
+        ntp,
+    })
 }
 
 /// OTA 回滚：将固件回滚到上一个版本
@@ -122,4 +155,37 @@ pub(crate) async fn ota_rollback(
     Ok(Json(serde_json::json!({
         "status": "rolled_back",
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway_core::platform::NtpStatus;
+
+    fn sample_ntp() -> NtpStatus {
+        NtpStatus {
+            last_sync: Some(1_790_000_000_000),
+            status: "synced".to_string(),
+            source: "NTP".to_string(),
+            offset_ms: 3_600_000,
+        }
+    }
+
+    #[test]
+    fn ntp_response_keeps_old_fields_and_adds_clock_trust() {
+        // flatten 后旧字段位置不变（前端/脚本按原契约解析），新增三个时钟字段
+        let resp = NtpStatusResponse {
+            ntp: sample_ntp(),
+            clock_trusted: false,
+            clock_untrust_reason: Some("系统时间与 NTP 偏差 3600 秒".to_string()),
+            scheduled_tasks_paused: true,
+        };
+        let v = serde_json::to_value(resp).unwrap();
+        assert_eq!(v["status"], "synced");
+        assert_eq!(v["source"], "NTP");
+        assert_eq!(v["offset_ms"], 3_600_000);
+        assert_eq!(v["clock_trusted"], false);
+        assert_eq!(v["scheduled_tasks_paused"], true);
+        assert!(v["clock_untrust_reason"].as_str().unwrap().contains("NTP"));
+    }
 }

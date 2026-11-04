@@ -357,13 +357,29 @@ if [ -n "$NTP_JSON" ]; then
   NTP_STATE=$(printf '%s' "$NTP_JSON" | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || true)
   NTP_SRC=$(printf '%s' "$NTP_JSON" | grep -o '"source":"[^"]*"' | cut -d'"' -f4 || true)
   NTP_OFF=$(printf '%s' "$NTP_JSON" | grep -o '"offset_ms":[-0-9]*' | cut -d: -f2 || true)
+  # 网关直接下发时钟可信结论（与调度器同一判据），优先于本地按偏差猜测；
+  # 旧版本网关无该字段，回退到「synced + 偏差」推断。
+  NTP_TRUST=$(printf '%s' "$NTP_JSON" | grep -o '"clock_trusted":[a-z]*' | cut -d: -f2 || true)
+  NTP_REASON=$(printf '%s' "$NTP_JSON" | grep -o '"clock_untrust_reason":"[^"]*"' | cut -d'"' -f4 || true)
+  if [ "$NTP_TRUST" = "false" ]; then
+    warn "系统时钟不可信（${NTP_REASON:-原因未下发}）：计划任务已暂停，校时恢复后自动重排"
+    CLOCK_VERDICT="${CLOCK_VERDICT:-正常}；系统时钟不可信（计划任务暂停）"
+    CLOCK_TRUST_DONE=1
+  elif [ "$NTP_TRUST" = "true" ]; then
+    ok "系统时钟可信（计划任务正常运行）"
+    CLOCK_TRUST_DONE=1
+  else
+    CLOCK_TRUST_DONE=0
+  fi
   NTP_ABS_OFF=${NTP_OFF:-0}
   if [ "$NTP_ABS_OFF" -lt 0 ] 2>/dev/null; then NTP_ABS_OFF=$((-NTP_ABS_OFF)); fi
   case "$NTP_STATE" in
     synced)
       if [ "$NTP_ABS_OFF" -gt 300000 ] 2>/dev/null; then
         warn "网关 NTP 偏差 ${NTP_OFF} ms（>5 分钟）：系统时钟不可信，计划任务处于暂停状态"
-        CLOCK_VERDICT="${CLOCK_VERDICT:-正常}；NTP 偏差 ${NTP_OFF} ms（计划任务暂停）"
+        if [ "${CLOCK_TRUST_DONE:-0}" = "0" ]; then
+          CLOCK_VERDICT="${CLOCK_VERDICT:-正常}；NTP 偏差 ${NTP_OFF} ms（计划任务暂停）"
+        fi
       else
         ok "网关 NTP 已同步（来源 ${NTP_SRC:-NTP}，偏差 ${NTP_OFF:-0} ms）"
       fi

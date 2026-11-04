@@ -39,6 +39,19 @@ pub fn clock_untrust_reason(now_ms: i64, ntp_gap_ms: Option<i64>) -> Option<Stri
     }
 }
 
+/// 计算「此刻」的时钟可信度，返回不可信原因（`None` = 可信）。
+///
+/// 用于 API / 自检等**只读**场景：只看当前墙钟与最近一次 NTP 偏差，不考虑跨 tick
+/// 的墙钟跳变。调度器用 [`ClockGate`]，额外处理跳变导致的偏差失效。
+pub fn evaluate_clock(now_ms: i64, ntp: NtpObservation) -> Option<String> {
+    let gap = if ntp.synced && ntp.last_sync_ms.is_some() {
+        Some(ntp.offset_ms)
+    } else {
+        None
+    };
+    clock_untrust_reason(now_ms, gap)
+}
+
 /// 单次 tick 观察到的校时状态（与具体 `NtpStatus` 解耦，便于纯逻辑单测与复用）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NtpObservation {
@@ -359,5 +372,23 @@ mod tests {
             gate.step(T2026 + 15_000, ntp_unsynced()),
             ClockAction::RunTasks
         );
+    }
+
+    #[test]
+    fn evaluate_clock_matches_gate_verdict() {
+        // 只读判据（API/自检）应与状态机的稳定态结论一致
+        assert!(evaluate_clock(T2026, ntp_unsynced()).is_none());
+        assert!(evaluate_clock(0, ntp_unsynced()).is_some());
+        assert!(evaluate_clock(T2026, ntp_synced(T2026, MAX_NTP_OFFSET_MS + 1)).is_some());
+        // 未同步时忽略 offset，避免用「上次失败校时」的陈旧值误判
+        assert!(evaluate_clock(
+            T2026,
+            NtpObservation {
+                synced: false,
+                offset_ms: 3_600_000,
+                last_sync_ms: Some(T2026)
+            }
+        )
+        .is_none());
     }
 }
