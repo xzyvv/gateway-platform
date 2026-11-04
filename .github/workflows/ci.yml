@@ -469,12 +469,14 @@ jobs:
             cc: aarch64-linux-gnu-gcc
             pkg: gcc-aarch64-linux-gnu
             qemu: qemu-aarch64-static
+            qemu_alt: qemu-aarch64
             sysroot: /usr/aarch64-linux-gnu
             loader: ld-linux-aarch64.so.1
           - target: armv7-unknown-linux-gnueabihf
             cc: arm-linux-gnueabihf-gcc
             pkg: gcc-arm-linux-gnueabihf
             qemu: qemu-arm-static
+            qemu_alt: qemu-arm
             sysroot: /usr/arm-linux-gnueabihf
             loader: ld-linux-armhf.so.3
     steps:
@@ -531,7 +533,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y qemu-user-static libc6-dev-arm64-cross libc6-dev-armhf-cross
+          # 目标 ABI 的 libc 头与动态链接器。
+          # 这两个包通常已被上面的交叉 gcc 包顺带装上，装不上不直接失败——
+          # 下面的 loader 存在性检查才是真正的判据。
+          sudo apt-get install -y libc6-dev-arm64-cross libc6-dev-armhf-cross \
+            || echo "警告：额外的 libc 交叉包安装失败，以 loader 检查为准"
+
           # 目标 ABI 的动态链接器必须在 sysroot 里。缺了它，QEMU 报的正是
           # "Error loading shared library"——那正是本作业要抓的失败模式，
           # 所以缺 loader 要在这里就报出来，而不是等到运行时才发现。
@@ -539,7 +546,60 @@ jobs:
             echo "sysroot 缺少动态链接器: ${{ matrix.sysroot }}/lib/${{ matrix.loader }}" >&2
             exit 1
           }
-          ${{ matrix.qemu }} --version | head -n 1
+
+          # 解析出实际可用的 qemu 可执行文件。静态版（*-static）与动态版
+          # （qemu-aarch64 / qemu-arm）在不同发行版里的归属包不同，
+          # 两种都能用，就近选一个存在的。
+          find_qemu() {
+            local cand
+            for cand in "${{ matrix.qemu }}" "${{ matrix.qemu_alt }}"; do
+              if command -v "$cand" >/dev/null 2>&1; then
+                command -v "$cand"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          # Ubuntu 26.04 起 qemu-user-static 是"虚拟包"（apt 直接报
+          # "Package 'qemu-user-static' has no installation candidate"），
+          # 实际由 qemu-user-binfmt / qemu-user-binfmt-hwe 提供；
+          # 动态版可执行文件则来自 qemu-user。
+          # 逐个候选包尝试：装上后必须真的能找到可执行文件才算成功。
+          qemu_bin=""
+          installed=""
+          for pkg in qemu-user-binfmt qemu-user-binfmt-hwe qemu-user-static qemu-user; do
+            if sudo apt-get install -y "$pkg"; then
+              if qemu_bin="$(find_qemu)"; then
+                installed="$pkg"
+                break
+              fi
+              echo "包 $pkg 装上了但没提供 qemu 可执行文件，继续尝试下一个" >&2
+            else
+              echo "包 $pkg 不可用，尝试下一个候选" >&2
+            fi
+          done
+          [ -n "$qemu_bin" ] || { echo "没有可用的 QEMU 用户态模拟器" >&2; exit 1; }
+          echo "已安装 QEMU 包: $installed"
+          echo "QEMU_BIN=$qemu_bin"
+          # 用变量接住再取首行：管道 + pipefail 下 head 提前退出会给 qemu 发 SIGPIPE，
+          # 导致这一步误判失败。
+          qemu_ver="$("$qemu_bin" --version 2>&1 || true)"
+          printf '%s\n' "$qemu_ver" | head -n 1
+          echo "QEMU_BIN=$qemu_bin" >> "$GITHUB_ENV"
+
+          # cargo 的 target runner 只接受"可执行文件路径"，不能带参数
+          # （"qemu-aarch64 -L /sysroot" 会被当成一个字面路径去找）。
+          # 故生成一个固定 sysroot 的包装脚本，让 cargo 直接跑这个脚本。
+          runner_sh="$RUNNER_TEMP/qemu-runner.sh"
+          cat > "$runner_sh" << EOF
+          #!/usr/bin/env bash
+          exec "$qemu_bin" -L "${{ matrix.sysroot }}" "\$@"
+          EOF
+          chmod +x "$runner_sh"
+          runner_ver="$("$runner_sh" --version 2>&1 || true)"
+          printf '%s\n' "$runner_ver" | head -n 1
+          echo "QEMU_RUNNER=$runner_sh" >> "$GITHUB_ENV"
 
       - name: QEMU runtime smoke (ARM binary actually loads and runs)
         run: |
@@ -551,10 +611,12 @@ jobs:
           # 把配置路径指向不存在的文件：gatewayd 会因配置缺失而退出。
           # 退出本身不是失败，要点在于它能走到 Rust 代码里——
           # 若动态链接失败，QEMU 会在进入 main 之前就报 loader 错误。
+          # 若它反而用默认配置起来了，timeout 会把它掐掉（rc=124），
+          # 同样说明装载成功。
           set +e
           out=$(cd "$WORK" && GATEWAY_CONFIG_PATH="$WORK/absent-config.json" \
-                timeout --signal=KILL 120 \
-                "${{ matrix.qemu }}" -L "${{ matrix.sysroot }}" "$BIN" 2>&1)
+                timeout --signal=KILL 60 \
+                "$QEMU_BIN" -L "${{ matrix.sysroot }}" "$BIN" 2>&1)
           rc=$?
           set -e
           echo "--- qemu exit=$rc ---"
@@ -587,7 +649,8 @@ jobs:
           export "CC_${TARGET//-/_}=${{ matrix.cc }}"
           export "CARGO_TARGET_$(echo "$TARGET" | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.cc }}"
           # cargo 用这个 runner 启动交叉编译出的测试二进制，QEMU 负责实际执行。
-          export "CARGO_TARGET_$(echo "$TARGET" | tr 'a-z-' 'A-Z_')_RUNNER=${{ matrix.qemu }} -L ${{ matrix.sysroot }}"
+          # runner 必须是无参数的脚本路径（见上一步生成的包装脚本）。
+          export "CARGO_TARGET_$(echo "$TARGET" | tr 'a-z-' 'A-Z_')_RUNNER=$QEMU_RUNNER"
 
           # 断言"确实跑了测试"：过滤条件失配时 cargo 会报 0 passed 并返回 0，
           # 那样这道门禁会静默退化成空跑——必须显式卡住。
@@ -614,6 +677,10 @@ jobs:
           #    在 ARM 上真跑一遍，确认队列 / RealtimeBus / 转换链在目标架构上成立。
           run_tests vpp cargo test -p gateway-core --target "$TARGET" --locked \
             --test virtual_point_pipeline
+        env:
+          # 测试代码里的 warning 不该阻断"在 ARM 上能不能跑"这个判定；
+          # 生产代码的 warning 仍由 check job 的 -D warnings 严格把关。
+          RUSTFLAGS: ""
 
   # L1: encryption feature 编译验证。
   # 生产构建通过 `--features encryption` 启用 SQLite 加密（bundled-sqlcipher），但历史上
