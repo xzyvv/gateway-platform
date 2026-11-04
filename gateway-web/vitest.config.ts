@@ -34,6 +34,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // 单例超时：默认 5s 在 CI 上不够（4 worker + v8 覆盖率插桩，实测 DataTable /
+    // RuntimeConfig / BatchReadTest 三处重型 mount 恰好卡在 5s 边界超时，本地同版本全绿）。
+    // 放宽到 15s：只影响真失败时的等待时间，不影响通过的用例耗时。
+    testTimeout: 15_000,
     // vmThreads 池：worker 复用 + VM context 保持逐文件隔离，显著降低 jsdom
     // 环境重建开销（实测 jsdom 创建曾占总时长 57%）。不用 isolate:false
     // （跨文件共享环境）——本仓测试大量依赖 localStorage/全局桩，共享会互相污染。

@@ -8,6 +8,11 @@ on:
   # 支持手动触发完整 bench job（见 bench job 的 if 条件）
   workflow_dispatch:
 
+# 同一个 ref 只保留最新一次运行：连推时自动取消旧运行，避免多份 check/e2e 并行抢 runner
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings

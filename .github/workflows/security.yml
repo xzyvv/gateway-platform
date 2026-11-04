@@ -10,6 +10,11 @@ on:
     - cron: "0 2 * * 1"
   workflow_dispatch:
 
+# 同一个 ref 只保留最新一次运行（同 ci.yml 的取舍）
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
