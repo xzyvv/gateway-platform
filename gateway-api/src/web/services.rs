@@ -78,10 +78,7 @@ impl WordProbe {
     pub(crate) fn new(bus: &BusConfig, timeout_ms: u64) -> Self {
         // mc/fins 均未启用时，唯一使用 timeout 的分支会被 cfg 剔除，
         // 此时该局部变量在 `-D warnings` 下会触发 unused variable。
-        #[cfg_attr(
-            not(any(feature = "mc", feature = "fins")),
-            allow(unused_variables)
-        )]
+        #[cfg_attr(not(any(feature = "mc", feature = "fins")), allow(unused_variables))]
         let timeout = Duration::from_millis(timeout_ms);
         match bus.protocol.as_str() {
             #[cfg(feature = "mc")]
@@ -110,10 +107,7 @@ impl WordProbe {
     /// 探测一个字；`Some(Ok((结束码, 值)))` 表示拿到应答（值 None=结束码非 0）。
     /// `Some(Err(说明))` 表示链路/帧级失败；`None` 表示该构建不支持此协议。
     // 同 `new`：mc/fins 均未启用时三个入参只服务于被 cfg 剔除的分支。
-    #[cfg_attr(
-        not(any(feature = "mc", feature = "fins")),
-        allow(unused_variables)
-    )]
+    #[cfg_attr(not(any(feature = "mc", feature = "fins")), allow(unused_variables))]
     pub(crate) async fn probe(
         &self,
         station: i32,

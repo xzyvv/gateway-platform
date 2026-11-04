@@ -366,7 +366,12 @@ async fn io_status_and_control() {
     if status == StatusCode::OK {
         assert_eq!(body["data"]["on"], true, "写入成功应回报输出状态: {}", body);
     } else {
-        assert_ne!(status, StatusCode::OK, "无 GPIO 硬件时不得假装成功: {}", body);
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "无 GPIO 硬件时不得假装成功: {}",
+            body
+        );
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{}", body);
         assert_eq!(body["code"], 2000, "GPIO 不可用应报 IO 错误码: {}", body);
         assert!(
