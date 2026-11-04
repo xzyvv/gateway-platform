@@ -15,9 +15,12 @@
 
 mod base;
 mod modbus_sink;
+// 依赖北向 OPC UA Server，故与之同一 feature 开关
+#[cfg(feature = "opcua-server")]
 mod opcua_sink;
 
 pub use modbus_sink::ModbusSink;
+#[cfg(feature = "opcua-server")]
 pub use opcua_sink::OpcUaSink;
 
 /// sink 内部 mpsc 通道默认容量

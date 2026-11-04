@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::engine::model::DataPoint;
 use crate::north::server::modbus_server::ModbusServer;
+#[cfg(feature = "opcua-server")]
 use crate::north::server::opcua_server::{OpcUaServer, OpcUaServerConfig};
 
 use super::*;
@@ -10,6 +11,7 @@ fn test_metrics() -> Arc<crate::engine::metrics::Metrics> {
     Arc::new(crate::engine::metrics::Metrics::new())
 }
 
+#[cfg(feature = "opcua-server")]
 #[tokio::test]
 async fn test_opcua_sink_overflow_drops_without_blocking() {
     let srv = Arc::new(OpcUaServer::new(OpcUaServerConfig::default(), None));
@@ -46,6 +48,7 @@ async fn test_modbus_sink_overflow_drops_without_blocking() {
     );
 }
 
+#[cfg(feature = "opcua-server")]
 #[tokio::test]
 async fn test_opcua_sink_metrics_incremented() {
     // 验证：单次 sink.send() 必然累加 sink_send_total +1
@@ -98,6 +101,7 @@ async fn test_modbus_sink_metrics_send_counted() {
 // test_modbus_sink_metrics_send_counted 中（send 路径覆盖 + dropped 是路径可能发生也可能不发生）。
 // 强行断言 dropped 可能因运行时差异（slot 漏调、current_thread runtime 行为）而 flaky。
 
+#[cfg(feature = "opcua-server")]
 #[tokio::test]
 async fn test_opcua_sink_channel_depth_reported() {
     // 验证：send 后 metrics.sink_channel_depth 被更新（非负）
@@ -132,9 +136,12 @@ async fn test_modbus_sink_channel_depth_reported() {
 
 #[tokio::test]
 async fn test_sink_names() {
-    let opcua_srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
-    let sink = OpcUaSink::new(Arc::new(opcua_srv), test_metrics());
-    assert_eq!(sink.name(), "opcua");
+    #[cfg(feature = "opcua-server")]
+    {
+        let opcua_srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
+        let sink = OpcUaSink::new(Arc::new(opcua_srv), test_metrics());
+        assert_eq!(sink.name(), "opcua");
+    }
     let mb_srv = ModbusServer::new(crate::north::server::ModbusServerConfig::default());
     let sink = ModbusSink::new(Arc::new(mb_srv), test_metrics());
     assert_eq!(sink.name(), "modbus");
@@ -144,6 +151,7 @@ async fn test_sink_names() {
 ///
 /// 缺陷背景：原实现恒返回 `connected: true`（假健康），server 未启动 / 启动失败 /
 /// 已停止时监控仍显示健康，而外部客户端实际读不到地址空间数据。
+#[cfg(feature = "opcua-server")]
 #[tokio::test]
 async fn test_opcua_sink_health_reflects_server_running() {
     use crate::north::server::Server;

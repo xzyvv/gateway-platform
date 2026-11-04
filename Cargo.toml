@@ -61,7 +61,10 @@ flate2 = "1.0"
 # OTA 差分升级：bsdiff 4.x 兼容的补丁应用（纯 Rust，无 C/交叉编译负担）
 qbsdiff = { version = "1.4", default-features = false }
 libc = "0.2"
-async-opcua = { version = "0.19", features = ["server", "client"] }
+# OPC UA：子特性 server / client 由 gateway-core 的 feature 决定
+# （opcua-server / opcua-client），此处不要写死 features —— 一旦在 workspace
+# 声明，所有引用方都会无条件打开 server+client，协议裁剪直接失效。
+async-opcua = { version = "0.19" }
 rcgen = "0.13"
 pem = "3"
 # S4: 加载系统 CA 证书（mTLS 场景下避免 ca 为空导致验证失败）

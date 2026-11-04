@@ -14,7 +14,9 @@ FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」：feature
 | `modbus` | Modbus RTU/TCP | 串行 + TCP | — | 默认 / 全部 SKU |
 | `dlt645` | DL/T 645 电力仪表 | 串行 (RS485) | — | 默认 / 标准版 / 电力版 / 精简版 |
 | `cjt188` | CJ/T 188 水气热仪表 | 串行 (RS485) | — | 默认 / 标准版 / 楼宇版 / 精简版 |
-| `opcua` | OPC UA 客户端 | TCP | — | 默认 / 标准版 / 楼宇版 / 电力版 / PLC 版 |
+| `opcua` | OPC UA **双向合并别名**（= `opcua-client` + `opcua-server`） | TCP | — | 默认 / 标准版 / 楼宇版 / 电力版 / PLC 版 |
+| `opcua-client` | OPC UA **南向客户端**（采集外部 OPC UA 服务端） | TCP | — | 需要采集 UA 设备时 |
+| `opcua-server` | OPC UA **北向服务端**（把点位暴露给 SCADA） | TCP | — | 需要给 SCADA/组态看数时 |
 | `iec104` | IEC 60870-5-104 | TCP | — | 默认 / 标准版 / 电力版 |
 | `bacnet` | BACnet/IP | UDP | — | 楼宇版 |
 | `s7comm` | S7comm 西门子 PLC | TCP | — | PLC 版 |
@@ -30,6 +32,17 @@ FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」：feature
 | `sku-minimal` | 行业 SKU：精简版 | — | modbus/dlt645/cjt188 | 行业发行 |
 
 > `gpio` 是点位级协议，不走 Collector 注册流程，始终编译，不受 feature gate 控制，随所有 SKU 交付。
+
+**OPC UA 为什么拆两向**：南向 Client（`south/protocol/opcua`）与北向 Server
+（`north/server/opcua_server` + `north/server_sinks/opcua_sink`）客户群几乎不重叠，
+且分别只拉 `async-opcua` 的不同子 crate（client → `async-opcua-client`；
+server → `async-opcua-server`、`async-opcua-nodes`、`async-opcua-core-namespace`）。
+此前 `async-opcua` 是非 optional 硬依赖、北向 Server 又无 `cfg` 门控，
+导致 5 个 SKU 依赖树完全相同（335 crate）、体积只差 ≤11 KB；
+拆分后 `sku-minimal` 依赖树降到 288 crate，不再链接任何 OPC UA 代码。
+
+> 未编译 `opcua-server` 的构建若在配置里启用了北向 OPC UA Server，启动时会打
+> `warn`（而不是静默不启动）——现场据此判断「是二进制没带能力」还是「网络问题」。
 
 ## 非协议 Feature
 

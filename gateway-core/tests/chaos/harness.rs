@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 use std::sync::Arc;
+#[cfg(feature = "opcua-server")]
 use std::time::Duration;
 
 use gateway_core::engine::metrics::Metrics;
@@ -1906,8 +1907,10 @@ pub fn mstp_read_property_ack(
 // 故在 harness 内以相同 API 起真服务端；节点命名空间 index 由服务端动态分配，
 // 通过 `address()` 暴露给采集器，避免硬编码 ns。
 
+#[cfg(feature = "opcua-server")]
 const OPCUA_E2E_NAMESPACE_URI: &str = "urn:gateway-e2e";
 
+#[cfg(feature = "opcua-server")]
 pub struct OpcUaTestServer {
     /// 采集器连接端点（opc.tcp://127.0.0.1:PORT）
     pub endpoint: String,
@@ -1918,6 +1921,7 @@ pub struct OpcUaTestServer {
     _task: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+#[cfg(feature = "opcua-server")]
 impl OpcUaTestServer {
     pub async fn start() -> std::io::Result<Self> {
         use opcua::crypto::SecurityPolicy;
@@ -2039,6 +2043,7 @@ impl OpcUaTestServer {
     }
 }
 
+#[cfg(feature = "opcua-server")]
 impl Drop for OpcUaTestServer {
     fn drop(&mut self) {
         self.handle.cancel();

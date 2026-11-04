@@ -36,7 +36,11 @@ all-protocols = [
 modbus = ["gateway-core/modbus", "gateway-api/modbus"]
 dlt645 = ["gateway-core/dlt645", "gateway-api/dlt645"]
 cjt188 = ["gateway-core/cjt188", "gateway-api/cjt188"]
-opcua = ["gateway-core/opcua", "gateway-api/opcua"]
+## OPC UA 两向拆分：client = 南向采集外部服务端，server = 北向暴露给 SCADA。
+## `opcua` 为合并别名，保持既有构建命令与 SKU 定义不变。
+opcua = ["opcua-client", "opcua-server"]
+opcua-client = ["gateway-core/opcua-client", "gateway-api/opcua-client"]
+opcua-server = ["gateway-core/opcua-server", "gateway-api/opcua-server"]
 iec104 = ["gateway-core/iec104", "gateway-api/iec104"]
 bacnet = ["gateway-core/bacnet", "gateway-api/bacnet"]
 s7comm = ["gateway-core/s7comm", "gateway-api/s7comm"]

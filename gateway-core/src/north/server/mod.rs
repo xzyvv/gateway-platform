@@ -18,6 +18,8 @@ use crate::engine::error::GatewayResult;
 pub(crate) mod modbus_gateway_bridge;
 pub(crate) mod modbus_server;
 pub(crate) mod mqtt_packet_passthrough;
+// 北向 OPC UA Server：仅在 opcua-server feature 下编译（体积裁剪）
+#[cfg(feature = "opcua-server")]
 pub(crate) mod opcua_server;
 pub(crate) mod registry;
 

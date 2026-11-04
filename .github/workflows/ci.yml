@@ -107,7 +107,10 @@ jobs:
       # 类型假设错误都会在生产做轻量化部署时才暴露。本矩阵覆盖四条代表性路径：
       #   1) --no-default-features：仅零依赖，剥离所有协议
       #   2) --features modbus,dlt645：常见数据链路最小组合
-      #   3) --features opcua：最重的 NorthConnector 服务端，单独验依赖隔离
+      #   3) --features opcua / opcua-client / opcua-server：OPC UA 已按南向
+      #      Client 与北向 Server 拆分（两者拉 async-opcua 的不同子 crate），
+      #      三个组合各自验证——`opcua` 是合并别名，client / server 单独路径
+      #      最容易漏挂 cfg（北向 server 模块、opcua_sink、chaos 的测试服务端）。
       #   4) --features bacnet,bacnet-mstp：BACnet IP+MSTP 双栈（含依赖关系）
       #   5) --features fins：FINS（退役观察）单独路径——它已移出默认发行集，
       #      注册表条目按 #[cfg(feature = "fins")] 门控；不带该 feature 的组合
@@ -135,6 +138,8 @@ jobs:
           cargo check -p gateway-core --all-targets --no-default-features --quiet
           cargo check -p gateway-core --all-targets --no-default-features --features modbus,dlt645 --quiet
           cargo check -p gateway-core --all-targets --no-default-features --features opcua --quiet
+          cargo check -p gateway-core --all-targets --no-default-features --features opcua-client --quiet
+          cargo check -p gateway-core --all-targets --no-default-features --features opcua-server --quiet
           cargo check -p gateway-core --all-targets --no-default-features --features bacnet,bacnet-mstp --quiet
           cargo check -p gateway-core --all-targets --no-default-features --features fins --quiet
         env:

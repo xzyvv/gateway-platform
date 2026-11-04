@@ -13,7 +13,9 @@ pub mod template;
 pub mod webhook;
 
 pub use conversion::ConversionManager;
-pub use server_sinks::{ModbusSink, OpcUaSink};
+pub use server_sinks::ModbusSink;
+#[cfg(feature = "opcua-server")]
+pub use server_sinks::OpcUaSink;
 pub use sim_consumer::{SimConsumer, SimConsumerStats};
 
 use crate::engine::error::GatewayResult;

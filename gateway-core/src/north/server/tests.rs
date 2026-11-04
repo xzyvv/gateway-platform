@@ -10,8 +10,10 @@
 use super::modbus_gateway_bridge::*;
 use super::modbus_server::*;
 use super::mqtt_packet_passthrough::*;
+#[cfg(feature = "opcua-server")]
 use super::opcua_server::*;
 use super::*;
+#[cfg(feature = "opcua-server")]
 use crate::engine::model::DataPoint;
 
 // ===== mod.rs: Server trait / 配置 / 映射 =====
@@ -241,6 +243,7 @@ fn exception_format() {
 
 // ===== opcua_server.rs: OPC UA Server =====
 
+#[cfg(feature = "opcua-server")]
 #[test]
 fn node_register_and_update() {
     let cfg = OpcUaServerConfig::default();
@@ -261,6 +264,7 @@ fn node_register_and_update() {
 /// 缺陷背景：builder 未设置 `discovery_urls` 时，async-opcua 的
 /// `ServerConfig::validate()` 会报 “Discovery urls not set” 使 `build()` 失败，
 /// 服务静默起不来（进程不崩溃、日志还谎报 started）。本测试确保修复不回归。
+#[cfg(feature = "opcua-server")]
 #[tokio::test]
 async fn opcua_server_start_reaches_running() {
     use std::sync::Arc;
@@ -306,6 +310,7 @@ async fn opcua_server_start_reaches_running() {
     );
 }
 
+#[cfg(feature = "opcua-server")]
 #[test]
 fn apply_points_batch() {
     let cfg = OpcUaServerConfig::default();
@@ -346,6 +351,7 @@ fn apply_points_batch() {
     assert_eq!(srv.nodes.read().get("b").unwrap().value, 2.0);
 }
 
+#[cfg(feature = "opcua-server")]
 #[test]
 fn parse_endpoint_formats() {
     assert_eq!(

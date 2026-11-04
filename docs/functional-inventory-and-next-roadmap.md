@@ -147,10 +147,14 @@
 1. ~~**缺真实体积数据**~~ **已闭环**：CI 新增 `sku-size-matrix` 作业（`if: push || workflow_dispatch`，
    纯观测不阻塞 PR），每次 main 合并后自动跑 5 个 SKU 的 release 构建并出表，
    产物见 Actions artifact `sku-size-matrix`。数据来源见上表。
-2. **`opcua` feature 同时打包南向 Client（`south/protocol/opcua`）与北向 Server（`north/server/opcua_server.rs`）**，
-   两者客户群几乎不重叠（现场多只要「采集 + MQTT 上送」）；拆成 `opcua-client` / `opcua-server` 是体积上最大的一个杠杆。
-   实测佐证：北向 Server 无条件编译，导致 5 个 SKU 依赖树完全一致（335 crate），
-   仅此一项就锁死了「按行业切体积」的可能性。
+2. ~~**`opcua` feature 同时打包南向 Client（`south/protocol/opcua`）与北向 Server（`north/server/opcua_server.rs`）**~~ **已闭环**：
+   `async-opcua` 改为 optional，拆成 `opcua-client`（`async-opcua/client`）与
+   `opcua-server`（`async-opcua/server`）两个 feature，`opcua` 保留为合并别名（既有构建命令不变）。
+   北向 `opcua_server` / `opcua_sink` / 注册表工厂 / 相关测试与 chaos 测试服务端全部挂
+   `#[cfg(feature = "opcua-server")]`；裁剪构建若配置里启用北向 UA Server，启动时打 `warn`
+   而不是静默不启动（同 §8.4 时区隐患的处理口径）。
+   实测：`sku-minimal` 依赖树 **335 → 288 crate**，不再链接 `async-opcua` 及其服务端子 crate；
+   `sku-*` 体积新数值由下一次 `sku size matrix` 作业回填。
 3. **行业 SKU 与授权档目前完全独立**（`sku-minimal` 也能配 ultra 授权），缺推荐组合；
    `tier_quotas` 的默认值也未随 SKU 场景给建议值。
 

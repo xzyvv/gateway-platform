@@ -87,6 +87,9 @@ impl Default for ServerRegistry {
 // ===== 内置 Server 工厂函数 =====
 
 /// OPC UA Server 工厂（可选，由 config.opcua.enabled 控制）
+///
+/// 仅在 `opcua-server` feature 下编译；裁剪构建的占位实现见下方同名函数。
+#[cfg(feature = "opcua-server")]
 fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
     use crate::engine::supervision::spawn_supervised;
     use crate::north::server::opcua_server::{OpcUaServer, OpcUaServerConfig, OpcUaWriteHandler};
@@ -161,6 +164,22 @@ fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
     );
 
     Some(opcua_server)
+}
+
+/// 未编译 `opcua-server` 的构建：配置若启用北向 OPC UA Server，必须显式告警。
+///
+/// 静默不启动会让运维以为「配置生效了、SCADA 连不上是网络问题」，
+/// 因此把「这个二进制没带该能力」写进日志，并给出可执行的修复方式。
+#[cfg(not(feature = "opcua-server"))]
+fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
+    if ctx.config.opcua.as_ref().is_some_and(|c| c.enabled) {
+        tracing::warn!(
+            "config enables north OPC UA server, but this binary was compiled without feature \
+             `opcua-server`: the server will NOT start. Rebuild with --features opcua-server, \
+             or remove the `opcua` section from config."
+        );
+    }
+    None
 }
 
 /// Modbus Server 工厂（可选，由 config.modbus_server.enabled 控制）

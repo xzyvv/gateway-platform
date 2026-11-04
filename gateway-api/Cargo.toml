@@ -75,7 +75,11 @@ all-protocols = [
 modbus = ["gateway-core/modbus"]
 dlt645 = ["gateway-core/dlt645"]
 cjt188 = ["gateway-core/cjt188"]
-opcua = ["gateway-core/opcua"]
+## OPC UA 两向拆分（与 gateway-core 同口径）：client = 南向采集，server = 北向暴露。
+## `opcua` 为合并别名，保持既有构建命令不变。
+opcua = ["opcua-client", "opcua-server"]
+opcua-client = ["gateway-core/opcua-client"]
+opcua-server = ["gateway-core/opcua-server"]
 iec104 = ["gateway-core/iec104"]
 bacnet = ["gateway-core/bacnet"]
 s7comm = ["gateway-core/s7comm"]

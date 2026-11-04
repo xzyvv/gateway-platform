@@ -216,11 +216,15 @@ async fn drop_aborts_both_tasks_and_clears_connected() {
 // diagnostics_enabled(true)）中的 CurrentSessionCount——不去复用「第二个会话
 // 能否建链」这种判据，因为客户端在 BadTooManySessions 下会按指数退避重试，
 // 连接调用要十几秒才返回，无法在秒级窗口内稳定观测。
+#[cfg(feature = "opcua-server")]
 use opcua::server::{ServerBuilder, ServerHandle};
+#[cfg(feature = "opcua-server")]
 use opcua::types::{VariableId, Variant};
+#[cfg(feature = "opcua-server")]
 use tokio::net::TcpListener;
 
 /// 读取服务端当前会话数（须先 `diagnostics_enabled(true)`）
+#[cfg(feature = "opcua-server")]
 fn server_session_count(handle: &ServerHandle) -> u32 {
     let dv = handle
         .info()
@@ -233,6 +237,7 @@ fn server_session_count(handle: &ServerHandle) -> u32 {
     }
 }
 
+#[cfg(feature = "opcua-server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drop_delivers_close_session_to_real_server() {
     // 进程内真实 OPC UA 服务端，开启 diagnostics 以便直接观测会话数

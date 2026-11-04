@@ -2198,7 +2198,8 @@ async fn scenario_bacnet_mstp_anomaly_family() {
 /// `OpcUaCollector` 作为真客户端，完整走完 `connect`（端点匹配 + 匿名会话
 /// + wait_for_connection）与 `read`（NodeId 解析 + Read 服务 + DataValue 提取），
 /// 并验证同一会话可连续读取、值随服务端更新变化。
-#[cfg(feature = "opcua")]
+/// 需要真实 OPC UA **服务端**（harness 里用 ServerBuilder 起），故要求 opcua-server。
+#[cfg(all(feature = "opcua", feature = "opcua-server"))]
 #[tokio::test]
 async fn scenario_opcua_client_end_to_end_roundtrip() {
     use gateway_core::south::protocol::opcua::OpcUaCollector;

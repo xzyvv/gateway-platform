@@ -35,8 +35,10 @@ flate2 = { workspace = true }
 # OTA 差分升级：bsdiff 4.x 兼容补丁应用（纯 Rust）
 qbsdiff = { workspace = true }
 libc = { workspace = true }
-# F2: OPC UA Server（freeopcua async-opcua，纯 Rust + tokio 原生异步）
-async-opcua = { workspace = true }
+# F2: OPC UA（async-opcua，纯 Rust + tokio 原生异步）
+# optional：由 opcua-client / opcua-server 两个 feature 各自激活，
+# 裁剪构建（如 sku-minimal）完全不链接 async-opcua 及其依赖树。
+async-opcua = { workspace = true, optional = true }
 # X.509 证书管理（自签名生成 + PEM/DER 编解码，纯 Rust，无 OpenSSL 依赖）
 rcgen = { workspace = true }
 pem = { workspace = true }
@@ -105,7 +107,16 @@ all-protocols = ["modbus", "dlt645", "cjt188", "opcua", "iec104", "bacnet", "s7c
 modbus = []
 dlt645 = []
 cjt188 = []
-opcua = []
+## ===== OPC UA 双向拆分（体积杠杆）=====
+## 南向 Client（south/protocol/opcua，采集外部 OPC UA 服务端）与
+## 北向 Server（north/server/opcua_server，把点位暴露给 SCADA）客户群几乎不重叠：
+## 现场多数只要「采集 + MQTT 上送」。两者各自只拉 async-opcua 的对应子 crate
+## （client → async-opcua-client；server → async-opcua-server + nodes + core-namespace），
+## 因此只装 client 的 SKU 能真正省下服务端那部分依赖。
+## `opcua` 是两个方向的合并别名，保持既有构建命令与 CI 矩阵不变。
+opcua = ["opcua-client", "opcua-server"]
+opcua-client = ["async-opcua/client"]
+opcua-server = ["async-opcua/server"]
 iec104 = []
 bacnet = []
 s7comm = []
@@ -128,7 +139,10 @@ sku-building = ["modbus", "bacnet", "cjt188", "opcua"]
 sku-power = ["modbus", "dlt645", "iec104", "iec101", "opcua"]
 ## PLC 版：主流 PLC 私有协议（西门子 S7comm + 三菱 MC）+ Modbus 兼容接入。
 sku-plc = ["modbus", "s7comm", "mc", "opcua"]
-## 精简版：仅计量三件套（Modbus / DL/T 645 / CJ/T 188），不含 OPC UA 与行业协议。
+## 精简版：仅计量三件套（Modbus / DL/T 645 / CJ/T 188）。
+## 不含 OPC UA：自 opcua-client / opcua-server 拆分后，本 SKU 不再链接
+## async-opcua 依赖树（此前北向 OPC UA Server 无条件编译，精简版也带着它）。
+## 若某项目需要「精简采集 + 给 SCADA 看数」，按需追加 `opcua-client` 或 `opcua-server`。
 sku-minimal = ["modbus", "dlt645", "cjt188"]
 
 [dev-dependencies]
