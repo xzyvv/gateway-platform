@@ -1117,6 +1117,63 @@ jobs:
             exit 1
           fi
 
+      # 受限资源运行（C）：工业小内存机型（256 MB）才是真实目标。
+      # RSS 门禁只回答「用了多少」，不回答「给 256 MB 够不够」——两种失败模式必须提前知道：
+      #   优雅降级（限流/拒绝新连接）  vs  被 cgroup OOM 直接杀进程。
+      # 在真实 systemd 服务上加 MemoryMax + CPUQuota 后继续观察：
+      #   进程存活、/health/live 仍 200、cgroup 未发生 oom_kill。
+      - name: Verify under memory cap (256M + 50% CPU)
+        run: |
+          set -euo pipefail
+          CAP_MB=256
+          sudo systemctl set-property gateway MemoryMax=${CAP_MB}M CPUQuota=50%
+          sleep 3
+          PID="$(sudo systemctl show -p MainPID --value gateway)"
+          if [ "$PID" = "0" ] || [ ! -d "/proc/$PID" ]; then
+            echo "限制生效后 gateway 已不在运行（疑似被 OOM 杀）" >&2
+            sudo systemctl status gateway --no-pager || true
+            sudo journalctl -u gateway -n 60 --no-pager || true
+            exit 1
+          fi
+          # 从 /proc/<pid>/cgroup 反查 cgroup 路径，兼容 cgroup v1/v2 挂载差异
+          CG_REL="$(awk -F: '{print $3}' "/proc/$PID/cgroup" | tail -n1)"
+          CG="/sys/fs/cgroup${CG_REL}"
+          OOM_KILL=0
+          PEAK_KIB=0
+          if [ -f "$CG/memory.events" ]; then
+            OOM_KILL="$(awk '/^oom_kill /{print $2}' "$CG/memory.events" || true)"
+            OOM_KILL="${OOM_KILL:-0}"
+            PEAK_KIB="$(cat "$CG/memory.peak" 2>/dev/null || echo 0)"
+          else
+            echo "::warning::未找到 $CG/memory.events（cgroup v1？），OOM 计数跳过"
+          fi
+          # 在限额下持续打健康接口：能稳定返回 200 说明是「活着的降级」而非卡死
+          FAILS=0
+          for _ in $(seq 1 20); do
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+              http://127.0.0.1:8080/health/live || true)"
+            [ "$CODE" = "200" ] || FAILS=$((FAILS + 1))
+          done
+          PEAK_MIB="$(awk -v k="$PEAK_KIB" 'BEGIN{printf "%.1f", k/1024}')"
+          {
+            echo "### 受限资源运行（MemoryMax=${CAP_MB}M, CPUQuota=50%）"
+            echo ""
+            echo "| 指标 | 实测 | 判定 |"
+            echo "|---|---|---|"
+            echo "| cgroup 峰值内存 | ${PEAK_MIB} MiB | ≤ ${CAP_MB} MiB |"
+            echo "| oom_kill 次数 | ${OOM_KILL} | 0 |"
+            echo "| 健康接口失败数 | ${FAILS}/20 | 0 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${OOM_KILL:-0}" -gt 0 ]; then
+            echo "在 ${CAP_MB} MiB 限额下发生 OOM kill：该机型会直接杀进程（非优雅降级）" >&2
+            exit 1
+          fi
+          if [ "$FAILS" -gt 0 ]; then
+            echo "限额下健康接口失败 ${FAILS}/20：资源受限时服务不可用" >&2
+            exit 1
+          fi
+          echo "✓ ${CAP_MB} MiB / 50% CPU 下存活且健康（峰值 ${PEAK_MIB} MiB）"
+
       # 失败时把现场留证：服务状态 + 日志 + 交付检查单
       - name: Collect systemd snapshot
         if: always()
