@@ -253,7 +253,8 @@ echo "  ✓ 二进制: $BIN_SRC"
 LINK_MODE="unknown"
 GLIBC_REQ=""
 if command -v file >/dev/null 2>&1; then
-  if file "$BIN_SRC" | grep -q "statically linked"; then
+  # x86_64 musl 默认 PIE，`file` 报 "static-pie linked"；非 PIE 报 "statically linked"
+  if file "$BIN_SRC" | grep -Eq "statically linked|static-pie linked"; then
     LINK_MODE="static"
   else
     LINK_MODE="dynamic"

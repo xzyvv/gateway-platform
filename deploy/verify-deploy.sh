@@ -219,7 +219,8 @@ if [ -x "$GW_BIN" ]; then
   LINK_KIND="unknown"
   if command -v file >/dev/null 2>&1; then
     case "$(file "$GW_BIN" 2>/dev/null)" in
-      *"statically linked"*) LINK_KIND="static" ;;
+      # x86_64 musl 默认 PIE，`file` 报 "static-pie linked"；非 PIE 报 "statically linked"
+      *"statically linked"*|*"static-pie linked"*) LINK_KIND="static" ;;
       *"ELF"*) LINK_KIND="dynamic" ;;
     esac
   fi

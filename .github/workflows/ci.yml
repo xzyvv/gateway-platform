@@ -756,7 +756,8 @@ jobs:
           BIN="target/$TARGET/release/gatewayd"
           file "$BIN"
           # 必须是静态链接：动态链接就失去 musl 的全部意义，等于白做
-          file "$BIN" | grep -q "statically linked" || {
+          # x86_64 musl 默认 PIE，`file` 报 "static-pie linked"；非 PIE 报 "statically linked"
+          file "$BIN" | grep -Eq "statically linked|static-pie linked" || {
             echo "✗ 产物不是静态链接，仍会依赖目标机 glibc" >&2
             exit 1
           }
