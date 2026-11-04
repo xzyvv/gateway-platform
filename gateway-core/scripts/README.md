@@ -34,7 +34,7 @@
 
 - `check / clippy / fmt / test`：fmt + check + clippy + test + build + 前端 lint/构建/单测 + ts-rs 校验 + API surface 校验（**其它 job 全部依赖它**）
 - `linux runtime checks`：仅编译 Linux 版本（硬件 watchdog / gpiod）
-- `cross build (aarch64-unknown-linux-gnu)` / `cross build (armv7-unknown-linux-gnueabihf)`：ARM 交叉编译
+- `cross build (aarch64-unknown-linux-gnu)` / `cross build (armv7-unknown-linux-gnueabihf)`：ARM 交叉编译 **+ QEMU 运行时验证**（ARM 产物装载冒烟 + 在 ARM 上真跑架构敏感单测与采集→北向端到端接线测试）
 - `encryption feature build` / `chaos scenarios` / `backend coverage (baseline)` / `performance benchmarks`
 - `e2e smoke`：Playwright 端到端；`deploy smoke (install + verify)`：出厂包安装 + 部署校验；`deploy script lint`：交付脚本静态检查
 - `soak smoke (memory leak gate)`：短时浸泡 + 判定，兜住内存 / 句柄泄漏回退（Linux 走 `scripts/soak.sh`）

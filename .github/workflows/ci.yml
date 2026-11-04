@@ -441,9 +441,15 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             cc: aarch64-linux-gnu-gcc
             pkg: gcc-aarch64-linux-gnu
+            qemu: qemu-aarch64-static
+            sysroot: /usr/aarch64-linux-gnu
+            loader: ld-linux-aarch64.so.1
           - target: armv7-unknown-linux-gnueabihf
             cc: arm-linux-gnueabihf-gcc
             pkg: gcc-arm-linux-gnueabihf
+            qemu: qemu-arm-static
+            sysroot: /usr/arm-linux-gnueabihf
+            loader: ld-linux-armhf.so.3
     steps:
       - uses: actions/checkout@v4
 
@@ -484,6 +490,103 @@ jobs:
             --no-default-features --features sku-standard --locked
           # 产物必须是目标架构的 ELF：只编译通过不代表链接出来的 ABI 正确
           file "target/$TARGET/debug/gatewayd"
+
+      # ===== QEMU 运行时验证 =====
+      # 交叉编译通过 ≠ ARM 上能跑。链接到宿主库、缺 .so、动态链接器不匹配、
+      # 原子指令对齐 / 浮点 ABI 差异，这些都只有"真的跑一下"才暴露，
+      # 而此前 CI 对 ARM 产物只编译、从不运行——真机到手前完全没有运行时保证。
+      # 这里用 QEMU user-mode 模拟器在 CI 里补上这一段：
+      #   1) ARM 产物能被目标 ABI 的动态链接器装载并执行到 Rust 代码；
+      #   2) ARM 上真跑一部分确定性测试（架构敏感的纯函数 + 采集→北向端到端接线）。
+      # QEMU 不是真机，但它是"真机冒烟"之前能拿到的最强保证。
+
+      - name: Install QEMU user-mode emulator and ARM sysroot
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static libc6-dev-arm64-cross libc6-dev-armhf-cross
+          # 目标 ABI 的动态链接器必须在 sysroot 里。缺了它，QEMU 报的正是
+          # "Error loading shared library"——那正是本作业要抓的失败模式，
+          # 所以缺 loader 要在这里就报出来，而不是等到运行时才发现。
+          test -e "${{ matrix.sysroot }}/lib/${{ matrix.loader }}" || {
+            echo "sysroot 缺少动态链接器: ${{ matrix.sysroot }}/lib/${{ matrix.loader }}" >&2
+            exit 1
+          }
+          ${{ matrix.qemu }} --version | head -n 1
+
+      - name: QEMU runtime smoke (ARM binary actually loads and runs)
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          BIN="$GITHUB_WORKSPACE/target/$TARGET/debug/gatewayd"
+          WORK="$(mktemp -d)"
+
+          # 把配置路径指向不存在的文件：gatewayd 会因配置缺失而退出。
+          # 退出本身不是失败，要点在于它能走到 Rust 代码里——
+          # 若动态链接失败，QEMU 会在进入 main 之前就报 loader 错误。
+          set +e
+          out=$(cd "$WORK" && GATEWAY_CONFIG_PATH="$WORK/absent-config.json" \
+                timeout --signal=KILL 120 \
+                "${{ matrix.qemu }}" -L "${{ matrix.sysroot }}" "$BIN" 2>&1)
+          rc=$?
+          set -e
+          echo "--- qemu exit=$rc ---"
+          echo "$out" | tail -n 40
+
+          if printf '%s' "$out" | grep -qiE \
+            'Error loading shared library|cannot open shared object|exec format error|qemu: Could not open|qemu: uncaught target signal'; then
+            echo "QEMU 装载失败：ARM 产物无法在目标 ABI 的动态链接器下装载" >&2
+            exit 1
+          fi
+          # 缺配置时程序应当干净地报错退出；panic 说明 ARM 上跑出了宿主上不复现的
+          # 问题（原子指令对齐 / 浮点 / 越界），这正是这道门禁要抓的信号。
+          if printf '%s' "$out" | grep -q 'panicked at'; then
+            echo "QEMU 运行期 panic：ARM 产物在目标架构上崩溃" >&2
+            exit 1
+          fi
+          # 走到 Rust 代码的标志：配置加载阶段的报错（中文上下文串）出现在输出里。
+          # 若配置缺失时程序走的是"自动生成默认配置"分支，这里会不匹配——
+          # 那时至少已证明装载成功，故降级为提示而非失败。
+          if printf '%s' "$out" | grep -q '加载配置失败'; then
+            echo "OK：ARM 产物已装载并执行到 Rust 代码（配置缺失报错符合预期）"
+          else
+            echo "NOTE：未观察到预期的配置缺失报错，但未出现 loader 错误，装载阶段通过"
+          fi
+
+      - name: QEMU runtime tests (run ARM test binaries)
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          export "CC_${TARGET//-/_}=${{ matrix.cc }}"
+          export "CARGO_TARGET_$(echo "$TARGET" | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.cc }}"
+          # cargo 用这个 runner 启动交叉编译出的测试二进制，QEMU 负责实际执行。
+          export "CARGO_TARGET_$(echo "$TARGET" | tr 'a-z-' 'A-Z_')_RUNNER=${{ matrix.qemu }} -L ${{ matrix.sysroot }}"
+
+          # 断言"确实跑了测试"：过滤条件失配时 cargo 会报 0 passed 并返回 0，
+          # 那样这道门禁会静默退化成空跑——必须显式卡住。
+          run_tests() {
+            local label="$1"; shift
+            local out="/tmp/qemu-test-${label}.log"
+            set +e
+            "$@" 2>&1 | tee "$out"
+            local rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] || { echo "qemu 测试失败: $label (rc=$rc)" >&2; exit "$rc"; }
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$out" || {
+              echo "qemu 测试未实际执行任何用例: $label（过滤条件可能失配）" >&2
+              exit 1
+            }
+          }
+
+          # ① 架构敏感的纯函数（字节序 / CRC / 编码）：这部分在 x86 上过、
+          #    在 ARM 上未必过——正是 QEMU 模拟器能替真机提前抓到的差异。
+          run_tests lib cargo test -p gateway-core --target "$TARGET" --locked \
+            --lib -- engine::util::
+
+          # ② 采集 → 虚拟点位派生 → 入队 → 北向扇出的端到端接线：
+          #    在 ARM 上真跑一遍，确认队列 / RealtimeBus / 转换链在目标架构上成立。
+          run_tests vpp cargo test -p gateway-core --target "$TARGET" --locked \
+            --test virtual_point_pipeline
 
   # L1: encryption feature 编译验证。
   # 生产构建通过 `--features encryption` 启用 SQLite 加密（bundled-sqlcipher），但历史上
