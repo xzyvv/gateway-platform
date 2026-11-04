@@ -58,6 +58,13 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | [`docs/perf-knee.md`](perf-knee.md) | 150 000 点**拐点**压测：总线数 × tcp 并发矩阵；结论「吞吐 ≥ 150k 点/秒，瓶颈在测试机 CPU」 |
 | [`docs/perf-rss-explanation.md`](perf-rss-explanation.md) | RSS 增长**归因**：未配置北向消费 → SQLite page cache 持有，附运维判据与复现命令 |
 
+## 功能盘点与路线图
+
+| 文档 | 说明 |
+|---|---|
+| [`docs/functional-review-and-next-phase.md`](functional-review-and-next-phase.md) | 上一阶段功能评审结论：实测体量基线、三因子价值评估、去留决策与各轮落地记录 |
+| [`docs/functional-inventory-and-next-roadmap.md`](functional-inventory-and-next-roadmap.md) | 全量功能清单（后端 18 路由组 / 前端 10 Hub）+ SKU 与授权分层现状 + 下一阶段路线图（§4 行动项、§5 验收口径） |
+
 ## 设计文档（`docs/design/`）
 
 未实施或实施中的功能设计方案，实施完成后请更新文档内状态标注：
@@ -82,9 +89,11 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 
 ## 桌面端（gateway-desktop）
 
+**已冻结（2026-11）**：桌面端不再构建 / 打包 / 发布，代码保留供历史分支合并。
+
 | 文档 | 说明 |
 |---|---|
-| [`gateway-desktop/README.md`](../gateway-desktop/README.md) | Tauri 桌面端构建与打包说明 |
+| [`gateway-desktop/README.md`](../gateway-desktop/README.md) | Tauri 桌面端结构说明与冻结声明（构建与打包流程已停用） |
 
 ## 目录命名约定
 

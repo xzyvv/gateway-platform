@@ -15,7 +15,7 @@
 | 技术债务 | 无系统性债务 | **仍为 0**（Rust 全仓 `TODO/FIXME/HACK/todo!/unimplemented!` = 0 处） | 全仓 `*.rs` 实测无匹配 |
 | 低价值功能 | 无需下线 | **仍为 0**（每个页面/端点都有真实后端与定位归属） | 端点清单 + 页面清单比对 |
 | 重复冗余实现 | 4 处（E1–E4） | **已清零**（E1–E4 全部收敛为单一实现） | 4 个 composable + 4 份 spec |
-| 协议能力缺口 | diag 4/13 族、扫描类工具仅 Modbus | **diag 10/13 族、扫描类工具注册表驱动**；剩余缺口见 §2.D | `registry/capabilities.rs` + `registry/tests.rs` |
+| 协议能力缺口 | diag 4/12 族、扫描类工具仅 Modbus | **diag 10/12 族、扫描类工具注册表驱动**；剩余缺口见 §2.D | `registry/capabilities.rs` + `registry/tests.rs` |
 | 交付门禁 | 散落靠人记 | **一条命令跑完 19 步并出结论**（`scripts/release_gate.ps1`） | 本次实跑：18 PASS / 1 SKIP |
 | **下一步主战场** | 主线 B（补能力 + 补验证） | **主线 C：以测试与故障验证为主，能力补齐为辅** | 见 §4 |
 
@@ -27,20 +27,20 @@
 
 ## 1. 完整功能清单（复评后的代码事实）
 
-### 1.1 体量基线（本次实测）
+### 1.1 体量基线（实测刷新于 2026-11-04）
 
 | 项 | 数量 | 依据 |
 |---|---|---|
-| Rust 源文件（core+api+gatewayd，不含 tests/） | 447 | `Get-ChildItem -Recurse *.rs`（排除 tests/target） |
-| HTTP 端点 | 18 路由组 / **169**「方法+路径」 | [docs/api-surface.md](api-surface.md)（脚本生成，CI 校验） |
-| 前端页面组件（.vue） | 197 | 本次统计 |
-| 前端 Hub / 页签 | 10 个 Hub / 72 个页签 | `views/**/*Hub.vue` 提取 |
-| 南向协议族 | 13（+ common/registry/skeleton 基础设施模块） | `gateway-core/src/south/protocol/` |
-| Rust 单元测试 | 242（core lib）+ 1236（api lib）+ 16（license-issuer） | `cargo test --lib` 三段汇总 |
-| 集成 / 契约测试文件 | 20 个（`gateway-api/tests/*.rs`） | 目录实测 |
-| 前端单测 | **182** 个 `*.spec.ts` | `Get-ChildItem -Recurse *.spec.ts` |
-| Playwright E2E | 3 套 / 13 用例（smoke、write-flows、routes-deep） | `gateway-web/e2e/` |
-| chaos 故障场景 | **41** 个真路径恢复场景 | `gateway-core/tests/chaos/scenarios.rs` |
+| Rust 源文件（core+api+gatewayd，含 tests/） | 468（其中非测试文件 367） | `Get-ChildItem -Recurse *.rs`（排除 target） |
+| HTTP 端点 | 18 路由组 / 141 唯一路径 / **169**「方法+路径」 | [docs/api-surface.md](api-surface.md)（脚本生成，CI 校验） |
+| 前端页面组件（.vue） | 199 | `Get-ChildItem -Recurse *.vue` |
+| 前端 Hub / 页签 | 10 个 Hub / 72 个页签 | `views/**/*Hub.vue` 的 `tabs` 数组逐个数 |
+| 南向协议族 | 12（+ common/registry/skeleton 三个基础设施模块） | `gateway-core/src/south/protocol/` |
+| Rust 单元测试 | 1246（core lib，另 1 ignored）+ 245（api lib）+ 3（license-issuer） | `cargo test --lib` 三段汇总 |
+| 集成 / 契约测试文件 | 22 个（`gateway-api/tests/*.rs`） | 目录实测 |
+| 前端单测 | 219 个 `*.spec.ts`（vitest 实际收集 **215 文件 / 1978 用例**） | `Get-ChildItem -Recurse *.spec.ts` + CI 实测 |
+| Playwright E2E | 4 套 / 16 用例（smoke、write-flows、routes-deep、debug-paths） | `gateway-web/e2e/` |
+| chaos 故障场景 | **47** 个真路径恢复场景 | `gateway-core/tests/chaos/scenarios.rs` |
 | 覆盖率门禁 | 分目录阈值"只许上调、不许下调" | `gateway-web/vitest.config.ts`:83–104 |
 
 ### 1.2 后端功能域（18 组 / 169 端点，B3 后变化见右列）
@@ -110,7 +110,7 @@
 | 交付链路 | `deploy/deliver.sh` 一条命令：install.sh → 等待就绪 → verify-deploy.sh → 交付检查单（Markdown，含构建信息/逐项 PASS/FAIL/诊断命令） | **已闭环（G5）**：检查单由 verify 脚本生成，判定逻辑单一来源 |
 | 桌面端 | `gateway-desktop` 已冻结：不再构建/打包/发布，CI `desktop-build` job 移除，代码保留（workspace 仍编译兜底） | 冻结（现场调试统一走 Web 控制台） |
 | 前端覆盖率 | 分目录阈值"只许上调"；**默认仅统计被测试加载的文件**（`COVERAGE_FULL=1` 才全量口径） | **盲区**：新增无测试文件不会拉低覆盖率（§4.C1.4） |
-| chaos | 41 场景：磁盘满、重启不丢数据、outbox 幂等/限流/重启存活、MQTT broker 不可达后恢复、串口重开恢复、调度器并发重载、S7 握手拒绝、IEC104 无应答、Modbus TCP 断连 | **缺口**：证书过期、许可证到期、NTP 失步、看门狗触发、网络切换、南向长时无响应（§4.C1.3） |
+| chaos | 47 场景：磁盘满、重启不丢数据、outbox 幂等/限流/重启存活、MQTT broker 不可达后恢复、串口重开恢复、调度器并发重载、S7 握手拒绝、IEC104 无应答、Modbus TCP 断连 | **缺口**：证书过期、许可证到期、NTP 失步、看门狗触发、网络切换、南向长时无响应（§4.C1.3） |
 | E2E 覆盖 | 登录/核心路由巡游/配置保存/点位增删/license 端点/登出 | **缺口**：现场调试主路径（协议控制台、采集调优、点位读写）无浏览器级验证（§4.C1.2） |
 
 ### 1.6 SKU 与授权分层现状（编译期裁剪 vs 运行时配额）
@@ -195,7 +195,7 @@
 |---|---|---|
 | **C1.1 新能力端到端验证** | ①`gateway-api` 增加能力位路由的 API 契约测试：`slave_scan` / `register_scan` / `auto_detect` 对"声明支持的协议"返回可执行结果、对"未声明的协议"返回明确错误（不是 500）；②前端 `useProtocolCaps` 单测 + 加载失败降级；③`useReadPointNow` / `usePointWrite` / `usePointBackoff` 的**协议错误 vs 传输错误**分支各补一条回归钉子 | 3 个新 spec 落地且进门禁 |
 | **C1.2 浏览器级覆盖现场调试主路径** | 新增 Playwright 用例：协议控制台入口按能力位可用/禁用、采集调优参数修改→生效、点位读写→写值确认弹窗→结果回显（复用现有隔离端口与登录助手） | `e2e/` 新增 1 套 spec，纳入 `release_gate.ps1` |
-| **C1.3 chaos 补 6 类现场故障** | 证书过期、许可证到期、NTP 失步、看门狗触发、网络切换（网卡 down/up）、南向长时无响应（超时风暴）；每条要求"**故障 → 现象 → 自愈动作 → 恢复后数据完整性（不丢/不重/有序）**"四段结论，落 `docs/故障处置卡.md` | chaos 由 41 → ≥47 场景，处置卡成文 |
+| **C1.3 chaos 补 6 类现场故障** | 证书过期、许可证到期、NTP 失步、看门狗触发、网络切换（网卡 down/up）、南向长时无响应（超时风暴）；每条要求"**故障 → 现象 → 自愈动作 → 恢复后数据完整性（不丢/不重/有序）**"四段结论，落 `docs/故障处置卡.md` | chaos 由 47 → ≥53 场景，处置卡成文 |
 | **C1.4 覆盖率口径修盲区** | 跑一次 `COVERAGE_FULL=1` 全量实测 → 以 `coverage-summary.json` 重定分目录阈值 → 改为默认全量口径（`include: ['src/**/*.{ts,vue}']`），使"新增无测试文件"不再免疫门禁 | 阈值重定后 CI 仍绿；新增盲区文件会被覆盖率拦下 |
 | **C1.5 调试工具的"非 Modbus"真机验证** | 用 `mc`/`fins`/`iec101`/`dlt645` 的 diag 路径各做一次"连不上就如实报错"的验证（本地无设备时用不可达端点断言错误文案），避免 B3 新代码只被单测覆盖 | 每族至少 1 条"不可达端点如实报错"的用例 |
 
@@ -248,7 +248,7 @@
 |---|---|
 | C1.1 | 能力位路由有 API 契约测试；前端 3 个新 composable 的错误分支有回归钉子 |
 | C1.2 | Playwright 新增 1 套"现场调试主路径"用例并进门禁 |
-| C1.3 | chaos ≥47 场景；每类现场故障在 `docs/故障处置卡.md` 有"现象/自愈/数据完整性"结论 |
+| C1.3 | chaos ≥53 场景（当前 47，需补齐 6 类现场故障）；每类现场故障在 `docs/故障处置卡.md` 有"现象/自愈/数据完整性"结论 |
 | C1.4 | 覆盖率默认全量口径，阈值重定后 CI 绿；新增无测试文件会被拦下 |
 | C2 | Modbus 在采集调试台可做"连通性诊断 + 单点读值"，与其它族口径一致 |
 | C3 | 一键诊断包一次产出：配置快照 + 日志 + 健康报告 + 北向状态 |

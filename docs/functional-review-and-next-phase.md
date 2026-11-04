@@ -7,27 +7,27 @@
 
 | 维度 | 核查结论 |
 |---|---|
-| 技术债 | **几乎为零**：后端全仓 `TODO/FIXME/HACK/todo!/unimplemented!` 仅 **1 处**（`gateway-core/src/north/server/opcua_server.rs`） |
-| 冗余功能 | **无僵尸功能**：前端 161 个 API 封装中 **151 个被 UI 引用**，未引用的 10 个全是内部工具（inflight/token 迁移/Tauri adapter） |
+| 技术债 | **几乎为零**：后端全仓 `TODO/FIXME/HACK/todo!/unimplemented!` 实测 **0 处**（上一版记的「1 处」是 `StatusCode::BadNothingToDo` 的子串误匹配，非真实标记） |
+| 冗余功能 | **无僵尸功能**：前端 API 层导出 **266** 个函数/常量，按标识符出现次数复核，**0 个「只定义未引用」** |
 | 端点浪费 | **无未消费端点**：169 个后端端点全部有前端入口或明确为内部/第三方 API |
-| 测试厚度 | 后端 **1427** 个测试 + 66 个 test 模块；前端 **175** 个 vitest 用例文件 |
-| 真正的短板 | ① **端到端/真实部署路径**未被测试覆盖；② **非 Modbus 协议无现场调试工具**（协议能力 13 族，调试工具只覆盖 Modbus RTU）；③ 3 处「演示数据混入生产」的功能污染 |
+| 测试厚度 | 后端 lib 测试 **1494** 个（core 1246 + api 245 + license-issuer 3，另 1 ignored）+ 22 个集成/契约测试文件；前端 **219** 个 `*.spec.ts`（vitest 实际收集 215 文件 / 1978 用例） |
+| 真正的短板 | ① **端到端/真实部署路径**未被测试覆盖；② **非 Modbus 协议无现场调试工具**（协议能力 12 族，调试工具只覆盖 Modbus RTU）；③ 3 处「演示数据混入生产」的功能污染 |
 
 **因此下阶段不做重构、不做功能砍除**，主线是：**把「功能齐备」升级为「现场敢交付」**——用端到端回归护栏 + 交付验收包 + 调试能力补齐，把已有 10 万行 Rust / 9 万行前端的工程价值转成可交付、可验收、可复制的产品价值。
 
 ---
 
-## 1. 现状盘点（实测数据）
+## 1. 现状盘点（实测数据，刷新于 2026-11-04）
 
 | 项 | 数值 |
 |---|---|
-| 后端代码 | `gateway-core` 329 文件 / 80,902 行；`gateway-api` 129 文件 / 23,800 行；`gatewayd` 7 文件 / 2,207 行 |
-| 前端代码 | 197 个 `.vue` / 33,311 行；519 个 `.ts` / 57,579 行 |
+| 后端代码 | `gateway-core` 332 文件 / 76,202 行；`gateway-api` 129 文件 / 22,329 行；`gatewayd` 7 文件 / 2,035 行 |
+| 前端代码 | 199 个 `.vue` / 31,725 行；567 个 `.ts` / 60,201 行 |
 | 后端端点 | 18 个路由组 / 141 条唯一路径 / 169 个「方法+路径」端点（含 2 个 WebSocket） |
-| 前端页面 | 路由表 24 条 = 13 个业务页面 + 登录/无权限 2 页 + 9 条旧址重定向 |
-| 南向协议 | 13 族：modbus / dlt645 / cjt188 / gpio / bacnet / bacnet_mstp / fins / iec101 / iec104 / mc / opcua / s7comm / skeleton |
+| 前端页面 | 页面路由 24 条 = 13 个业务页面 + 11 条旧址重定向别名；顶层另有 5 条（登录/改密/加载失败/无权/404）+ 1 条 catch-all |
+| 南向协议 | 12 族：modbus / dlt645 / cjt188 / gpio / bacnet / bacnet_mstp / fins / iec101 / iec104 / mc / opcua / s7comm（另有 common / registry / skeleton 三个基础设施模块，非协议族） |
 | 北向通道 | mqtt（含 broker/outbox/template）、webhook、server 族（modbus_server / opcua_server / mqtt 透传 / modbus 网关桥）、server_sinks、sim_consumer、conversion |
-| 测试 | 后端 1427 个测试；前端 175 个 vitest 文件；最大单文件 647 行（`slave_scan.rs`） |
+| 测试 | 后端 lib 1494 个（另 1 ignored）+ 集成/契约 22 个文件；前端 219 个 `*.spec.ts`（vitest 收集 215 文件 / 1978 用例）；chaos 47 场景；E2E 4 套 / 16 用例；最大非测试源文件 999 行（`remote_diag.rs`） |
 
 ---
 
@@ -97,11 +97,11 @@
 
 | 检查项 | 结果 |
 |---|---|
-| `TODO/FIXME/HACK/todo!/unimplemented!` | 全后端 **1 处**（`north/server/opcua_server.rs`），非阻塞 |
-| 超大单文件 | 最大 647 行（`slave_scan.rs`），其余 < 400 行；本轮已把 930/805/776 行三文件拆分完 |
+| `TODO/FIXME/HACK/todo!/unimplemented!` | 全后端 **0 处**（上一版记的「1 处」是 `StatusCode::BadNothingToDo` 的子串误匹配） |
+| 超大单文件 | 非测试源文件 360 个，**中位数 179 行**；最大 999 行（`engine/monitor/remote_diag.rs`），>400 行文件 66 个。上一版「已把 930/805/776 行三文件拆分完」的结论已被后续演进冲掉，需重新排期拆分 |
 | 死代码 / 僵尸端点 | 0（169 端点全部有消费方） |
-| 前端未使用 API 封装 | 10 个，均为内部工具函数，非功能 |
-| 测试规模 | 后端 1427 测试 + 66 test 模块；前端 175 vitest 文件 |
+| 前端未使用 API 封装 | API 层导出 266 个函数/常量，按标识符出现次数复核，**0 个「只定义未引用」** |
+| 测试规模 | 后端 lib 1494 测试（另 1 ignored）+ 66 test 模块 + 22 个集成/契约测试文件；前端 219 个 `*.spec.ts`（vitest 收集 215 文件 / 1978 用例） |
 | 一致性护栏 | `cargo fmt` / `clippy -D warnings` / `api-surface --check` 已在用 |
 
 ---
@@ -125,7 +125,7 @@
 | **A 现场交付化（推荐）** | 无待修 bug 清单，功能已齐 | 把工程量转成可复制交付能力 | 需要真实现场/仿真环境做 E2E |
 | **B 修 bug** | 有现场 issue 清单 | 直接解决阻塞问题 | **当前无输入**：仓内无 bug 单、无 issue 追踪，先收集再动手，避免凭猜测改代码 |
 | **C 纯优化重构** | 存在可度量的性能/可维护性问题 | — | **不成立**：TODO 近零、无死代码、无超大文件，重构边际收益极低 |
-| **D 补测试** | 单元测试缺口明显 | — | 单元测试已 1427 个；真正缺的是 **E2E/集成层**（P1），故并入 A 而非单列 |
+| **D 补测试** | 单元测试缺口明显 | — | 单元测试已 1494 个；真正缺的是 **E2E/集成层**（P1），故并入 A 而非单列 |
 
 ### 5.3 建议执行顺序
 
@@ -202,9 +202,11 @@ powershell -File scripts/e2e_smoke.ps1         # 真实进程：临时配置 + �
 
 回归：
 - `npx vue-tsc --noEmit`、`npx eslint <改动文件>` 通过；
-- `npx vitest run`：175 文件 / 1567 用例通过；
+- `npx vitest run`：175 文件 / 1567 用例通过（**此为 2026-11-03 当时的基线**；当前已增长到 215 文件 / 1978 用例）；
 - `src/stores/theme.spec.ts` 在全量并发下会因 echarts 动态 import 超 5s 而偶发超时（与本次改动无关），
   单独运行 `npx vitest run src/stores/theme.spec.ts` 6/6 通过。
+  **该超时问题已于 2026-11-04 处理**：`vitest.config.ts` 的 `testTimeout` 放宽到 15s，
+  CI（Node 22 + v8 覆盖率插桩，4 worker）下此前超时的 5 条重型组件用例已全部通过。
 
 ### 5.8 P4 落地记录：IEC104 协议调试（2026-11-03）
 

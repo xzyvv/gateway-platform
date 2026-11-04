@@ -269,7 +269,7 @@ jobs:
       - name: API surface check
         run: python3 scripts/gen_api_surface.py --check
 
-  # S1 / R1: chaos 场景（当前 42 项真路径恢复测试）由观察期转为**强制门禁**。
+  # S1 / R1: chaos 场景（当前 47 项真路径恢复测试）由观察期转为**强制门禁**。
   # 观察期内 `continue-on-error: true` 意味着这些用例失败从不阻塞合并——而它们
   # 覆盖的恰恰是总线/协议重构最易回归的故障恢复路径。现直接作为合并门禁。
   chaos:

@@ -19,7 +19,7 @@
 4. SQLite 进程内 page cache 自动扩容以持有未 checkpoint 的页内存
 5. RSS 上升完全由 page cache + WAL buffer 贡献
 
-**已排除的真泄漏嫌疑**（见 [remaining-optimizations.md P4](file:///c:/Users/xzy35/AppData/Roaming/Trae%20CN/ModularData/ai-agent/work-mode-projects/6ac90dddcbfa62fa225c7a9d/.trae/documents/remaining-optimizations.md)）：
+**已排除的真泄漏嫌疑**（逐模块核查结论见下表）：
 
 | 模块 | 状态 | 证据 |
 |---|---|---|
