@@ -225,6 +225,15 @@ async fn register_scan_mc_声明支持时返回可执行结果() {
 }
 
 /// fins：按节点号 + 软元件地址逐点探测
+///
+/// fins 处于「退役观察」：已移出默认发行集，注册表条目按
+/// `#[cfg(feature = "fins")]` 门控。两种构建各钉一条：
+/// - 显式 `--features fins`（存量项目/回归）：协议已登记 → 200 + 可执行结果；
+/// - 默认发行集：协议未登记 → 400 `unsupported_protocol` +「未在注册表中登记」。
+///
+/// 不按「协议名是否存在」硬断言 200，是因为那等于假设 fins 在默认构建里
+/// 仍然可用——而这正是「退役观察」要杜绝的口径漂移。
+#[cfg(feature = "fins")]
 #[tokio::test]
 async fn register_scan_fins_声明支持时返回可执行结果() {
     let state = state_with(vec![bus_cfg("cap_fins_reg", "fins")], Vec::new());
@@ -244,6 +253,35 @@ async fn register_scan_fins_声明支持时返回可执行结果() {
     assert_eq!(body["code"], 0, "body={body}");
     let id = body["data"].as_str().expect("应返回扫描任务 id");
     assert!(id.starts_with("scan_"), "id 形如 scan_*，实际: {id}");
+}
+
+/// fins 未随默认发行集交付时，调试面必须明确拒绝「协议未登记」，
+/// 而不是把它当成「协议不支持寄存器扫描」或直接 500。
+#[cfg(not(feature = "fins"))]
+#[tokio::test]
+async fn register_scan_fins_未随默认发行集交付时明确拒绝() {
+    let state = state_with(vec![bus_cfg("cap_fins_reg", "fins")], Vec::new());
+
+    let (status, body) = call(
+        state,
+        request(
+            "POST",
+            "/api/protocol-tools/register-scan",
+            json!({ "bus": "cap_fins_reg", "slave_id": 1, "reg_type": "holding",
+                    "start_addr": 0, "end_addr": 0, "timeout_ms": 200, "interval_ms": 20 }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body={body}");
+    assert_eq!(body["code"], 4002, "body={body}");
+    assert_eq!(body["error"], "unsupported_protocol", "body={body}");
+    let msg = body["message"].as_str().unwrap_or_default();
+    assert!(msg.contains("fins"), "提示应点明协议 fins，实际: {msg}");
+    assert!(
+        msg.contains("未在注册表中登记"),
+        "fins 未随默认发行集交付，提示应说明「未在注册表中登记」，实际: {msg}"
+    );
 }
 
 #[tokio::test]
