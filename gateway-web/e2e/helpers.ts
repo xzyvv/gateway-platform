@@ -37,7 +37,8 @@ export async function loginViaForm(page: Page): Promise<void> {
   await page.getByPlaceholder(LOGIN_USERNAME_PLACEHOLDER).fill('admin')
   await page.getByPlaceholder(LOGIN_PASSWORD_PLACEHOLDER).fill('admin')
   await page.getByRole('button', { name: '登录' }).click()
-  // CI 首次导航要等 vite 按需预打包 element-plus（实测首个用例登录往返可到 ~19s，
-  // 后续用例 ~6s）。10s 的默认断言超时会在冷启动那一条上假红，故单独放宽。
+  // 冷启动余量：首次进入 /overview 要等 vite 编译大批模块（实测登录往返可达 ~19s，
+  // 后续用例 ~6s）。首轮 re-optimize 的 reload 已由 global-setup 预热吸收，
+  // 这里只留慢机型的余量，10s 的默认断言在慢 runner 上仍会假红。
   await expect(page).toHaveURL(/\/overview$/, { timeout: 30_000 })
 }

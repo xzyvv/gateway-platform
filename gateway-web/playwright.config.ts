@@ -31,6 +31,9 @@ process.env.GATEWAY_E2E_PORT ??= String(GATEWAY_PORT)
 
 export default defineConfig({
   testDir: './e2e',
+  // 预热：先替全量用例把 vite 首次进入 /overview 触发的 re-optimize reload 消耗掉
+  // （否则第一个用例会被 reload 冲回登录页，见 e2e/global-setup.ts）。
+  globalSetup: './e2e/global-setup.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
