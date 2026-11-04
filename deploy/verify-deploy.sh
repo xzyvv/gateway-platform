@@ -94,6 +94,7 @@ write_report() {
     echo "- 监听绑定：${BIND_ADDR:-（未取到）}"
     echo "- 生效时区：${TZ_LINE:-（未取到，请人工核对 journalctl -u gateway | grep 'device timezone'）}"
     echo "- 二进制链接：${LINK_KIND:-unknown}${BIN_GLIBC:+（要求 glibc ≥ $BIN_GLIBC）}${SYS_GLIBC:+，本机 glibc $SYS_GLIBC}"
+    echo "- 设备时钟：${CLOCK_VERDICT:-（未取到）}"
     echo "- 主机：$(uname -s) / $(uname -m)"
     echo "- 结论：$verdict"
     echo "- 统计：PASS $PASS / FAIL $FAIL / WARN $WARN"
@@ -263,6 +264,25 @@ else
   warn "未找到可执行产物 $GW_BIN，跳过二进制兼容性检查"
 fi
 
+# ── 1d. 时钟有效性 ──
+# 计划任务按墙钟解释 cron：设备时间不对，任务要么在错误时刻执行、要么静默停摆。
+# 无 RTC（无电池）的板子掉电后时间常回落到 1970/厂商默认时刻，网关会自动暂停
+# 计划任务（见 gateway-api 调度器日志 "system clock not trustworthy"）。
+# 这里从设备侧读时间，把「时间不可信」变成交付检查单上看得见的一条结论。
+echo "${BOLD}[1d] 时钟有效性${RESET}"
+DEV_EPOCH=$(date +%s 2>/dev/null || echo 0)
+# 2020-01-01T00:00:00Z：任何真实部署都应晚于该时刻
+MIN_EPOCH=1577836800
+if [ "$DEV_EPOCH" -lt "$MIN_EPOCH" ]; then
+  CLOCK_VERDICT="不可信（$(date -Is 2>/dev/null || echo "$DEV_EPOCH")，早于 2020-01-01；计划任务已暂停）"
+  fail "设备系统时间为 $(date -Is 2>/dev/null || echo "$DEV_EPOCH")，早于 2020-01-01（疑似无 RTC 掉电回退）"
+  echo "    影响: 计划任务已被网关自动暂停（不会在错误时刻执行），校时恢复后自动重排"
+  echo "    处置: 配置 OS 级校时（systemd-timesyncd / chrony）或写入 RTC；仅网关自身 NTP 只记录偏差、不改系统时钟"
+else
+  CLOCK_VERDICT="正常（$(date -Is 2>/dev/null || echo "$DEV_EPOCH")）"
+  ok "设备系统时间正常：$(date -Is 2>/dev/null || echo "$DEV_EPOCH")"
+fi
+
 # ── 2. 端口监听 ──
 # 同时取本地绑定地址：仅回环说明「本机验证能过，但车间 LAN 打不开」，
 # 检查单不能再写「浏览器打开 http://<host>:PORT」而不加限定。
@@ -326,6 +346,37 @@ else
   else
     warn "config.json 不存在，跳过鉴权端点测试"
   fi
+fi
+
+# ── 4b. 网关校时状态 ──
+# 设备时间对得上还不够：网关自己的校时结果决定「计划任务保护」是否处于暂停状态。
+# 放这里是因为 /api/ntp/status 需要鉴权（token 在上一段才准备好）。
+echo "${BOLD}[4b] 网关校时状态${RESET}"
+NTP_JSON=$(curl -fsS --max-time 5 "${AUTH_HEADER[@]}" "$API/api/ntp/status" 2>/dev/null || true)
+if [ -n "$NTP_JSON" ]; then
+  NTP_STATE=$(printf '%s' "$NTP_JSON" | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || true)
+  NTP_SRC=$(printf '%s' "$NTP_JSON" | grep -o '"source":"[^"]*"' | cut -d'"' -f4 || true)
+  NTP_OFF=$(printf '%s' "$NTP_JSON" | grep -o '"offset_ms":[-0-9]*' | cut -d: -f2 || true)
+  NTP_ABS_OFF=${NTP_OFF:-0}
+  if [ "$NTP_ABS_OFF" -lt 0 ] 2>/dev/null; then NTP_ABS_OFF=$((-NTP_ABS_OFF)); fi
+  case "$NTP_STATE" in
+    synced)
+      if [ "$NTP_ABS_OFF" -gt 300000 ] 2>/dev/null; then
+        warn "网关 NTP 偏差 ${NTP_OFF} ms（>5 分钟）：系统时钟不可信，计划任务处于暂停状态"
+        CLOCK_VERDICT="${CLOCK_VERDICT:-正常}；NTP 偏差 ${NTP_OFF} ms（计划任务暂停）"
+      else
+        ok "网关 NTP 已同步（来源 ${NTP_SRC:-NTP}，偏差 ${NTP_OFF:-0} ms）"
+      fi
+      ;;
+    "")
+      warn "未取到 /api/ntp/status 的 status 字段，无法判断网关校时状态"
+      ;;
+    *)
+      warn "网关 NTP 状态为 ${NTP_STATE}（来源 ${NTP_SRC:-未知}）：若设备时间本身不可信，计划任务会持续暂停"
+      ;;
+  esac
+else
+  warn "未取到 /api/ntp/status（可能需要 api_token），无法判断网关校时状态"
 fi
 
 if [ -n "$TOKEN" ]; then
