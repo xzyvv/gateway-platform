@@ -111,6 +111,16 @@ pub struct Quota {
 | ultra | None | None | None | None |
 | **无 license** | 100 | 1 | 7 | 1 |
 
+> **tier 名称以代码枚举为准**：`core` / `standard` / `pro` / `ultra`（`Tier` enum，serde 小写序列化）。
+> 配置里写 `professional` / `enterprise` / `oem` 是早期草案旧称，会反序列化失败，不要沿用。
+>
+> **这张表是「配置目标值」，不是「代码内置默认值」**：仓库没有内置 tier 查表默认值，
+> 真正生效的载体是 `config.json` 的 `license.tier_quotas`（`LicenseConfig::tier_quotas`）。
+> 三条生效优先级（`LicenseManager::current`）：
+> **license 自带 `quota` → 配置 `tier_quotas` 查表 → `license.absent_quota` 兜底**。
+> 因此**部署时必须显式写全 `tier_quotas` 四档**：若配置里没写、且 license 文件也没自带 quota，
+> 则任何 tier（哪怕 ultra）都会退到末行的「无 license」配额（100 点 / 1 协议 / 7 天 / 1 通道）。
+
 > **无 license 默认配额**意义：开源版用户拿到网关能跑，但只能做最小化演示（100 点 / 1 协议 / 保留 7 天）。这不是商业策略，是"开源可体验"的基础诚意，避免开源用户对 license 产生敌意。
 
 ## 4. 修订后 LicenseState 暴露给前端的字段
@@ -289,13 +299,22 @@ pub struct QuotaUsage {
 
 以下四个决策点已评审通过（2026-10-12 随实施生效），结论如下：
 
-1. **档位配额数值：standard / professional / enterprise / oem 四档，点数配额 500 / 1500 / 5000 / 无限制。**
-   已按此数值落地实施。数值定义于 `tier_quotas` 配置（gateway-core LicenseConfig），后续产品/销售线如需调整档位数值，**改配置即可，无需改代码**。
+1. **档位配额数值：core / standard / pro / ultra 四档，点数配额 500 / 1500 / 5000 / 无限制。**
+   （档位名以代码 `Tier` 枚举为准：`core` / `standard` / `pro` / `ultra`；
+   早期草案里的 professional / enterprise / oem 是旧称，serde 无法反序列化，已作废。）
+   数值定义于 `tier_quotas` 配置（gateway-core LicenseConfig），后续产品/销售线如需调整档位数值，**改配置即可，无需改代码**。
+   ⚠️ 仓库未内置这些数值：**出厂/部署配置必须显式写全 `license.tier_quotas` 四档**，
+   否则 license 未自带 quota 字段时，各 tier 一律退到 `absent_quota`（100 点 / 1 协议 / 7 天 / 1 通道），
+   与本节「已落地」的预期不符。
 
-2. **无 license 默认配额：100 点位 / 1 协议 / 7 北向 / 1 总线。**
+2. **无 license 默认配额：100 点位 / 1 并发协议 / 7 天历史保留 / 1 北向通道。**
+   对应 `Quota { max_points: 100, max_protocols: 1, storage_days: 7, northbound_channels: 1 }`
+   —— 注意 `storage_days` 是历史保留天数，不是北向通道数。
    已按此数值落地实施。数值定义于 `absent_quota` 配置，调整同样无需改代码。该默认值保证无 license 时设备可调试、可演示，但不足以支撑正式项目运行。
 
 3. **硬件 SKU 划分（G-100 / G-300 / G-500 / G-900）：⏳ 待硬件线确认。**
+   §2 已给出「型号 → 物理上限 → license 配额档」的初步映射（G-100→core/500 点、G-300→standard/1500 点、
+   G-500→pro/5000 点、G-900→ultra/无限制）；待确认的是**物料成本与物理接口上限**，不涉及代码。
    此项**不阻塞 license**：配额与 SKU 已解耦，SKU 划分变化只改配置、不改代码。硬件线确认后仅需同步 `tier_quotas` 中各档配额数值。
 
 4. **失效软降级语义：license 失效后现有配置继续运行，新增/修改配置受配额限制（"新增受限 vs 现有继续跑"）。**

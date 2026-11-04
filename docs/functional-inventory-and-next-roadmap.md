@@ -113,6 +113,28 @@
 | chaos | 41 场景：磁盘满、重启不丢数据、outbox 幂等/限流/重启存活、MQTT broker 不可达后恢复、串口重开恢复、调度器并发重载、S7 握手拒绝、IEC104 无应答、Modbus TCP 断连 | **缺口**：证书过期、许可证到期、NTP 失步、看门狗触发、网络切换、南向长时无响应（§4.C1.3） |
 | E2E 覆盖 | 登录/核心路由巡游/配置保存/点位增删/license 端点/登出 | **缺口**：现场调试主路径（协议控制台、采集调优、点位读写）无浏览器级验证（§4.C1.2） |
 
+### 1.6 SKU 与授权分层现状（编译期裁剪 vs 运行时配额）
+
+两层解耦，各管一件事：
+
+| 层 | 载体 | 决定什么 | 现状 |
+|---|---|---|---|
+| 行业 SKU | `gateway-core/Cargo.toml` 的 `sku-*` 聚合 feature（**编译期**） | **二进制体积**：装不装得下（flash / RAM） | 5 档：standard（modbus/dlt645/cjt188/iec104/opcua）、building（+bacnet）、power（+iec101）、plc（+s7comm/mc）、minimal（仅计量三件套）；`fins` / `bacnet-mstp` 为退役观察；`--protocols` 可自定义 |
+| 授权档 | License `tier` + `Quota`（**运行时**） | **卖多少钱**：点位 / 并发协议数 / 历史保留天数 / 北向通道数 | tier = core / standard / pro / ultra；配额数值载体是 `config.json` 的 `license.tier_quotas`，**仓库未内置默认表**，出厂配置必须写全四档 |
+
+分工原则（与主流厂商一致）：**编译期只裁体积，License 只卖规模**——不用 License 去卖「二进制里已经没有的东西」
+（客户付了钱发现内存没降会直接投诉），也不用 License 做功能开关（v2.0 已删除 6 个 feature gate，调试功能全免费）。
+详见 [docs/design/license-v2-quota.md](design/license-v2-quota.md)。
+
+**待办（不阻塞主线 C）**：
+
+1. **缺真实体积数据**：CI 的 feature 矩阵跑的是 debug 变体，5 个 SKU 各占多少 MB 从未实测，
+   裁剪决策目前建立在估算上。应加 `sku-size-matrix` 作业跑 release 构建出表。
+2. **`opcua` feature 同时打包南向 Client（`south/protocol/opcua`）与北向 Server（`north/server/opcua_server.rs`）**，
+   两者客户群几乎不重叠（现场多只要「采集 + MQTT 上送」）；拆成 `opcua-client` / `opcua-server` 是体积上最大的一个杠杆。
+3. **行业 SKU 与授权档目前完全独立**（`sku-minimal` 也能配 ultra 授权），缺推荐组合；
+   `tier_quotas` 的默认值也未随 SKU 场景给建议值。
+
 ---
 
 ## 2. 逐项价值评估（三因子：现场价值 × 维护成本 × 定位契合）
