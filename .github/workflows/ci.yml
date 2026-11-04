@@ -1140,28 +1140,38 @@ jobs:
           CG_REL="$(awk -F: '{print $3}' "/proc/$PID/cgroup" | tail -n1)"
           CG="/sys/fs/cgroup${CG_REL}"
           OOM_KILL=0
-          PEAK_KIB=0
+          PEAK_BYTES=0
           if [ -f "$CG/memory.events" ]; then
             OOM_KILL="$(awk '/^oom_kill /{print $2}' "$CG/memory.events" || true)"
             OOM_KILL="${OOM_KILL:-0}"
-            PEAK_KIB="$(cat "$CG/memory.peak" 2>/dev/null || echo 0)"
+            # 注意：cgroup v2 的 memory.peak 单位是「字节」（不是 KiB），算错会差 1024 倍
+            PEAK_BYTES="$(cat "$CG/memory.peak" 2>/dev/null || echo 0)"
+            PEAK_BYTES="${PEAK_BYTES:-0}"
           else
             echo "::warning::未找到 $CG/memory.events（cgroup v1？），OOM 计数跳过"
           fi
           # 在限额下持续打健康接口：能稳定返回 200 说明是「活着的降级」而非卡死
           FAILS=0
+          RSS_MAX_KIB=0
           for _ in $(seq 1 20); do
             CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
               http://127.0.0.1:8080/health/live || true)"
             [ "$CODE" = "200" ] || FAILS=$((FAILS + 1))
+            # 顺带采一次常驻内存（VmRSS，单位 KiB），作为「限额内实际占用」的实测值
+            RSS_KIB="$(awk '/^VmRSS:/ {print $2}' "/proc/$PID/status" 2>/dev/null || echo 0)"
+            RSS_KIB="${RSS_KIB:-0}"
+            # 用 if 而非 `[ ] &&`：set -e 下条件为假会让整段返回非零而中断脚本
+            if [ "$RSS_KIB" -gt "$RSS_MAX_KIB" ]; then RSS_MAX_KIB="$RSS_KIB"; fi
           done
-          PEAK_MIB="$(awk -v k="$PEAK_KIB" 'BEGIN{printf "%.1f", k/1024}')"
+          PEAK_MIB="$(awk -v b="$PEAK_BYTES" 'BEGIN{printf "%.1f", b/1048576}')"
+          RSS_MAX_MIB="$(awk -v k="$RSS_MAX_KIB" 'BEGIN{printf "%.1f", k/1024}')"
           {
             echo "### 受限资源运行（MemoryMax=${CAP_MB}M, CPUQuota=50%）"
             echo ""
             echo "| 指标 | 实测 | 判定 |"
             echo "|---|---|---|"
-            echo "| cgroup 峰值内存 | ${PEAK_MIB} MiB | ≤ ${CAP_MB} MiB |"
+            echo "| 限额内最大常驻内存 RSS | ${RSS_MAX_MIB} MiB | ≤ ${CAP_MB} MiB |"
+            echo "| cgroup 峰值内存（服务启动以来） | ${PEAK_MIB} MiB | ≤ ${CAP_MB} MiB |"
             echo "| oom_kill 次数 | ${OOM_KILL} | 0 |"
             echo "| 健康接口失败数 | ${FAILS}/20 | 0 |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1173,7 +1183,7 @@ jobs:
             echo "限额下健康接口失败 ${FAILS}/20：资源受限时服务不可用" >&2
             exit 1
           fi
-          echo "✓ ${CAP_MB} MiB / 50% CPU 下存活且健康（峰值 ${PEAK_MIB} MiB）"
+          echo "✓ ${CAP_MB} MiB / 50% CPU 下存活且健康（限额内 RSS 峰值 ${RSS_MAX_MIB} MiB，cgroup 峰值 ${PEAK_MIB} MiB）"
 
       # 失败时把现场留证：服务状态 + 日志 + 交付检查单
       - name: Collect systemd snapshot
