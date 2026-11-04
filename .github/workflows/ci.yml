@@ -241,6 +241,8 @@ jobs:
 
       - name: Copy frontend dist to ui-dist/
         run: |
+          # ui-dist 是构建产物目录（.gitignore 排除），干净 checkout 里不存在
+          mkdir -p ui-dist
           rm -rf ui-dist/*
           cp -r gateway-web/dist/* ui-dist/
 
