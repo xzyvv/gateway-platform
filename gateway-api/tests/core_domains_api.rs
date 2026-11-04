@@ -349,7 +349,13 @@ async fn io_status_and_control() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{}", body);
     assert_eq!(body["code"], 4000);
 
-    // 合法动作：Linux 下应成功；非 Linux 必须如实报错而不是静默 200
+    // 合法动作：结果必须与硬件可用性一致——能写则成功，不写则如实报错
+    //
+    // 断言按**写入结果**分支，而非按平台分支：
+    // - 非 Linux 平台无 gpiod，必然失败；
+    // - Linux 平台若无 `/dev/gpiochip0`（CI runner 即如此）同样失败。
+    // 这与 `gateway-core/src/south/protocol/gpio/tests.rs` 中
+    // `test_write_do_updates_single_state_source` 已确立的契约一致。
     let (status, body) = call_auth(
         &app,
         "POST",
@@ -357,17 +363,19 @@ async fn io_status_and_control() {
         Some(serde_json::json!({"action": "on"})),
     )
     .await;
-    if cfg!(target_os = "linux") {
-        assert_eq!(status, StatusCode::OK, "{}", body);
-        assert_eq!(body["data"]["on"], true);
+    if status == StatusCode::OK {
+        assert_eq!(body["data"]["on"], true, "写入成功应回报输出状态: {}", body);
     } else {
-        assert_ne!(status, StatusCode::OK, "非 Linux 不得假装成功: {}", body);
+        assert_ne!(status, StatusCode::OK, "无 GPIO 硬件时不得假装成功: {}", body);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{}", body);
+        assert_eq!(body["code"], 2000, "GPIO 不可用应报 IO 错误码: {}", body);
         assert!(
             body["message"]
                 .as_str()
                 .unwrap_or("")
-                .contains("不支持 GPIO"),
-            "错误信息应说明平台限制: {}",
+                .to_lowercase()
+                .contains("gpio"),
+            "错误信息应说明 GPIO 不可用: {}",
             body
         );
     }

@@ -905,16 +905,17 @@ async fn scenario_mqtt_publish_broker_unreachable_then_recover() {
 /// 场景 26: broker 收 N 条后断 → 客户端重连 → outbox replay 重发未 ack 消息
 ///
 /// 复现路径：
-/// 1. broker 正常服务，set_drop_after(1)（处理 1 条 PUBLISH 后关连接）
+/// 1. broker 正常服务，set_drop_after(1)（全局累计收到 1 条 PUBLISH 后关连接，
+///    且**只触发一次**——之后重连进来的连接正常服务）
 /// 2. 客户端连上、入队 3 条
 /// 3. publish_loop 触发第一次 publish：broker 收 1 条后关连接（client in_flight）
 /// 4. publish_batch 失败路径触发 queue.release(数据回 queue) + cleanup_outbox
 /// 5. 事件循环重连（指数退避 1-2s）→ broker 接受新连接
 /// 6. ConnAck 触发 replay_pending_outbox：把 outbox 里所有 pending 重发
-/// 7. broker 第二次 set_drop_after 阈值未到，正常 ack 使 data 真正出队
+/// 7. broker 第二次不再断连，正常回 PUBACK → queue.ack 使 data 真正出队
 ///
 /// 终态断言：
-/// - broker.connection_count == 2（初始连接 + 重连）
+/// - broker.connection_count >= 2（初始连接 + 重连）
 /// - broker.received.len() >= 2（至少收到初次 publish + 一次重发）
 /// - 队列最终必清空
 #[tokio::test]

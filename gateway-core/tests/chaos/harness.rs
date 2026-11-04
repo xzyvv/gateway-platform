@@ -268,7 +268,18 @@ pub struct MqttBroker {
     /// 关闭后 broker 仍监听端口，可接受新连接（重连场景）。
     /// 通过 `set_drop_after(n)` 设置，setter 会同时写 self.drop_after
     /// 和后台共享的 _drop_after_arc（同一 Arc 解引用）。
+    ///
+    /// 计数语义：**跨连接全局累加**（与 `ModbusTestServer::request_count`
+    /// 一致），且**只触发一次**——首次达到阈值时断开当前连接，之后重连
+    /// 进来的连接正常服务。
+    ///
+    /// 为何必须"只触发一次"：若按连接重置计数，每次重连后的第 1 条
+    /// PUBLISH 都会触发断连，客户端永远等不到 PUBACK，publish 失败路径
+    /// 把数据 release 回队列 → 队列永不排空（场景 26 的排空断言必然失败）。
+    /// 一次性语义才能复现真实的"瞬时网络抖动"：断一次 → 重连 → 重发成功。
     pub drop_after: Arc<parking_lot::Mutex<Option<usize>>>,
+    /// 断连是否已经触发过（保证 drop_after 只生效一次）。
+    pub drop_fired: Arc<std::sync::atomic::AtomicBool>,
     /// 已接受连接数（用于"重连后第二次连接是否建立"断言）
     pub connection_count: Arc<parking_lot::Mutex<usize>>,
     _drop_after_arc: Arc<parking_lot::Mutex<Option<usize>>>,
@@ -282,10 +293,12 @@ impl MqttBroker {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let received: ReceivedBuffer = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let drop_after_arc = Arc::new(parking_lot::Mutex::new(None));
+        let drop_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let connection_count_arc = Arc::new(parking_lot::Mutex::new(0usize));
         let listener_clone = listener.clone();
         let received_clone = received.clone();
         let drop_after_clone = drop_after_arc.clone();
+        let drop_fired_clone = drop_fired.clone();
         let count_clone = connection_count_arc.clone();
         let handle = tokio::spawn(async move {
             run_mqtt_accept(
@@ -293,6 +306,7 @@ impl MqttBroker {
                 shutdown_rx,
                 received_clone,
                 drop_after_clone,
+                drop_fired_clone,
                 count_clone,
             )
             .await;
@@ -308,6 +322,7 @@ impl MqttBroker {
             // Mutex。set_drop_after 写 self.drop_after，task 立即看到。
             drop_after: drop_after_arc.clone(),
             connection_count: connection_count_arc.clone(),
+            drop_fired,
             _drop_after_arc: drop_after_arc,
             _connection_count_arc: connection_count_arc,
         })
@@ -358,6 +373,7 @@ async fn run_mqtt_accept(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     received: ReceivedBuffer,
     drop_after: Arc<parking_lot::Mutex<Option<usize>>>,
+    drop_fired: Arc<std::sync::atomic::AtomicBool>,
     connection_count: Arc<parking_lot::Mutex<usize>>,
 ) {
     loop {
@@ -368,8 +384,9 @@ async fn run_mqtt_accept(
                 *connection_count.lock() += 1;
                 let r = received.clone();
                 let d = drop_after.clone();
+                let f = drop_fired.clone();
                 tokio::spawn(async move {
-                    let _ = handle_mqtt_connection(socket, r, d).await;
+                    let _ = handle_mqtt_connection(socket, r, d, f).await;
                 });
             }
         }
@@ -380,11 +397,11 @@ async fn handle_mqtt_connection(
     mut socket: tokio::net::TcpStream,
     received: ReceivedBuffer,
     drop_after: Arc<parking_lot::Mutex<Option<usize>>>,
+    drop_fired: Arc<std::sync::atomic::AtomicBool>,
 ) -> std::io::Result<()> {
     use tokio::io::AsyncWriteExt;
     let mut buf = Vec::with_capacity(4096);
     let mut tmp = [0u8; 1024];
-    let mut publish_count_in_conn: usize = 0;
     loop {
         let (header_end, pkt_type, pkt_flags, remaining_len) =
             match read_mqtt_header(&mut socket, &mut buf, &mut tmp).await {
@@ -432,14 +449,25 @@ async fn handle_mqtt_connection(
                 };
                 let payload = body[offset..].to_vec();
                 received.lock().push((topic, payload, packet_id, qos));
-                publish_count_in_conn += 1;
                 if qos == 1 {
                     let puback = [0x40, 0x02, (packet_id >> 8) as u8, packet_id as u8];
                     socket.write_all(&puback).await?;
                 }
                 // drop_after 触发：直接关连接（不主动 DISCONNECT，让客户端感知 EOF）
+                //
+                // 计数语义：**跨连接全局**——`received` 缓冲长度即 broker 累计
+                // 收到的 PUBLISH 数（与 ModbusTestServer 的 request_count 一致）。
+                // 只触发**一次**（drop_fired）：模拟"瞬时网络抖动"——断一次后，
+                // 重连进来的连接正常服务，客户端才能收到 PUBACK 让数据出队。
+                //
+                // 若按连接重置计数（每次重连后第 1 条 PUBLISH 都断），客户端
+                // 永远等不到 PUBACK → publish 失败路径把数据 release 回队列
+                // → 队列永不排空（场景 26 的排空断言必然失败）。
+                let total_publishes = received.lock().len();
                 if let Some(n) = *drop_after.lock() {
-                    if publish_count_in_conn >= n {
+                    if total_publishes >= n
+                        && !drop_fired.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
                         drop(socket);
                         return Ok(());
                     }
