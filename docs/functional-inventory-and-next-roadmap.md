@@ -150,9 +150,9 @@
 
 **待办（不阻塞主线 C）**：
 
-1. ~~**缺真实体积数据**~~ **已闭环**：CI 新增 `sku-size-matrix` 作业（`if: push || workflow_dispatch`，
-   纯观测不阻塞 PR），每次 main 合并后自动跑 5 个 SKU 的 release 构建并出表，
-   产物见 Actions artifact `sku-size-matrix`。数据来源见上表。
+1. ~~**缺真实体积数据**~~ **已闭环**：CI 新增 `sku-size-matrix` 作业（纯观测不阻塞 PR），
+   默认仅在 `workflow_dispatch` 手动触发（或仓库变量 `RUN_HEAVY=true`）时跑 5 个 SKU 的
+   release 构建并出表，产物见 Actions artifact `sku-size-matrix`。数据来源见上表。
 2. ~~**`opcua` feature 同时打包南向 Client（`south/protocol/opcua`）与北向 Server（`north/server/opcua_server.rs`）**~~ **已闭环**：
    `async-opcua` 改为 optional，拆成 `opcua-client`（`async-opcua/client`）与
    `opcua-server`（`async-opcua/server`）两个 feature，`opcua` 保留为合并别名（既有构建命令不变）。
