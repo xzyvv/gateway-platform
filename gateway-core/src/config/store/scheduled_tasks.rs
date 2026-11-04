@@ -244,6 +244,20 @@ impl ScheduledTaskStore {
         Ok(())
     }
 
+    /// 仅重排下次执行时间（不改执行统计）。
+    ///
+    /// 供调度器在时钟被大幅校正/恢复可信后重新锚定：漏掉的窗口直接跳过，
+    /// 避免一批任务在错误时刻集中补跑。
+    pub fn set_next_run_at(&self, id: &str, next_run_at: Option<i64>) -> GatewayResult<()> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE scheduled_tasks SET next_run_at=?2 WHERE id=?1",
+            params![id, next_run_at],
+        )
+        .map_err(|e| db_err("set next_run_at", e))?;
+        Ok(())
+    }
+
     /// 列出到期应执行的启用任务（next_run_at <= now_ms）
     pub fn due_tasks(&self, now_ms: i64) -> GatewayResult<Vec<ScheduledTask>> {
         Ok(self
