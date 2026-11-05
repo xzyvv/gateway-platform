@@ -73,6 +73,9 @@ $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
 $gitCmd = Get-Command git -ErrorAction SilentlyContinue
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $pythonCmd) { $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue }
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+$llvmCovReady = $null -ne (Get-Command cargo-llvm-cov -ErrorAction SilentlyContinue)
+$gatewaydReady = Test-Path (Join-Path $repoRoot "target\debug\gatewayd.exe")
 $nodeModulesReady = Test-Path (Join-Path $webRoot "node_modules")
 $configReady = Test-Path (Join-Path $repoRoot "config.json")
 $playwrightBrowsersReady = Test-Path (Join-Path $env:LOCALAPPDATA "ms-playwright")
@@ -323,6 +326,20 @@ if (-not $SkipBackend) {
             return (Run-Native -Exe "cargo" -Arguments @("test", "-p", "gateway-core", "--test", "chaos", "--quiet"))
         }
     }
+
+    if (-not $SkipCoverage) {
+        # 与 CI 的差异：本地不带 --all-features（Windows 上 encryption/bundled-sqlcipher
+        # 需要本机 OpenSSL 构建环境），故用默认 features 的口径；阈值来自 CI 实测值，
+        # 只作"防回落地板"，不放宽也不收紧。
+        # 只测 gateway-core / gateway-api：check_coverage.py 的分桶只认这两个 crate 的源文件，
+        # 而 --workspace 会把 gateway-desktop（Tauri）一起编译，白等十几分钟且与阈值无关。
+        Add-Step -Id "backend-coverage" -Title "后端覆盖率门禁（cargo llvm-cov + check_coverage.py）" -Action {
+            $lcovPath = Join-Path $LogDir "lcov.info"
+            $covOk = Run-Native -Exe "cargo" -Arguments @("llvm-cov", "-p", "gateway-core", "-p", "gateway-api", "--lcov", "--output-path", $lcovPath)
+            if (-not $covOk) { return $false }
+            return (Run-Native -Exe $pythonCmd.Source -Arguments @("scripts/check_coverage.py", $lcovPath))
+        } -SkipReason $(if ($null -eq $pythonCmd) { "未检测到 python/python3，无法运行 check_coverage.py" } elseif (-not $llvmCovReady) { "未安装 cargo-llvm-cov，先执行 cargo install cargo-llvm-cov 并 rustup component add llvm-tools-preview" } else { "" })
+    }
 }
 
 if (-not $SkipFrontend) {
@@ -389,6 +406,12 @@ if (-not $SkipSmoke) {
         $smokeScript = Join-Path $repoRoot "scripts\e2e_smoke.ps1"
         return (Run-PsScript -ScriptPath $smokeScript -Arguments @("-Port", "$SmokePort", "-Build"))
     } -SkipReason $(if (-not $configReady) { "缺少 config.json（e2e_smoke 以它为基线生成隔离配置）" } else { "" })
+
+    # 与上一步的分工：e2e_smoke 校验 API 契约（总线为空，不采集）；
+    # chain-smoke 校验**采集链路**——真实 Modbus TCP 从站 + 真实轮询 + 入队 + 历史查回。
+    Add-Step -Id "chain-smoke" -Title "采集全链路冒烟（Modbus TCP 从站 + 真实轮询 + /api/history）" -Action {
+        return (Run-Native -Exe "node" -Arguments @("scripts/smoke/chain-smoke.mjs"))
+    } -SkipReason $(if ($null -eq $nodeCmd) { "未检测到 node，无法运行 scripts/smoke/chain-smoke.mjs" } elseif (-not $gatewaydReady) { "未找到 target\debug\gatewayd.exe，先 cargo build -p gatewayd" } else { "" })
 }
 
 # =============================================================================
