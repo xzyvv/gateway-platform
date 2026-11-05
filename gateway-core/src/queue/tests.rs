@@ -903,3 +903,128 @@ fn test_aggregate_minute_windows_is_idempotent() {
     );
     assert_eq!(result.items[0].value, 1.5);
 }
+
+// ===== P2-9：磁盘满 → 恢复的端到端契约 =====
+
+/// 磁盘满期间的点全部进内存缓冲（一行不写库），恢复后全部落盘：
+/// 不丢、不重、顺序保持。
+///
+/// 反证闭环：把 `flush_fallback` 里的 `drain` 改成 `clone`（不清空缓冲）→
+/// 缓冲长度断言失败，且出队会出现重复 id。
+#[tokio::test]
+async fn p2_disk_full_recover_flushes_all_points_without_duplication() {
+    let queue = DataQueue::new_memory().unwrap();
+    queue.set_disk_ok(false);
+
+    // 3 批 × 2 点：磁盘满期间只能进 fallback
+    for batch in 0..3 {
+        queue
+            .enqueue(vec![
+                make_point(&format!("p{batch}a"), batch as f64),
+                make_point(&format!("p{batch}b"), batch as f64),
+            ])
+            .await
+            .unwrap();
+    }
+    assert_eq!(queue.fallback_len(), 6, "磁盘满期间的点必须全部进内存缓冲");
+    assert_eq!(queue.len().await, 0, "磁盘满期间不得写入存储");
+
+    // 恢复后的第一次 enqueue 会先 flush_fallback，再写本批
+    queue.set_disk_ok(true);
+    queue.enqueue(vec![make_point("p3", 3.0)]).await.unwrap();
+    assert_eq!(queue.fallback_len(), 0, "恢复后缓冲必须清空");
+    assert_eq!(queue.len().await, 7, "缓冲 6 个 + 新 1 个，一个都不能少");
+
+    let items = queue.dequeue(20).await.unwrap();
+    assert_eq!(items.len(), 7);
+    let order: Vec<&str> = items.iter().map(|i| i.point_id.as_str()).collect();
+    assert_eq!(
+        order,
+        vec!["p0a", "p0b", "p1a", "p1b", "p2a", "p2b", "p3"],
+        "恢复后必须按缓冲顺序先落盘，再做新数据"
+    );
+
+    let ids: Vec<i64> = items.iter().map(|i| i.id).collect();
+    let unique: std::collections::HashSet<i64> = ids.iter().copied().collect();
+    assert_eq!(unique.len(), 7, "不得重复出队（flush 不能把同一批发两遍）");
+
+    queue.ack(ids).await.unwrap();
+    assert_eq!(queue.len().await, 0, "ack 后不得留下幽灵行");
+}
+
+/// fallback 超容量时按优先级淘汰：低优先级（Bad / stale_count 高）先被踢，
+/// 高优先级保留。这里用小容量直接驱动 `push_into_fallback`，
+/// 避免为测 5000 上限而灌 5001 个点。
+///
+/// 反证闭环：把 `find_lowest_priority_idx` 换成 `pop_front` → 保留集合里会出现 Bad 点。
+#[test]
+fn p2_fallback_pressure_evicts_lowest_priority_first() {
+    use super::push_into_fallback;
+    use std::collections::VecDeque;
+
+    let mut buf: VecDeque<DataPoint> = VecDeque::new();
+    let mut retry = 0u32;
+
+    let bad: Vec<DataPoint> = (0..5)
+        .map(|i| {
+            let mut p = make_point(&format!("bad{i}"), 0.0);
+            p.quality = Quality::Bad;
+            p
+        })
+        .collect();
+    let good: Vec<DataPoint> = (0..5)
+        .map(|i| make_point(&format!("good{i}"), 1.0))
+        .collect();
+
+    let (retained1, dropped1) = push_into_fallback(&mut buf, 10, bad, &mut retry);
+    assert_eq!((retained1, dropped1), (5, 0), "容量 10 装 5 个不该淘汰");
+
+    // 容量收紧到 5：新增 5 个 Good 后总长 10，必须淘汰 5 个
+    let (_retained2, dropped2) = push_into_fallback(&mut buf, 5, good, &mut retry);
+    assert_eq!(dropped2, 5, "超容量必须淘汰 5 个");
+    assert_eq!(buf.len(), 5, "淘汰后长度必须回到容量上限");
+    assert!(
+        buf.iter().all(|p| p.quality == Quality::Good),
+        "留下的必须全是高优先级，实际: {:?}",
+        buf.iter()
+            .map(|p| (&p.point_id, p.quality))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// enqueue 走 fallback 且超容量时，被踢出的点数必须计入
+/// `gateway_queue_persist_dropped_total`——否则真丢数据在监控上完全不可见。
+#[tokio::test]
+async fn p2_disk_full_overflow_counts_dropped_metric() {
+    use super::FALLBACK_CAPACITY;
+    use crate::engine::metrics::Metrics;
+    use std::sync::Arc;
+
+    let queue = DataQueue::new_memory().unwrap();
+    let metrics = Arc::new(Metrics::new());
+    queue.set_metrics(metrics.clone());
+    queue.set_disk_ok(false);
+
+    // 1 个 Bad + 恰好满容量的 Good → 溢出的 1 个必须是最低优先级的 Bad
+    let mut points = vec![{
+        let mut p = make_point("must-drop", 0.0);
+        p.quality = Quality::Bad;
+        p
+    }];
+    points.extend((0..FALLBACK_CAPACITY).map(|i| make_point(&format!("g{i}"), 1.0)));
+
+    queue.enqueue(points).await.unwrap();
+    assert_eq!(
+        queue.fallback_len(),
+        FALLBACK_CAPACITY,
+        "缓冲不得超过容量上限"
+    );
+    assert_eq!(
+        metrics
+            .queue_persist
+            .persist_dropped
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "被容量淘汰的 1 个点必须计入 dropped_total"
+    );
+}

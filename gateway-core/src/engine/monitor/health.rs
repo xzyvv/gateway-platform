@@ -114,12 +114,24 @@ pub fn disk_usage_percent(path: &str) -> GatewayResult<f64> {
     check_disk_space(path).map(|free| (100.0 - free).clamp(0.0, 100.0))
 }
 
+/// 剩余空间百分比是否足以继续入队（`>= 10%`）。
+///
+/// 抽成纯函数：阈值边界（9.99% vs 10.0%）是现场最容易踩的点——既不需要真造一个
+/// 满盘分区就能测，也让监控循环与诊断页判定共用同一口径。
+pub(crate) fn disk_ok_from_free_pct(free_pct: f64) -> bool {
+    free_pct >= DISK_FREE_THRESHOLD_PCT
+}
+
 /// 磁盘空间监控：数据分区剩余空间低于阈值时更新 queue.disk_ok
 /// 由 gatewayd 启动编排调用，故对外公开。
 ///
 /// 同时把检测结果写入 [`DiskStatus`]（磁盘压力信号），供 `/health/ready` 的
 /// `storage` 组件与 Prometheus `gateway_disk_pressure` gauge 消费——
 /// 否则磁盘满（入队被阻断、低优先级点被丢弃）在监控与页面上完全不可见。
+///
+/// **先检测、再 sleep**：原实现 `sleep` 在循环最前面，而 `DataQueue::with_storage`
+/// 里 `disk_ok` 默认是 `true`，于是「已满盘开机」的前 60 秒会把数据直接写进 SQLite
+/// ——正是这段保护要挡的场景。改成首轮立即检测，之后每 60 秒一次。
 pub fn spawn_disk_monitor(
     queue: Arc<DataQueue>,
     history: Arc<DiskHistoryStore>,
@@ -135,10 +147,9 @@ pub fn spawn_disk_monitor(
         let check_path = check_path.clone();
         async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 match check_disk_space(&check_path) {
                     Ok(free_pct) => {
-                        let ok = free_pct >= DISK_FREE_THRESHOLD_PCT;
+                        let ok = disk_ok_from_free_pct(free_pct);
                         queue.set_disk_ok(ok);
                         history.push(free_pct);
                         // 状态变化时才打日志（否则每 60s 重复刷同一条）
@@ -167,6 +178,7 @@ pub fn spawn_disk_monitor(
                         tracing::warn!("disk space check failed: {}", e);
                     }
                 }
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
         }
     });

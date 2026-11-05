@@ -185,6 +185,14 @@ impl DataQueue {
         self.disk_ok.store(ok, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// 当前是否允许入队（磁盘压力状态的反向视图）。
+    ///
+    /// 供 `/health/ready` 与运维诊断展示「现在到底是在写库还是在内存缓冲」——
+    /// 此前这个状态只在内部流转，现场只能从「点没上来」反推。
+    pub fn is_disk_ok(&self) -> bool {
+        self.disk_ok.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// S2: fallback 缓冲区当前条目数
     pub fn fallback_len(&self) -> usize {
         self.fallback_buffer.lock().len()

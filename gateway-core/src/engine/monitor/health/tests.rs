@@ -249,3 +249,95 @@ fn p9_disk_pressure_gauge_roundtrip_and_exported() {
     );
     assert!(export.contains("# TYPE gateway_disk_pressure gauge"));
 }
+
+// ============================================================
+// P2-9: 磁盘压力判定（阈值边界 + 状态沿）
+// ============================================================
+
+/// 阈值边界：10.0 是「刚好还能继续写」的包含边界。
+///
+/// 这条断言的价值在于不需要真造一个只剩 9% 的分区：监控循环里
+/// `free_pct >= 10.0` 的判定抽成纯函数后，边界语义可以被直接钉死。
+#[test]
+fn p2_disk_ok_threshold_is_inclusive_at_ten_percent() {
+    assert!(!disk_ok_from_free_pct(0.0), "0% 必须阻断入队");
+    assert!(!disk_ok_from_free_pct(9.99), "9.99% 必须阻断入队");
+    assert!(disk_ok_from_free_pct(10.0), "恰好 10% 应放行（包含边界）");
+    assert!(disk_ok_from_free_pct(100.0));
+    // 采样异常（NaN）时失败必须偏保守：宁可阻断入队，也不能把数据写进快满的盘
+    assert!(!disk_ok_from_free_pct(f64::NAN), "NaN 必须视为不 ok");
+}
+
+/// `DiskStatus::record` 只在状态翻转时返回 true——否则每分钟刷一条同样的
+/// error/info 日志，现场排查时反而会把真正的故障埋在噪声里。
+#[test]
+fn p2_disk_status_reports_only_on_state_change() {
+    let st = DiskStatus::new();
+    assert!(!st.is_pressure(), "尚未检测过，不应处于压力态");
+    assert!(st.free_pct().is_none(), "未检测过时必须是 None 而不是 0%");
+
+    assert!(
+        !st.record(25.0, false),
+        "默认压力=false，首次正常检测不算状态变化"
+    );
+    assert_eq!(st.free_pct(), Some(25.0));
+
+    assert!(st.record(5.0, true), "正常 → 压力 必须报告一次");
+    assert!(st.is_pressure());
+    assert_eq!(st.free_pct(), Some(5.0));
+
+    assert!(!st.record(3.0, true), "持续压力不得重复报告");
+    assert!(!st.record(4.0, true), "压力值继续下降也不得重复报告");
+
+    assert!(st.record(60.0, false), "压力 → 恢复 必须报告一次");
+    assert!(!st.is_pressure());
+    assert_eq!(st.free_pct(), Some(60.0));
+}
+
+/// 监控循环必须**先检测再 sleep**：原实现 sleep 在最前，`disk_ok` 默认 true，
+/// 已满盘开机的设备前 60 秒会把数据直接写进 SQLite。
+///
+/// 这里用真实目录（临时目录所在的磁盘必然 >10% 可用）验证首轮会立即把
+/// `disk_ok` 校正为 true，并写入 DiskStatus；若把 sleep 挪回循环开头，本测试
+/// 会因 5s 超时而失败。
+#[tokio::test]
+async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
+    use crate::engine::metrics::Metrics;
+    use crate::queue::DataQueue;
+    use std::sync::Arc;
+
+    let queue = Arc::new(DataQueue::new_memory().unwrap());
+    // 故意先置为 false（模拟「开机时磁盘是满的」这一最坏状态）
+    queue.set_disk_ok(false);
+
+    let path = temp_db_path();
+    let history = Arc::new(DiskHistoryStore::new(10, &path).unwrap());
+    let status = Arc::new(DiskStatus::new());
+    let metrics = Arc::new(Metrics::new());
+
+    spawn_disk_monitor(queue.clone(), history, status.clone(), metrics);
+
+    // 首轮检测应在毫秒级完成；给 5s 冗余足够覆盖慢机
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while status.free_pct().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "磁盘监控 5s 内未完成首轮检测——sleep 很可能又跑到了循环最前面"
+        );
+        // 必须用 tokio 的 sleep 让出执行权：current-thread 运行时下
+        // std::thread::sleep 会阻塞唯一线程，被监管任务永远不会被 poll 到。
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    assert!(
+        status.free_pct().unwrap() >= 10.0,
+        "临时目录所在分区可用空间应 >10%，实际 {:?}",
+        status.free_pct()
+    );
+    assert!(!status.is_pressure(), "空间充足时不应处于压力态");
+    assert!(
+        queue.is_disk_ok(),
+        "首轮检测后必须把 disk_ok 校正为 true——否则后续 enqueue 仍会绕道内存缓冲"
+    );
+    let _ = std::fs::remove_file(&path);
+}
