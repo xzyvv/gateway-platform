@@ -945,6 +945,18 @@ jobs:
         env:
           RUSTFLAGS: ""
 
+      # Linux 专属代码块（cfg(target_os="linux") / cfg(unix)）在 Windows CI 上
+      # 根本不会被编译 → 改坏了只能到真机编译时才发现。
+      # 本 job 用 --all-targets 对三个实际部署的 crate 做 Linux 编译验证，
+      # 让这类问题在 CI 阶段就暴露。
+      # gateway-desktop 已冻结，其 Tauri 依赖的 libdbus-sys 需要 Linux sysroot，不纳入。
+      - name: check linux-only code paths
+        run: |
+          cargo check --target x86_64-unknown-linux-gnu --all-targets --features fins \
+            -p gateway-core -p gateway-api -p gatewayd
+        env:
+          RUSTFLAGS: ""
+
   # Playwright E2E 冒烟（阶段 3：强制门禁）
   # ─────────────────────────────────────────────────────────
   # S5: 由观察期转为强制门禁——用例失败将阻塞合并。

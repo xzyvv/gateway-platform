@@ -80,6 +80,28 @@ $nodeModulesReady = Test-Path (Join-Path $webRoot "node_modules")
 $configReady = Test-Path (Join-Path $repoRoot "config.json")
 $playwrightBrowsersReady = Test-Path (Join-Path $env:LOCALAPPDATA "ms-playwright")
 
+# Linux 交叉编译验证的前置条件探测（zig + rust linux target）。
+# 缺任一项 → 该步骤标 SKIP：Linux 专属代码改坏了只能到真机编译时才发现，
+# 本地 Windows 门禁覆盖不到，必须显式提供这条通道。
+$linuxCrossReady = $false
+$linuxCrossSkipReason = "未检测 Linux 交叉编译能力"
+try {
+    $probeOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\linux_cross_check.ps1") -Probe 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $linuxCrossReady = $true
+        $linuxCrossSkipReason = ""
+    }
+    else {
+        $linuxCrossSkipReason = (@($probeOut) | ForEach-Object { "$_" }) -join "; "
+        if ([string]::IsNullOrWhiteSpace($linuxCrossSkipReason)) {
+            $linuxCrossSkipReason = "未检测到 zig / 未安装 x86_64-unknown-linux-gnu target"
+        }
+    }
+}
+catch {
+    $linuxCrossSkipReason = "能力探测失败：$($_.Exception.Message)"
+}
+
 $script:steps = New-Object System.Collections.ArrayList
 $script:results = New-Object System.Collections.ArrayList
 $script:stepNo = 0
@@ -320,6 +342,10 @@ if (-not $SkipBackend) {
     Add-Step -Id "check-deadcode" -Title "dead_code 严格门禁（RUSTFLAGS=-D dead_code）" -Action {
         return (Run-Native -Exe "cargo" -Arguments @("check", "--all-targets") -EnvVars @{ RUSTFLAGS = "-D dead_code" })
     }
+
+    Add-Step -Id "linux-cross-check" -Title "Linux 交叉编译验证（cfg(target_os=linux) 代码块不被编译会静默腐烂）" -Action {
+        return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\linux_cross_check.ps1"))
+    } -SkipReason $linuxCrossSkipReason
 
     if ($IncludeChaos) {
         Add-Step -Id "chaos" -Title "chaos 故障恢复场景（cargo test --test chaos）" -Action {
