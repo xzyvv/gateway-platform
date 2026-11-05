@@ -171,56 +171,102 @@ const LOG_SIZE_THRESHOLD: u64 = 50 * 1024 * 1024;
 /// #17: 日志目录内 `gateway.log*` 的总大小上限。
 const LOG_TOTAL_CAP: u64 = 500 * 1024 * 1024;
 
+/// 扫描日志目录，收集本系统日志候选（`gateway.log*` 前缀且是普通文件）。
+///
+/// 前缀过滤是硬约束：日志目录下还可能有 `config.json` / `eula.txt` 等邻居文件，
+/// 清理绝不能碰到它们。
+pub(super) fn collect_log_files(dir: &std::path::Path) -> Vec<(PathBuf, u64, SystemTime)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(LOG_FILE_PREFIX) {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if !meta.is_file() {
+                continue;
+            }
+            let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            files.push((entry.path(), meta.len(), mtime));
+        }
+    }
+    files
+}
+
+/// 完整轮转计划：第一轮按「大小阈值 + 保留最新 N 个」，第二轮按「目录总量上限」。
+///
+/// 两轮合并成一个纯函数，才能把「总量超限时删哪些」这条决策钉进测试——
+/// 此前它埋在 `spawn_log_rotation` 的 async 循环里，只能靠真机等一小时观测。
+///
+/// 不变量：
+/// - 最新 `keep_recent` 个文件**任何情况下**都不删（正在写的活动文件在其内）；
+/// - 第二轮只从「最旧的、且不在第一轮删除列表里」的文件开始删，删到总量达标即停；
+/// - 若删光所有可删文件后总量仍超限，也绝不越过 `keep_recent` 保护线。
+pub(super) fn plan_rotation_with(
+    files: &[(PathBuf, u64, SystemTime)],
+    keep_recent: usize,
+    size_threshold: u64,
+    total_cap: u64,
+) -> Vec<(PathBuf, u64)> {
+    let mut to_delete = select_files_for_rotation(files, keep_recent, size_threshold);
+
+    let mut remaining: Vec<&(PathBuf, u64, SystemTime)> = files
+        .iter()
+        .filter(|f| !to_delete.iter().any(|(p, _)| *p == f.0))
+        .collect();
+    // 最旧的排在前面：超限时优先牺牲最旧的日志
+    remaining.sort_by_key(|a| a.2);
+    let mut total: u64 = remaining.iter().map(|f| f.1).sum();
+    let protected = remaining.len().min(keep_recent);
+    let deletable = remaining.len().saturating_sub(protected);
+    for f in remaining.iter().take(deletable) {
+        if total <= total_cap {
+            break;
+        }
+        to_delete.push((f.0.clone(), f.1));
+        total = total.saturating_sub(f.1);
+    }
+    to_delete
+}
+
+/// 生产参数下的轮转计划（保留 7 个 / 50MB 单文件阈值 / 500MB 目录上限）。
+pub(super) fn plan_rotation(files: &[(PathBuf, u64, SystemTime)]) -> Vec<(PathBuf, u64)> {
+    plan_rotation_with(files, KEEP_RECENT_LOGS, LOG_SIZE_THRESHOLD, LOG_TOTAL_CAP)
+}
+
+/// 对指定目录执行一次轮转，返回实际删除的文件列表。
+///
+/// 抽成独立函数（而非内联在循环里）是为了能用临时目录端到端验证「真的删了哪些、
+/// 哪些邻居文件没被碰」。
+pub(super) fn prune_log_dir(dir: &std::path::Path) -> Vec<(PathBuf, u64)> {
+    let files = collect_log_files(dir);
+    let to_delete = plan_rotation(&files);
+    for (path, size) in &to_delete {
+        match std::fs::remove_file(path) {
+            Ok(()) => tracing::info!("rotated log file: {} ({} bytes)", path.display(), size),
+            Err(e) => tracing::warn!(
+                "failed to rotate log file: {} ({} bytes): {e}",
+                path.display(),
+                size
+            ),
+        }
+    }
+    to_delete
+}
+
 /// 日志文件轮转：保留最近 7 个，删除超过 50MB 的旧日志，并保证总量不超过上限
+///
+/// 先立即清理一次再进入周期循环：原实现 `sleep` 在前，重启间隔短于 1 小时的设备
+/// （现场调参、断电重启很常见）永远等不到第一次清理，日志目录会一直膨胀到写满磁盘。
 fn spawn_log_rotation() {
     crate::engine::supervision::spawn_supervised("log_rotation", || async {
         loop {
+            prune_log_dir(std::path::Path::new(crate::support::default_log_dir()));
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            let log_dir = crate::support::default_log_dir();
-            let Ok(mut entries) = std::fs::read_dir(log_dir) else {
-                continue;
-            };
-            let mut files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
-            while let Some(Ok(entry)) = entries.next() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if !name.starts_with(LOG_FILE_PREFIX) {
-                    continue;
-                }
-                if let Ok(meta) = entry.metadata() {
-                    if !meta.is_file() {
-                        continue;
-                    }
-                    let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                    files.push((entry.path(), meta.len(), mtime));
-                }
-            }
-
-            let mut to_delete =
-                select_files_for_rotation(&files, KEEP_RECENT_LOGS, LOG_SIZE_THRESHOLD);
-
-            {
-                let mut remaining: Vec<&(std::path::PathBuf, u64, std::time::SystemTime)> = files
-                    .iter()
-                    .filter(|f| !to_delete.iter().any(|(p, _)| *p == f.0))
-                    .collect();
-                remaining.sort_by_key(|a| a.2);
-                let mut total: u64 = remaining.iter().map(|f| f.1).sum();
-                let protected = remaining.len().min(KEEP_RECENT_LOGS);
-                let deletable = remaining.len().saturating_sub(protected);
-                for f in remaining.iter().take(deletable) {
-                    if total <= LOG_TOTAL_CAP {
-                        break;
-                    }
-                    to_delete.push((f.0.clone(), f.1));
-                    total = total.saturating_sub(f.1);
-                }
-            }
-
-            for (path, size) in to_delete {
-                let _ = std::fs::remove_file(&path);
-                tracing::info!("rotated log file: {} ({} bytes)", path.display(), size);
-            }
         }
     });
 }

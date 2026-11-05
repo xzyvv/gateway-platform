@@ -282,6 +282,137 @@ fn shutdown_logging_handles_poisoned_log_guard() {
 // 见 [tests.rs] 顶部注释。
 // 此处不再重复——已被 `log_rotation_only_targets_gateway_log_prefix` 覆盖。
 
+// ===== P2-11：目录总量上限（第二轮清理）=====
+//
+// 此前的总量上限逻辑内联在 `spawn_log_rotation` 的 async 循环里：只能等一小时
+// 在真机上观测，且删错文件（删掉正在写的活动日志）没人能提前发现。现在决策
+// 收敛到纯函数 `plan_rotation_with`，下面用合成元数据覆盖三种关键分支。
+
+/// 第一轮（大小阈值）已清干净：总量不超上限时，第二轮不得多删
+#[test]
+fn cap_pass_deletes_nothing_when_under_cap() {
+    // 12 个 60MB：第一轮删掉最新 7 个之外的 5 个，剩 7 × 60MB = 420MB < 500MB
+    let files: Vec<_> = (0..12).map(|i| f(&format!("a{i}.log"), 60, i)).collect();
+    let del = plan_rotation(&files);
+    assert_eq!(del.len(), 5, "超阈值且超出保留窗口的 5 个旧文件应被删");
+
+    // 总量 420MB < 500MB，第二轮不应再删
+    let cap: u64 = 500 * 1024 * 1024;
+    let del2 = plan_rotation_with(&files, 7, 50 * 1024 * 1024, cap);
+    assert_eq!(del2.len(), 5, "总量未超上限时不应触发第二轮删除");
+}
+
+/// 第二轮：全部文件都低于单文件阈值，但总量超上限 → 从最旧的开始删到达标
+#[test]
+fn cap_pass_deletes_oldest_first_until_under_cap() {
+    // 10 × 60MB = 600MB，阈值设 100MB 让第一轮完全不动作
+    let files: Vec<_> = (0..10).map(|i| f(&format!("a{i}.log"), 60, i)).collect();
+    let cap = 200 * 1024 * 1024;
+    let del = plan_rotation_with(&files, 3, 100 * 1024 * 1024, cap);
+
+    // 需把 600MB 压到 ≤200MB：删最旧的前 7 个（420MB）后剩 180MB
+    assert_eq!(del.len(), 7, "应删最旧的 7 个文件，实际删除列表: {del:?}");
+    let names: Vec<String> = del
+        .iter()
+        .map(|(p, _)| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    for i in 0..7 {
+        assert!(
+            names.contains(&format!("a{i}.log")),
+            "第二轮必须从最旧的开始删，缺少 a{i}.log；实际: {names:?}"
+        );
+    }
+    // 最新 3 个必须原样保留
+    for i in 7..10 {
+        assert!(
+            !names.contains(&format!("a{i}.log")),
+            "最新 3 个文件不得被删，但 a{i}.log 在删除列表里"
+        );
+    }
+}
+
+/// 反证闭环：只保留 1 个文件且它自己就超过上限时，仍不得删它（正在写的活动文件）
+#[test]
+fn cap_pass_never_deletes_newest_even_if_it_alone_exceeds_cap() {
+    let files = vec![f("only.log", 900, 1)];
+    let del = plan_rotation_with(&files, 1, 1024 * 1024 * 1024, 500 * 1024 * 1024);
+    assert!(del.is_empty(), "唯一（最新）文件即活动日志，绝不能被删");
+}
+
+/// 第二轮不得把第一轮已列入删除的文件重复计入（重复项会导致删除同一文件两次、
+/// 日志里出现两条 "rotated" 记录，运维会误以为有第二个文件被清）
+#[test]
+fn cap_pass_does_not_duplicate_first_pass_entries() {
+    // 10 × 10MB：全部低于单文件阈值 → 第一轮不动作；总量 100MB > 50MB 上限 → 第二轮动手
+    let files: Vec<_> = (0..10).map(|i| f(&format!("a{i}.log"), 10, i)).collect();
+    let del = plan_rotation_with(&files, 3, 50 * 1024 * 1024, 50 * 1024 * 1024);
+    let mut names: Vec<String> = del
+        .iter()
+        .map(|(p, _)| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    let total = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), total, "删除列表存在重复项: {names:?}");
+    assert_eq!(
+        names,
+        vec!["a0.log", "a1.log", "a2.log", "a3.log", "a4.log"],
+        "应删最旧的 5 个（把 100MB 压到恰好 50MB 上限），最新 5 个保留"
+    );
+}
+
+/// 端到端：`prune_log_dir` 真的删掉最旧的大文件，且不碰目录里的邻居文件
+///
+/// 反证闭环：把 `LOG_FILE_PREFIX` 改成空串（不再过滤前缀）→ 邻居文件被删、断言失败；
+/// 把 `remove_file` 那行删掉（只计划不执行）→ 文件仍在、断言失败。
+#[test]
+fn prune_log_dir_deletes_old_big_log_and_keeps_neighbours() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("config.json"), b"{}").expect("write config");
+    std::fs::write(dir.path().join("eula.txt"), b"hi").expect("write eula");
+
+    // 9 个 gateway.log.*：最旧的 1 个 51MB（> 50MB 阈值），其余 8 个 1KB
+    let old = dir.path().join("gateway.log.20260101");
+    {
+        use std::io::Write as _;
+        let mut fh = std::fs::File::create(&old).expect("create big log");
+        // 分块写入 51MB，避免一次分配大缓冲
+        for _ in 0..51 {
+            fh.write_all(&[b'x'; 1024 * 1024]).expect("write big log");
+        }
+    }
+    for i in 0..8 {
+        let p = dir.path().join(format!("gateway.log.2026010{}", i + 2));
+        std::fs::write(&p, b"small").expect("write small log");
+        // 显式设置 mtime：文件系统时间精度差异不应让测试结果不稳定
+        let fh = std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .expect("open small log");
+        fh.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(20_000 + i as u64))
+            .expect("set mtime");
+    }
+    let fh = std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .expect("open big log");
+    fh.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(10_000))
+        .expect("set mtime");
+
+    let del = prune_log_dir(dir.path());
+
+    assert!(
+        del.iter().any(|(p, _)| p == &old),
+        "最旧且超阈值的日志应被实际删除，实际删除列表: {del:?}"
+    );
+    assert!(!old.exists(), "大日志文件应已从磁盘移除");
+    assert_eq!(del.len(), 1, "其余 8 个都在保留窗口内，不应被删");
+    assert!(
+        dir.path().join("config.json").exists() && dir.path().join("eula.txt").exists(),
+        "日志目录里的邻居文件不得被清理"
+    );
+}
+
 /// 读取临时日志目录下唯一的 `gateway.log*` 文件并按行收集（忽略空行）。
 ///
 /// `RollingFileAppender` 的 DAILY 轮转会把文件名变成 `gateway.log.<date>`，
