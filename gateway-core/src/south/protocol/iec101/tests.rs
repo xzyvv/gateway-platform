@@ -364,8 +364,14 @@ async fn test_diag_reports_unreachable_endpoint_instead_of_fake_success() {
     let msg = c.diag().await;
     assert!(msg.contains("链路复位失败"), "{msg}");
     assert!(msg.contains("总召唤失败"), "{msg}");
-    assert!(!msg.contains("链路复位成功"), "不可达端点不得报复位成功: {msg}");
-    assert!(!msg.contains("总召唤返回"), "不可达端点不得报总召唤成功: {msg}");
+    assert!(
+        !msg.contains("链路复位成功"),
+        "不可达端点不得报复位成功: {msg}"
+    );
+    assert!(
+        !msg.contains("总召唤返回"),
+        "不可达端点不得报总召唤成功: {msg}"
+    );
 }
 
 #[tokio::test]
