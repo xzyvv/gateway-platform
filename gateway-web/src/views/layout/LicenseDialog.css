@@ -49,7 +49,7 @@
 }
 /* 已用量超过上限（存量配置超出当前档位配额）→ 红色警示 */
 .lic-quota-item b.lic-quota-over {
-  color: var(--color-danger);
+  color: var(--text-danger);
 }
 
 /* 导入行 */
