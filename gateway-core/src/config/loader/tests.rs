@@ -258,3 +258,131 @@ fn reload_returns_err_when_enc_ciphertext_invalid() {
         "应提示 reload 解密失败，实际: {msg}"
     );
 }
+
+// ===== 坏配置矩阵（决策清单 P1-5）=====
+//
+// 现场手改配置是「装机当天起不来」的主要来源。这里表驱动地跑一遍典型坏配置，
+// 逐条断言：加载必须失败，且错误里点名了字段 / 给出了可读原因（而非笼统失败）。
+//
+// 加载顺序（loader.rs:86-105）：expand includes → JSON Schema → 反序列化 →
+// migrate → 解密 → validate_all。不同坏配置会被不同层拦下，故每条用例断言各自的关键词。
+
+/// 从默认配置派生 JSON 后写入临时目录，返回 loader 与路径。
+fn loader_with_json(
+    dir: &tempfile::TempDir,
+    mutate: impl FnOnce(&mut serde_json::Value),
+) -> ConfigLoader {
+    let mut value = serde_json::to_value(GatewayConfig::default()).expect("默认配置应可序列化");
+    mutate(&mut value);
+    let path = dir.path().join("config.json");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&value).expect("JSON 应可序列化"),
+    )
+    .expect("写入坏配置失败");
+    ConfigLoader::new(path)
+}
+
+/// 断言 load() 失败，且错误消息包含 `needle`（用于确认报错点名了具体字段/原因）。
+fn assert_load_error(loader: &ConfigLoader, case: &str, needle: &str) {
+    let err = loader
+        .load()
+        .expect_err(&format!("坏配置 {case} 必须被拒绝加载"));
+    let msg = err.to_string();
+    assert!(
+        msg.contains(needle),
+        "坏配置 {case} 的报错应包含 {needle:?}，实际: {msg}"
+    );
+}
+
+#[test]
+fn bad_config_matrix_is_rejected_with_readable_error() {
+    let addr_bus = |bus: serde_json::Value| -> serde_json::Value {
+        serde_json::json!({
+            "port_name": "COM3",
+            "protocol": "modbus",
+            "tcp_addr": bus,
+        })
+    };
+
+    let cases: Vec<(&str, Box<dyn Fn(&mut serde_json::Value)>, &str)> = vec![
+        (
+            "缺必填字段 port_name",
+            Box::new(|v: &mut serde_json::Value| {
+                v["buses"] = serde_json::json!([{"protocol": "modbus"}]);
+            }),
+            "port_name",
+        ),
+        (
+            "类型错 baud_rate=字符串",
+            Box::new(|v: &mut serde_json::Value| {
+                v["buses"] = serde_json::json!([{
+                    "port_name": "COM3",
+                    "protocol": "modbus",
+                    "baud_rate": "fast"
+                }]);
+            }),
+            "baud_rate",
+        ),
+        (
+            "非法波特率 12345",
+            Box::new(|v: &mut serde_json::Value| {
+                v["buses"] = serde_json::json!([{
+                    "port_name": "COM3",
+                    "protocol": "modbus",
+                    "baud_rate": 12345
+                }]);
+            }),
+            "invalid_baud_rate",
+        ),
+        (
+            "非法校验位 mark",
+            Box::new(|v: &mut serde_json::Value| {
+                v["buses"] = serde_json::json!([{
+                    "port_name": "COM3",
+                    "protocol": "modbus",
+                    "parity": "mark"
+                }]);
+            }),
+            "invalid_parity",
+        ),
+        (
+            "非法 tcp_addr（缺端口）",
+            Box::new(|v: &mut serde_json::Value| {
+                v["buses"] = serde_json::json!([addr_bus(serde_json::json!("127.0.0.1"))]);
+            }),
+            "缺少端口",
+        ),
+        (
+            "schema_version 超前",
+            Box::new(|v: &mut serde_json::Value| {
+                v["schema_version"] = serde_json::json!(99);
+            }),
+            "高于当前支持",
+        ),
+    ];
+
+    for (case, mutate, needle) in cases {
+        let dir = tempdir().expect("should succeed");
+        let loader = loader_with_json(&dir, mutate);
+        assert_load_error(&loader, case, needle);
+    }
+}
+
+/// 版本落后（v0，无 schema_version 的历史配置）必须能迁移加载，而不是被拒绝。
+///
+/// 这是「旧配置升级后无法加载」风险的反向用例：migrate 只拒绝超前版本，
+/// 落后版本应原地迁移到 CURRENT。
+#[test]
+fn legacy_schema_version_is_migrated_not_rejected() {
+    let dir = tempdir().expect("should succeed");
+    let loader = loader_with_json(&dir, |v| {
+        v["schema_version"] = serde_json::json!(0);
+    });
+    let cfg = loader.load().expect("v0 历史配置应可迁移加载");
+    assert_eq!(
+        cfg.schema_version,
+        crate::config::CURRENT_SCHEMA_VERSION,
+        "v0 配置加载后应升到当前版本"
+    );
+}
