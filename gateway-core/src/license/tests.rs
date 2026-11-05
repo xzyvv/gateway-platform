@@ -434,6 +434,65 @@ fn test_evaluate_clock_tampered_overrides() {
     assert!(matches!(err, Some(LicenseError::ClockTampered)));
 }
 
+// ===== 时钟 / license 反回拨行为验证（决策清单 P1-6）=====
+//
+// 现场最常见的「授权突然失效」不是签名问题，而是工控板无电池 RTC 断电后
+// 时间漂回过去。这里锁定三件事：
+// 1. < 48h 的抖动属于常态，不得误判（合法设备不能被锁）；
+// 2. 真回拨必须判 Tampered，且原因明确写「clock rollback」，不能混成
+//    「signature invalid」（后者会把人引向完全错误的排查方向）；
+// 3. 对外状态是 `tampered` 而不是 `invalid`，前端据此显示「时钟异常」。
+
+#[test]
+fn test_clock_drift_within_48h_is_tolerated() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    let lic = write_lic(dir.path(), &sign_payload(&test_payload()));
+    let now = chrono::Utc::now().timestamp();
+    // 建立基准
+    let (s1, err1) = m.evaluate_at(&lic, &matching_fp(), now);
+    assert_eq!(s1.status, LicenseStatus::Ok);
+    assert!(err1.is_none());
+
+    // 回拨 47h：在 48h 容差内，应继续正常授权
+    let (s2, err2) = m.evaluate_at(&lic, &matching_fp(), now - 47 * 3600);
+    assert_eq!(
+        s2.status,
+        LicenseStatus::Ok,
+        "47h 抖动属于无电池 RTC 常态，不得判 Tampered"
+    );
+    assert!(s2.present, "容差内应保持授权有效");
+    assert!(err2.is_none(), "容差内不应产生失效原因");
+}
+
+#[test]
+fn test_clock_rollback_reason_says_rollback_not_signature() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    let lic = write_lic(dir.path(), &sign_payload(&test_payload()));
+    let now = chrono::Utc::now().timestamp();
+    m.evaluate_at(&lic, &matching_fp(), now);
+
+    // 回拨 49h（超阈值）→ Tampered，原因必须是「回拨」而非「签名无效」
+    let (state, err) = m.evaluate_at(&lic, &matching_fp(), now - 49 * 3600);
+    assert_eq!(state.status, LicenseStatus::Tampered);
+    let err = err.expect("超阈值回拨必须给出失效原因");
+    let reason = err.to_string();
+    assert!(
+        reason.contains("clock rollback"),
+        "原因应明确写 clock rollback，实际: {reason}"
+    );
+    assert!(
+        !reason.contains("signature"),
+        "回拨原因不能混入 signature（会误导排查方向），实际: {reason}"
+    );
+
+    // 对外 JSON 状态是 tampered（前端显示「时钟异常」），不是 invalid
+    let json = state.to_json_value();
+    assert_eq!(json["status"], "tampered");
+    assert_ne!(json["status"], "invalid");
+}
+
 /// Bug C9: clock 存储不可用必须 fail-closed（判 Tampered），不得放行。
 #[test]
 fn test_clock_store_error_fails_closed() {

@@ -162,3 +162,6 @@ async fn sync_ntp(server: &str) -> GatewayResult<i64> {
         .map_err(|e| GatewayError::Io(format!("ntp returned no datetime: {}", e)))?;
     Ok(datetime.timestamp_millis())
 }
+
+#[cfg(test)]
+mod tests;

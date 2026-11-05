@@ -483,7 +483,11 @@ impl LicenseManager {
         // Bug C9: clock store failure is fail-closed (was fail-open) -> degrade license to Tampered
         let clock_ok = match self.clock.check_and_update(now, Some(path)) {
             Ok(ClockVerdict::Tampered) => {
-                tracing::warn!("license clock rollback detected: {}", payload.license_id);
+                tracing::warn!(
+                    "license clock rollback detected: {} (system clock is >48h earlier than last seen; \
+                     if this board has no RTC battery, sync NTP or fix the clock, then restart)",
+                    payload.license_id
+                );
                 false
             }
             Ok(_) => true,
