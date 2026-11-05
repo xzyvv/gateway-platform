@@ -304,17 +304,29 @@ fn net_interfaces() -> Vec<NetInterfaceMetric> {
             continue;
         }
         let base = entry.path();
-        let rx_bytes = std::fs::read_to_string(base.join("statistics/rx_bytes"))
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0);
-        let tx_bytes = std::fs::read_to_string(base.join("statistics/tx_bytes"))
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0);
-        let up = std::fs::read_to_string(base.join("operstate"))
-            .map(|s| s.trim() == "up")
-            .unwrap_or(false);
+        // 计数器/状态读失败时不能静默当 0 / down：运维会把「读不到」误读成
+        // 「网卡流量为 0」「网卡已 down」，从而误判现场。失败时留痕。
+        let rx_bytes = match std::fs::read_to_string(base.join("statistics/rx_bytes")) {
+            Ok(s) => s.trim().parse().unwrap_or(0),
+            Err(e) => {
+                tracing::warn!("host metrics: read rx_bytes of {} failed: {}", name, e);
+                0
+            }
+        };
+        let tx_bytes = match std::fs::read_to_string(base.join("statistics/tx_bytes")) {
+            Ok(s) => s.trim().parse().unwrap_or(0),
+            Err(e) => {
+                tracing::warn!("host metrics: read tx_bytes of {} failed: {}", name, e);
+                0
+            }
+        };
+        let up = match std::fs::read_to_string(base.join("operstate")) {
+            Ok(s) => s.trim() == "up",
+            Err(e) => {
+                tracing::warn!("host metrics: read operstate of {} failed: {}", name, e);
+                false
+            }
+        };
         let ip = addresses.remove(&name).unwrap_or_else(|| "-".to_string());
         result.push(NetInterfaceMetric {
             name,

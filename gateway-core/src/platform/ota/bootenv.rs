@@ -223,12 +223,69 @@ fn uboot_printenv(name: &str) -> Option<String> {
     None
 }
 
+/// `sync` 的处置决策（**纯函数，跨平台可测**）。
+///
+/// 抽成纯函数的原因：`uboot_sync` 只在 Linux 上编译，本机（Windows）
+/// 无法覆盖其分支——而这恰恰是 OTA 回滚**变砖**的判定点。
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncDecision {
+    /// 已刷盘，继续后续流程。
+    Flushed,
+    /// `sync` 命令不存在：u-boot `fw_setenv` 自身已刷 env 分区，放行但留痕。
+    Missing,
+    /// `sync` 执行失败：env 可能未落盘 → 必须中止 reboot。
+    Failed,
+}
+
+/// 判定 `sync` 的执行结果该如何处置（纯函数）。
+///
+/// - `spawn_ok`：`sync` 是否成功启动（false = 命令不存在 / 无法执行）
+/// - `success`：`sync` 的退出码是否表示成功
+#[cfg(any(target_os = "linux", test))]
+fn classify_sync(spawn_ok: bool, success: bool) -> SyncDecision {
+    if !spawn_ok {
+        SyncDecision::Missing
+    } else if success {
+        SyncDecision::Flushed
+    } else {
+        SyncDecision::Failed
+    }
+}
+
 /// `sync`：把 u-boot env 写入刷盘。
+///
+/// r15-OTA-SYNC (fix): 旧实现 `let _ = Command::new("sync").status();`
+/// **完全忽略退出码**——`sync` 失败（磁盘 I/O 错误 / 只读根 / 进程被杀）时
+/// 依然继续 `reboot()`，env 实际未落盘 → 重启后仍启动旧分区。
+/// 在 A/B 回滚场景下这意味着「回滚以为成功 → 实际仍启动故障分区」→
+/// 设备反复重启变砖。
+///
+/// 现在：`sync` 启动失败（命令不存在）→ 放行但 warn（`fw_setenv` 自身已刷
+/// env 分区）；`sync` 退出码非零 → **返回 Err 中止 reboot**。
 #[cfg(target_os = "linux")]
 fn uboot_sync() -> GatewayResult<()> {
     use std::process::Command;
-    let _ = Command::new("sync").status();
-    Ok(())
+    let status = Command::new("sync").status();
+    let (spawn_ok, success, code) = match &status {
+        Ok(s) => (true, s.success(), s.code()),
+        Err(_) => (false, false, None),
+    };
+    match classify_sync(spawn_ok, success) {
+        SyncDecision::Flushed => Ok(()),
+        SyncDecision::Missing => {
+            tracing::warn!(
+                "OTA: `sync` command unavailable — relying on fw_setenv's own env flush; \
+                 bootloader env persistence cannot be confirmed"
+            );
+            Ok(())
+        }
+        SyncDecision::Failed => Err(GatewayError::Io(format!(
+            "sync failed: exit code {:?} — bootloader env may not be persisted; \
+             rebooting now would restart the OLD slot (rollback would silently fail)",
+            code
+        ))),
+    }
 }
 
 /// 非 Linux：`sync` 无意义，no-op。
@@ -342,5 +399,16 @@ mod tests {
         assert_eq!(env.writes().len(), 1);
         env.clear_writes();
         assert!(env.writes().is_empty());
+    }
+
+    /// r15-OTA-SYNC: `sync` 三种结果的处置判定。
+    ///
+    /// 关键断言：`sync` 退出码非零必须判为 `Failed`——这决定 OTA 回滚
+    /// 是否中止 reboot（旧实现忽略退出码 → 回滚静默失效 → 设备变砖）。
+    #[test]
+    fn sync_outcomes_are_classified() {
+        assert_eq!(classify_sync(true, true), SyncDecision::Flushed);
+        assert_eq!(classify_sync(true, false), SyncDecision::Failed);
+        assert_eq!(classify_sync(false, false), SyncDecision::Missing);
     }
 }

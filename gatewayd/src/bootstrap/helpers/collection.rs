@@ -264,6 +264,13 @@ pub(crate) async fn init_collection_chain(
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
             loop {
                 ticker.tick().await;
+                // r15-WD3: 优雅停机会调用 `stop_platform_watchdog()` 解除
+                // 硬件看门狗 armed 状态；此时本喂狗循环必须退出，否则会继续
+                // 向已解除的设备写心跳，把看门狗重新 arm 起来（等于没解除）。
+                if !watchdog.is_running() {
+                    info!("watchdog stopped: kick loop exiting");
+                    break;
+                }
                 watchdog.kick();
             }
         });

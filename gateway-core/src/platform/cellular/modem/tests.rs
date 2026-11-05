@@ -75,3 +75,29 @@ fn jittered_backoff_secs_stays_within_range_and_nonzero() {
         }
     }
 }
+
+// ============================================================
+// r15: failover 默认路由切换（静默断网修复）
+// ============================================================
+
+/// 默认路由目标选择：物理状态 → 路由目标（纯函数，任意平台可测）。
+#[test]
+fn default_route_target_follows_link_priority() {
+    // 以太网在 → 走以太网
+    assert_eq!(
+        desired_default_route(LinkState::EthernetUp),
+        Some(RouteTarget::Ethernet)
+    );
+    // 双链路都在 → 仍以以太网为主（工业现场默认不把 4G 作为主用）
+    assert_eq!(
+        desired_default_route(LinkState::BothUp),
+        Some(RouteTarget::Ethernet)
+    );
+    // 只有 4G → 走 4G
+    assert_eq!(
+        desired_default_route(LinkState::CellularUp),
+        Some(RouteTarget::Cellular)
+    );
+    // 全断 → 不下任何路由（避免把默认路由指向不存在的接口）
+    assert_eq!(desired_default_route(LinkState::Down), None);
+}

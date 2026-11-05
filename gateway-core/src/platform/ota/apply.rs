@@ -462,25 +462,17 @@ impl OtaManager {
 /// - Linux: 写 /dev/watchdog（依赖系统服务/board support，不存在则 no-op）
 /// - Windows / macOS: 无硬件 watchdog，kick 为 no-op；上层进程级守护（
 ///   tokio::time::timeout 包裵 write_partition）是主要保障。
+///
+/// # r15-OTA-WD (fix): 不再二次独占打开 `/dev/watchdog`
+///
+/// `/dev/watchdog` 是**独占设备**：主看门狗（`platform::hardware_watchdog`）
+/// 已经 open 成功后，这里再 open 第二次必然得到 `EBUSY`。
+/// 旧实现把 open 失败（`if let Ok` 分支不成立）与写失败（`let _ =`）全部吞掉，
+/// 现场表现是：OTA 写入期间**硬件看门狗根本没被喂**，写满超时后整机被
+/// watchdog 复位 → 升级变砖，而且日志里**没有任何线索**。
+///
+/// 现在改为复用主看门狗持有的同一个 fd（全局唯一句柄），写失败会被
+/// 计数并打出 error 级日志。
 fn kick_platform_watchdog() {
-    #[cfg(target_os = "linux")]
-    {
-        use std::io::Write;
-        // Bug 157: 旧实现 `std::fs::write("/dev/watchdog", b"")` 写入 0 字节——
-        // 内核 watchdog 仅在有"非空写入"时才刷新计时器，空写等于没喂狗，OTA 写入
-        // 期间仍可能被复位 → 变砖；且 fs::write 带 truncate 语义，对设备节点不合适。
-        // 改为只写模式 open（不 truncate）并写入 1 字节。
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/watchdog")
-        {
-            let _ = f.write_all(b"\0");
-            let _ = f.flush();
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        // No-op: 跨平台 stub。设备部署上如需 watchdog，可改为 Windows
-        // service control / OpenHardwareMonitor / 工业主板 BMC 协议。
-    }
+    crate::platform::hardware_watchdog::kick_platform_watchdog();
 }

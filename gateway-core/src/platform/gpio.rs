@@ -98,23 +98,27 @@ pub struct IoStatus {
 }
 
 /// DI 段线号（绝对线号 0..3）
-#[cfg(target_os = "linux")]
-const DI_LINES: [u32; 4] = [0, 1, 2, 3];
+///
+/// 编译条件含 `test`：映射逻辑是纯函数，可在任意平台单测，
+/// 避免「Linux 专属分支永久零覆盖」。
+#[cfg(any(target_os = "linux", test))]
+const DI_PIN_IDS: [u32; 4] = [0, 1, 2, 3];
 
 /// GPIO 控制器
 pub struct GpioController {
-    #[cfg(target_os = "linux")]
-    chips: std::collections::HashMap<u32, gpiod::Chip>,
-    /// Bug r13-GPIO2 (fix): 缓存 4 个 DI 线的批量句柄，避免每次采集周期
-    /// (默认 1Hz) 都重新 request + drop——既性能浪费，也与高频
-    /// set_gpio_output (DE/RE 切换) 共享 gpiochip0 时偶发 EBUSY
-    /// (line 正在被前一次 request 持有)。
+    /// Linux 平台占位字段。
     ///
-    /// init() 时一次性 request 4 条 DI 输入线并持有到本字段；
-    /// read_di_with_quality 直接 get_values，无新 request。
-    /// 非 Linux 平台字段类型用 ()，与 cfg(Linux) 字段布局对齐。
+    /// 历史实现把 `gpiod::Chip` 与 DI 输入句柄存在**实例**里，导致：
+    /// - Web API（`GpioController`）与采集器（`read_gpio_line`）各开各的
+    ///   `/dev/gpiochip0` fd，各自 request 同一批物理线 → gpiod chardev
+    ///   语义下同一条线**只能被 request 一次**，第二次必然 `EBUSY`；
+    /// - DI 采集（`read_gpio_line`）在 Web 控制器已 request 后必然失败，
+    ///   表现为「DI 点位永远读不到值」且错误信息被 EBUSY 掩盖。
+    ///
+    /// 现在 DI 句柄提升为**进程级全局**（`di_lines()`），chip 也统一走
+    /// `get_gpio_chip()`，所有路径共用同一份 request，不再重复占用。
     #[cfg(target_os = "linux")]
-    di_lines: parking_lot::Mutex<Option<gpiod::Lines<gpiod::Input>>>,
+    _linux: (),
 }
 
 impl Drop for GpioController {
@@ -127,9 +131,7 @@ impl GpioController {
     pub fn new() -> Self {
         Self {
             #[cfg(target_os = "linux")]
-            chips: std::collections::HashMap::new(),
-            #[cfg(target_os = "linux")]
-            di_lines: parking_lot::Mutex::new(None),
+            _linux: (),
         }
     }
 
@@ -154,31 +156,18 @@ impl GpioController {
     pub fn init(&mut self) -> GatewayResult<()> {
         #[cfg(target_os = "linux")]
         {
-            let chip = gpiod::Chip::new("/dev/gpiochip0")
-                .map_err(|e| GatewayError::Io(format!("open gpiochip0 failed: {}", e)))?;
+            // 预先打开 chip（失败直接返回错误，让运维看到真实原因）。
+            get_gpio_chip()?;
 
-            // Bug r13-GPIO2 (fix): 初始化时一次性 request 4 条 DI 输入线，
-            // 持有批量句柄缓存到 di_lines 字段。
-            // 后续 read_di_with_quality 直接 get_values，
-            // 不再每次循环 request/drop——既消除 4 次/秒的 sys call 开销，
-            // 也消除与高频 set_gpio_output (DE/RE) 共享 chip 时的 EBUSY 竞争。
-            //
-            // 失败不阻断：request 失败仅 warn，整体降级到"按需 request"路径
-            // （降级路径仍把 request 错误传播出去，运维能立即看到问题）。
-            //
-            // 注意：这里直接用局部 chip 变量 request，而不是 insert 后再 get 回来——
-            // crate 顶部 deny(clippy::expect_used)，不允许用 expect 兜底。
-            match chip.request_lines(gpiod::Options::input(DI_LINES).consumer("gatewayd")) {
-                Ok(lines) => {
-                    *self.di_lines.lock() = Some(lines);
-                    tracing::info!("GPIO init: cached 4 DI input lines");
-                }
+            // 一次性 request 4 条 DI 输入线并存入**进程级全局**句柄。
+            // 失败不阻断启动：降级到"按需 request"路径（read_di_levels 内部
+            // 仍会把 request 错误传播出去）。
+            match ensure_di_lines() {
+                Ok(()) => tracing::info!("GPIO init: cached 4 DI input lines (process-wide)"),
                 Err(e) => {
                     tracing::warn!("GPIO init: request DI INPUT lines failed: {}", e);
                 }
             }
-
-            self.chips.insert(0, chip);
         }
         Ok(())
     }
@@ -198,53 +187,18 @@ impl GpioController {
 
         #[cfg(target_os = "linux")]
         {
-            // Bug r13-GPIO2 (fix): 优先使用 init() 阶段缓存的批量句柄
-            // 直接 get_values()——避免每采集周期 4 次 request+drop 的 sys call 开销
-            // 和与高频 set_gpio_output (DE/RE) 共享 chip 时的 EBUSY 竞争。
-            // 缓存未命中（init 失败）时降级到"每次 request"路径。
-            {
-                let cache = self.di_lines.lock();
-                if let Some(lines) = cache.as_ref() {
-                    let mut vals = [false; 4];
-                    match lines.get_values(&mut vals) {
-                        Ok(_) => {
-                            for i in 0..4usize {
-                                di[i] = vals[i];
-                                quality[i] = true;
-                            }
-                            return (di, quality);
-                        }
-                        Err(e) => {
-                            tracing::warn!("read DI cached lines failed: {}", e);
-                        }
+            // 走进程级共享句柄：Web API 与采集器共用同一份 request，
+            // 杜绝同线重复 request 导致的 EBUSY。
+            match read_di_levels() {
+                Ok(vals) => {
+                    for i in 0..4usize {
+                        di[i] = vals[i];
+                        quality[i] = true;
                     }
                 }
-            }
-
-            // 降级路径：按需重新 request 4 条输入线后读取。
-            // r13-GPIO1 fix：request 错误不再被静默吞掉（记录告警，质量位保持 false）。
-            if let Some(chip) = self.chips.get(&0) {
-                match chip.request_lines(gpiod::Options::input(DI_LINES).consumer("gatewayd")) {
-                    Ok(lines) => {
-                        let mut vals = [false; 4];
-                        match lines.get_values(&mut vals) {
-                            Ok(_) => {
-                                for i in 0..4usize {
-                                    di[i] = vals[i];
-                                    quality[i] = true;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("read DI values failed: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("request DI lines failed: {}", e);
-                    }
+                Err(e) => {
+                    tracing::warn!("read DI values failed: {}", e);
                 }
-            } else {
-                tracing::warn!("gpiochip0 not available, DI read skipped");
             }
         }
 
@@ -293,6 +247,74 @@ fn get_gpio_chip() -> GatewayResult<&'static Mutex<gpiod::Chip>> {
             .map_err(|e| GatewayError::Io(format!("open gpiochip0 failed: {}", e)))?;
         Ok(Mutex::new(chip))
     })
+}
+
+/// 进程级共享的 DI 输入句柄（4 条线）。
+///
+/// # 为什么必须是进程级共享（r15-GPIO3 fix）
+///
+/// gpiod chardev 语义：**同一条物理线在同一时刻只能被 request 一次**，
+/// 第二次 request 返回 `EBUSY`。历史实现把 DI 句柄存在 `GpioController`
+/// 实例里，而采集器 `read_gpio_line()` 走的是另一条路径再 request 一遍，
+/// 于是：
+/// - Web API 一旦 `init()` 成功，采集器的 DI 读取**必然 EBUSY 失败**；
+/// - 错误被 `map_err` 成 `CollectorError::IoError` 上抛，现场表现是
+///   「DI 点位永远读不到值」，且根因被 EBUSY 掩盖。
+///
+/// 现在 DI 句柄提升为进程级全局，Web API 与采集器共用同一份 request。
+#[cfg(target_os = "linux")]
+static DI_LINES: OnceCell<parking_lot::Mutex<Option<gpiod::Lines<gpiod::Input>>>> = OnceCell::new();
+
+#[cfg(target_os = "linux")]
+fn di_lines_slot() -> &'static parking_lot::Mutex<Option<gpiod::Lines<gpiod::Input>>> {
+    DI_LINES.get_or_init(|| parking_lot::Mutex::new(None))
+}
+
+/// DI 线号在 DI_PIN_IDS 中的下标（非 DI 段返回 None）。
+///
+/// 纯函数：任意平台可测（`test` 编译条件下保留）。
+#[cfg(any(target_os = "linux", test))]
+fn di_index(pin: u32) -> Option<usize> {
+    DI_PIN_IDS.iter().position(|&l| l == pin)
+}
+
+/// 确保 DI 输入句柄已建立（幂等）。
+///
+/// 已有缓存 → 直接返回；否则 request 一次并写入全局缓存。
+#[cfg(target_os = "linux")]
+fn ensure_di_lines() -> GatewayResult<()> {
+    if di_lines_slot().lock().is_some() {
+        return Ok(());
+    }
+    let chip_mutex = get_gpio_chip()?;
+    let chip = chip_mutex
+        .lock()
+        .map_err(|e| GatewayError::Io(format!("gpio chip lock poisoned: {}", e)))?;
+    let lines = chip
+        .request_lines(gpiod::Options::input(DI_PIN_IDS).consumer("gatewayd"))
+        .map_err(|e| {
+            GatewayError::Io(format!(
+                "gpio request DI INPUT lines failed: {} (lines may be busy or permission denied)",
+                e
+            ))
+        })?;
+    *di_lines_slot().lock() = Some(lines);
+    Ok(())
+}
+
+/// 读取 4 路 DI 电平（共享句柄；未建立时按需建立一次）。
+#[cfg(target_os = "linux")]
+fn read_di_levels() -> GatewayResult<[bool; 4]> {
+    ensure_di_lines()?;
+    let guard = di_lines_slot().lock();
+    let lines = guard
+        .as_ref()
+        .ok_or_else(|| GatewayError::Io("gpio DI lines unavailable".to_string()))?;
+    let mut vals = [false; 4];
+    lines
+        .get_values(&mut vals)
+        .map_err(|e| GatewayError::Io(format!("get DI values failed: {}", e)))?;
+    Ok(vals)
 }
 
 /// 设置任意 GPIO 引脚输出电平（用于 RS485 DE/RE 方向控制）
@@ -347,6 +369,13 @@ pub fn set_gpio_output(pin: u32, on: bool) -> GatewayResult<()> {
 pub fn read_gpio_line(pin: u32) -> GatewayResult<u8> {
     #[cfg(target_os = "linux")]
     {
+        // r15-GPIO3 fix: DI 段（绝对线号 0..=3）必须复用进程级共享句柄，
+        // 否则本函数再 request 一遍同一物理线 → gpiod 返回 EBUSY，
+        // 表现为「DI 点位永远读不到值」且根因被 EBUSY 掩盖。
+        if let Some(idx) = di_index(pin) {
+            let vals = read_di_levels()?;
+            return Ok(u8::from(vals[idx]));
+        }
         let chip_mutex = get_gpio_chip()?;
         let chip = chip_mutex
             .lock()
@@ -372,5 +401,65 @@ pub fn read_gpio_line(pin: u32) -> GatewayResult<u8> {
         Err(GatewayError::Io(
             "当前平台不支持 GPIO 读取（需 Linux + gpiod）".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 串行化 DO 位图相关用例（位图是进程级全局状态，测试并行会互相污染）。
+    static DO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// DI 线号 → 共享句柄下标的映射必须稳定（DI 段复用全局句柄的前提）。
+    #[test]
+    fn di_pin_ids_map_to_sequential_indices() {
+        for (idx, pin) in DI_PIN_IDS.iter().enumerate() {
+            assert_eq!(di_index(*pin), Some(idx));
+        }
+    }
+
+    /// 非 DI 段线号（DO 段 4..=7 及更高）不得被误判为 DI 共享句柄，
+    /// 否则会读到错误的物理线。
+    #[test]
+    fn non_di_pins_are_not_mapped() {
+        for pin in 4..=32u32 {
+            assert_eq!(di_index(pin), None, "pin {} must not map to DI handle", pin);
+        }
+    }
+
+    /// DO 线号越界必须报错，且**不得**改动状态位图
+    /// （避免 /api/io/status 显示与实际输出不一致的假状态）。
+    #[test]
+    fn write_do_rejects_out_of_range_pin() {
+        let _guard = DO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = do_state();
+        assert!(write_do(3, true).is_err(), "pin 3 is DI, not DO");
+        assert!(write_do(8, true).is_err(), "pin 8 is out of DO range");
+        assert_eq!(do_state(), before, "state bitmap must be unchanged");
+    }
+
+    /// 非 Linux 平台必须如实报错，不得返回伪造电平。
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn read_gpio_line_reports_unsupported_platform() {
+        assert!(read_gpio_line(0).is_err());
+        assert!(read_gpio_line(4).is_err());
+    }
+
+    /// DO 状态位图的置位/清零必须互不影响。
+    #[test]
+    fn do_bitmap_set_and_clear_are_independent() {
+        let _guard = DO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_do_bit(0, true);
+        set_do_bit(2, true);
+        let s = do_state();
+        assert_eq!(s, [true, false, true, false]);
+        set_do_bit(0, false);
+        let s = do_state();
+        assert_eq!(s, [false, false, true, false]);
+        // 复位，避免污染其它用例
+        set_do_bit(2, false);
+        assert_eq!(do_state(), [false, false, false, false]);
     }
 }

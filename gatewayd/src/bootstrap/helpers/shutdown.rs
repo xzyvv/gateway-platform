@@ -375,6 +375,17 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
     if let Some(mqtt_client) = mqtt {
         let _ = tokio::time::timeout(Duration::from_secs(5), mqtt_client.stop()).await;
     }
+
+    // r15-WD2: 最后解除硬件看门狗 armed 状态。
+    //
+    // 放在停机序**末尾**：停机期间硬件看门狗仍在保护进程（写卡死 → 整机
+    // 复位），全部资源释放完成后再写 magic char 'V' 解除 armed。
+    //
+    // 历史问题：等价逻辑（`Watchdog::stop`）**全仓零调用**——Linux 优雅
+    // 停机从不写 'V'，`/dev/watchdog` 保持 armed；下次上电后若无人喂狗，
+    // 整机被 watchdog 误复位，表现为"设备重启后莫名其妙又重启一次"。
+    gateway_core::platform::hardware_watchdog::stop_platform_watchdog();
+
     info!("graceful shutdown complete");
 }
 

@@ -65,15 +65,24 @@ impl CellularManager {
             .map_err(|e| GatewayError::Io(format!("AT no response: {}", e)))?;
         tracing::info!("cellular: AT OK");
 
-        let _ = self.at_command("ATE0", at_to).await;
+        // ATE0（关闭回显）失败不阻断流程（部分模块不支持），
+        // 但必须留痕：后续 AT 响应解析依赖无回显模式。
+        if let Err(e) = self.at_command("ATE0", at_to).await {
+            tracing::warn!("cellular: ATE0 failed: {}", e);
+        }
 
         let sim_resp = self.at_command("AT+CPIN?", at_to).await.unwrap_or_default();
         if sim_resp.contains("SIM PIN") {
             if let Some(pin) = &self.config.pin {
                 // r35-MDM4: PIN 净化，防引号闭合导致的 AT 命令注入
-                let _ = self
+                if let Err(e) = self
                     .at_command(&format!("AT+CPIN=\"{}\"", sanitize_at_arg(pin)), at_to)
-                    .await;
+                    .await
+                {
+                    // PIN 写失败后续拨号必然失败，这里留痕便于区分
+                    // 「PIN 错」与「模块无响应」。
+                    tracing::warn!("cellular: set SIM PIN failed: {}", e);
+                }
             } else {
                 self.set_state(CellularState::SimNotReady);
                 return Err(GatewayError::Io("SIM requires PIN".into()));
@@ -116,7 +125,10 @@ impl CellularManager {
         }
         tracing::info!("cellular: signal = {}", signal);
 
-        let _ = self
+        // APN 设置失败不阻断流程（部分模块已内置默认 APN），
+        // 但必须留痕：APN 写错是「有信号、无 IP」的常见根因，
+        // 静默吞掉会让现场无从排查。
+        if let Err(e) = self
             .at_command(
                 // r35-MDM5: APN 净化，防引号闭合导致的 AT 命令注入
                 &format!(
@@ -125,7 +137,10 @@ impl CellularManager {
                 ),
                 at_to,
             )
-            .await;
+            .await
+        {
+            tracing::warn!("cellular: set APN ({}) failed: {}", self.config.apn, e);
+        }
         let _ = self
             .at_command(
                 "ATD*99#",
@@ -347,11 +362,33 @@ impl CellularManager {
     /// - 路由表残留指向已失效的 ppp0，影响主备切换
     fn cleanup_ppp_interface(&self) {
         let iface = &self.config.ppp_iface;
-        // ip link set <iface> down（接口不存在时返回非 0，忽略）
-        let _ = Command::new("ip")
+        // ip link set <iface> down（接口不存在时返回非 0）
+        // 失败必须留痕：清理失败会导致内核残留 ppp0 接口与 default route，
+        // 影响主备切换（见本函数文档）。此前错误被整个吞掉，只留 debug 日志。
+        match Command::new("ip")
             .args(["link", "set", iface, "down"])
-            .status();
-        tracing::debug!("cellular: cleanup_ppp_interface: {} set down", iface);
+            .status()
+        {
+            Ok(st) if st.success() => {
+                tracing::debug!("cellular: cleanup_ppp_interface: {} set down", iface);
+            }
+            Ok(st) => {
+                tracing::warn!(
+                    "cellular: cleanup_ppp_interface: 'ip link set {} down' exited with {} \
+                     (interface may not exist; residual ppp0 route could break failover)",
+                    iface,
+                    st
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "cellular: cleanup_ppp_interface: 'ip link set {} down' failed to spawn: {} \
+                     (residual ppp0 route could break failover)",
+                    iface,
+                    e
+                );
+            }
+        }
     }
 
     pub(super) async fn monitor_loop(&self) {
@@ -384,6 +421,15 @@ impl CellularManager {
     }
 
     pub(super) async fn failover_loop(&self) {
+        // 已成功应用的默认路由目标（None = 尚未成功应用过任何默认路由）。
+        //
+        // 与 `link_state` **分开**记录：`link_state` 描述物理链路通断，
+        // 而默认路由是否真的切过去取决于 `ip route replace` 是否成功。
+        // 历史上两者混为一谈：切换失败被 `let _ =` 吞掉后，状态已记为
+        // 「已切到 4G」且不再重试 → eth 已 down、路由仍指向 eth →
+        // **设备实际断网，但状态显示一切正常**（静默断网）。
+        let mut applied_route: Option<RouteTarget> = None;
+
         loop {
             tokio::time::sleep(Duration::from_secs(self.config.heartbeat_secs)).await;
             let eth_up = check_iface_up(&self.config.eth_iface);
@@ -401,20 +447,65 @@ impl CellularManager {
             if new_state != old_state {
                 tracing::info!("link state changed: {:?} -> {:?}", old_state, new_state);
                 *self.link_state.lock() = new_state;
-                match new_state {
-                    LinkState::EthernetUp | LinkState::BothUp => {
-                        let _ = set_default_route(&self.config.eth_iface);
-                    }
-                    LinkState::CellularUp => {
-                        tracing::warn!("ethernet down, switching to 4G");
-                        let _ = set_default_route(&self.config.ppp_iface);
-                    }
-                    LinkState::Down => {
-                        tracing::error!("all links down!");
-                    }
+                if new_state == LinkState::Down {
+                    tracing::error!("all links down!");
+                }
+            }
+
+            // 默认路由目标：与物理状态解耦，失败可重试。
+            let desired = desired_default_route(new_state);
+            if desired == applied_route {
+                continue;
+            }
+            let iface = match desired {
+                Some(RouteTarget::Ethernet) => self.config.eth_iface.clone(),
+                Some(RouteTarget::Cellular) => self.config.ppp_iface.clone(),
+                None => {
+                    // 两路都断：不下任何路由（保留现状，等下一轮）。
+                    continue;
+                }
+            };
+            if desired == Some(RouteTarget::Cellular) {
+                tracing::warn!("ethernet down, switching to 4G");
+            }
+            match set_default_route(&iface) {
+                Ok(()) => {
+                    applied_route = desired;
+                    tracing::info!("default route now points to {}", iface);
+                }
+                Err(e) => {
+                    // 失败必须显式告警：静默吞掉会让「eth 已 down + 路由未切换」
+                    // 变成看不出来的现场断网。
+                    tracing::error!(
+                        "cellular: switch default route to {} FAILED: {} — \
+                         traffic may still use the old link (silent outage risk)",
+                        iface,
+                        e
+                    );
+                    // 不更新 applied_route → 下一轮重试。
                 }
             }
         }
+    }
+}
+
+/// 默认路由的目标链路（纯逻辑，便于跨平台单测）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteTarget {
+    Ethernet,
+    Cellular,
+}
+
+/// 依据物理链路状态决定默认路由应指向哪条链路（纯函数，跨平台可测）。
+///
+/// - `EthernetUp` / `BothUp` → 以太网优先
+/// - `CellularUp` → 4G
+/// - `Down` → 无可用目标（不下路由）
+fn desired_default_route(state: LinkState) -> Option<RouteTarget> {
+    match state {
+        LinkState::EthernetUp | LinkState::BothUp => Some(RouteTarget::Ethernet),
+        LinkState::CellularUp => Some(RouteTarget::Cellular),
+        LinkState::Down => None,
     }
 }
 
@@ -503,7 +594,11 @@ fn set_default_route(iface: &str) -> GatewayResult<()> {
         .status()
         .map_err(|e| GatewayError::Io(format!("set default route failed: {}", e)))?;
     if !status.success() {
-        return Err(GatewayError::Io("set default route failed".into()));
+        // 带上退出码：否则现场只知道「失败」，不知道是权限不足还是接口不存在。
+        return Err(GatewayError::Io(format!(
+            "set default route failed: 'ip route replace default dev {}' exited with {}",
+            iface, status
+        )));
     }
     tracing::info!("default route set to {} (replace)", iface);
     Ok(())
