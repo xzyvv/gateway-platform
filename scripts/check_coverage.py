@@ -71,7 +71,13 @@ class Counter:
 
 
 def bucket_of(path: str) -> str | None:
-    """把 lcov 的绝对路径映射到桶名；不属于本仓的路径返回 None。"""
+    """把 lcov 的绝对路径映射到桶名；不属于本仓的路径返回 None。
+
+    Windows 上 cargo-llvm-cov 写出的 SF 是反斜杠路径（`C:\\...\\gateway-core\\src\\...`），
+    必须先归一成 `/` 才能命中下面的目录标记，否则所有文件都会被判成「不属于本仓」，
+    结果就是全 0%——这不是覆盖率真的掉了，而是分桶失效。
+    """
+    path = path.replace("\\", "/")
     for marker, prefix in (("/gateway-core/src/", "core/"), ("/gateway-api/src/", "api/")):
         idx = path.find(marker)
         if idx == -1:
