@@ -386,4 +386,118 @@ mod migration_tests {
             .expect("count value_text columns");
         assert_eq!(count, 1, "value_text 列应唯一");
     }
+
+    /// 现场最老版本的 schema：只有最初 7 列。
+    ///
+    /// 既有 `OLD_SCHEMA` 只缺 `value_text`，等于只验证了「单列迁移」；真实升级
+    /// 路径上 PDF 里记录的 device_id / quality_reason / source_ts / stale_count /
+    /// in_flight / dequeued_at / delivered 会同时缺失，需要 7 次 ALTER 全部成功。
+    const ANCIENT_SCHEMA: &str = "CREATE TABLE data_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        point_id TEXT NOT NULL,
+        value REAL NOT NULL,
+        raw_value REAL NOT NULL,
+        raw_type TEXT NOT NULL,
+        quality TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+    )";
+
+    const REQUIRED_COLUMNS: [&str; 8] = [
+        "device_id",
+        "quality_reason",
+        "source_ts",
+        "stale_count",
+        "in_flight",
+        "dequeued_at",
+        "delivered",
+        "value_text",
+    ];
+
+    fn columns_of(db_path: &Path) -> Vec<String> {
+        let conn = Connection::open(db_path).expect("open db");
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(data_queue)")
+            .expect("prepare table_info");
+        let mut rows = stmt.query([]).expect("query table_info");
+        let mut columns = Vec::new();
+        while let Some(row) = rows.next().expect("next row") {
+            columns.push(row.get::<_, String>(1).expect("column name"));
+        }
+        columns
+    }
+
+    fn seed_ancient_db(db_path: &Path, rows: usize) {
+        let conn = Connection::open(db_path).expect("open ancient db");
+        conn.execute_batch(ANCIENT_SCHEMA)
+            .expect("create ancient table");
+        for i in 0..rows {
+            conn.execute(
+                "INSERT INTO data_queue (point_id, value, raw_value, raw_type, quality, timestamp)
+                 VALUES (?1, ?2, ?2, 'u16', 'good', ?3)",
+                rusqlite::params!["p-old", i as f64, 1_700_000_000_000_i64 + i as i64],
+            )
+            .expect("insert ancient row");
+        }
+    }
+
+    /// 老库升级：8 个新增列必须全部补齐，历史行不丢，深度按 delivered=0 重算。
+    ///
+    /// 这是「升级演练」的代码级替身：若某次 ALTER 失败被吞掉，后续查询会在离
+    /// 根因很远的地方报 `no such column`；此处一次性钉住表结构结果。
+    #[test]
+    fn ancient_schema_upgrades_all_columns_and_preserves_rows() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db_path = dir.path().join("queue.db");
+        seed_ancient_db(&db_path, 3);
+
+        let storage = crate::queue::storage::SqliteStorage::new(
+            db_path.to_str().expect("db path utf8"),
+            Arc::new(Metrics::new()),
+        )
+        .expect("open storage on ancient db");
+
+        let columns = columns_of(&db_path);
+        for required in REQUIRED_COLUMNS {
+            assert!(
+                columns.iter().any(|c| c == required),
+                "迁移后缺少列 `{}`，实际列: {:?}",
+                required,
+                columns
+            );
+        }
+
+        assert_eq!(storage.len(), 3, "历史行必须全部保留且计入深度");
+        let items = storage
+            .history_query("p-old", 0, i64::MAX, 10)
+            .expect("history query ancient rows");
+        assert_eq!(items.len(), 3, "历史行应可按 point_id 查回");
+    }
+
+    /// 升级幂等：同一老库连续打开两次，表格列不重复、数据不丢、深度不漂移。
+    ///
+    /// 第二次打开时 7 次 ALTER 必然全部返回「duplicate column name」，正是
+    /// `ensure_column` 的幂等分支；若该分支被写成吞掉所有错误，也测不出来，
+    /// 但至少能保证「重复升级不会破坏数据」。
+    #[test]
+    fn repeated_upgrade_is_idempotent_and_keeps_depth() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db_path = dir.path().join("queue.db");
+        seed_ancient_db(&db_path, 2);
+
+        for round in 1..=2 {
+            let storage = crate::queue::storage::SqliteStorage::new(
+                db_path.to_str().expect("db path utf8"),
+                Arc::new(Metrics::new()),
+            )
+            .unwrap_or_else(|e| panic!("第 {} 次打开老库失败: {}", round, e));
+            assert_eq!(storage.len(), 2, "第 {} 次打开后历史行应保留", round);
+            drop(storage);
+        }
+
+        let columns = columns_of(&db_path);
+        for required in REQUIRED_COLUMNS {
+            let n = columns.iter().filter(|c| c.as_str() == required).count();
+            assert_eq!(n, 1, "列 `{}` 应唯一，实际出现 {} 次", required, n);
+        }
+    }
 }

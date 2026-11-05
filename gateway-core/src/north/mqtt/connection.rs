@@ -32,66 +32,58 @@ impl MqttClient {
         let mut options = MqttOptions::new(client_id, host, port);
 
         match scheme {
-            BrokerScheme::Tls => {
-                if let Some(cert) = &client_cert {
-                    // S4: 双向 TLS——加载系统 CA 证书，避免 ca 为空导致服务器证书验证失败
-                    // Bug 2.4: 优先使用配置的自定义 CA bundle（ca_cert_path），
-                    //         再合入系统 CA 作为补充信任链。
-                    use rumqttc::TlsConfiguration;
-                    let mut ca_pem = load_custom_ca_pem(
-                        config.tls.as_ref().and_then(|t| t.ca_cert_path.as_deref()),
+            // TLS 与 WSS 共用同一套证书材料：自定义 CA + 系统 CA 合并，
+            // 有客户端证书即启用 mTLS。
+            //
+            // 旧实现 `Wss` 直接走 `wss_with_default_config()`，导致 wss:// 下
+            // 配置的 `ca_cert_path` 与客户端证书被静默忽略——私有 CA 场景连不上，
+            // 且日志看起来「配置已生效」，属于配置撒谎。现改为显式构造
+            // `TlsConfiguration::Simple` 后交给 `wss_with_config`。
+            BrokerScheme::Tls | BrokerScheme::Wss => {
+                let custom_ca = config.tls.as_ref().and_then(|t| t.ca_cert_path.as_deref());
+                let has_client_cert = client_cert.is_some();
+                // 什么都没配时保留原生默认信任库，避免把系统根证书重编码成 PEM
+                // 反而引入兼容性风险（wss 的既有行为也维持不变）。
+                if matches!(scheme, BrokerScheme::Wss) && custom_ca.is_none() && !has_client_cert {
+                    options.set_transport(Transport::wss_with_default_config());
+                    tracing::info!(
+                        "mqtt: wss enabled with system CA only (no custom CA configured)"
                     );
-                    ca_pem.extend_from_slice(&load_native_ca_pem());
-                    let tls_config = TlsConfiguration::Simple {
-                        ca: ca_pem,
-                        alpn: None,
-                        client_auth: Some((
-                            cert.cert_pem.as_bytes().to_vec(),
-                            cert.key_pem.as_bytes().to_vec(),
-                        )),
-                    };
-                    options.set_transport(Transport::Tls(tls_config));
-                    tracing::info!("mqtt: mutual TLS enabled with client cert + CA bundle");
                 } else {
-                    // Bug 2.4: 单 TLS（无 client cert）路径——加载自定义 CA + 系统 CA，
-                    //         使内网自签 / 私有 CA broker 可连。
                     use rumqttc::TlsConfiguration;
-                    let mut ca_pem = load_custom_ca_pem(
-                        config.tls.as_ref().and_then(|t| t.ca_cert_path.as_deref()),
-                    );
+                    let mut ca_pem = load_custom_ca_pem(custom_ca);
                     ca_pem.extend_from_slice(&load_native_ca_pem());
+                    let client_auth = client_cert.as_ref().map(|c| {
+                        (
+                            c.cert_pem.as_bytes().to_vec(),
+                            c.key_pem.as_bytes().to_vec(),
+                        )
+                    });
                     let tls_config = TlsConfiguration::Simple {
                         ca: ca_pem,
                         alpn: None,
-                        client_auth: None,
+                        client_auth,
                     };
-                    options.set_transport(Transport::Tls(tls_config));
-                    if let Some(tls) = &config.tls {
-                        if tls.ca_cert_path.is_some() {
-                            tracing::info!(
-                                "mqtt: TLS enabled with custom CA bundle (path={:?}) + system CA",
-                                tls.ca_cert_path
-                            );
-                        } else {
-                            tracing::info!("mqtt: TLS enabled with system CA only");
-                        }
-                        if tls.insecure_skip_verify {
-                            tracing::error!(
-                                "mqtt: tls.insecure_skip_verify=true — SERVER CERT VERIFICATION DISABLED.                                  This is for testing only; production deployments must use proper CA bundle."
-                            );
-                        }
+                    if matches!(scheme, BrokerScheme::Wss) {
+                        options.set_transport(Transport::wss_with_config(tls_config));
                     } else {
-                        tracing::info!(
-                            "mqtt: TLS enabled with system CA only (no custom CA configured)"
-                        );
+                        options.set_transport(Transport::Tls(tls_config));
                     }
+                    let kind = if matches!(scheme, BrokerScheme::Wss) {
+                        "wss"
+                    } else {
+                        "tls"
+                    };
+                    tracing::info!(
+                        "mqtt: {} enabled (client_cert={}, custom_ca={:?}, system CA merged)",
+                        kind,
+                        has_client_cert,
+                        custom_ca
+                    );
                 }
             }
             BrokerScheme::Ws => {
                 options.set_transport(Transport::ws());
-            }
-            BrokerScheme::Wss => {
-                options.set_transport(Transport::wss_with_default_config());
             }
             BrokerScheme::Tcp => {}
         }

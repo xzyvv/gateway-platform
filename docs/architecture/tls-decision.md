@@ -62,17 +62,24 @@
 | 实验室 / 单机直连调试 | 明文 HTTP，仅 `127.0.0.1` | 明文 `tcp://` | 不开或明文 `None` | 零证书配置即可；不要设 `GATEWAY_REQUIRE_EXTERNAL_CERT` |
 | 产线内网，平台只收数据 | 明文 HTTP | 明文 `tcp://` | 不开 | 零证书配置；靠网络隔离保证边界 |
 | 产线内网，broker 私有 CA | 明文 HTTP | `tls://` + `ca_cert_path` | 不开 | 只配 `mqtt.tls.ca_cert_path`；自签设备证书不参与 |
-| 集团平台强制 CA 链校验 + mTLS | 明文 HTTP（外侧反代） | `tls://` + `ca_cert_path`；broker 导入网关证书或其 CA 签发 | `opcua.cert_path/key_path` 指向 CA 签发证书 | `GATEWAY_REQUIRE_EXTERNAL_CERT=1` + 预置证书文件（注意 §4 第 3 条：不会阻断启动，需自检） |
+| 集团平台强制 CA 链校验 + mTLS | 明文 HTTP（外侧反代） | `tls://` + `ca_cert_path`；broker 导入网关证书或其 CA 签发 | `opcua.cert_path/key_path` 指向 CA 签发证书 | `GATEWAY_REQUIRE_EXTERNAL_CERT=1` + 预置证书文件（缺文件会**拒绝启动**，见 §4） |
 | 网关 Web 对不可信网络开放 | 前置反代终止 TLS，只放行 443 | 按上 | 按上 | 网关自身仍是 HTTP；反代证书独立维护 |
 
 ---
 
-## 4. 四个已知不一致（部署前必须知道）
+## 4. 已知不一致：已修正 vs 仍存在
 
-1. **`mqtt.tls.insecure_skip_verify` 不生效。** 代码只在启动时打一条 `error` 日志（`north/mqtt/connection.rs:78-82`），实际仍是标准服务端证书校验。现场不要依赖它绕过自签 broker，正确做法是配 `ca_cert_path`。
-2. **`wss://` 忽略 TLS 配置。** `north/mqtt/connection.rs:93-95` 走 `wss_with_default_config()`，既不读 `ca_cert_path` 也不发送客户端证书。私有 CA / mTLS 的 wss broker 会失败；需要 TLS 时优先用 `tls://`。
-3. **`GATEWAY_REQUIRE_EXTERNAL_CERT=1` 不是 fail-closed 启动开关。** `get_or_create()` 返回 Err 后，`bootstrap` 只 `warn` 并以「无证书」继续（`gatewayd/src/bootstrap/helpers/north.rs:111-117`）。后果：OPC UA 退化为临时自签 + 明文 `None` 端点，MQTT 变成无客户端证书的单 TLS。上线自检必须确认 `gateway.pem` 真的存在且被加载。
-4. **自签证书 SAN 只有 `localhost`。** 初始化只设置 CN，未调用 `with_san_hosts`（`bootstrap/helpers/north.rs:106-110`）。用设备 IP/域名访问且客户端做主机名校验时会握手失败；需要时改用外部证书（含正确 SAN），或让客户端按指纹信任。另：`GET /api/certificates` 的 `bound_to` 硬编码 `"mqtt,https"`（`gateway-api/src/web/api/system/handlers/certificates.rs:90`），与实际不符——该证书不用于 Web HTTPS。
+已修正（2026-11，`GATEWAY_REQUIRE_EXTERNAL_CERT` 与 TLS 配置诚实性）：
+
+1. ~~`mqtt.tls.insecure_skip_verify` 不生效~~ → 该字段无法真正关闭证书校验（rumqttc 的 `TlsConfiguration::Simple` 不支持），现改为**配置期直接拒绝**并提示改用 `ca_cert_path`，不再只打一行日志。
+2. ~~`wss://` 忽略 TLS 配置~~ → 已改为 `wss_with_config()`，`ca_cert_path` 与客户端证书在 wss 下同样生效；仅当什么都没配时才用系统默认信任库。
+3. ~~`GATEWAY_REQUIRE_EXTERNAL_CERT=1` 不是 fail-closed~~ → 证书初始化失败现在会**阻断启动**（退出码 1），不再退化为明文 `None` 端点。
+4. ~~明文链路下配置 TLS 材料被静默忽略~~ → 现于配置期报错（`mqtt.broker` 非 tls/mqtts/wss 时配 `ca_cert_path` 直接拒绝）。
+5. ~~`GET /api/certificates` 的 `bound_to` 硬编码 `"mqtt,https"`~~ → 现按实际消费者推导（MQTT 仅当 broker 加密链路启用、OPC UA 仅当 server 启用），未绑定时返回空。
+
+仍存在（不影响启动，但现场要知道）：
+
+6. **自签证书 SAN 只有 `localhost`。** 初始化只设置 CN，未调用 `with_san_hosts`（`bootstrap/helpers/north.rs:106-110`）。用设备 IP/域名访问且客户端做主机名校验时会握手失败；需要时改用外部证书（含正确 SAN），或让客户端按指纹信任。
 
 ---
 
@@ -80,12 +87,13 @@
 
 | 现象 | 先看这里 | 处置 |
 |---|---|---|
-| `tls://` 内网 broker 连不上 | 启动日志 `mqtt: TLS enabled with system CA only` | 配 `mqtt.tls.ca_cert_path`，日志应变成 `custom CA bundle` |
+| `tls://` 内网 broker 连不上 | 启动日志 `mqtt: tls enabled (client_cert=..., custom_ca=Some(...))` | 若 `custom_ca=None` 说明没读到 `ca_cert_path`，检查路径与 PEM 格式 |
+| `wss://` + 私有 CA / mTLS | 同上（日志会标 `wss`） | 已支持；若仍失败，确认 broker 走的是 WSS 而非 MQTT-over-WS，并检查 CA 链是否完整 |
 | broker 拒绝网关连接（mTLS） | broker 侧日志「客户端证书未受信」 | broker 导入 `gateway.pem`，或改由 broker 的 CA 签发网关证书 |
 | OPC UA 客户端报证书不受信 | 客户端信任列表 | 导入 `gateway.pem`；生产改用 CA 签发证书 |
 | OPC UA 握手报安全校验失败 | endpoint 主机名 vs 证书 SAN | 用外部证书带正确 SAN，或客户端按指纹信任 |
 | 浏览器 HTTPS 告警 | 反代证书，不是网关证书 | 续期反代证书；`POST /api/certificates/renew` 对 Web 无效 |
 | 证书显示即将过期 | `GET /api/certificates` 的 `days_remaining` | `renew` 重生成自签（10 年）；CA 证书走 `upload` 后重启网关 |
-| 启动后 OPC UA 只有 `None` 端点 | 是否有证书 | 确认 `GATEWAY_CERT_DIR` 下两文件同时存在、未被 `GATEWAY_REQUIRE_EXTERNAL_CERT` 拦住 |
+| 启动后 OPC UA 只有 `None` 端点 | 是否有证书 | 确认 `GATEWAY_CERT_DIR` 下两文件同时存在；若设置了 `GATEWAY_REQUIRE_EXTERNAL_CERT=1`，缺文件会直接启动失败（退出码 1） |
 
 相关文档：[`故障处置卡.md`](../故障处置卡.md)（卡 1 证书过期）、[`deployment.md`](deployment.md)（目录布局 / 反向代理）。

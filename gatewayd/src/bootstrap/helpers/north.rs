@@ -111,7 +111,11 @@ pub(crate) async fn init_north_and_processing(
     let cert_pair = match cert_manager.get_or_create() {
         Ok(p) => Some(p),
         Err(e) => {
-            tracing::warn!("cert init failed, continuing without cert: {}", e);
+            degrade_cert_or_fail(
+                e,
+                gateway_core::crypto::cert::require_external_cert(),
+                cert_dir,
+            )?;
             None
         }
     };
@@ -328,4 +332,63 @@ pub(crate) async fn init_north_and_processing(
         conversion_mgr,
         channels,
     })
+}
+
+/// 证书初始化失败时的处置策略：`require_external` 为 true 时必须阻断启动。
+///
+/// 背景：`GATEWAY_REQUIRE_EXTERNAL_CERT=1` 的语义是「不许自签、必须用运维
+/// 提供的证书」。旧实现只让 `get_or_create()` 拒绝自签，而 bootstrap 拿到
+/// Err 后仅 `warn` 并以「无证书」继续，结果是：OPC UA 退化为临时自签 + 明文
+/// `None` 端点，MQTT 退化为无客户端证书的单向 TLS——开关形同虚设，合规场景
+/// 下属于「静默降级」，比直接启动失败危险得多。故此处改为 fail-closed。
+///
+/// `require_external` 由调用方传入而非在函数内读环境变量，便于单测覆盖两条
+/// 分支（环境变量是进程级全局状态，测试间会互相污染）。
+fn degrade_cert_or_fail(
+    err: gateway_core::engine::error::GatewayError,
+    require_external: bool,
+    cert_dir: &Path,
+) -> Result<()> {
+    if require_external {
+        return Err(anyhow::anyhow!(
+            "证书初始化失败且 GATEWAY_REQUIRE_EXTERNAL_CERT=1，拒绝以降级模式启动。\
+             请检查 {} 下的 gateway.pem 与 gateway_key.pem 是否同时存在且配对；\
+             原始错误: {}",
+            cert_dir.display(),
+            err
+        ));
+    }
+    warn!("cert init failed, continuing without cert: {}", err);
+    Ok(())
+}
+
+#[cfg(test)]
+mod cert_degrade_tests {
+    use super::degrade_cert_or_fail;
+    use std::path::Path;
+
+    fn sample_err() -> gateway_core::engine::error::GatewayError {
+        gateway_core::engine::error::GatewayError::Config(
+            "cert files not found and self-signed generation is disabled".to_string(),
+        )
+    }
+
+    /// 强制外部证书时，证书失败必须让启动失败（fail-closed），且错误信息要
+    /// 同时带上证书目录与原始原因，供现场直接定位。
+    #[test]
+    fn require_external_cert_makes_cert_failure_fatal() {
+        let err = degrade_cert_or_fail(sample_err(), true, Path::new("C:/data/certs"))
+            .expect_err("REQUIRE_EXTERNAL_CERT=1 时不得降级启动");
+        let msg = err.to_string();
+        assert!(msg.contains("GATEWAY_REQUIRE_EXTERNAL_CERT=1"), "{}", msg);
+        assert!(msg.contains("C:/data/certs"), "{}", msg);
+        assert!(msg.contains("self-signed"), "应保留原始错误: {}", msg);
+    }
+
+    /// 未开启该开关时保持原行为：告警并继续（兼容实验室/调试场景）。
+    #[test]
+    fn without_require_external_cert_failure_is_degraded() {
+        degrade_cert_or_fail(sample_err(), false, Path::new("C:/data/certs"))
+            .expect("未开启强制外部证书时应允许降级继续");
+    }
 }

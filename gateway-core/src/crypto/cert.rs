@@ -36,6 +36,15 @@ pub struct CertPair {
     pub key_der: Vec<u8>,
 }
 
+/// 是否禁止自签、要求运维提供外部证书（`GATEWAY_REQUIRE_EXTERNAL_CERT=1`）。
+///
+/// 单一事实来源：`get_or_create()` 的生成开关与 bootstrap 的「初始化失败是否
+/// 阻断启动」共用同一判定，避免两处口径漂移（否则开关只会禁自签、却仍允许
+/// 无证书启动，等于没有强制）。
+pub fn require_external_cert() -> bool {
+    std::env::var("GATEWAY_REQUIRE_EXTERNAL_CERT").as_deref() == Ok("1")
+}
+
 /// 证书管理器。
 #[derive(Clone)]
 pub struct CertManager {
@@ -106,7 +115,7 @@ impl CertManager {
             )));
         }
         // 安全开关：GATEWAY_REQUIRE_EXTERNAL_CERT=1 时禁用自签发，要求运维提供证书
-        if std::env::var("GATEWAY_REQUIRE_EXTERNAL_CERT").as_deref() == Ok("1") {
+        if require_external_cert() {
             return Err(GatewayError::Config(
                 "cert files not found and self-signed generation is disabled (GATEWAY_REQUIRE_EXTERNAL_CERT=1). \
                  Please provide cert files or unset the environment variable.".to_string()

@@ -211,6 +211,38 @@ impl GatewayConfig {
                     self.mqtt.publish_interval
                 ));
             }
+            // TLS 配置诚实性：`insecure_skip_verify` 未实现（rumqttc 的
+            // `TlsConfiguration::Simple` 无法关闭服务器证书校验，旧实现只打
+            // 一行 error 日志），若静默接受会让现场误以为「已跳过校验」而实际
+            // 仍严格校验，排障方向完全错误。故在配置期直接拒绝。
+            if self
+                .mqtt
+                .tls
+                .as_ref()
+                .map(|t| t.insecure_skip_verify)
+                .unwrap_or(false)
+            {
+                errs.push(
+                    "mqtt.tls.insecure_skip_verify=true 不受支持（该字段不会真正跳过 \
+                     证书校验，只有日志提示）。请改用 mqtt.tls.ca_cert_path 指定 \
+                     broker 的自签/私有 CA。"
+                        .to_string(),
+                );
+            }
+            // 自定义 CA / 客户端证书只在加密链路（tls/mqtts/wss）有意义；
+            // 明文 scheme 下配置它们会被静默忽略，同样是撒谎。
+            if let Some(tls) = &self.mqtt.tls {
+                let encrypted = ["tls://", "mqtts://", "wss://"]
+                    .iter()
+                    .any(|s| url.starts_with(s));
+                if !encrypted && tls.ca_cert_path.is_some() {
+                    errs.push(format!(
+                        "mqtt.broker={} 为明文链路，mqtt.tls 配置不会生效；请改用 \
+                         tls/mqtts/wss",
+                        url
+                    ));
+                }
+            }
         }
 
         // NTP 配置校验（self.ntp 为 Option<NtpConfig>）
@@ -400,4 +432,67 @@ pub fn validate_collection_config(
     config: &crate::config::GatewayConfig,
 ) -> Result<(), Vec<String>> {
     config.validate_all()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::mqtt::MqttTlsConfig;
+    use crate::config::GatewayConfig;
+
+    fn cfg_with_mqtt(broker: &str, tls: Option<MqttTlsConfig>) -> GatewayConfig {
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = true;
+        cfg.mqtt.broker = broker.to_string();
+        cfg.mqtt.tls = tls;
+        cfg
+    }
+
+    /// `insecure_skip_verify` 未实现，必须在配置期拒绝，而不是只打一行日志。
+    #[test]
+    fn mqtt_insecure_skip_verify_is_rejected_at_config_time() {
+        let cfg = cfg_with_mqtt(
+            "mqtts://broker.example:8883",
+            Some(MqttTlsConfig {
+                ca_cert_path: None,
+                insecure_skip_verify: true,
+            }),
+        );
+        let errs = cfg.validate_all().expect_err("应拒绝未实现的开关");
+        assert!(
+            errs.iter().any(|e| e.contains("insecure_skip_verify")),
+            "错误信息应指明具体字段: {:?}",
+            errs
+        );
+    }
+
+    /// 明文链路下配置 TLS 证书材料会被静默忽略，同样属于撒谎，必须拒绝。
+    #[test]
+    fn mqtt_tls_material_on_plaintext_scheme_is_rejected() {
+        let cfg = cfg_with_mqtt(
+            "mqtt://broker.example:1883",
+            Some(MqttTlsConfig {
+                ca_cert_path: Some("/etc/gateway/ca.pem".to_string()),
+                insecure_skip_verify: false,
+            }),
+        );
+        let errs = cfg.validate_all().expect_err("明文链路配置 TLS 材料应拒绝");
+        assert!(
+            errs.iter().any(|e| e.contains("不会生效")),
+            "应说明该配置不生效: {:?}",
+            errs
+        );
+    }
+
+    /// 正例：wss + 自定义 CA 是合法组合（此前该组合被静默丢弃）。
+    #[test]
+    fn mqtt_wss_with_custom_ca_is_accepted() {
+        let cfg = cfg_with_mqtt(
+            "wss://broker.example:8084/mqtt",
+            Some(MqttTlsConfig {
+                ca_cert_path: Some("/etc/gateway/ca.pem".to_string()),
+                insecure_skip_verify: false,
+            }),
+        );
+        cfg.validate_all().expect("wss + 自定义 CA 应通过校验");
+    }
 }

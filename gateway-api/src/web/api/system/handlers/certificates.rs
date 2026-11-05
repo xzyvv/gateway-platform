@@ -74,6 +74,27 @@ pub(crate) async fn list_certificates(
                 }
             };
 
+            // `bound_to` 必须反映真实消费者，否则运维会按错误信息排查：
+            // 本网关的 Web 是明文 HTTP（TLS 由外部反代承担），这张证书实际只
+            // 用于 MQTT 客户端 mTLS 与内置 OPC UA Server。旧实现硬编码
+            // "mqtt,https" 会让人误以为 Web 也在用它。
+            let cfg = state.config.config.load();
+            let mut consumers: Vec<&str> = Vec::new();
+            let mqtt_encrypted = ["tls://", "mqtts://", "ssl://", "wss://"]
+                .iter()
+                .any(|p| cfg.mqtt.broker.starts_with(p));
+            if cfg.mqtt.enabled && mqtt_encrypted {
+                consumers.push("mqtt");
+            }
+            if cfg.opcua.as_ref().map(|o| o.enabled).unwrap_or(false) {
+                consumers.push("opcua");
+            }
+            let bound_to = if consumers.is_empty() {
+                None
+            } else {
+                Some(consumers.join(","))
+            };
+
             let cert = CertificateInfo {
                 id: "gateway".to_string(),
                 name: "网关 TLS 证书".to_string(),
@@ -87,7 +108,7 @@ pub(crate) async fn list_certificates(
                 cert_path: mgr.cert_path().display().to_string(),
                 fingerprint,
                 enabled: true,
-                bound_to: Some("mqtt,https".to_string()),
+                bound_to,
             };
             Ok(ApiResponse::ok(vec![cert]))
         }
