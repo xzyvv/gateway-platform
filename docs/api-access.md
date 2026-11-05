@@ -164,10 +164,10 @@ config:read   config:write   history:read
 
 | 路径前缀 | 需要的写 scope |
 |---|---|
-| `/api/devices`、`/api/device-groups`、`/api/io`、`/api/discover`、`/api/diagnostics`（诊断写）、`/api/quality`（数据质量规则写） | `devices:write` |
+| `/api/devices`、`/api/device-groups`、`/api/io`、`/api/diagnostics`（诊断写，`/api/diagnostics/exec` 除外）、`/api/quality`（数据质量规则写） | `devices:write` |
 | `/api/points`（含 `/api/points/virtual`、`/api/points/clone` 等） | `points:write` |
 | `/api/config`、`/api/buses`、`/api/uplink`、`/api/templates`、`/api/project`、`/api/protocol-tools/conversion`、`/api/sim_consumer` | `config:write` |
-| `/api/protocol-tools` 中**真实发帧 / 占线**的写操作（`packet-editor/send`、`register-scan`、`test/run`、`auto-detect/run`、`packet-replay/*/execute`） | **仅主 token**（与系统域同级） |
+| `/api/protocol-tools` 中**真实发帧 / 占线**的写操作（`packet-editor/send`、`register-scan`、`auto-detect/run`、`packet-replay/*/execute`） | **仅主 token**（与系统域同级） |
 | `/api/protocol-tools` 其余写操作（presets、抓包清理、回放会话 CRUD） | `devices:write` |
 | `/api/access`、`/api/auth`、`/api/system`、`/api/ota`、`/api/ntp`、`/api/certificates`、`/api/network` 等系统域 | **仅主 token**（无可授予 scope） |
 | 其余未归类路径 | 任一 `*:write` |

@@ -300,7 +300,9 @@ fn required_write_scope(path: &str) -> Option<&'static str> {
         || path.starts_with("/api/quality")
         // F-13：诊断写操作（刷新总线负载 / 单点诊断）只影响单设备与总线读取，
         // 与 devices:write 同风险级；原先全域锁 system:write 反而比"会发帧"的
-        // protocol-tools 更严，与真实风险倒挂。系统级诊断（exec / logs）有独立入口。
+        // protocol-tools 更严，与真实风险倒挂。
+        // 例外：`/api/diagnostics/exec` 由路由级 require_admin_or_exec_scope 额外把关，
+        // 只有主 token / `*` / `admin` / `diagnostics:exec` 能过（devices:write 会被 8004 拒绝）。
         || path.starts_with("/api/diagnostics")
         || path.starts_with("/api/io")
     {
@@ -723,6 +725,10 @@ mod tests {
             &devices,
             "/api/protocol-tools/packet-replay/s-1/execute"
         ));
+        // remote-shell 下 /api/diagnostics/exec 还有路由级 exec 门控，
+        // 全局 scope 分类只到 devices 域；exec 的最终拒绝由 8004 负责。
+        assert!(key_can_write(&devices, "/api/diagnostics/bus-load/refresh"));
+        assert!(key_can_write(&devices, "/api/diagnostics/task-diag/p-1"));
     }
 
     #[test]

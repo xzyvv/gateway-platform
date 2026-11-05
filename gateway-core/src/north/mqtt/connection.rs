@@ -352,8 +352,12 @@ fn load_custom_ca_pem(ca_path: Option<&str>) -> Vec<u8> {
             );
         }
         Err(e) => {
-            tracing::warn!(
-                "failed to read custom CA bundle from {}: {} — falling back to system CA only",
+            // 配置里已经指定了自定义 CA，却读不到文件：不能让这条配置「看起来生效」。
+            // 私有 CA 场景下（无客户端证书时也会走到这里）握手必然失败，
+            // 因此用 error 级别并说明后果，而不是一句 info 级 warn 混在启动日志里。
+            tracing::error!(
+                "mqtt: 自定义 CA {} 读取失败（{}）——本次将仅使用系统 CA；\
+                 若 broker 使用私有 CA，握手会失败，请检查路径与文件权限",
                 path,
                 e
             );

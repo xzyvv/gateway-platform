@@ -190,12 +190,19 @@ impl GatewayConfig {
             if url.is_empty() {
                 errs.push("mqtt.broker 不能为空".to_string());
             } else {
-                let scheme_ok = ["mqtt://", "mqtts://", "ws://", "wss://"]
+                // 必须与 north/mqtt/broker.rs::parse_broker 支持的 scheme 一致。
+                // 曾经的列表只有 mqtt/mqtts/ws/wss，导致运行时明明支持、
+                // 出厂 config.json 里也用着的 tcp:// 与 tls:// 在门禁期被误判为非法：
+                // mqtt.enabled 一打开就启动失败（示例配置默认关闭，问题被掩盖）。
+                let scheme_ok = ["mqtt://", "mqtts://", "tls://", "tcp://", "ws://", "wss://"]
                     .iter()
-                    .any(|s| url.starts_with(s));
+                    .any(|s| url.starts_with(s))
+                    // 兼容历史配置：直接写 host[:port]，parse_broker 按 tcp://1883 处理。
+                    // 含 "://" 但不匹配上面白名单的（如 http://）仍要拒绝；空串也拒绝。
+                    || (!url.trim().is_empty() && !url.contains("://"));
                 if !scheme_ok {
                     errs.push(format!(
-                        "mqtt.broker 协议非法（必须为 mqtt/mqtts/ws/wss）: {}",
+                        "mqtt.broker 协议非法（必须为 mqtt/mqtts/tls/tcp/ws/wss）: {}",
                         url
                     ));
                 }
@@ -494,6 +501,34 @@ mod tests {
             }),
         );
         cfg.validate_all().expect("wss + 自定义 CA 应通过校验");
+    }
+
+    /// broker scheme 白名单必须与运行时 ``parse_broker`` 支持的一致。
+    #[test]
+    fn mqtt_broker_scheme_matches_runtime_parser() {
+        for broker in [
+            "tcp://localhost:1883", // 出厂 config.json / dummy 配置使用的写法
+            "tls://broker:8883",    // MQTT over TLS
+            "mqtt://broker:1883",
+            "mqtts://broker:8883",
+            "ws://broker:9001/mqtt",
+            "wss://broker:8084/mqtt",
+            "localhost:1883", // 裸 host:port，parse_broker 按 tcp://1883 处理
+        ] {
+            let cfg = cfg_with_mqtt(broker, None);
+            cfg.validate_all()
+                .unwrap_or_else(|e| panic!("{broker} 应通过配置校验: {e:?}"));
+        }
+
+        // 不支持的 scheme 仍要拒绝：否则 parse_broker 会把 "http://x" 当主机名
+        for broker in ["http://broker:1883", ""] {
+            let cfg = cfg_with_mqtt(broker, None);
+            let errs = cfg.validate_all().expect_err("非法 broker 应被拒绝");
+            assert!(
+                errs.iter().any(|e| e.contains("mqtt.broker")),
+                "{broker:?}: {errs:?}"
+            );
+        }
     }
 
     // ===== 配置负例：未知协议 / 非法枚举 / 缺失必填，必须在门禁期 fail-fast =====

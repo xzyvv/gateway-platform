@@ -329,15 +329,23 @@ async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 
-    assert!(
-        status.free_pct().unwrap() >= 10.0,
-        "临时目录所在分区可用空间应 >10%，实际 {:?}",
-        status.free_pct()
-    );
-    assert!(!status.is_pressure(), "空间充足时不应处于压力态");
-    assert!(
+    // 断言「首轮检测结果已回写」，而不是假设测试机磁盘一定宽裕。
+    // 曾经硬编码 free>=10%：本机 C: 盘曾掉到 9.94%，一个表达
+    // 「监控不依赖睡眠即可生效」的用例就变成了环境探测器而误报。
+    // 这里按实测值反推期望：healthy 时必须把 disk_ok 校正为 true（覆盖 stale false），
+    // 空间确实紧张时必须如实进入压力态（而不是沿用旧的 false 蒙对）。
+    let free = status.free_pct().unwrap();
+    assert!(free > 0.0, "应读到真实剩余百分比，实际 {free}");
+    let expected_ok = free >= 10.0;
+    assert_eq!(
         queue.is_disk_ok(),
-        "首轮检测后必须把 disk_ok 校正为 true——否则后续 enqueue 仍会绕道内存缓冲"
+        expected_ok,
+        "disk_ok 必须与首轮实测一致（free={free}%）"
+    );
+    assert_eq!(
+        status.is_pressure(),
+        !expected_ok,
+        "压力态必须与首轮实测一致（free={free}%）"
     );
     let _ = std::fs::remove_file(&path);
 }

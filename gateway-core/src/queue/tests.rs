@@ -179,11 +179,12 @@ fn test_fallback_capacity_eviction_reported() {
     // 容量=2，再 push 第三个 Good 点，bad（Bad 质量）应被淘汰。
     // 因为新 push 的也是 Good，但淘汰策略始终选最低者（bad < good），
     // 所以 buf 变成 [good, new_good]（good 在前，new_good 在后），
-    // 唯一被淘汰的就是 bad；retained=0（被保留下来的旧 1 个 good 不算本批的 retained）。
+    // 唯一被淘汰的就是 bad——新点最终留下来了，retained 必须是 1。
+    // （曾经用 n_in - dropped 计算，会把 1-1=0 报成「本批全丢」，日志误导运维。）
     let mut new_good = make_point("new_good", 9.0);
     new_good.quality = Quality::Good;
     let (retained, dropped) = push_into_fallback(&mut buf, 2, vec![new_good], &mut retry);
-    assert_eq!(retained, 0);
+    assert_eq!(retained, 1, "被淘汰的是旧点，本批新点仍在缓冲里");
     assert_eq!(dropped, 1);
     assert_eq!(buf.len(), 2);
     // bad 被淘汰，两个 good 都在。

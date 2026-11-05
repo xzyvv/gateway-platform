@@ -4,7 +4,7 @@
 >
 > 1. 网关内置 Web 是**明文 HTTP**，本身不提供 HTTPS；要对浏览器加密必须前置反向代理终止 TLS，证书由反代管理，**不是**网关的设备证书。
 > 2. 设备自签证书 [`gateway.pem` / `gateway_key.pem`] 只服务于 **OPC UA Server** 和 **MQTT 客户端**（mTLS）。缺证书时默认自动生成，自签能通的前提是**对端按指纹信任或不做 CA 链校验**。
-> 3. `GATEWAY_REQUIRE_EXTERNAL_CERT=1` 只禁用自签生成，**不会阻断启动**——配错时表现为「没有证书继续跑」，而不是启动失败。
+> 3. `GATEWAY_REQUIRE_EXTERNAL_CERT=1` 禁止自签，**且证书初始化失败会阻断启动**（退出码 1）——配错时的表现是「起不来」，而不是「没有证书继续跑」。
 
 ---
 
@@ -12,9 +12,9 @@
 
 | 链路 | 是否加密 | 证书从哪来 | 关键配置 | 代码位置 |
 |---|---|---|---|---|
-| Web / REST / WebSocket | 否（明文 HTTP） | 无（靠前置反代） | `web.listen_addr` | `gateway-core/src/config/web.rs:11-60` |
-| MQTT 北向（`tls://` / `mqtts://`） | 是 | `mqtt.tls.ca_cert_path` 自定义 CA + 系统 CA 合并；客户端证书用全局设备证书 | `mqtt.broker` 前缀、`mqtt.tls` | `north/mqtt/broker.rs:19-34`、`north/mqtt/connection.rs:34-97` |
-| MQTT 北向（`wss://`） | 是（但配置不生效） | 仅系统默认信任池 | 无 | `north/mqtt/connection.rs:93-95` |
+| Web / REST / WebSocket | 否（明文 HTTP） | 无（靠前置反代） | `web.listen_addr` | `gateway-core/src/config/web.rs:11` |
+| MQTT 北向（`tls://` / `mqtts://`） | 是 | `mqtt.tls.ca_cert_path` 自定义 CA + 系统 CA 合并；客户端证书用全局设备证书 | `mqtt.broker` 前缀、`mqtt.tls` | `north/mqtt/connection.rs:30-80` |
+| MQTT 北向（`wss://`） | 是 | 同上；只有「既无自定义 CA 也无客户端证书」时才退回系统默认信任池 | `mqtt.broker` 前缀、`mqtt.tls` | `north/mqtt/connection.rs:42-71` |
 | OPC UA Server | 有证书→`Basic256Sha256/SignAndEncrypt`；无证书→临时自签 + 明文 `None` 端点 | `opcua.cert_path/key_path` 优先，否则全局设备证书；都没有则运行时生成临时证书 | `opcua.*` | `north/server/registry.rs:117-137`、`north/server/opcua_server.rs:417-495` |
 | 南向采集（Modbus / DL/T645 / CJT188 / IEC101 / FINS / BACnet） | 否 | 工业协议本身无 TLS | — | — |
 
@@ -23,9 +23,9 @@
 | 项 | 说明 |
 |---|---|
 | 目录 | `GATEWAY_CERT_DIR`；Linux 默认 `/var/lib/gateway/certs`，Windows 默认 `./certs`（`gateway-core/src/support/paths.rs:126-132`） |
-| 文件 | `gateway.pem`（证书）+ `gateway_key.pem`（私钥），由 `gatewayd/src/bootstrap/helpers/north.rs:103-117` 初始化 |
+| 文件 | `gateway.pem`（证书）+ `gateway_key.pem`（私钥），由 `gatewayd/src/bootstrap/helpers/north.rs:111` 初始化 |
 | 算法 / 有效期 | ECDSA P-256 + SHA-256；`当前年-1` ~ `当前年+10`；CN `Gateway Device`；SAN 仅 `localhost` |
-| 生成开关 | `GATEWAY_REQUIRE_EXTERNAL_CERT=1` 禁止自签（`crypto/cert.rs:107-113`） |
+| 生成开关 | `GATEWAY_REQUIRE_EXTERNAL_CERT=1` 禁止自签；缺文件/不配对时启动失败（`crypto/cert.rs:44`、`bootstrap/helpers/north.rs:347`） |
 | 过期查询 | `GET /api/certificates` → `days_remaining`；`POST /api/certificates/renew` 重新生成自签 |
 
 ---

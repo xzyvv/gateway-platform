@@ -128,20 +128,27 @@ pub(crate) fn push_into_fallback(
     }
     *retry_count += 1;
     let n_in = points.len();
+    let before = buf.len();
     for dp in points {
         buf.push_back(dp);
     }
+    // 新点占用的下标区间起点。淘汰不一定是新点（按优先级可能踢掉更旧的条目），
+    // 因此要按区间位置统计「本批真正留下来的条数」，否则日志里的 retained
+    // 会在淘汰旧点时被误报为 0（运维会以为新数据全丢了）。
+    let mut new_start = before;
+    let mut new_evicted = 0usize;
     let mut dropped = 0usize;
     while buf.len() > capacity {
-        if let Some(idx) = find_lowest_priority_idx(buf) {
-            buf.remove(idx);
+        let idx = find_lowest_priority_idx(buf).unwrap_or(0);
+        if idx >= new_start {
+            new_evicted += 1;
         } else {
-            buf.pop_front();
+            new_start = new_start.saturating_sub(1);
         }
+        buf.remove(idx);
         dropped += 1;
     }
-    let retained = n_in.saturating_sub(dropped);
-    (retained, dropped)
+    (n_in - new_evicted, dropped)
 }
 
 pub struct DataQueue {
@@ -415,7 +422,7 @@ impl DataQueue {
             }
             tracing::warn!(
                 "flush fallback send failed, restored {} points to buffer (dropped by priority={}): {}",
-                n - dropped,
+                n.saturating_sub(dropped),
                 dropped,
                 e
             );
@@ -474,7 +481,7 @@ impl DataQueue {
                 }
                 tracing::warn!(
                     "sync flush fallback failed, restored {} points to buffer (dropped by priority={}): {}",
-                    n - dropped,
+                    n.saturating_sub(dropped),
                     dropped,
                     e
                 );

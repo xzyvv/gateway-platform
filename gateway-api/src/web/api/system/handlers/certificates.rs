@@ -80,7 +80,7 @@ pub(crate) async fn list_certificates(
             // "mqtt,https" 会让人误以为 Web 也在用它。
             let cfg = state.config.config.load();
             let mut consumers: Vec<&str> = Vec::new();
-            let mqtt_encrypted = ["tls://", "mqtts://", "ssl://", "wss://"]
+            let mqtt_encrypted = ["tls://", "mqtts://", "wss://"]
                 .iter()
                 .any(|p| cfg.mqtt.broker.starts_with(p));
             if cfg.mqtt.enabled && mqtt_encrypted {
