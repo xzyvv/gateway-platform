@@ -1,8 +1,48 @@
 use super::*;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 // 测试用唯一目录计数器，避免并行测试冲突
 static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// 环境变量是进程级全局状态：`GATEWAY_REQUIRE_EXTERNAL_CERT` 会影响
+/// `get_or_create()`。凡调用 `get_or_create` 的测试都必须持有此锁，
+/// 否则并发时可能读到别的测试刚设置的值。
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+    // 某个测试 panic 导致锁中毒时继续使用，避免后续测试全部连带失败
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 临时改写环境变量，Drop 时恢复原值（测试 panic 也不会把状态泄漏给其他用例）。
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, prev }
+    }
+
+    fn clear(key: &'static str) -> Self {
+        let prev = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 fn temp_dir() -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -36,6 +76,9 @@ fn test_generate_and_load() {
 
 #[test]
 fn test_get_or_create_creates_then_loads() {
+    // 走 get_or_create：必须与改写环境变量的用例串行，且确保生成开关未被外部置位
+    let _env = env_guard();
+    let _var = EnvVarGuard::clear("GATEWAY_REQUIRE_EXTERNAL_CERT");
     let dir = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
@@ -151,6 +194,9 @@ fn test_generate_atomic_on_happy_path() {
 /// 验证修复后的写入顺序能让 load() 成功——证明 cert 与 key 配对正确落盘。
 #[test]
 fn test_generate_then_get_or_create_loads_successfully() {
+    // 走 get_or_create：与其他改写环境变量的用例串行
+    let _env = env_guard();
+    let _var = EnvVarGuard::clear("GATEWAY_REQUIRE_EXTERNAL_CERT");
     let dir = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
@@ -159,4 +205,97 @@ fn test_generate_then_get_or_create_loads_successfully() {
     let _loaded = mgr.get_or_create().expect("get_or_create loads existing");
     assert!(mgr.cert_path().exists());
     assert!(mgr.key_path().exists());
+}
+
+/// P2-8 契约：`GATEWAY_REQUIRE_EXTERNAL_CERT=1` 时缺证书必须拒绝自签，
+/// 且不落盘任何文件——现场必须显式提供外部证书，不能悄悄用自签顶上。
+#[test]
+fn p2_require_external_cert_refuses_self_signed_generation() {
+    let _env = env_guard();
+    let _var = EnvVarGuard::set("GATEWAY_REQUIRE_EXTERNAL_CERT", "1");
+    let dir = temp_dir();
+    let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
+
+    let err = match mgr.get_or_create() {
+        Ok(_) => panic!("REQUIRE_EXTERNAL_CERT=1 时必须拒绝自签，实际成功生成"),
+        Err(e) => e,
+    };
+
+    assert!(
+        matches!(err, crate::engine::error::GatewayError::Config(_)),
+        "应为可直接展示给运维的 Config 错误，实际: {:?}",
+        err
+    );
+    assert!(
+        err.to_string().contains("GATEWAY_REQUIRE_EXTERNAL_CERT"),
+        "错误信息必须点明开关名，实际: {}",
+        err
+    );
+    assert!(!mgr.cert_path().exists(), "拒绝生成时不得落盘证书");
+    assert!(!mgr.key_path().exists(), "拒绝生成时不得落盘私钥");
+}
+
+/// P2-8 契约：cert / key 只剩一个时拒绝生成（避免用新的一半去配旧的一半），
+/// 既有文件保持原样；错误信息要指明「现存的是哪一个」。
+#[test]
+fn p2_incomplete_pair_refuses_generation_and_keeps_existing_file() {
+    let _env = env_guard();
+    let _var = EnvVarGuard::clear("GATEWAY_REQUIRE_EXTERNAL_CERT");
+    let dir = temp_dir();
+    let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
+
+    // 场景 A：只有 cert（key 丢失）
+    mgr.generate().expect("generate");
+    let cert_before = std::fs::read(mgr.cert_path()).expect("read cert");
+    std::fs::remove_file(mgr.key_path()).expect("remove key");
+
+    let err = match mgr.get_or_create() {
+        Ok(_) => panic!("只有 cert 时必须拒绝生成，实际成功"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cert pair incomplete"),
+        "错误信息应包含 cert pair incomplete，实际: {}",
+        msg
+    );
+    assert!(
+        msg.contains("only cert exists"),
+        "错误必须指明现存的是 cert，实际: {}",
+        msg
+    );
+    assert_eq!(
+        std::fs::read(mgr.cert_path()).expect("read cert after"),
+        cert_before,
+        "拒绝时不得改写既有 cert"
+    );
+    assert!(
+        !mgr.key_path().exists(),
+        "拒绝时不得生成新 key（会与既有 cert 失配）"
+    );
+
+    // 场景 B：只有 key（cert 丢失）
+    mgr.generate().expect("regenerate pair");
+    let key_before = std::fs::read(mgr.key_path()).expect("read key");
+    std::fs::remove_file(mgr.cert_path()).expect("remove cert");
+
+    let err = match mgr.get_or_create() {
+        Ok(_) => panic!("只有 key 时必须拒绝生成，实际成功"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("only key exists"),
+        "错误必须指明现存的是 key，实际: {}",
+        msg
+    );
+    assert_eq!(
+        std::fs::read(mgr.key_path()).expect("read key after"),
+        key_before,
+        "拒绝时不得改写既有 key"
+    );
+    assert!(
+        !mgr.cert_path().exists(),
+        "拒绝时不得生成新 cert（会与既有 key 失配）"
+    );
 }

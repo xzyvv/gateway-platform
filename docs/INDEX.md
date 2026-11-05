@@ -23,6 +23,7 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | 核心模块说明 | [`architecture/modules.md`](architecture/modules.md) | 启动流程 / config / south / pipeline / queue / north / Web API / platform / engine / 目录约定 |
 | 数据流 | [`architecture/data-flow.md`](architecture/data-flow.md) | 设备→采集→处理→队列→分发 完整链路 |
 | 部署架构 | [`architecture/deployment.md`](architecture/deployment.md) | 目录布局 / 进程模型 / 开发联调 / ServeDir 静态托管 |
+| 现场 TLS 决策 | [`architecture/tls-decision.md`](architecture/tls-decision.md) | 各链路加密现状 / 现场必答 4 问 / 分场景配置 / 已知不一致与排障速查 |
 | 关键设计约束 | [`architecture/constraints.md`](architecture/constraints.md) | 稳定性 / 安全 / 资源占用 相关硬性约束 |
 
 ## 开发指南

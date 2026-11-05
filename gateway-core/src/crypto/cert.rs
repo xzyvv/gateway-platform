@@ -98,10 +98,11 @@ impl CertManager {
         }
         if cert_exists != key_exists {
             // 不一致：只其中一个文件存在时不安全生成（避免覆盖或失配）
-            let missing = if !cert_exists { "cert" } else { "key" };
+            let existing = if cert_exists { "cert" } else { "key" };
             return Err(GatewayError::Config(format!(
-                "cert pair incomplete: only {} exists, refusing to overwrite.                  Please remove both files or restore the missing one.",
-                missing
+                "cert pair incomplete: only {} exists, refusing to generate the missing half. \
+                 Please restore the missing file or remove the existing one.",
+                existing
             )));
         }
         // 安全开关：GATEWAY_REQUIRE_EXTERNAL_CERT=1 时禁用自签发，要求运维提供证书
