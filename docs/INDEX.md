@@ -58,6 +58,7 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | [`docs/perf-baseline.md`](perf-baseline.md) | 13 个场景的**汇总基线**（50 ~ 20 000 点）：参数与结果总表、分场景结论、读数口径（队列上限截断 / p99 饱和 / 整轮失败） |
 | [`docs/perf-knee.md`](perf-knee.md) | 150 000 点**拐点**压测：总线数 × tcp 并发矩阵；结论「吞吐 ≥ 150k 点/秒，瓶颈在测试机 CPU」 |
 | [`docs/perf-rss-explanation.md`](perf-rss-explanation.md) | RSS 增长**归因**：未配置北向消费 → SQLite page cache 持有，附运维判据与复现命令 |
+| [`docs/bench-baseline.md`](bench-baseline.md) | **微基准基线**（criterion 0.5）：CRC / Modbus 帧构建与校验 / 内存队列 / SQLite 周期 / DataQueue 往返的单点成本与回归判定口径 |
 
 ## 功能盘点与路线图
 

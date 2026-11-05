@@ -484,3 +484,171 @@ async fn pause_bus_without_points_is_rejected() {
 
     scheduler.stop().await;
 }
+
+// =========================================================================
+// F-11 采集时序快照（timeline.rs）
+//
+// 该快照直接给运维页出「真实执行窗口 + 重叠」结论。若样本裁剪/窗口过滤/跨组判定
+// 写错，页面会给出**看似精确却错误**的结论（这正是该模块引入时要替换掉的行为）。
+// =========================================================================
+
+#[test]
+fn timeline_keeps_recent_samples_and_counts_all_runs() {
+    let tl = Timeline::default();
+    let now = super::timeline::now_ms();
+
+    // 40 次执行：内存里只保留最近 32 条样本，runs 必须如实累计
+    for i in 0..40i64 {
+        let start = now - 40_000 + i * 1000;
+        tl.record(
+            "modbus:b1",
+            "modbus",
+            "b1",
+            Duration::from_secs(1),
+            start,
+            start + 200,
+        );
+    }
+
+    let snap = tl.snapshot(60_000);
+    assert_eq!(snap.group_count, 1);
+    let g = &snap.groups[0];
+    assert_eq!(g.runs, 40);
+    assert_eq!(g.samples.len(), super::timeline::MAX_SAMPLES_PER_GROUP);
+    // 最老的 8 条被丢弃：首条应是下标 8，末条是下标 39
+    assert_eq!(g.samples.first().unwrap().start_ms, now - 40_000 + 8 * 1000);
+    assert_eq!(g.samples.last().unwrap().start_ms, now - 40_000 + 39 * 1000);
+}
+
+#[test]
+fn timeline_snapshot_drops_samples_outside_window() {
+    let tl = Timeline::default();
+    let now = super::timeline::now_ms();
+
+    // 窗口外的历史样本不得影响当前结论
+    tl.record(
+        "modbus:b1",
+        "modbus",
+        "b1",
+        Duration::from_secs(1),
+        now - 120_000,
+        now - 119_000,
+    );
+    assert_eq!(tl.snapshot(60_000).group_count, 0);
+
+    tl.record(
+        "modbus:b1",
+        "modbus",
+        "b1",
+        Duration::from_secs(1),
+        now - 1_000,
+        now,
+    );
+    let snap = tl.snapshot(60_000);
+    assert_eq!(snap.group_count, 1);
+    assert_eq!(snap.groups[0].samples.len(), 1);
+}
+
+#[test]
+fn timeline_flags_overrun_only_when_duration_exceeds_interval() {
+    let tl = Timeline::default();
+    let now = super::timeline::now_ms();
+
+    tl.record(
+        "modbus:b1",
+        "modbus",
+        "b1",
+        Duration::from_millis(1000),
+        now - 3_000,
+        now - 1_500,
+    );
+    tl.record(
+        "modbus:b1",
+        "modbus",
+        "b1",
+        Duration::from_millis(1000),
+        now - 1_000,
+        now - 500,
+    );
+
+    let snap = tl.snapshot(10_000);
+    let g = &snap.groups[0];
+    assert!(g.samples[0].overrun, "1500ms > 1000ms 应标记超时");
+    assert!(!g.samples[1].overrun, "500ms < 1000ms 不应标记超时");
+    assert_eq!(g.max_duration_ms, 1_500);
+    assert_eq!(g.avg_duration_ms, 1_000);
+}
+
+#[test]
+fn timeline_overlap_only_between_different_groups_on_same_bus() {
+    let tl = Timeline::default();
+    let now = super::timeline::now_ms();
+
+    // 同总线、不同组：窗口相交 → 1 条重叠
+    tl.record(
+        "modbus:b1",
+        "modbus",
+        "b1",
+        Duration::from_secs(1),
+        now - 5_000,
+        now - 3_000,
+    );
+    tl.record(
+        "dlt645:b1",
+        "dlt645",
+        "b1",
+        Duration::from_secs(1),
+        now - 4_000,
+        now - 2_000,
+    );
+    // 同组自身的两次样本首尾相接，不算重叠
+    tl.record(
+        "dlt645:b1",
+        "dlt645",
+        "b1",
+        Duration::from_secs(1),
+        now - 1_500,
+        now - 1_000,
+    );
+    // 另一条总线上的组，时间再重叠也不得算进 b1
+    tl.record(
+        "modbus:b2",
+        "modbus",
+        "b2",
+        Duration::from_secs(1),
+        now - 5_000,
+        now - 3_000,
+    );
+
+    let snap = tl.snapshot(10_000);
+    assert_eq!(snap.groups.len(), 3);
+    assert_eq!(snap.overlaps.len(), 1, "只应有一条 b1 跨组重叠");
+    let o = &snap.overlaps[0];
+    assert_eq!(o.bus, "b1");
+    assert_eq!(o.start_ms, now - 4_000);
+    assert_eq!(o.end_ms, now - 3_000);
+    assert_eq!(o.overlap_ms, 1_000);
+}
+
+#[test]
+fn timeline_clear_resets_state() {
+    let tl = Timeline::default();
+    let now = super::timeline::now_ms();
+
+    tl.record(
+        "modbus:b1",
+        "modbus",
+        "b1",
+        Duration::from_secs(1),
+        now - 1_000,
+        now,
+    );
+    assert_eq!(tl.snapshot(10_000).group_count, 1);
+
+    tl.clear();
+    let snap = tl.snapshot(10_000);
+    assert_eq!(snap.group_count, 0);
+    assert!(snap.groups.is_empty());
+    assert!(snap.overlaps.is_empty());
+    assert!(!snap.running);
+}

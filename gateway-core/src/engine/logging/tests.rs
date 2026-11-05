@@ -398,6 +398,11 @@ fn prune_log_dir_deletes_old_big_log_and_keeps_neighbours() {
         .expect("open big log");
     fh.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(10_000))
         .expect("set mtime");
+    // 显式关闭句柄再清理：Windows 上「已被标记删除但仍有打开句柄」的文件，
+    // `Path::exists()` 的返回值取决于句柄/扫描时机。全量并行测试（尤其 llvm-cov
+    // 插桩让整体更慢）时曾因此偶发误报「大日志文件应已从磁盘移除」。
+    // 轮转删的是归档文件，测试本身不该替它保持写句柄。
+    drop(fh);
 
     let del = prune_log_dir(dir.path());
 

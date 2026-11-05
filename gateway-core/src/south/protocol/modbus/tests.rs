@@ -459,3 +459,296 @@ fn malformed_modbus_coils_response_is_rejected_without_panic() {
     // 功能码不匹配（FC02 响应被当成 FC01）
     assert!(parse_coils_response(1, 2, 3, &full).is_err());
 }
+
+// =========================================================================
+// 批量合并（batch.rs）：读合并允许空洞，写合并必须严格连续。
+//
+// 写路径是高风险区：FC15/FC16 写帧会覆盖 [start, start+units) 内的**全部**地址，
+// 若把中间有空洞的点位并进同一帧，就会把空洞地址上原有的线圈/寄存器一起改掉，
+// 属于「配置没错、线上数据却被改坏」的现场事故。以下用例锁定该不变量。
+// =========================================================================
+
+fn mk_addr_point(addr: u16, data_type: &str) -> crate::config::PointConfig {
+    let mut p = mk_typed_point(data_type);
+    p.address = addr.to_string();
+    p.address_num = Some(addr);
+    p
+}
+
+/// 写合并：地址出现空洞必须拆帧，不能把 (10,1)(11,2)(14,1) 并成一帧读到 12/13。
+#[test]
+fn write_batches_split_on_address_gap() {
+    use super::merge_write_batches;
+
+    let items = [(10u16, 1u16), (11, 2), (14, 1)];
+    let batches = merge_write_batches(&items, super::MAX_WRITE_REGISTERS);
+    assert_eq!(
+        batches.len(),
+        2,
+        "14 与前一帧不连续，必须拆帧: {:?}",
+        batches
+    );
+    assert_eq!((batches[0].start_addr, batches[0].units), (10, 3));
+    assert_eq!(batches[0].range, 0..2);
+    assert_eq!((batches[1].start_addr, batches[1].units), (14, 1));
+    assert_eq!(batches[1].range, 2..3);
+}
+
+/// 写合并：连续项超出 FC16 单帧上限时另起一帧，任何一帧都不得超过 123。
+#[test]
+fn write_batches_split_when_exceeding_frame_limit() {
+    use super::merge_write_batches;
+
+    let items = [(0u16, 60u16), (60, 60), (120, 4)];
+    let batches = merge_write_batches(&items, super::MAX_WRITE_REGISTERS);
+    assert_eq!(batches.len(), 2);
+    assert_eq!((batches[0].start_addr, batches[0].units), (0, 120));
+    assert_eq!((batches[1].start_addr, batches[1].units), (120, 4));
+    for b in &batches {
+        assert!(
+            b.units <= super::MAX_WRITE_REGISTERS,
+            "写帧超过 FC16 上限: {:?}",
+            b
+        );
+    }
+}
+
+/// 写合并：恰好用满 123 个寄存器仍应合成一帧（边界含等号）。
+#[test]
+fn write_batches_merge_exactly_at_limit() {
+    use super::merge_write_batches;
+
+    let items = [(5u16, 100u16), (105, 23)];
+    let batches = merge_write_batches(&items, super::MAX_WRITE_REGISTERS);
+    assert_eq!(batches.len(), 1);
+    assert_eq!((batches[0].start_addr, batches[0].units), (5, 123));
+}
+
+/// 读合并：空洞 ≤ gap_threshold 时并成一帧，超过阈值才拆。
+#[test]
+fn read_batches_merge_gap_within_threshold() {
+    use super::merge_batches;
+
+    let p0 = mk_addr_point(0, "u16");
+    let p2 = mk_addr_point(2, "u16");
+    let p10 = mk_addr_point(10, "u16");
+    let batches = merge_batches(&[&p0, &p2, &p10], 2, 125);
+    assert_eq!(batches.len(), 2);
+    assert_eq!((batches[0].start_addr, batches[0].count), (0, 3));
+    assert_eq!(batches[0].points.len(), 2);
+    assert_eq!((batches[1].start_addr, batches[1].count), (10, 1));
+}
+
+/// 读合并：不得超过 max_count，否则会读到设备映射末尾之外的地址。
+#[test]
+fn read_batches_never_cross_max_count() {
+    use super::merge_batches;
+
+    let p0 = mk_addr_point(0, "u16");
+    // 124 + 1 恰好等于 125 上界 → 允许合并（gap 放宽到 1000，专门隔离 max_count 判定）
+    let p124 = mk_addr_point(124, "u16");
+    let batches = merge_batches(&[&p0, &p124], 1000, 125);
+    assert_eq!(batches.len(), 1);
+    assert_eq!((batches[0].start_addr, batches[0].count), (0, 125));
+
+    // 125 + 1 = 126 越过上界 → 必须拆帧
+    let p125 = mk_addr_point(125, "u16");
+    let batches = merge_batches(&[&p0, &p125], 1000, 125);
+    assert_eq!(batches.len(), 2);
+}
+
+/// 解码：寄存器数不足时必须返回 Bad，而不是越界 panic（脏帧/短响应）。
+#[test]
+fn parse_point_value_out_of_range_is_bad_not_panic() {
+    use crate::engine::model::Quality;
+
+    // f32 需要 2 个寄存器，这里只给 1 个
+    let point = mk_addr_point(2, "f32");
+    let dp = super::parse_point_value(&point, &[0x42F7], 0);
+    assert_eq!(dp.quality, Quality::Bad);
+    assert_eq!(dp.quality_reason, "modbus_decode_failed");
+}
+
+/// 写元件类型判定与 `write` 的功能码语义一致；其余功能码视为只读。
+#[test]
+fn write_kind_mapping_matches_function_code_semantics() {
+    use super::batch::WriteKind;
+
+    for fc in [1u8, 5, 15] {
+        assert_eq!(super::write_kind_of(fc), Some(WriteKind::Coil), "fc={fc}");
+    }
+    for fc in [3u8, 6, 16] {
+        assert_eq!(
+            super::write_kind_of(fc),
+            Some(WriteKind::Register),
+            "fc={fc}"
+        );
+    }
+    for fc in [0u8, 2, 4, 20, 99] {
+        assert_eq!(super::write_kind_of(fc), None, "fc={fc} 应视为只读");
+    }
+}
+
+// =========================================================================
+// 采集主路径（collector.rs）：批量读成功 / 异常分级 / 可恢复异常只重试一次
+//
+// 现场最常见的两种真实故障是「从站回了异常码」和「异常码后恢复」。
+// 这里用可脚本化的 TCP 假从站跑通 read_batch_points，锁定：
+// 1) 连续地址合并成一帧后，各点位偏移解析正确；
+// 2) 配置类异常不重试、只计入 config_error；
+// 3) 可恢复异常退避重试一次，成功后才算 Good，不计入 retry_exhausted。
+// =========================================================================
+
+/// 可脚本化的假从站：按 `script` 顺序应答。
+///
+/// 同一连接上可能连续来多次事务（TCP 复用），也可能每次事务重连，两种都要能服务：
+/// 外层 `accept` 负责重连，内层读循环负责同一连接上的后续事务。
+/// `None` 表示本次不回包并断开（模拟无应答）。
+async fn spawn_modbus_tcp_script(mut script: Vec<Option<Vec<u8>>>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr").to_string();
+    tokio::spawn(async move {
+        let mut idx = 0usize;
+        while idx < script.len() {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            while idx < script.len() {
+                let mut header = [0u8; 7];
+                if stream.read_exact(&mut header).await.is_err() {
+                    break; // 客户端每次事务新建连接 → 回到 accept
+                }
+                let tx_id = u16::from_be_bytes([header[0], header[1]]);
+                let unit_id = header[6];
+                let length = u16::from_be_bytes([header[4], header[5]]) as usize;
+                let body_len = length.saturating_sub(1);
+                let mut body = vec![0u8; body_len];
+                if body_len > 0 && stream.read_exact(&mut body).await.is_err() {
+                    break;
+                }
+                match script[idx].take() {
+                    Some(pdu) => {
+                        idx += 1;
+                        let mut resp = Vec::with_capacity(7 + pdu.len());
+                        resp.extend_from_slice(&tx_id.to_be_bytes());
+                        resp.extend_from_slice(&0u16.to_be_bytes());
+                        resp.extend_from_slice(&((pdu.len() + 1) as u16).to_be_bytes());
+                        resp.push(unit_id);
+                        resp.extend_from_slice(&pdu);
+                        if stream.write_all(&resp).await.is_err() {
+                            return;
+                        }
+                    }
+                    None => return,
+                }
+            }
+        }
+    });
+    addr
+}
+
+fn mk_poll_point(id: &str, addr: u16) -> crate::config::PointConfig {
+    let mut p = mk_typed_point("u16");
+    p.id = id.into();
+    p.address = addr.to_string();
+    p.address_num = Some(addr);
+    p.function_code = Some(3);
+    p.slave_id = Some(1);
+    p
+}
+
+/// 连续地址合并为一帧后，每个点位必须按各自偏移取到正确的寄存器。
+#[tokio::test]
+async fn batch_read_reports_values_for_merged_registers() {
+    use crate::engine::model::Quality;
+
+    // 地址 0、1 连续 → 合并为一帧 FC03 count=2，回 42 / 100
+    let addr = spawn_modbus_tcp_script(vec![Some(vec![0x03, 0x04, 0x00, 0x2A, 0x00, 0x64])]).await;
+    let c = super::ModbusCollector::new("modbus_batch_ok", modbus_tcp_bus(addr, 1000));
+    let pts = vec![mk_poll_point("p0", 0), mk_poll_point("p1", 1)];
+
+    let out = c.read_batch_points(&pts).await;
+    assert_eq!(out.len(), 2, "每个输入点位都必须有结果");
+    assert!(out.iter().all(|d| d.quality == Quality::Good), "{:?}", out);
+    assert_eq!(out[0].value, 42.0, "地址 0 应取 0x002A");
+    assert_eq!(out[1].value, 100.0, "地址 1 应取 0x0064");
+}
+
+/// 配置类异常（0x02 非法数据地址）：不重试，只计 config_error。
+#[tokio::test]
+async fn batch_read_config_error_is_reported_without_retry() {
+    use crate::engine::model::Quality;
+    use std::sync::atomic::Ordering;
+
+    let addr = spawn_modbus_tcp_script(vec![Some(vec![0x83, 0x02])]).await;
+    let metrics = Arc::new(Metrics::new());
+    let c = super::ModbusCollector::new("modbus_batch_cfg_err", modbus_tcp_bus(addr, 1000))
+        .with_metrics(metrics.clone());
+    let pts = vec![mk_poll_point("p0", 0)];
+
+    let out = c.read_batch_points(&pts).await;
+    assert_eq!(out[0].quality, Quality::Bad);
+    assert_eq!(out[0].quality_reason, "modbus_read_failed");
+    assert_eq!(
+        metrics
+            .protocol_exception
+            .modbus_config_error
+            .load(Ordering::Relaxed),
+        1,
+        "配置类异常应计入 config_error"
+    );
+    assert_eq!(
+        metrics
+            .protocol_exception
+            .modbus_recoverable
+            .load(Ordering::Relaxed),
+        0,
+        "配置类异常不得计入 recoverable"
+    );
+    assert_eq!(
+        metrics
+            .protocol_exception
+            .modbus_retry_exhausted
+            .load(Ordering::Relaxed),
+        0,
+        "配置类异常不应重试"
+    );
+}
+
+/// 可恢复异常（0x06 从站忙）：退避重试一次，成功后必须回到 Good。
+#[tokio::test]
+async fn batch_read_retries_recoverable_exception_once() {
+    use crate::engine::model::Quality;
+    use std::sync::atomic::Ordering;
+
+    let addr = spawn_modbus_tcp_script(vec![
+        Some(vec![0x83, 0x06]),
+        Some(vec![0x03, 0x02, 0x00, 0x2A]),
+    ])
+    .await;
+    let metrics = Arc::new(Metrics::new());
+    let c = super::ModbusCollector::new("modbus_batch_retry", modbus_tcp_bus(addr, 1000))
+        .with_metrics(metrics.clone());
+    let pts = vec![mk_poll_point("p0", 0)];
+
+    let out = c.read_batch_points(&pts).await;
+    assert_eq!(out[0].quality, Quality::Good, "{:?}", out[0]);
+    assert_eq!(out[0].value, 42.0);
+    assert_eq!(
+        metrics
+            .protocol_exception
+            .modbus_recoverable
+            .load(Ordering::Relaxed),
+        1,
+        "第一次异常应计入 recoverable"
+    );
+    assert_eq!(
+        metrics
+            .protocol_exception
+            .modbus_retry_exhausted
+            .load(Ordering::Relaxed),
+        0,
+        "重试成功不应计入 retry_exhausted"
+    );
+}

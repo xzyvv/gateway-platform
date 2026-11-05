@@ -67,53 +67,65 @@ impl ModbusCollector {
         count: u16,
     ) -> CollectorResult<Vec<u16>> {
         let request = build_read_request(slave, fc, start_addr, count);
-        let first = self.bus.transaction(request.clone(), Some(count)).await;
-        match first {
+        // 关键：异常响应是「从站正常应答的一帧」，由 parse_read_response 识别，
+        // 而不是 bus.transaction 的 Err。原实现只匹配 `Err(ModbusException)`，
+        // 于是异常码永远进不了重试/计数分支（Bug 186 的「可恢复异常重试一次」
+        // 实际是死代码）。这里把「事务结果 + 解帧结果」先合并，再统一分类。
+        let first = match self.bus.transaction(request.clone(), Some(count)).await {
             Ok(resp) => parse_read_response(slave, fc, count, &resp),
-            Err(CollectorError::ModbusException(code)) => {
-                let (retryable, exc, label) = self.classify_exception(code);
-                if !retryable {
-                    tracing::warn!(
-                        target: "south.modbus",
-                        "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {}",
-                        label, fc, slave, start_addr, count, exc.description()
-                    );
-                    return Err(CollectorError::ModbusException(code));
-                }
+            Err(e) => Err(e),
+        };
+        let code = match first {
+            Ok(regs) => return Ok(regs),
+            Err(CollectorError::ModbusException(code)) => code,
+            // 超时 / 校验错 / 非法帧不是「从站回了异常码」，原样透传，不重试
+            Err(e) => return Err(e),
+        };
+        {
+            let (retryable, exc, label) = self.classify_exception(code);
+            if !retryable {
                 tracing::warn!(
                     target: "south.modbus",
-                    "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {} (will retry once after 50ms backoff)",
+                    "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {}",
                     label, fc, slave, start_addr, count, exc.description()
                 );
-                // Bug 186: 单次重试——现网 90%+ 的 recoverable 都是偶发。
-                // 一次重试足够；第二次重试会让通信周期翻倍，无明显收益。
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                let second = self.bus.transaction(request, Some(count)).await;
-                match second {
-                    Ok(resp) => {
-                        tracing::info!(
-                            target: "south.modbus",
-                            "modbus exception ({}): retry succeeded for fc={:#04x} slave={} addr={}",
-                            label, fc, slave, start_addr
-                        );
-                        parse_read_response(slave, fc, count, &resp)
+                return Err(CollectorError::ModbusException(code));
+            }
+            tracing::warn!(
+                target: "south.modbus",
+                "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {} (will retry once after 50ms backoff)",
+                label, fc, slave, start_addr, count, exc.description()
+            );
+            // Bug 186: 单次重试——现网 90%+ 的 recoverable 都是偶发。
+            // 一次重试足够；第二次重试会让通信周期翻倍，无明显收益。
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let second = match self.bus.transaction(request, Some(count)).await {
+                Ok(resp) => parse_read_response(slave, fc, count, &resp),
+                Err(e) => Err(e),
+            };
+            match second {
+                Ok(regs) => {
+                    tracing::info!(
+                        target: "south.modbus",
+                        "modbus exception ({}): retry succeeded for fc={:#04x} slave={} addr={}",
+                        label, fc, slave, start_addr
+                    );
+                    Ok(regs)
+                }
+                Err(e) => {
+                    if let Some(m) = &self.metrics {
+                        m.protocol_exception
+                            .modbus_retry_exhausted
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
-                    Err(e) => {
-                        if let Some(m) = &self.metrics {
-                            m.protocol_exception
-                                .modbus_retry_exhausted
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        tracing::error!(
-                            target: "south.modbus",
-                            "modbus exception ({}): retry exhausted for fc={:#04x} slave={} addr={}: {}",
-                            label, fc, slave, start_addr, e
-                        );
-                        Err(e)
-                    }
+                    tracing::error!(
+                        target: "south.modbus",
+                        "modbus exception ({}): retry exhausted for fc={:#04x} slave={} addr={}: {}",
+                        label, fc, slave, start_addr, e
+                    );
+                    Err(e)
                 }
             }
-            Err(e) => Err(e),
         }
     }
 
@@ -126,51 +138,60 @@ impl ModbusCollector {
         count: u16,
     ) -> CollectorResult<Vec<bool>> {
         let request = build_read_request(slave, fc, start_addr, count);
-        let first = self.bus.transaction(request.clone(), None).await;
-        match first {
+        // 同 read_registers_with_retry：异常帧由 parse_coils_response 识别，
+        // 必须合并「事务结果 + 解帧结果」后再分类，否则异常码走不到重试。
+        let first = match self.bus.transaction(request.clone(), None).await {
             Ok(resp) => parse_coils_response(slave, fc, count, &resp),
-            Err(CollectorError::ModbusException(code)) => {
-                let (retryable, exc, label) = self.classify_exception(code);
-                if !retryable {
-                    tracing::warn!(
-                        target: "south.modbus",
-                        "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {}",
-                        label, fc, slave, start_addr, count, exc.description()
-                    );
-                    return Err(CollectorError::ModbusException(code));
-                }
+            Err(e) => Err(e),
+        };
+        let code = match first {
+            Ok(bits) => return Ok(bits),
+            Err(CollectorError::ModbusException(code)) => code,
+            Err(e) => return Err(e),
+        };
+        {
+            let (retryable, exc, label) = self.classify_exception(code);
+            if !retryable {
                 tracing::warn!(
                     target: "south.modbus",
-                    "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {} (will retry once after 50ms backoff)",
+                    "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {}",
                     label, fc, slave, start_addr, count, exc.description()
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                let second = self.bus.transaction(request, None).await;
-                match second {
-                    Ok(resp) => {
-                        tracing::info!(
-                            target: "south.modbus",
-                            "modbus exception ({}): retry succeeded for fc={:#04x} slave={} addr={}",
-                            label, fc, slave, start_addr
-                        );
-                        parse_coils_response(slave, fc, count, &resp)
+                return Err(CollectorError::ModbusException(code));
+            }
+            tracing::warn!(
+                target: "south.modbus",
+                "modbus exception ({}): fc={:#04x} slave={} addr={} count={} -> {} (will retry once after 50ms backoff)",
+                label, fc, slave, start_addr, count, exc.description()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let second = match self.bus.transaction(request, None).await {
+                Ok(resp) => parse_coils_response(slave, fc, count, &resp),
+                Err(e) => Err(e),
+            };
+            match second {
+                Ok(bits) => {
+                    tracing::info!(
+                        target: "south.modbus",
+                        "modbus exception ({}): retry succeeded for fc={:#04x} slave={} addr={}",
+                        label, fc, slave, start_addr
+                    );
+                    Ok(bits)
+                }
+                Err(e) => {
+                    if let Some(m) = &self.metrics {
+                        m.protocol_exception
+                            .modbus_retry_exhausted
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
-                    Err(e) => {
-                        if let Some(m) = &self.metrics {
-                            m.protocol_exception
-                                .modbus_retry_exhausted
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        tracing::error!(
-                            target: "south.modbus",
-                            "modbus exception ({}): retry exhausted for fc={:#04x} slave={} addr={}: {}",
-                            label, fc, slave, start_addr, e
-                        );
-                        Err(e)
-                    }
+                    tracing::error!(
+                        target: "south.modbus",
+                        "modbus exception ({}): retry exhausted for fc={:#04x} slave={} addr={}: {}",
+                        label, fc, slave, start_addr, e
+                    );
+                    Err(e)
                 }
             }
-            Err(e) => Err(e),
         }
     }
 
