@@ -147,6 +147,29 @@ describe('evalClock', () => {
     expect(evalClock({ status: 'synced', offset_ms: 2000 }).level).toBe('warn')
     expect(evalClock({ status: 'synced', offset_ms: 8000 }).level).toBe('fail')
   })
+
+  // 时钟不可信优先于 NTP 状态判定：网关已据此暂停计划任务，属交付级问题
+  it('时钟不可信判失败（即使 NTP 已同步）', () => {
+    const item = evalClock({
+      status: 'synced',
+      offset_ms: 100,
+      clock_trusted: false,
+      clock_untrust_reason: '系统时间早于 2020-01-01（疑似无 RTC 掉电回退）',
+    })
+    expect(item.level).toBe('fail')
+    expect(item.detail).toContain('计划任务已暂停')
+    expect(item.detail).toContain('2020-01-01')
+  })
+
+  it('时钟不可信但未下发原因时仍判失败', () => {
+    const item = evalClock({ status: 'synced', clock_trusted: false })
+    expect(item.level).toBe('fail')
+    expect(item.detail).toContain('原因未知')
+  })
+
+  it('时钟可信时沿用原有 NTP 判定', () => {
+    expect(evalClock({ status: 'synced', offset_ms: 300, clock_trusted: true }).level).toBe('pass')
+  })
 })
 
 describe('evalCertificates', () => {

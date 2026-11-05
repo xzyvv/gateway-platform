@@ -339,6 +339,35 @@ async fn test_diag_reports_no_data_honestly() {
     assert!(msg.contains("总召唤未返回任何数据"), "{msg}");
 }
 
+/// 起一条没有串口句柄的总线：模拟现场「从站掉线 / 串口配错 / 转换器掉电」。
+fn dead_bus() -> Arc<BusManager> {
+    let cfg = BusConfig {
+        port_name: "COM9999".to_string(),
+        protocol: "iec101".to_string(),
+        timeout_ms: 300,
+        retry_count: Some(0),
+        retry_delay_ms: Some(0),
+        ..Default::default()
+    };
+    Arc::new(BusManager::spawn_with(
+        &cfg,
+        None,
+        Arc::new(Metrics::new()),
+        BusDeps::production(),
+    ))
+}
+
+/// 不可达端点必须如实报错，不得伪造「链路复位成功 / 总召唤成功」。
+#[tokio::test]
+async fn test_diag_reports_unreachable_endpoint_instead_of_fake_success() {
+    let c = Iec101Collector::new("iec101-diag-dead", dead_bus());
+    let msg = c.diag().await;
+    assert!(msg.contains("链路复位失败"), "{msg}");
+    assert!(msg.contains("总召唤失败"), "{msg}");
+    assert!(!msg.contains("链路复位成功"), "不可达端点不得报复位成功: {msg}");
+    assert!(!msg.contains("总召唤返回"), "不可达端点不得报总召唤成功: {msg}");
+}
+
 #[tokio::test]
 async fn test_e2e_read_float_via_interrogation() {
     let st = stub_state();
