@@ -15,7 +15,7 @@
 | 审查的 Linux-only 代码块 | 14 处（见 §2） |
 | 修复的 P0/P1 缺陷 | 6 项（§1） |
 | 新增跨平台单测 | 20 个（§3） |
-| Linux 交叉编译验证 | `cargo check --target x86_64-unknown-linux-gnu --workspace --all-targets` 通过 |
+| Linux 交叉编译验证 | `cargo check --target x86_64-unknown-linux-gnu --all-targets`（三个部署 crate）通过 |
 | Windows 侧单测 | `cargo test -p gateway-core --lib --features fins` → 1407 passed / 0 failed |
 | 剩余风险 | §4「无法在本机验证项」，需真机验收 |
 
@@ -251,11 +251,15 @@ Unix 下另有 `keyfile_is_owner_only_on_unix` 断言权限恰为 0600。
 ## 5. 复现命令
 
 ```powershell
-# Linux 交叉编译验证（本机 Windows，无需真机）
-$env:CC_x86_64_unknown_linux_gnu="<zigwrap>.exe"
-$env:AR_x86_64_unknown_linux_gnu="<zigwrap>.exe"
+# Linux 交叉编译验证（本机 Windows，无需真机；zig 作交叉 C 编译器/链接器）
+powershell -File scripts/linux_cross_check.ps1
+
+# 或手工
+$env:CC_x86_64-unknown-linux-gnu="<zigwrap>.exe"
+$env:AR_x86_64-unknown-linux-gnu="<zigwrap>.exe"
 $env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="<zigwrap>.exe"
-cargo check --target x86_64-unknown-linux-gnu --workspace --all-targets --features fins
+cargo check --target x86_64-unknown-linux-gnu --all-targets --features fins \
+  -p gateway-core -p gateway-api -p gatewayd
 
 # Windows 侧单测
 cargo fmt --all
@@ -266,13 +270,28 @@ cargo test -p gateway-core --lib --features fins
 > 注：`encryption` feature 需要 OpenSSL（`OPENSSL_DIR`），本机未安装，
 > 因此该 feature 的完整构建需在有 OpenSSL 的环境执行。
 > key 模块的**核心逻辑已与该 feature 解耦**，可在 Windows 直接单测。
+>
+> `gateway-desktop` 已冻结，其 Tauri 依赖的 `libdbus-sys` 需要 Linux sysroot，
+> Windows 侧无交叉 sysroot，不纳入交叉验证范围。
 
 ---
 
-## 6. 后续建议
+## 6. 门禁化：让 Linux 分支不再「静默腐烂」
 
-1. **CI 增加 Linux 交叉编译矩阵**（本报告的 zig 方案可落地为 CI job，
-   让 Linux-only 代码至少做到「每次提交都被编译验证」）；
-2. **CI 增加 Linux 容器单测 job**（无需真机即可覆盖 `/proc` 解析、
+本次修复的都是**已经被改坏的**代码。若没有持续机制，下次照样会烂。
+
+| 载体 | 变更 |
+|---|---|
+| `scripts/linux_cross_check.ps1`（新增） | zig 作交叉 C 编译器/链接器 → `cargo check --target x86_64-unknown-linux-gnu --all-targets`（三个部署 crate）。缺 zig / 未装 rust linux target 时**跳过而不阻塞**；`-Probe` 供门禁判定 |
+| `scripts/linux/zigwrap.rs`（新增） | 包装器：自动判定 cc / ar 模式；把 rust 三元组换成 zig 三元组；编译成 exe 以规避 cmd.exe 8191 字符命令行上限 |
+| `scripts/release_gate.ps1` | 新增 `linux-cross-check` 步骤（门禁共 22 项），前置条件探测失败时标 SKIP 并打印原因 |
+| `.github/workflows/ci.yml` | `linux-runtime` job 增加 `--all-targets` 检查步骤（Linux 专属代码改坏了在 CI 就暴露，不必等真机） |
+
+---
+
+## 7. 后续建议
+
+1. **CI 增加 Linux 容器单测 job**（无需真机即可覆盖 `/proc` 解析、
    Modbus 写超时等用例）；
-3. 真机验收表按 §4 逐项签字后方可放行批量部署。
+2. 真机验收表按 §4 逐项签字后方可放行批量部署。
+
