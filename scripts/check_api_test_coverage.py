@@ -59,13 +59,19 @@ def path_matches(endpoint_path: str, literal: str) -> bool:
 
 
 
-def collect_observations(tests_dir: pathlib.Path):
+def collect_observations(tests_dir: pathlib.Path, allowed_first_segments=None):
     """返回 [(file, line, path_literal, verbs)]."""
     obs = []
     for fp in sorted(tests_dir.rglob("*.rs")):
         text = fp.read_text(encoding="utf-8", errors="replace")
-        for m in re.finditer(r'"(\/api\/[^"\\]*)"', text):
+        # 同时收录 `/api/...` 与 `/health/...` 等非 /api 端点；用首段白名单过滤掉
+        # `/dev/ttyS1`、`/tmp/x` 这类与 API 无关的字面量。
+        for m in re.finditer(r'"(\/[^"\\]*)"', text):
             lit = m.group(1)
+            if allowed_first_segments:
+                first = lit.strip("/").split("/")[0]
+                if first not in allowed_first_segments:
+                    continue
             window = text[max(0, m.start() - WINDOW) : m.end() + WINDOW]
             verbs = {
                 verb
@@ -99,7 +105,8 @@ def main() -> int:
     repo = pathlib.Path(args.repo)
     md = (repo / "docs" / "api-surface.md").read_text(encoding="utf-8")
     endpoints = parse_endpoints(md)
-    obs = collect_observations(repo / args.tests_dir)
+    allowed = {p.strip("/").split("/")[0] for _m, p in endpoints}
+    obs = collect_observations(repo / args.tests_dir, allowed)
 
     covered, uncovered = [], []
     for method, path in endpoints:

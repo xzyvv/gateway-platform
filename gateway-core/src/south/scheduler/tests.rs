@@ -381,3 +381,104 @@ async fn n2_non_empty_points_start_does_not_increment_metric() {
 
     scheduler.stop().await;
 }
+
+/// E1：暂停/恢复总线的**成功语义**（离线可验证：SkeletonCollector 不发起真实 IO）。
+///
+/// 语义要求（API `POST /api/buses/:name/pause|resume` 依赖）：
+/// - 暂停只摘除该总线的点位与采集组，其它总线不受影响；
+/// - `paused_buses()` / `is_bus_paused()` 反映真实状态（前端 Banner 依赖）；
+/// - 恢复后该总线重新进入调度，且状态清除。
+#[tokio::test]
+async fn pause_and_resume_bus_remove_and_restore_only_target_bus() {
+    let metrics = Arc::new(Metrics::new());
+    let collectors: HashMap<String, Arc<dyn Collector>> = ["b1", "b2"]
+        .iter()
+        .map(|b| (b.to_string(), test_collector(b)))
+        .collect();
+    let pts = vec![point("p_b1", "b1", "1"), point("p_b2", "b2", "1")];
+
+    let scheduler = Arc::new(Scheduler::new(
+        collectors,
+        pts.clone(),
+        test_pipeline(metrics.clone()),
+        metrics.clone(),
+    ));
+    scheduler.start();
+
+    assert_eq!(
+        scheduler.group_stops.lock().len(),
+        2,
+        "启动后两条总线各一组"
+    );
+    assert!(!scheduler.is_bus_paused("b1"));
+
+    scheduler
+        .pause_bus("b1", pts.clone())
+        .await
+        .expect("暂停已有点位的总线应成功");
+
+    assert!(scheduler.is_bus_paused("b1"));
+    assert_eq!(scheduler.paused_buses(), vec!["b1".to_string()]);
+    assert!(
+        !scheduler.points.lock().iter().any(|p| p.bus == "b1"),
+        "暂停后该总线点位必须从调度点集中摘除"
+    );
+    assert!(
+        scheduler.points.lock().iter().any(|p| p.bus == "b2"),
+        "其它总线点位不得受影响"
+    );
+    let stops = scheduler.group_stops.lock();
+    assert!(!stops.contains_key("skeleton:b1"), "b1 采集组必须停掉");
+    assert!(stops.contains_key("skeleton:b2"), "b2 采集组必须保留");
+    drop(stops);
+
+    scheduler
+        .resume_bus("b1", pts.clone())
+        .await
+        .expect("恢复已暂停总线应成功");
+
+    assert!(!scheduler.is_bus_paused("b1"));
+    assert!(scheduler.paused_buses().is_empty());
+    assert!(
+        scheduler.points.lock().iter().any(|p| p.bus == "b1"),
+        "恢复后点位必须回到调度"
+    );
+    assert!(
+        scheduler.group_stops.lock().contains_key("skeleton:b1"),
+        "恢复后 b1 采集组必须重建"
+    );
+
+    scheduler.stop().await;
+}
+
+/// E1 反证：总线不存在（没有可暂停点位）必须报错，不能静默标记为「已暂停」——
+/// 否则前端会显示一个永远无法恢复的暂停横幅。
+#[tokio::test]
+async fn pause_bus_without_points_is_rejected() {
+    let metrics = Arc::new(Metrics::new());
+    let collectors: HashMap<String, Arc<dyn Collector>> =
+        [("b1".to_string(), test_collector("b1"))]
+            .into_iter()
+            .collect();
+    let pts = vec![point("p_b1", "b1", "1")];
+
+    let scheduler = Arc::new(Scheduler::new(
+        collectors,
+        pts.clone(),
+        test_pipeline(metrics.clone()),
+        metrics.clone(),
+    ));
+    scheduler.start();
+
+    let err = scheduler
+        .pause_bus("ghost", pts)
+        .await
+        .expect_err("不存在于点位集的总线不能暂停");
+    assert!(
+        err.contains("没有可暂停的采集点位"),
+        "错误原因应可读: {err}"
+    );
+    assert!(!scheduler.is_bus_paused("ghost"));
+
+    scheduler.stop().await;
+}

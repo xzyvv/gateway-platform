@@ -125,6 +125,7 @@ pub(crate) fn init_collectors(
             }
         }
     }
+    warn_unavailable_bus_points(config, &expanded_points, bus_managers);
     let mut buses_with_collector: Vec<&String> = collectors.keys().collect();
     buses_with_collector.sort();
     info!(
@@ -140,6 +141,60 @@ pub(crate) fn init_collectors(
     Ok((collectors, expanded_points, templates))
 }
 
+/// 找出「所属总线没有可用 BusManager」的点位（gpio 除外：它不依赖总线管理器）。
+///
+/// 这类点位在 `init_collectors` 里会被跳过，导致配置加载成功、界面正常，
+/// 但这几个点位**永远采不到数据**。必须显式告警，否则现场只能靠逐点试错定位。
+fn points_with_unavailable_bus<'a>(
+    points: &'a [PointConfig],
+    bus_managers: &HashMap<String, Arc<BusManager>>,
+) -> Vec<(&'a str, &'a str)> {
+    points
+        .iter()
+        .filter(|p| p.protocol != "gpio")
+        .filter(|p| !bus_managers.contains_key(&p.bus))
+        .map(|p| (p.bus.as_str(), p.id.as_str()))
+        .collect()
+}
+
+/// 汇总告警：按总线聚合，避免 N 条点位刷屏。
+fn warn_unavailable_bus_points(
+    config: &GatewayConfig,
+    points: &[PointConfig],
+    bus_managers: &HashMap<String, Arc<BusManager>>,
+) {
+    let missing = points_with_unavailable_bus(points, bus_managers);
+    if missing.is_empty() {
+        return;
+    }
+
+    // 区分「没配置」和「配置了但打开失败」——两者现场排查方向完全不同
+    let configured: std::collections::HashSet<&str> =
+        config.buses.iter().map(|b| b.port_name.as_str()).collect();
+    let mut by_bus: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for (bus, point) in missing {
+        by_bus.entry(bus).or_default().push(point);
+    }
+
+    warn!(
+        "{} point(s) will never be collected: no open collector for their bus",
+        by_bus.values().map(|v| v.len()).sum::<usize>()
+    );
+    for (bus, points) in by_bus {
+        let reason = if configured.contains(bus) {
+            "declared in config.buses but failed to open"
+        } else {
+            "not declared in config.buses"
+        };
+        warn!(
+            "  bus '{}' {}; affected point(s): [{}]",
+            bus,
+            reason,
+            points.join(", ")
+        );
+    }
+}
+
 /// 把 devices 展开成 points（template 模式 → point 模式）。
 pub(crate) fn expand_config_points(
     config: &GatewayConfig,
@@ -153,6 +208,42 @@ pub(crate) fn expand_config_points(
         all.extend(expanded);
     }
     Ok(all)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::points_with_unavailable_bus;
+    use gateway_core::config::PointConfig;
+    use gateway_core::south::bus::BusManager;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn point(id: &str, bus: &str, protocol: &str) -> PointConfig {
+        PointConfig {
+            id: id.to_string(),
+            bus: bus.to_string(),
+            protocol: protocol.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 回归：总线未配置/打开失败时点位会被跳过，必须能被识别出来用于告警；
+    /// gpio 不依赖 BusManager，不应误报。
+    #[test]
+    fn reports_points_on_missing_bus_and_exempts_gpio() {
+        let points = vec![
+            point("p_missing", "ghost", "modbus"),
+            point("p_other_bus", "bus0", "dlt645"),
+            point("gpio_point", "gpio-bus", "gpio"),
+        ];
+        let buses: HashMap<String, Arc<BusManager>> = HashMap::new();
+        let missing = points_with_unavailable_bus(&points, &buses);
+        assert_eq!(
+            missing,
+            vec![("ghost", "p_missing"), ("bus0", "p_other_bus")],
+            "非 gpio 的缺失总线点位都要告警"
+        );
+    }
 }
 
 /// 启动软件看门狗（W1）：每 5 秒检查一次心跳，独立 spawn_catch_unwind 任务。
