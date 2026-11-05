@@ -117,7 +117,10 @@ async fn config_import_rejects_config_without_devices() {
     let body = json_body(resp).await;
     assert_eq!(body["code"], 4003);
     assert!(
-        body["message"].as_str().unwrap_or("").contains("至少需要一个设备"),
+        body["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("至少需要一个设备"),
         "报错应说明缺设备，实际: {body}"
     );
     // 拒绝路径不得改动内存配置
@@ -149,7 +152,10 @@ async fn config_reload_returns_500_when_config_file_missing() {
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = json_body(resp).await;
     assert!(
-        body["message"].as_str().unwrap_or("").contains("reload failed"),
+        body["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("reload failed"),
         "应提示 reload failed，实际: {body}"
     );
 }
@@ -158,11 +164,7 @@ async fn config_reload_returns_500_when_config_file_missing() {
 async fn config_reload_applies_saved_config_from_disk() {
     let state = common::mock_state::mock_app_state();
     let cfg = current_config(&state);
-    state
-        .config
-        .config_loader
-        .save(&cfg)
-        .expect("保存磁盘配置");
+    state.config.config_loader.save(&cfg).expect("保存磁盘配置");
 
     let app = gateway_api::web::build_router(state.clone());
     let resp = app
@@ -186,11 +188,7 @@ async fn config_rollback_to_missing_version_is_404() {
     let app = gateway_api::web::build_router(state.clone());
 
     let resp = app
-        .oneshot(req(
-            "POST",
-            "/api/config/versions/2000000/rollback",
-            None,
-        ))
+        .oneshot(req("POST", "/api/config/versions/2000000/rollback", None))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
