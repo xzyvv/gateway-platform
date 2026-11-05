@@ -234,14 +234,18 @@ fn atomic_write(target: &Path, data: &[u8]) -> GatewayResult<()> {
 
     // 1. 写入 tmp（写 + fsync 一起，任何步骤失败都清理 tmp）。
     let write_result: std::io::Result<()> = (|| {
-        let mut f = fs::File::create(&tmp_path)?;
+        // Bug C5: config.json 含（加密后的）凭据，必须 0600。
+        // r15-CFG1: 原实现 `File::create` 先以默认 0644 建档再 chmod 0600，
+        // 两者之间存在竞态窗口（同机其它用户可短暂读到含凭据的临时文件）。
+        // 改为**创建时即指定 0600**（OpenOptions::mode），窗口消失。
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
-            // Bug C5: config.json 含（加密后的）凭据，收紧权限到 0600。
-            // 避免同机其他用户读取。Windows 没有 POSIX 权限位，跳过。
-            use std::os::unix::fs::PermissionsExt;
-            f.set_permissions(fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
         }
+        let mut f = opts.open(&tmp_path)?;
         f.write_all(data)?;
         // fsync：确保数据落盘再 rename，防止断电后看到 0 长度文件
         f.sync_all()?;
