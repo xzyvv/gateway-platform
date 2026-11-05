@@ -297,15 +297,21 @@ fn assert_load_error(loader: &ConfigLoader, case: &str, needle: &str) {
 
 #[test]
 fn bad_config_matrix_is_rejected_with_readable_error() {
-    let addr_bus = |bus: serde_json::Value| -> serde_json::Value {
+    // 坏配置用例的变形闭包。
+    type Mutator = Box<dyn Fn(&mut serde_json::Value)>;
+    // 一条坏配置用例：(场景说明, 配置变形, 报错应包含的关键词)。
+    type BadCase<'a> = (&'a str, Mutator, &'a str);
+
+    // 用 fn 而非闭包：闭包会被下面的用例捕获，导致 `BadCase` 无法满足 'static。
+    fn addr_bus(bus: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
             "port_name": "COM3",
             "protocol": "modbus",
             "tcp_addr": bus,
         })
-    };
+    }
 
-    let cases: Vec<(&str, Box<dyn Fn(&mut serde_json::Value)>, &str)> = vec![
+    let cases: Vec<BadCase> = vec![
         (
             "缺必填字段 port_name",
             Box::new(|v: &mut serde_json::Value| {

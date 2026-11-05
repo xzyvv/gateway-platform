@@ -210,42 +210,6 @@ pub(crate) fn expand_config_points(
     Ok(all)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::points_with_unavailable_bus;
-    use gateway_core::config::PointConfig;
-    use gateway_core::south::bus::BusManager;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    fn point(id: &str, bus: &str, protocol: &str) -> PointConfig {
-        PointConfig {
-            id: id.to_string(),
-            bus: bus.to_string(),
-            protocol: protocol.to_string(),
-            ..Default::default()
-        }
-    }
-
-    /// 回归：总线未配置/打开失败时点位会被跳过，必须能被识别出来用于告警；
-    /// gpio 不依赖 BusManager，不应误报。
-    #[test]
-    fn reports_points_on_missing_bus_and_exempts_gpio() {
-        let points = vec![
-            point("p_missing", "ghost", "modbus"),
-            point("p_other_bus", "bus0", "dlt645"),
-            point("gpio_point", "gpio-bus", "gpio"),
-        ];
-        let buses: HashMap<String, Arc<BusManager>> = HashMap::new();
-        let missing = points_with_unavailable_bus(&points, &buses);
-        assert_eq!(
-            missing,
-            vec![("ghost", "p_missing"), ("bus0", "p_other_bus")],
-            "非 gpio 的缺失总线点位都要告警"
-        );
-    }
-}
-
 /// 启动软件看门狗（W1）：每 5 秒检查一次心跳，独立 spawn_catch_unwind 任务。
 pub(crate) fn spawn_software_watchdog(metrics: Arc<gateway_core::engine::metrics::Metrics>) {
     let watchdog = gateway_core::engine::monitor::heartbeat::init(
@@ -347,4 +311,40 @@ pub(crate) async fn init_collection_chain(
         expanded_points,
         templates,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::points_with_unavailable_bus;
+    use gateway_core::config::PointConfig;
+    use gateway_core::south::bus::BusManager;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn point(id: &str, bus: &str, protocol: &str) -> PointConfig {
+        PointConfig {
+            id: id.to_string(),
+            bus: bus.to_string(),
+            protocol: protocol.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 回归：总线未配置/打开失败时点位会被跳过，必须能被识别出来用于告警；
+    /// gpio 不依赖 BusManager，不应误报。
+    #[test]
+    fn reports_points_on_missing_bus_and_exempts_gpio() {
+        let points = vec![
+            point("p_missing", "ghost", "modbus"),
+            point("p_other_bus", "bus0", "dlt645"),
+            point("gpio_point", "gpio-bus", "gpio"),
+        ];
+        let buses: HashMap<String, Arc<BusManager>> = HashMap::new();
+        let missing = points_with_unavailable_bus(&points, &buses);
+        assert_eq!(
+            missing,
+            vec![("ghost", "p_missing"), ("bus0", "p_other_bus")],
+            "非 gpio 的缺失总线点位都要告警"
+        );
+    }
 }

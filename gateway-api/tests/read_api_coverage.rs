@@ -215,8 +215,8 @@ async fn devices_topology_point_quality_and_backoff() {
     assert_eq!(body["code"], 0, "{body}");
     assert_eq!(body["data"]["stats"]["bus_count"], 1, "{body}");
     assert_eq!(body["data"]["stats"]["device_count"], 1, "{body}");
-    assert!(body["data"]["nodes"].as_array().expect("nodes").len() >= 1);
-    assert!(body["data"]["links"].as_array().expect("links").len() >= 1);
+    assert!(!body["data"]["nodes"].as_array().expect("nodes").is_empty());
+    assert!(!body["data"]["links"].as_array().expect("links").is_empty());
 
     // 无运行时状态：质量列表为空，统计全 0（空态如实表达）
     let body = call(&app, "GET", "/api/devices/point-quality", None).await;

@@ -427,10 +427,12 @@ async fn pause_and_resume_bus_remove_and_restore_only_target_bus() {
         scheduler.points.lock().iter().any(|p| p.bus == "b2"),
         "其它总线点位不得受影响"
     );
-    let stops = scheduler.group_stops.lock();
-    assert!(!stops.contains_key("skeleton:b1"), "b1 采集组必须停掉");
-    assert!(stops.contains_key("skeleton:b2"), "b2 采集组必须保留");
-    drop(stops);
+    // 用块作用域确保锁在下一个 .await 之前释放（parking_lot 锁不得跨 await 持有）
+    {
+        let stops = scheduler.group_stops.lock();
+        assert!(!stops.contains_key("skeleton:b1"), "b1 采集组必须停掉");
+        assert!(stops.contains_key("skeleton:b2"), "b2 采集组必须保留");
+    }
 
     scheduler
         .resume_bus("b1", pts.clone())
