@@ -470,7 +470,7 @@ pub fn evaluate(
         );
 
         // 斜率只有在观察窗口足够长时才有意义：短跑里启动期分配会被放大成几十 MB/h
-        let (slope, slope_window_hours) = rss_slope_per_hour(proc);
+        let (slope, slope_window_hours) = rss_slope_per_hour(proc, base_idx);
         if slope_window_hours >= 1.0 {
             v.row(
                 "RSS 末段斜率",
@@ -528,27 +528,55 @@ fn delta(samples: &[Sample], f: impl Fn(&Sample) -> u64) -> u64 {
 }
 
 /// 返回 (斜率 bytes/h, 实际观察窗口小时数)。
-fn rss_slope_per_hour(proc: &[ProcSample]) -> (f64, f64) {
+///
+/// `base_idx` 是预热结束时刻的样本下标。斜率必须**从预热结束后算起**：
+/// 否则短于 6h 的运行会回退到 `proc.first()`（进程启动瞬间），
+/// 把启动期一次性分配摊进斜率 → 恒定误报「泄漏」。
+///
+/// 另：用**最小二乘拟合**而非首尾两点差值。RSS 是锯齿状曲线，
+/// 首尾两点会被噪声主导（同一份数据：两点差值 +2.24 MB/h，
+/// 最小二乘 +0.46 MB/h，中位数分段 +0.18 MB/h），
+/// 两点差值会把正常运行的进程判成泄漏。
+fn rss_slope_per_hour(proc: &[ProcSample], base_idx: usize) -> (f64, f64) {
     let last = match proc.last() {
         Some(p) => p,
         None => return (0.0, 0.0),
     };
     let window_ms = 6.0 * 3600.0 * 1000.0;
-    let first = proc
+    // 末段窗口起点：优先取「距末样本 ≥ 6h 的最早样本」；
+    // 若运行不足 6h，则从预热结束处开始（而非进程启动处）。
+    let start_idx = proc
         .iter()
-        .rev()
-        .find(|p| (last.ts_ms.saturating_sub(p.ts_ms)) as f64 >= window_ms)
-        .or_else(|| proc.first());
-    match first {
-        Some(f) if last.ts_ms > f.ts_ms => {
-            let hours = (last.ts_ms - f.ts_ms) as f64 / 3_600_000.0;
-            (
-                (last.rss_bytes - f.rss_bytes) as f64 / hours.max(1e-6),
-                hours,
-            )
-        }
-        _ => (0.0, 0.0),
+        .position(|p| (last.ts_ms.saturating_sub(p.ts_ms)) as f64 >= window_ms)
+        .map(|i| i.max(base_idx))
+        .unwrap_or(base_idx);
+    let window = &proc[start_idx..];
+    if window.len() < 2 || last.ts_ms <= window[0].ts_ms {
+        return (0.0, 0.0);
     }
+
+    // 最小二乘：slope = Σ(x-x̄)(y-ȳ) / Σ(x-x̄)²
+    let n = window.len() as f64;
+    let t0 = window[0].ts_ms as f64;
+    let xs: Vec<f64> = window
+        .iter()
+        .map(|p| (p.ts_ms as f64 - t0) / 3_600_000.0)
+        .collect();
+    let ys: Vec<f64> = window.iter().map(|p| p.rss_bytes as f64).collect();
+    let mean_x = xs.iter().sum::<f64>() / n;
+    let mean_y = ys.iter().sum::<f64>() / n;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (x, y) in xs.iter().zip(ys.iter()) {
+        let dx = x - mean_x;
+        num += dx * (y - mean_y);
+        den += dx * dx;
+    }
+    if den <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let hours = (last.ts_ms - window[0].ts_ms) as f64 / 3_600_000.0;
+    (num / den, hours)
 }
 
 fn mb(bytes: i64) -> f64 {
@@ -654,4 +682,101 @@ pub fn render_report(
     let path = out_dir.join("report.md");
     fs::write(&path, &md)?;
     Ok(md)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(ts_ms: u64, rss: i64) -> ProcSample {
+        ProcSample {
+            ts_ms,
+            pid: 1234,
+            rss_bytes: rss,
+            handles: 100,
+        }
+    }
+
+    const MB: i64 = 1024 * 1024;
+
+    /// 短于 6h 的运行：斜率必须从**预热结束处**开始算，
+    /// 不能把启动期的一次性分配摊进斜率（否则恒定误报泄漏）。
+    #[test]
+    fn short_run_slope_ignores_startup_allocation() {
+        // 前 10 分钟：启动期一次性分配 +8MB（随后稳定）
+        // 之后 2 小时：稳定在 20MB 不变
+        let mut proc_samples: Vec<ProcSample> = Vec::new();
+        let mut ts = 0u64;
+        for i in 0..10 {
+            proc_samples.push(sample(ts, 12 * MB + i * MB));
+            ts += 60_000;
+        }
+        for _ in 0..120 {
+            proc_samples.push(sample(ts, 20 * MB));
+            ts += 60_000;
+        }
+        // 预热 10 分钟 → base_idx 指向 ts = 10min 的样本
+        let base_idx = proc_samples
+            .iter()
+            .position(|p| p.ts_ms >= 600_000)
+            .unwrap();
+        let (slope, hours) = rss_slope_per_hour(&proc_samples, base_idx);
+        assert!(
+            slope.abs() < 0.01 * MB as f64,
+            "稳定期斜率应接近 0，实际 {} bytes/h",
+            slope
+        );
+        assert!(hours > 1.0, "观察窗应 > 1h，实际 {}", hours);
+    }
+
+    /// 真实泄漏必须被检出：稳定增长 1MB/h（每分钟采样，2 小时涨 2MB）。
+    #[test]
+    fn real_leak_is_detected() {
+        let mut proc_samples: Vec<ProcSample> = Vec::new();
+        let mut ts = 0u64;
+        for i in 0..120 {
+            // 每 60 分钟涨 1MB → 1 MB/h（线性爬升）
+            let rss = 20 * MB + ((i as f64) * (MB as f64) / 60.0) as i64;
+            proc_samples.push(sample(ts, rss));
+            ts += 60_000;
+        }
+        let (slope, hours) = rss_slope_per_hour(&proc_samples, 0);
+        let mb_per_h = slope / MB as f64;
+        assert!(
+            (mb_per_h - 1.0).abs() < 0.1,
+            "泄漏斜率应约 1 MB/h，实际 {}",
+            mb_per_h
+        );
+        assert!(hours > 1.0);
+    }
+
+    /// 锯齿状噪声不应被判成泄漏：均值稳定但首尾两点差异大。
+    /// 首尾差值法在此会给出显著正斜率，最小二乘应接近 0。
+    #[test]
+    fn noisy_rss_is_not_misjudged_as_leak() {
+        // 锯齿：0, +3, -2, +2.5, -1.5 MB 循环，均值不变
+        let pattern = [0i64, 3, -2, 2, -1];
+        let mut proc_samples: Vec<ProcSample> = Vec::new();
+        let mut ts = 0u64;
+        for i in 0..180 {
+            proc_samples.push(sample(ts, (20 + pattern[i % pattern.len()]) * MB));
+            ts += 60_000;
+        }
+        let (slope, _) = rss_slope_per_hour(&proc_samples, 0);
+        assert!(
+            slope.abs() < 0.1 * MB as f64,
+            "锯齿噪声下斜率应接近 0，实际 {} bytes/h",
+            slope
+        );
+    }
+
+    /// 样本不足时不应产生斜率（避免除零 / 假阳性）。
+    #[test]
+    fn insufficient_samples_yield_zero_slope() {
+        let proc_samples = vec![sample(0, 20 * MB)];
+        let (slope, hours) = rss_slope_per_hour(&proc_samples, 0);
+        assert_eq!(slope, 0.0);
+        assert_eq!(hours, 0.0);
+        assert_eq!(rss_slope_per_hour(&[], 0), (0.0, 0.0));
+    }
 }
