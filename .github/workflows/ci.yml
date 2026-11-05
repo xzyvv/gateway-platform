@@ -836,6 +836,52 @@ jobs:
           fi
           echo "✓ 静态产物启动成功并通过 /health/live（$TARGET）"
 
+      # ===== 产物发布 =====
+      # 此前本条链路的终点是「在 runner 上跑通就结束」：binary 留在 runner 的 target/
+      # 目录里随实例销毁，现场要拿到 ARM 包只能自己装交叉工具链重编一遍——
+      # 于是「CI 绿」与「现场这个包能跑」之间没有任何可追溯的对应关系。
+      # 这里把已经跑过 QEMU 启动冒烟的同一个二进制打成可下载产物（含校验值与构建
+      # 信息），产物名带 target，现场按板卡 ABI 取包即可。
+      - name: Package release artifact
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          BIN="target/$TARGET/release/gatewayd"
+          OUT="dist/gatewayd-${TARGET}"
+          mkdir -p "$OUT"
+          cp "$BIN" "$OUT/gatewayd"
+          chmod +x "$OUT/gatewayd"
+          # 校验值随包发布：U 盘 / 内网转存后仍能判断二进制是否损坏或被截断
+          ( cd "$OUT" && sha256sum gatewayd > gatewayd.sha256 )
+          # 构建信息：现场排障要能对上是「哪次提交 + 哪个工具链」编出来的
+          {
+            echo "target: ${TARGET}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "ref: ${GITHUB_REF}"
+            echo "run_id: ${GITHUB_RUN_ID}"
+            echo "built_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "rustc: $(rustc --version)"
+            echo "file: $(file -b "$BIN")"
+          } > "$OUT/buildinfo.txt"
+          tar -C dist -czf "gatewayd-${TARGET}.tar.gz" "gatewayd-${TARGET}"
+          ls -l "gatewayd-${TARGET}.tar.gz"
+          # 防止「空包也算成功」：至少要有二进制、校验值、构建信息三样
+          for f in "$OUT/gatewayd" "$OUT/gatewayd.sha256" "$OUT/buildinfo.txt"; do
+            [ -s "$f" ] || { echo "✗ 产物缺失或为空: $f" >&2; exit 1; }
+          done
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatewayd-${{ matrix.target }}
+          path: |
+            gatewayd-${{ matrix.target }}.tar.gz
+            dist/gatewayd-${{ matrix.target }}/
+          # 30 天：覆盖一个出厂镜像的装配周期；超期后重新触发 workflow_dispatch 即可
+          retention-days: 30
+          # 构建成功但产物没上传，等于白编一场，必须让作业失败
+          if-no-files-found: error
+
   # L1: encryption feature 编译验证。
   # 生产构建通过 `--features encryption` 启用 SQLite 加密（bundled-sqlcipher），但历史上
   # 该路径只在开发者本机手工构建过，CI 的默认 feature 构建完全绕开它——加密相关的
