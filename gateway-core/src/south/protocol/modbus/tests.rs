@@ -380,3 +380,82 @@ async fn diag_reports_unreachable_endpoint() {
     assert!(msg.contains("无应答/链路失败"), "{msg}");
     assert!(!msg.contains("读取成功"), "不可达端点不得报成功: {msg}");
 }
+
+// =========================================================================
+// 畸形帧负例：任意截断 / 长度字段撒谎 / CRC 错误都不得 panic，必须返回 Err
+// =========================================================================
+
+#[test]
+fn malformed_modbus_read_response_is_rejected_without_panic() {
+    use super::frames::{parse_read_response, rtu_frame};
+    use crate::south::protocol::CollectorError;
+
+    // 合法 FC03 响应：2 个寄存器 = 0x1234 / 0x5678
+    let full = rtu_frame(&[0x01, 0x03, 0x04, 0x12, 0x34, 0x56, 0x78]);
+    assert_eq!(
+        parse_read_response(1, 3, 2, &full).expect("合法帧应解析成功"),
+        vec![0x1234, 0x5678]
+    );
+
+    // 任意严格前缀（含 0 字节）都必须报错而不是越界读取
+    for cut in 0..full.len() {
+        assert!(
+            parse_read_response(1, 3, 2, &full[..cut]).is_err(),
+            "截断到 {cut} 字节应被拒绝"
+        );
+    }
+
+    // CRC 篡改
+    let mut bad_crc = full.clone();
+    *bad_crc.last_mut().unwrap() ^= 0xFF;
+    assert!(matches!(
+        parse_read_response(1, 3, 2, &bad_crc),
+        Err(CollectorError::ChecksumError)
+    ));
+
+    // 字节数字段撒谎：声明 4 字节，但调用方期望 1 个寄存器（2 字节）
+    assert!(parse_read_response(1, 3, 1, &full).is_err());
+    // 零长度请求显式拒绝
+    assert!(parse_read_response(1, 3, 0, &full).is_err());
+    // 从站 / 功能码不匹配
+    assert!(parse_read_response(2, 3, 2, &full).is_err());
+    assert!(parse_read_response(1, 4, 2, &full).is_err());
+    // 异常响应走 ModbusException，而不是当成正常数据
+    let exc = rtu_frame(&[0x01, 0x83, 0x02]);
+    assert!(matches!(
+        parse_read_response(1, 3, 2, &exc),
+        Err(CollectorError::ModbusException(0x02))
+    ));
+}
+
+#[test]
+fn malformed_modbus_coils_response_is_rejected_without_panic() {
+    use super::frames::{parse_coils_response, rtu_frame};
+    use crate::south::protocol::CollectorError;
+
+    let full = rtu_frame(&[0x01, 0x01, 0x01, 0b0000_0101]);
+    assert_eq!(
+        parse_coils_response(1, 1, 3, &full).expect("合法帧应解析成功"),
+        vec![true, false, true]
+    );
+
+    for cut in 0..full.len() {
+        assert!(
+            parse_coils_response(1, 1, 3, &full[..cut]).is_err(),
+            "截断到 {cut} 字节应被拒绝"
+        );
+    }
+
+    let mut bad_crc = full.clone();
+    *bad_crc.last_mut().unwrap() ^= 0xFF;
+    assert!(matches!(
+        parse_coils_response(1, 1, 3, &bad_crc),
+        Err(CollectorError::ChecksumError)
+    ));
+
+    // 期望 0 个线圈 / 字节数与期望不符
+    assert!(parse_coils_response(1, 1, 0, &full).is_err());
+    assert!(parse_coils_response(1, 1, 16, &full).is_err());
+    // 功能码不匹配（FC02 响应被当成 FC01）
+    assert!(parse_coils_response(1, 2, 3, &full).is_err());
+}

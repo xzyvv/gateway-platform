@@ -28,9 +28,7 @@ pub struct MqttTlsConfig {
     pub insecure_skip_verify: bool,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Validate, schemars::JsonSchema, ts_rs::TS,
-)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Validate, schemars::JsonSchema, ts_rs::TS)]
 #[ts(export)]
 pub struct MqttConfig {
     #[serde(default)]
@@ -104,6 +102,13 @@ pub struct MqttConfig {
     #[serde(default = "default_reconnect_backoff")]
     #[validate(nested)]
     pub reconnect_backoff: ReconnectBackoffConfig,
+}
+
+/// broker 用户名/密码不得随 `{:?}` 进入日志。
+impl std::fmt::Debug for MqttConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::config::fmt_redacted_debug(self, f)
+    }
 }
 
 impl Default for MqttConfig {

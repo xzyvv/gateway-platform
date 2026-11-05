@@ -650,4 +650,104 @@ mod tests {
         assert!(!is_sensitive_read_path("/api/realtime/ws"));
         assert!(!is_sensitive_read_path("/health/live"));
     }
+
+    // ===== 只读 API 密钥的写端点拒绝矩阵 =====
+
+    #[test]
+    fn only_state_changing_methods_count_as_write() {
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert!(is_write_method(method), "{method} 应视为写操作");
+        }
+        for method in ["GET", "HEAD", "OPTIONS"] {
+            assert!(!is_write_method(method), "{method} 不应视为写操作");
+        }
+    }
+
+    #[test]
+    fn readonly_scopes_cannot_write_any_domain() {
+        let readonly: Vec<String> = ["points:read", "devices:read", "config:read"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        for path in [
+            "/api/points",
+            "/api/points/p-1",
+            "/api/devices",
+            "/api/config",
+            "/api/buses",
+            "/api/templates",
+            "/api/access/api-keys",
+            "/api/system/restart",
+            "/api/certificates",
+            "/api/protocol-tools/packet-editor/send",
+            "/api/protocol-tools/auto-detect/run",
+            "/api/protocol-tools/preset/apply",
+        ] {
+            assert!(
+                !key_can_write(&readonly, path),
+                "只读 scope 不得写入 {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_scope_is_domain_isolated() {
+        let points = vec!["points:write".to_string()];
+        assert!(key_can_write(&points, "/api/points"));
+        assert!(key_can_write(&points, "/api/points/batch"));
+        assert!(!key_can_write(&points, "/api/config"));
+        assert!(!key_can_write(&points, "/api/buses"));
+        assert!(!key_can_write(&points, "/api/devices"));
+        assert!(!key_can_write(&points, "/api/access/api-keys"));
+    }
+
+    #[test]
+    fn devices_write_cannot_reach_bus_intrusive_tools() {
+        // F-13：发帧 / 占总线 / 回放执行与系统域同风险，不接受 devices:write
+        let devices = vec!["devices:write".to_string()];
+        assert!(key_can_write(&devices, "/api/devices"));
+        assert!(key_can_write(&devices, "/api/protocol-tools/presets"));
+        assert!(!key_can_write(
+            &devices,
+            "/api/protocol-tools/packet-editor/send"
+        ));
+        assert!(!key_can_write(
+            &devices,
+            "/api/protocol-tools/register-scan"
+        ));
+        assert!(!key_can_write(
+            &devices,
+            "/api/protocol-tools/auto-detect/run"
+        ));
+        assert!(!key_can_write(
+            &devices,
+            "/api/protocol-tools/packet-replay/s-1/execute"
+        ));
+    }
+
+    #[test]
+    fn wildcard_and_admin_scopes_can_write_everything() {
+        for scopes in [
+            vec!["*".to_string()],
+            vec!["admin".to_string()],
+            vec!["points:write".to_string(), "admin".to_string()],
+        ] {
+            assert!(key_can_write(&scopes, "/api/points"));
+            assert!(key_can_write(&scopes, "/api/access/api-keys"));
+            assert!(key_can_write(&scopes, "/api/certificates"));
+        }
+    }
+
+    #[test]
+    fn unclassified_path_falls_back_to_any_write_scope() {
+        // 尚未归类的边缘端点：持有任一 `*:write` 即放行（保持旧语义，避免破坏性变更）
+        assert!(key_can_write(
+            &["points:write".to_string()],
+            "/api/unknown-endpoint"
+        ));
+        assert!(!key_can_write(
+            &["points:read".to_string()],
+            "/api/unknown-endpoint"
+        ));
+    }
 }

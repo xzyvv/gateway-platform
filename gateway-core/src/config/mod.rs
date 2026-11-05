@@ -99,6 +99,76 @@ pub fn sensitive_field_paths() -> &'static [&'static str] {
 /// 等凭据，需逐键脱敏/还原，不能作为静态字段路径列出。
 pub const SENSITIVE_SECRET_HEADERS_PATH: &str = "/webhook/headers";
 
+/// 持有凭据的配置结构体的 `Debug` 实现：先序列化为 JSON，再把敏感键的值替换为
+/// `<redacted>` 后输出。
+///
+/// `derive(Debug)` 会把 `api_token` / `password` 等字段原样打印，任何
+/// `tracing::debug!("{:?}", cfg)` 或 `anyhow!("{cfg:?}")` 都会把明文凭据写进日志。
+/// 日志排查需要看配置时，用本函数代替默认实现。
+///
+/// 说明：落盘序列化（`serde_json::to_string(&cfg)`）仍保留明文/密文原值，
+/// 加密由 `crypto::encrypt_config_secrets` 负责，与本函数无关。
+pub(crate) fn fmt_redacted_debug<T: serde::Serialize>(
+    value: &T,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    match serde_json::to_value(value) {
+        Ok(mut v) => {
+            redact_debug_value(&mut v);
+            match serde_json::to_string(&v) {
+                Ok(s) => f.write_str(&s),
+                Err(_) => f.write_str("<redacted>"),
+            }
+        }
+        // 序列化失败时宁可不输出，也不能回退到明文 Debug
+        Err(_) => f.write_str("<redacted>"),
+    }
+}
+
+/// 递归脱敏：按**键名**识别凭据字段，兼容 `webhook.headers` 这类动态键。
+fn redact_debug_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, v) in map.iter_mut() {
+                let key_lc = key.to_ascii_lowercase();
+                let is_secret = matches!(
+                    key_lc.as_str(),
+                    "password"
+                        | "password_hash"
+                        | "api_token"
+                        | "ota_signing_key"
+                        | "pin"
+                        | "secret"
+                        | "token"
+                        // 与 `sensitive_field_paths()` 保持一致：mqtt/cellular 的
+                        // username 常是账号/邮箱，Debug 里一并隐去（宁多勿漏）。
+                        | "username"
+                );
+                if is_secret && v.is_string() {
+                    *v = serde_json::Value::String("<redacted>".to_string());
+                } else if key_lc == "headers" {
+                    // HTTP 头键名不可枚举（Authorization / X-Api-Key / Cookie …），整体脱敏值
+                    if let serde_json::Value::Object(headers) = v {
+                        for hv in headers.values_mut() {
+                            if hv.is_string() {
+                                *hv = serde_json::Value::String("<redacted>".to_string());
+                            }
+                        }
+                    }
+                } else {
+                    redact_debug_value(v);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                redact_debug_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 当前配置 Schema 版本号
 ///
 /// 每次结构性变更（新增必填字段、语义变更）时递增，
@@ -254,5 +324,85 @@ impl Default for WebConfig {
             webhook_test_block_private: false,
             demo_replay_sessions: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod debug_redaction_tests {
+    use super::*;
+
+    /// 断言渲染结果既不含任何明文凭据，也确实执行了脱敏（而非靠字段缺失蒙混过关）。
+    fn assert_redacted(rendered: &str, secrets: &[&str]) {
+        for secret in secrets {
+            assert!(
+                !rendered.contains(secret),
+                "Debug 输出泄露明文凭据 {secret:?}: {rendered}"
+            );
+        }
+        assert!(
+            rendered.contains("<redacted>"),
+            "应至少出现一个脱敏占位符: {rendered}"
+        );
+    }
+
+    #[test]
+    fn config_debug_never_leaks_plaintext_secrets() {
+        const SECRETS: &[&str] = &[
+            "TOKEN-PLAINTEXT-123",
+            "HASH-PLAINTEXT-456",
+            "OTA-KEY-PLAINTEXT-789",
+            "MQTT-USER-PLAINTEXT",
+            "MQTT-PASS-PLAINTEXT",
+            "CELL-PASS-PLAINTEXT",
+            "CELL-PIN-9876",
+            "OPCUA-PASS-PLAINTEXT",
+            "WEBHOOK-AUTH-PLAINTEXT",
+        ];
+
+        let cfg = GatewayConfig {
+            web: Some(WebConfig {
+                api_token: "TOKEN-PLAINTEXT-123".into(),
+                password_hash: "HASH-PLAINTEXT-456".into(),
+                ota_signing_key: Some("OTA-KEY-PLAINTEXT-789".into()),
+                ..Default::default()
+            }),
+            mqtt: MqttConfig {
+                enabled: true,
+                username: Some("MQTT-USER-PLAINTEXT".into()),
+                password: Some("MQTT-PASS-PLAINTEXT".into()),
+                ..Default::default()
+            },
+            cellular: Some(CellularConfig {
+                password: "CELL-PASS-PLAINTEXT".into(),
+                pin: Some("CELL-PIN-9876".into()),
+                ..Default::default()
+            }),
+            opcua: Some(OpcuaConfig {
+                users: vec![opcua::OpcuaUserConfig {
+                    username: "operator".into(),
+                    password: "OPCUA-PASS-PLAINTEXT".into(),
+                }],
+                ..Default::default()
+            }),
+            webhook: Some(WebhookConfig {
+                url: "https://example.invalid/hook".into(),
+                headers: [(
+                    "Authorization".to_string(),
+                    "WEBHOOK-AUTH-PLAINTEXT".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // 顶层整体打印（最常见的排查姿势）
+        assert_redacted(&format!("{cfg:?}"), SECRETS);
+        // 单拎叶子结构体打印也必须安全
+        assert_redacted(&format!("{:?}", cfg.web.as_ref().unwrap()), SECRETS);
+        assert_redacted(&format!("{:?}", cfg.mqtt), SECRETS);
+        assert_redacted(&format!("{:?}", cfg.cellular.as_ref().unwrap()), SECRETS);
+        assert_redacted(&format!("{:?}", cfg.webhook.as_ref().unwrap()), SECRETS);
     }
 }

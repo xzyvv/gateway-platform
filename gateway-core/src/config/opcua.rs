@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// 落盘时 `password` 由 `crypto/secret.rs` 统一加密为 `enc:` 形式，
 /// API 返回时由 `redact_config_secrets` 替换为占位符。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[ts(export)]
 pub struct OpcuaUserConfig {
     /// 登录用户名（同时作为 OPC UA user token id，必须非空且唯一）
@@ -66,6 +66,13 @@ pub struct OpcuaConfig {
     /// 南向采集器的真实写命令（与 API 写入口共用同一白名单语义）。
     #[serde(default)]
     pub write_enabled: bool,
+}
+
+/// 用户密码不得随 `{:?}` 进入日志。
+impl std::fmt::Debug for OpcuaUserConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::config::fmt_redacted_debug(self, f)
+    }
 }
 
 impl Default for OpcuaConfig {

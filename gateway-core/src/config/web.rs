@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// 工业现场不能无鉴权暴露控制接口（IO 控制/配置热重载/OTA/模板覆盖），
 /// 必须在配置中显式设置 api_token 才允许启动 Web 服务。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[ts(export)]
 pub struct WebConfig {
     /// API Token（用于保护所有 POST 写接口）
@@ -90,6 +90,13 @@ pub struct WebConfig {
     /// 误以为存在历史会话。仅演示 / 培训环境显式置 true。
     #[serde(default)]
     pub demo_replay_sessions: bool,
+}
+
+/// `api_token` / `password_hash` / `ota_signing_key` 不得随 `{:?}` 进入日志。
+impl std::fmt::Debug for WebConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::config::fmt_redacted_debug(self, f)
+    }
 }
 
 impl WebConfig {

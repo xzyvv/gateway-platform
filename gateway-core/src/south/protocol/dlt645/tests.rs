@@ -470,3 +470,51 @@ fn golden_v2007_exception_response_is_rejected() {
         other => panic!("异常应答必须解析失败，实际: {other:?}"),
     }
 }
+
+// =========================================================================
+// 畸形帧负例：任意截断 / LEN 撒谎 / CS 错误 / 尾标错误都不得 panic
+// =========================================================================
+
+#[test]
+fn malformed_dlt645_response_is_rejected_without_panic() {
+    let addr = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+    let payload = [0x33u8, 0x34, 0x35];
+    let full = dlt_response(&addr, 0x81, &payload);
+    assert!(parse_dlt645_response(&full, &addr, Dlt645Version::V2007).is_ok());
+
+    // 任意严格前缀都必须报错（0 字节也不能 panic）
+    for cut in 0..full.len() {
+        assert!(
+            parse_dlt645_response(&full[..cut], &addr, Dlt645Version::V2007).is_err(),
+            "截断到 {cut} 字节应被拒绝"
+        );
+    }
+
+    // LEN 字段撒谎（远超实际数据）→ 截断错误，不得越界读
+    let mut lying = full.clone();
+    lying[9] = 0xFE;
+    assert!(parse_dlt645_response(&lying, &addr, Dlt645Version::V2007).is_err());
+
+    // CS 篡改
+    let mut bad_cs = full.clone();
+    let cs_idx = bad_cs.len() - 2;
+    bad_cs[cs_idx] ^= 0xFF;
+    assert!(matches!(
+        parse_dlt645_response(&bad_cs, &addr, Dlt645Version::V2007),
+        Err(crate::south::protocol::CollectorError::ChecksumError)
+    ));
+
+    // 尾标不是 0x16
+    let mut bad_end = full.clone();
+    *bad_end.last_mut().unwrap() = 0x00;
+    assert!(parse_dlt645_response(&bad_end, &addr, Dlt645Version::V2007).is_err());
+
+    // 请求帧（D7 未置位）不能被当成响应
+    let request_like = dlt_response(&addr, 0x01, &payload);
+    assert!(parse_dlt645_response(&request_like, &addr, Dlt645Version::V2007).is_err());
+
+    // 地址不匹配
+    let mut other_addr = addr;
+    other_addr[0] ^= 0xFF;
+    assert!(parse_dlt645_response(&full, &other_addr, Dlt645Version::V2007).is_err());
+}

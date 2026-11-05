@@ -495,4 +495,103 @@ mod tests {
         );
         cfg.validate_all().expect("wss + 自定义 CA 应通过校验");
     }
+
+    // ===== 配置负例：未知协议 / 非法枚举 / 缺失必填，必须在门禁期 fail-fast =====
+
+    fn point_with(protocol: &str) -> crate::config::PointConfig {
+        crate::config::PointConfig {
+            id: "p1".to_string(),
+            bus: "bus1".to_string(),
+            protocol: protocol.to_string(),
+            address: "1".to_string(),
+            interval: 10,
+            ..Default::default()
+        }
+    }
+
+    /// 拼写错误的协议名不能等到运行期建 Collector 时才暴露。
+    #[test]
+    fn unknown_point_protocol_is_rejected_by_gate() {
+        let mut cfg = GatewayConfig::default();
+        cfg.points.push(point_with("modbu"));
+        let errs = cfg.validate_all().expect_err("未知协议名应被拒绝");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("points[0].protocol") && e.contains("modbu")),
+            "错误应定位到 points[0].protocol 并回显非法值: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn unknown_bus_protocol_is_rejected_by_gate() {
+        let mut cfg = GatewayConfig::default();
+        cfg.buses.push(crate::config::BusConfig {
+            port_name: "bus1".to_string(),
+            protocol: "not-a-protocol".to_string(),
+            ..Default::default()
+        });
+        let errs = cfg.validate_all().expect_err("未知总线协议应被拒绝");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("buses[0].protocol") && e.contains("not-a-protocol")),
+            "错误应定位到 buses[0].protocol: {:?}",
+            errs
+        );
+    }
+
+    /// 非法枚举字符串必须报错，而不是静默回退到默认值（ABCD / None）。
+    #[test]
+    fn illegal_enum_strings_are_rejected_not_silently_defaulted() {
+        let mut cfg = GatewayConfig::default();
+        let mut p = point_with("modbus");
+        p.address_num = Some(0);
+        p.data_type = Some("float128".to_string());
+        p.byte_order = Some("ABCDE".to_string());
+        cfg.points.push(p);
+
+        let errs = cfg.validate_all().expect_err("非法枚举值应被拒绝");
+        assert!(
+            errs.iter().any(|e| e.contains("data_type")),
+            "应指出非法 data_type: {:?}",
+            errs
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("byte_order")),
+            "应指出非法 byte_order: {:?}",
+            errs
+        );
+    }
+
+    /// 缺失必填字段（周期为 0 / Modbus 缺寻址字段 / 总线协议为空）一次性全部报出。
+    #[test]
+    fn missing_required_fields_are_rejected_by_gate() {
+        let mut cfg = GatewayConfig::default();
+        cfg.buses.push(crate::config::BusConfig {
+            port_name: "bus1".to_string(),
+            protocol: String::new(), // 必填但为空
+            ..Default::default()
+        });
+        let mut p = point_with("modbus");
+        p.interval = 0; // 必填，且 0 会让采集永不触发
+        p.address_num = None; // Modbus 寻址只认该字段
+        cfg.points.push(p);
+
+        let errs = cfg.validate_all().expect_err("缺失必填字段应被拒绝");
+        assert!(
+            errs.iter().any(|e| e.contains("buses[0].protocol")),
+            "应指出空协议总线: {:?}",
+            errs
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("interval")),
+            "应指出 interval 非法: {:?}",
+            errs
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("address_num")),
+            "应指出 Modbus 缺 address_num: {:?}",
+            errs
+        );
+    }
 }

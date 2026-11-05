@@ -253,3 +253,64 @@ fn test_data_type_from_str() {
     assert_eq!(S7DataType::from_str("bit"), Some(S7DataType::Bit));
     assert_eq!(S7DataType::from_str("unknown"), None);
 }
+
+// ===== 畸形帧负例：截断 / 协议 ID 错误 / 长度字段撒谎 =====
+
+fn valid_read_response_frame(value: f32) -> Vec<u8> {
+    let value_bytes = value.to_be_bytes();
+    let data_section = {
+        let mut d = Vec::new();
+        d.push(RET_OK);
+        d.push(TS_BYTE);
+        d.extend_from_slice(&(value_bytes.len() as u16).to_be_bytes());
+        d.extend_from_slice(&value_bytes);
+        d
+    };
+    let param = vec![FUNC_READ, 0x01];
+
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&[0x02, 0xF0, 0x80]); // COTP DT
+    frame.push(0x32); // Protocol ID
+    frame.push(PDU_ACK); // PDU type: Ack-Data
+    frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Reserved + PDU Reference
+    frame.extend_from_slice(&(param.len() as u16).to_be_bytes());
+    frame.extend_from_slice(&(data_section.len() as u16).to_be_bytes());
+    frame.extend_from_slice(&[0x00, 0x00]); // Error class + Error code
+    frame.extend_from_slice(&param);
+    frame.extend_from_slice(&data_section);
+    frame
+}
+
+#[test]
+fn malformed_s7_read_response_is_rejected_without_panic() {
+    let full = valid_read_response_frame(42.5);
+    assert!(frames::parse_read_response(&full, S7DataType::Real).is_ok());
+
+    // 任意严格前缀都不得 panic，且都应报错
+    for cut in 0..full.len() {
+        assert!(
+            frames::parse_read_response(&full[..cut], S7DataType::Real).is_err(),
+            "截断到 {cut} 字节应被拒绝"
+        );
+    }
+
+    // 协议 ID 被破坏（串到别的协议）
+    let mut bad_proto = full.clone();
+    bad_proto[3] = 0x00;
+    assert!(frames::parse_read_response(&bad_proto, S7DataType::Real).is_err());
+
+    // PDU 类型既不是 Ack-Data 也无错误位
+    let mut bad_pdu = full.clone();
+    bad_pdu[4] = 0x01; // Job
+    assert!(frames::parse_read_response(&bad_pdu, S7DataType::Real).is_err());
+
+    // 数据长度字段撒谎（远大于实际剩余字节）
+    let mut lying = full.clone();
+    lying[11] = 0xFF;
+    assert!(frames::parse_read_response(&lying, S7DataType::Real).is_err());
+
+    // 参数长度撒谎：参数区越过帧尾
+    let mut bad_param_len = full.clone();
+    bad_param_len[9] = 0xFF;
+    assert!(frames::parse_read_response(&bad_param_len, S7DataType::Real).is_err());
+}

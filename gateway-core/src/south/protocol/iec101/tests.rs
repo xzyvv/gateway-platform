@@ -605,3 +605,81 @@ fn golden_iec101_interrogation_addr_len_2() {
         "公共地址 2 字节形态的帧长应比 1 字节形态多 1"
     );
 }
+
+// ============================================================
+// 畸形帧负例：FT1.2 截断 / 长度字节撒谎 / 校验和错误
+// ============================================================
+
+#[test]
+fn malformed_iec101_variable_frame_is_rejected_without_panic() {
+    let asdu = [0x64u8, 0x01, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x14];
+    let full = build_variable_frame(0x08, 1, &asdu);
+    assert!(parse_frame(&full).is_ok(), "构造的合法变长帧应可解析");
+
+    // 任意严格前缀都不得 panic（长度/起止符/校验任一不满足即报错）
+    for cut in 0..full.len() {
+        assert!(
+            parse_frame(&full[..cut]).is_err(),
+            "截断到 {cut} 字节应被拒绝"
+        );
+    }
+
+    // 长度字段整体放大 1：与实际长度不一致
+    let mut lying = full.clone();
+    let l = lying[1].wrapping_add(1);
+    lying[1] = l;
+    lying[2] = l;
+    assert!(parse_frame(&lying).is_err());
+
+    // 两个长度字节互相矛盾
+    let mut mismatch = full.clone();
+    mismatch[2] = mismatch[1].wrapping_add(1);
+    assert!(parse_frame(&mismatch).is_err());
+
+    // 校验和破坏
+    let mut bad_cs = full.clone();
+    let l = bad_cs[1] as usize;
+    bad_cs[4 + l] ^= 0xFF;
+    assert!(matches!(
+        parse_frame(&bad_cs),
+        Err(crate::south::protocol::CollectorError::ChecksumError)
+    ));
+
+    // 尾标破坏
+    let mut bad_end = full.clone();
+    *bad_end.last_mut().unwrap() = 0x00;
+    assert!(parse_frame(&bad_end).is_err());
+
+    // 第二个起始符破坏
+    let mut bad_start = full.clone();
+    bad_start[3] = 0x10;
+    assert!(parse_frame(&bad_start).is_err());
+}
+
+#[test]
+fn malformed_iec101_fixed_and_ack_frames_are_rejected() {
+    // 单字符确认帧必须恰好 1 字节
+    assert!(parse_frame(&[0xE5, 0x00]).is_err());
+
+    let full = reset_link(1);
+    // 任意截断
+    for cut in 0..full.len() {
+        assert!(
+            parse_frame(&full[..cut]).is_err(),
+            "定长帧截断到 {cut} 字节应被拒绝"
+        );
+    }
+    // 尾标破坏
+    let mut bad_end = full.clone();
+    *bad_end.last_mut().unwrap() = 0x00;
+    assert!(parse_frame(&bad_end).is_err());
+    // 校验和破坏
+    let mut bad_cs = full;
+    bad_cs[3] ^= 0xFF;
+    assert!(matches!(
+        parse_frame(&bad_cs),
+        Err(crate::south::protocol::CollectorError::ChecksumError)
+    ));
+    // 未知起始字节
+    assert!(parse_frame(&[0xFF, 0x00, 0x00, 0x00, 0x16]).is_err());
+}

@@ -625,3 +625,76 @@ fn golden_fins_read_dm_words_response_decodes() {
         "读回数据应按大端解码为 0x1234"
     );
 }
+
+// ============================================================
+// 畸形帧负例：截断 / 命令码不匹配 / 结束码非零 / 长度越界
+// ============================================================
+
+fn valid_read_response() -> Vec<u8> {
+    let mut fins = vec![0x80, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, 0x01, 0x00, 0x01];
+    fins.extend_from_slice(&[0x01, 0x01, 0x00, 0x00]); // MRC/SRC=01/01，结束码 0000
+    fins.extend_from_slice(&[0x12, 0x34]);
+    fins
+}
+
+#[test]
+fn malformed_fins_read_response_is_rejected_without_panic() {
+    use crate::south::protocol::CollectorError;
+
+    let full = valid_read_response();
+    assert!(parse_read_response(&full, MRC_MEMORY_READ, SRC_MEMORY_READ).is_ok());
+
+    // 帧头（14 字节）任意截断都必须报错
+    for cut in 0..14 {
+        assert!(
+            parse_read_response(&full[..cut], MRC_MEMORY_READ, SRC_MEMORY_READ).is_err(),
+            "截断到 {cut} 字节应被拒绝"
+        );
+        assert!(
+            parse_read_end_code(&full[..cut]).is_err(),
+            "结束码读取也应拒绝 {cut} 字节"
+        );
+    }
+
+    // MRC / SRC 与请求不一致（串包 / 错帧）
+    assert!(parse_read_response(&full, 0x02, SRC_MEMORY_READ).is_err());
+    assert!(parse_read_response(&full, MRC_MEMORY_READ, 0x02).is_err());
+    assert!(parse_read_end_code(&{
+        let mut f = full.clone();
+        f[10] = 0x02;
+        f
+    })
+    .is_err());
+
+    // 结束码非零仍按帧错误上抛，但 parse_read_end_code 应如实返回原始码
+    let mut bad_end = full.clone();
+    bad_end[12] = 0x11;
+    bad_end[13] = 0x02;
+    match parse_read_response(&bad_end, MRC_MEMORY_READ, SRC_MEMORY_READ) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("end code"), "应说明结束码异常: {msg}");
+        }
+        other => panic!("非零结束码应报错，实际: {other:?}"),
+    }
+    assert_eq!(parse_read_end_code(&bad_end).expect("结束码可读"), 0x1102);
+
+    // 数据区截断（帧头完整但数据不足）不得 panic
+    for cut in 14..full.len() {
+        let _ = parse_read_response(&full[..cut], MRC_MEMORY_READ, SRC_MEMORY_READ);
+    }
+}
+
+#[test]
+fn malformed_fins_node_addr_response_is_rejected() {
+    for len in 0..4 {
+        let payload = vec![0u8; len];
+        assert!(
+            parse_node_addr_response(&payload).is_err(),
+            "{len} 字节的节点地址应答应被拒绝"
+        );
+    }
+    assert_eq!(
+        parse_node_addr_response(&[0x00, 0x00, 0x00, 0x07]).expect("4 字节应可解析"),
+        0x07
+    );
+}

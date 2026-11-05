@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// HTTP Webhook 上报配置
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[ts(export)]
 pub struct WebhookConfig {
     /// 是否启用 Webhook 上报
@@ -52,6 +52,13 @@ fn default_interval() -> u64 {
 }
 fn default_retries() -> u32 {
     3
+}
+
+/// `headers` 常装 Authorization 等凭据，不得随 `{:?}` 进入日志。
+impl std::fmt::Debug for WebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::config::fmt_redacted_debug(self, f)
+    }
 }
 
 impl Default for WebhookConfig {

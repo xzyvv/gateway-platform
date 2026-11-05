@@ -194,9 +194,7 @@ impl BusConfig {
 ///
 /// 安全策略 `none` 只能配 `security_mode = none`；非 `none` 策略必须使用
 /// `sign` / `sign_and_encrypt`，且客户端需要自带证书/私钥（见 `semantic_error`）。
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Validate, schemars::JsonSchema, ts_rs::TS,
-)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Validate, schemars::JsonSchema, ts_rs::TS)]
 #[ts(export)]
 pub struct OpcUaClientConfig {
     /// 认证方式：anonymous（默认）/ username / certificate
@@ -234,6 +232,13 @@ pub struct OpcUaClientConfig {
     /// 生产环境建议关闭并预置信任证书，避免中间人替换 Server 证书。
     #[serde(default = "default_true")]
     pub trust_server_certs: bool,
+}
+
+/// OPC UA 客户端用户名/密码不得随 `{:?}` 进入日志。
+impl std::fmt::Debug for OpcUaClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::config::fmt_redacted_debug(self, f)
+    }
 }
 
 impl Default for OpcUaClientConfig {

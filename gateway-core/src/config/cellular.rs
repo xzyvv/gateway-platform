@@ -8,7 +8,7 @@
 //! 注意：以太网与 4G 不应同时作为主链路（route table 冲突由系统层处理）。
 
 #[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema, ts_rs::TS,
+    Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema, ts_rs::TS,
 )]
 #[ts(export)]
 pub struct CellularConfig {
@@ -66,6 +66,13 @@ pub struct CellularConfig {
     #[serde(default = "default_retry_backoff")]
     #[ts(type = "number")]
     pub retry_backoff_secs: u64,
+}
+
+/// 拨号用户名/密码/PIN 不得随 `{:?}` 进入日志。
+impl std::fmt::Debug for CellularConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::config::fmt_redacted_debug(self, f)
+    }
 }
 
 impl Default for CellularConfig {
