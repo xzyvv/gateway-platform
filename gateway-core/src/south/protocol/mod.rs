@@ -32,6 +32,7 @@ pub mod fins;
 #[cfg(any(
     feature = "bacnet",
     feature = "cjt188",
+    feature = "dlt645",
     feature = "iec104",
     feature = "mc",
     feature = "modbus",

@@ -380,3 +380,93 @@ fn write_password_fields_respect_variant_cipher() {
     assert_eq!(&addr_plain[0..6], &new_addr[..], "新地址明文");
     assert_eq!(&addr_plain[6..14], &[0x00; 8][..], "plain 密码字段原样");
 }
+
+// =========================================================================
+// Golden 报文回归（决策清单 P0-3）
+//
+// 样本在 `gateway-core/tests/fixtures/golden/dlt645/*.hex`，逐字节锁定：
+// - 2007 读请求（地址低字节在前、DI 反转 +0x33）
+// - 2007 读响应（DI/值 +0x33，解码出正确数值）
+// - 1997 读响应（地址高字节在前、数据明文）
+// - 2007 写通信地址请求（0x0C，新地址明文 + 密码 +0x33）
+// - 异常应答（CTRL 带 0x40），解析必须报「device abnormal response」
+//
+// 首次生成 / 有意变更：$env:GOLDEN_UPDATE='1' 跑这些用例后提交 hex。
+// =========================================================================
+
+/// 2007 默认地址样本（低字节在前：000000000001）
+fn golden_addr() -> [u8; 6] {
+    [0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+}
+
+#[test]
+fn golden_v2007_read_request() {
+    let addr = golden_addr();
+    // DI 00010000 → 线上 4 字节反转 + 0x33
+    let mut data = parse_data_id("00010000").expect("DI 解析失败");
+    data.reverse();
+    for b in data.iter_mut() {
+        *b = b.wrapping_add(0x33);
+    }
+    let f = build_dlt645_frame(&addr, 0x01, &data, Dlt645Version::V2007);
+    crate::south::protocol::golden::assert_golden("dlt645/v2007_read_request.hex", &f);
+}
+
+#[test]
+fn golden_v2007_read_response_decodes_value() {
+    let addr = golden_addr();
+    // 明文数据区 = DI(4) + 值(4)：DI=00000100，值=0x00001234
+    let plain: Vec<u8> = vec![0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x12, 0x34];
+    let wire: Vec<u8> = plain.iter().map(|b| b.wrapping_add(0x33)).collect();
+    let f = build_dlt645_frame(&addr, 0x81, &wire, Dlt645Version::V2007);
+    crate::south::protocol::golden::assert_golden("dlt645/v2007_read_response.hex", &f);
+
+    let loaded = crate::south::protocol::golden::load("dlt645/v2007_read_response.hex");
+    let parsed = parse_dlt645_response(&loaded, &addr, Dlt645Version::V2007)
+        .expect("golden 2007 读响应必须可解析");
+    assert_eq!(parsed, plain, "数据区 -0x33 后应还原明文");
+
+    let point = point_for_codec("u32", "ABCD");
+    let (raw, _t, quality) = decode_dlt_value(&point, &parsed[4..]);
+    assert_eq!(raw, 0x1234_u32 as f64, "DI 后 4 字节应解码为 0x1234");
+    assert_eq!(quality, Quality::Good);
+}
+
+#[test]
+fn golden_v1997_read_response() {
+    let addr = golden_addr();
+    // 1997 国标：地址高字节在前、数据区明文（无 +0x33）
+    let plain: Vec<u8> = vec![0x00, 0x00, 0x01, 0x00, 0x12, 0x34];
+    let f = build_dlt645_frame(&addr, 0x81, &plain, Dlt645Version::V1997BePlain);
+    crate::south::protocol::golden::assert_golden("dlt645/v1997_read_response.hex", &f);
+
+    let loaded = crate::south::protocol::golden::load("dlt645/v1997_read_response.hex");
+    let parsed = parse_dlt645_response(&loaded, &addr, Dlt645Version::V1997BePlain)
+        .expect("golden 1997 读响应必须可解析");
+    assert_eq!(parsed, plain);
+}
+
+#[test]
+fn golden_v2007_write_address_request() {
+    let addr = golden_addr();
+    let new_addr = [0x12, 0x34, 0x56, 0x78, 0x00, 0x00];
+    let data = build_dlt645_write_address_data(&new_addr, 0, 0, true).expect("写地址数据构建失败");
+    let f = build_dlt645_frame(&addr, 0x0C, &data, Dlt645Version::V2007);
+    crate::south::protocol::golden::assert_golden("dlt645/v2007_write_address_request.hex", &f);
+}
+
+#[test]
+fn golden_v2007_exception_response_is_rejected() {
+    let addr = golden_addr();
+    // 异常应答：0x01 | 0x80 | 0x40 = 0xC1，数据区为错误码 0x01
+    let f = build_dlt645_frame(&addr, 0xC1, &[0x01], Dlt645Version::V2007);
+    crate::south::protocol::golden::assert_golden("dlt645/v2007_exception_response.hex", &f);
+
+    let loaded = crate::south::protocol::golden::load("dlt645/v2007_exception_response.hex");
+    match parse_dlt645_response(&loaded, &addr, Dlt645Version::V2007) {
+        Err(crate::south::protocol::CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("abnormal"), "应报设备异常应答，实际: {msg}");
+        }
+        other => panic!("异常应答必须解析失败，实际: {other:?}"),
+    }
+}
