@@ -116,10 +116,22 @@ pub struct Quota {
 >
 > **这张表是「配置目标值」，不是「代码内置默认值」**：仓库没有内置 tier 查表默认值，
 > 真正生效的载体是 `config.json` 的 `license.tier_quotas`（`LicenseConfig::tier_quotas`）。
+> 完整四档模板见 `gateway-core/config.json.example` 的 `license` 节，可直接复制。
 > 三条生效优先级（`LicenseManager::current`）：
 > **license 自带 `quota` → 配置 `tier_quotas` 查表 → `license.absent_quota` 兜底**。
 > 因此**部署时必须显式写全 `tier_quotas` 四档**：若配置里没写、且 license 文件也没自带 quota，
 > 则任何 tier（哪怕 ultra）都会退到末行的「无 license」配额（100 点 / 1 协议 / 7 天 / 1 通道）。
+>
+> **查表只在「license 有效」时发生**：无 license / 授权失效（`present = false`）一律走
+> `absent_quota` 兜底（100/1/7/1），**不查 `tier_quotas`**——否则配置写全四档后，
+> 无 license 设备会因 `tier = core` 而错误拿到 core 档的 500 点 / 3 协议 / 30 天 / 1 通道。
+> 「core 档配额」与「无 license 配额」是两件事，前者是买了 core 授权，后者是完全没有授权。
+>
+> **降级可观测**：配置漏配某档时，配额会静默降到兜底值，现场只看配额数字无法察觉。
+> 三处兜底：
+> - 启动日志：`gatewayd` 启动时打印 `license.tier_quotas missing tiers: [...]` 的 WARN；
+> - API：`GET /api/license` 响应新增 `quota_source` 字段；
+> - 前端：授权弹窗在 `quota_source = tier_missing` 时展示黄色告警，提示补齐配置。
 
 > **无 license 默认配额**意义：开源版用户拿到网关能跑，但只能做最小化演示（100 点 / 1 协议 / 保留 7 天）。这不是商业策略，是"开源可体验"的基础诚意，避免开源用户对 license 产生敌意。
 
@@ -132,19 +144,19 @@ pub struct LicenseState {
     pub present: bool,         // 是否存在有效 license
     pub tier: Tier,            // 当前生效档位
     pub quota: Quota,          // 配额上限
+    pub quota_source: QuotaSource, // 配额来源：license / tier_config / absent_fallback / tier_missing
     pub status: LicenseStatus, // ok / expiring / expired / mismatch / tampered / invalid
     pub expires_at: Option<i64>,
     pub license_id: Option<String>,
     pub customer: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
-pub struct QuotaUsage {
-    pub points: u32,            // 当前已配置点数
-    pub protocols: u32,         // 当前已启用协议数
-    pub storage_days: u32,      // 当前数据保留天数
-    pub northbound_channels: u32,// 当前北向通道数
+/// 配额来源（serde 小写序列化）
+pub enum QuotaSource {
+    License,        // license 文件自带 quota
+    TierConfig,     // 配置 tier_quotas 查表命中
+    AbsentFallback, // 无 license / 授权失效 → absent_quota 兜底（预期行为）
+    TierMissing,    // license 有效但 tier_quotas 缺该档 → 兜底（配置缺失，需告警）
 }
 ```
 
@@ -155,6 +167,7 @@ pub struct QuotaUsage {
   "present": true,
   "tier": "pro",
   "quota": { "max_points": 5000, "max_protocols": 16, "storage_days": 365, "northbound_channels": 8 },
+  "quota_source": "license",
   "status": "ok",
   "expires_at": 1814822400,
   "license_id": "LIC-2026-0001",
@@ -303,9 +316,12 @@ pub struct QuotaUsage {
    （档位名以代码 `Tier` 枚举为准：`core` / `standard` / `pro` / `ultra`；
    早期草案里的 professional / enterprise / oem 是旧称，serde 无法反序列化，已作废。）
    数值定义于 `tier_quotas` 配置（gateway-core LicenseConfig），后续产品/销售线如需调整档位数值，**改配置即可，无需改代码**。
-   ⚠️ 仓库未内置这些数值：**出厂/部署配置必须显式写全 `license.tier_quotas` 四档**，
+   ⚠️ 仓库未内置这些数值：**出厂/部署配置必须显式写全 `license.tier_quotas` 四档**
+   （完整模板见 `gateway-core/config.json.example` 的 `license` 节，可直接复制），
    否则 license 未自带 quota 字段时，各 tier 一律退到 `absent_quota`（100 点 / 1 协议 / 7 天 / 1 通道），
    与本节「已落地」的预期不符。
+   该漏配不再静默：启动时打 WARN 列出缺失档位，API 的 `quota_source` 返回 `tier_missing`，
+   前端授权弹窗展示告警提示补齐配置。
 
 2. **无 license 默认配额：100 点位 / 1 并发协议 / 7 天历史保留 / 1 北向通道。**
    对应 `Quota { max_points: 100, max_protocols: 1, storage_days: 7, northbound_channels: 1 }`

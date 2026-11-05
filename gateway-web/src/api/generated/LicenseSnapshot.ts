@@ -2,6 +2,7 @@
 import type { LicenseStatus } from "./LicenseStatus";
 import type { LocalFingerprints } from "./LocalFingerprints";
 import type { Quota } from "./Quota";
+import type { QuotaSource } from "./QuotaSource";
 import type { Tier } from "./Tier";
 
 /**
@@ -21,7 +22,11 @@ tier: Tier,
  * v2.0 有效配额（license 自带 quota 优先，否则按 tier 查 tier_quotas，缺省走 absent_quota）
  * LicenseManager 在 current() 时实时计算填入
  */
-quota: Quota, status: LicenseStatus, 
+quota: Quota, 
+/**
+ * 生效配额来源（LicenseManager 在 current() 时实时计算填入）
+ */
+quota_source: QuotaSource, status: LicenseStatus, 
 /**
  * 过期时间（unix 秒），None = 永久 / 无 license
  */

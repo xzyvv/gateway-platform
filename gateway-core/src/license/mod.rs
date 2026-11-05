@@ -158,6 +158,25 @@ pub enum LicenseStatus {
     Invalid,
 }
 
+/// 生效配额的来源（v2.0）
+///
+/// 目的：把「付费档位被静默降级」变成可观测事实。配置里没写满四档时，
+/// license 自带 quota 缺失的付费用户会落到 absent 兜底（100/1/7/1），
+/// 现场从配额数字看不出异常；本字段让 API / 启动日志能直接指出降级原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum QuotaSource {
+    /// license 文件自带 quota（最高优先级）
+    License,
+    /// 配置 license.tier_quotas 查表命中
+    TierConfig,
+    /// 无 license / 授权失效 → absent_quota 兜底（预期行为，不是配置问题）
+    AbsentFallback,
+    /// license 有效但 license.tier_quotas 未写该 tier → absent_quota 兜底（配置缺失，需告警）
+    TierMissing,
+}
+
 /// 运行时授权状态快照（ts-rs 导出，前端类型自动同步）
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
@@ -169,6 +188,8 @@ pub struct LicenseState {
     /// v2.0 有效配额（license 自带 quota 优先，否则按 tier 查 tier_quotas，缺省走 absent_quota）
     /// LicenseManager 在 current() 时实时计算填入
     pub quota: Quota,
+    /// 生效配额来源（LicenseManager 在 current() 时实时计算填入）
+    pub quota_source: QuotaSource,
     pub status: LicenseStatus,
     /// 过期时间（unix 秒），None = 永久 / 无 license
     pub expires_at: Option<i64>,
@@ -183,6 +204,7 @@ impl LicenseState {
             present: false,
             tier: Tier::Core,
             quota: Quota::default(),
+            quota_source: QuotaSource::AbsentFallback,
             status: LicenseStatus::Ok,
             expires_at: None,
             license_id: None,
@@ -196,6 +218,7 @@ impl LicenseState {
             present: false,
             tier: Tier::Core,
             quota: Quota::default(),
+            quota_source: QuotaSource::AbsentFallback,
             status,
             expires_at: payload
                 .as_ref()
@@ -208,10 +231,18 @@ impl LicenseState {
 
     /// 有效态
     fn active(payload: &LicensePayload, status: LicenseStatus) -> Self {
+        let quota = payload.quota.clone().unwrap_or_default();
+        // payload 未带 quota（或全 null）时只是占位，真正的来源由 current() 实时判定
+        let quota_source = if quota.is_all_none() {
+            QuotaSource::AbsentFallback
+        } else {
+            QuotaSource::License
+        };
         Self {
             present: true,
             tier: payload.tier,
-            quota: payload.quota.clone().unwrap_or_default(),
+            quota,
+            quota_source,
             status,
             expires_at: payload
                 .expires_at
@@ -235,11 +266,13 @@ impl LicenseState {
 
     /// API 层序列化视图（Arc<LicenseState> 不便 JSON 序列化，故提供 to_json_value）
     /// v2.0：输出 quota 字段（前端授权管理对话框展示配额信息）
+    /// v2.0：输出 quota_source 字段（前端据此提示"配置缺该档位，配额已降级"）
     pub fn to_json_value(&self) -> serde_json::Value {
         serde_json::json!({
             "present": self.present,
             "tier": self.tier,
             "quota": &self.quota,
+            "quota_source": self.quota_source,
             "status": self.status,
             "expires_at": self.expires_at,
             "license_id": self.license_id,
@@ -488,25 +521,51 @@ impl LicenseManager {
     /// 若未来发现配额查询成为热点，再迁移到 evaluate_at 内的同步计算。
     pub fn current(&self) -> Arc<LicenseState> {
         let state = self.state.load_full();
-        // license 自带 quota 非空 → 原样返回（license 自带优先）
-        if !state.quota.is_all_none() {
-            return state;
-        }
-        // B3：license 自带 quota 全空（签发遗漏 / 老 payload）时必须走安全兜底，
-        // 不能落回全 None（=无限）导致配额形同虚设。
         let cfg = self.quota_config.lock();
-        let effective = match cfg.as_ref() {
-            // 已注入 config：按 tier 查表，tier 缺省走 effective_absent_quota
-            Some(cfg) => cfg.quota_for_tier(state.tier),
-            // Bug T7: 原实现在 config.json 未配 license 节、且状态非 present 时直接
-            // 原样返回——而 absent（无 license）与 Expired/Mismatch/Tampered/Invalid
-            // 降级态的 quota 都是 `Quota::default()`（全 None = 无限），导致授权
-            // 过期后配额被静默解除为无限。统一走「license 自带 > tier 查表 > absent
-            // 兜底」语义：两类状态都回退到 effective_absent_quota（100/1/7/1）。
-            None => crate::config::LicenseConfig::default().effective_absent_quota(),
-        };
         let mut updated = (*state).clone();
-        updated.quota = effective;
+
+        // ① 无 license / 授权失效降级（present=false）→ 一律 absent 兜底，
+        //    **不查 tier_quotas**。docs §6/§9：失效时配额回退到「无 license 默认配额」
+        //    （100/1/7/1），而不是 core 档配额（500/3/30/1）。
+        if !state.present {
+            updated.quota = cfg
+                .as_ref()
+                .map(|c| c.effective_absent_quota())
+                .unwrap_or_else(|| {
+                    crate::config::LicenseConfig::default().effective_absent_quota()
+                });
+            updated.quota_source = QuotaSource::AbsentFallback;
+            return Arc::new(updated);
+        }
+
+        // ② license 自带 quota 非空 → 原样保留（license 自带优先，配置不覆盖）
+        if !state.quota.is_all_none() {
+            updated.quota_source = QuotaSource::License;
+            return Arc::new(updated);
+        }
+
+        // ③ license 有效但未自带 quota（B3：签发遗漏 / 老 payload）→ 按 tier 查配置。
+        //    查不到该 tier → 降级到 absent 兜底，并标记 TierMissing（现场可观测，
+        //    避免付费用户被静默降到开源配额而无人察觉）。
+        match cfg.as_ref() {
+            Some(cfg) if cfg.tier_configured(state.tier) => {
+                updated.quota = cfg.quota_for_tier(state.tier);
+                updated.quota_source = QuotaSource::TierConfig;
+            }
+            Some(cfg) => {
+                updated.quota = cfg.effective_absent_quota();
+                updated.quota_source = QuotaSource::TierMissing;
+            }
+            None => {
+                // Bug T7: 原实现在 config.json 未配 license 节、且状态非 present 时直接
+                // 原样返回——而 absent（无 license）与 Expired/Mismatch/Tampered/Invalid
+                // 降级态的 quota 都是 `Quota::default()`（全 None = 无限），导致授权
+                // 过期后配额被静默解除为无限。统一走「license 自带 > tier 查表 > absent
+                // 兜底」语义：两类状态都回退到 effective_absent_quota（100/1/7/1）。
+                updated.quota = crate::config::LicenseConfig::default().effective_absent_quota();
+                updated.quota_source = QuotaSource::TierMissing;
+            }
+        }
         Arc::new(updated)
     }
 

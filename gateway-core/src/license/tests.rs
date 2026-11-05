@@ -180,6 +180,183 @@ fn test_current_quota_degraded_without_config_is_restricted() {
     assert!(m.check_quota(QuotaKind::Points, 100).is_ok());
 }
 
+// ===== v2.0 配额来源可观测（quota_source）=====
+
+/// license 自带 quota → 来源 = License
+#[test]
+fn test_quota_source_license_when_payload_carries_quota() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    let mut p = test_payload();
+    p.quota = Some(Quota {
+        max_points: Some(5000),
+        ..Quota::default()
+    });
+    load_with_matching_fp(&m, &p, dir.path());
+    let s = m.current();
+    assert_eq!(s.quota_source, QuotaSource::License);
+    assert_eq!(s.quota.max_points, Some(5000));
+}
+
+/// license 有效但未自带 quota + tier_quotas 配了该档 → 来源 = TierConfig
+#[test]
+fn test_quota_source_tier_config_when_mapping_hit() {
+    use crate::config::{LicenseConfig, TierQuotaEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    load_with_matching_fp(&m, &test_payload(), dir.path());
+    m.set_quota_config(LicenseConfig {
+        tier_quotas: Some(vec![TierQuotaEntry {
+            tier: Tier::Pro,
+            quota: Quota {
+                max_points: Some(5000),
+                ..Quota::default()
+            },
+        }]),
+        ..LicenseConfig::default()
+    });
+    let s = m.current();
+    assert_eq!(s.quota_source, QuotaSource::TierConfig);
+    assert_eq!(s.quota.max_points, Some(5000));
+}
+
+/// license 有效但未自带 quota + tier_quotas 缺该档 → 来源 = TierMissing（降级可观测）
+#[test]
+fn test_quota_source_tier_missing_when_mapping_absent() {
+    use crate::config::LicenseConfig;
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    load_with_matching_fp(&m, &test_payload(), dir.path());
+    // 只配了 core，Pro 未配 → Pro 降级到 absent 兜底
+    m.set_quota_config(LicenseConfig {
+        tier_quotas: Some(vec![crate::config::TierQuotaEntry {
+            tier: Tier::Core,
+            quota: Quota {
+                max_points: Some(500),
+                ..Quota::default()
+            },
+        }]),
+        ..LicenseConfig::default()
+    });
+    let s = m.current();
+    assert_eq!(s.tier, Tier::Pro);
+    assert_eq!(s.quota_source, QuotaSource::TierMissing);
+    assert_eq!(s.quota.max_points, Some(100));
+    assert_eq!(s.quota.max_protocols, Some(1));
+}
+
+/// 无 license（present=false）→ 来源 = AbsentFallback（预期行为，不是配置问题）
+#[test]
+fn test_quota_source_absent_fallback_without_license() {
+    use crate::config::LicenseConfig;
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    m.set_quota_config(LicenseConfig {
+        tier_quotas: Some(vec![crate::config::TierQuotaEntry {
+            tier: Tier::Core,
+            quota: Quota {
+                max_points: Some(500),
+                ..Quota::default()
+            },
+        }]),
+        ..LicenseConfig::default()
+    });
+    let s = m.current();
+    assert!(!s.present);
+    assert_eq!(s.quota_source, QuotaSource::AbsentFallback);
+}
+
+/// 语义修正（§6/§9）：无 license / 失效时**不查 tier_quotas**。
+///
+/// config.json 写全四档后 core=500，但无 license 的设备必须拿 100/1/7/1
+/// （无 license 默认配额），不能因为 tier=core 就拿到 core 档配额。
+#[test]
+fn test_absent_license_does_not_use_tier_quotas() {
+    use crate::config::{LicenseConfig, TierQuotaEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    // 四档写全（core=500/3/30/1）
+    let q = |max_points: u32, max_protocols: u32| Quota {
+        max_points: Some(max_points),
+        max_protocols: Some(max_protocols),
+        storage_days: Some(30),
+        northbound_channels: Some(1),
+    };
+    m.set_quota_config(LicenseConfig {
+        tier_quotas: Some(vec![
+            TierQuotaEntry {
+                tier: Tier::Core,
+                quota: q(500, 3),
+            },
+            TierQuotaEntry {
+                tier: Tier::Standard,
+                quota: q(1500, 8),
+            },
+            TierQuotaEntry {
+                tier: Tier::Pro,
+                quota: q(5000, 16),
+            },
+            TierQuotaEntry {
+                tier: Tier::Ultra,
+                quota: Quota::default(),
+            },
+        ]),
+        ..LicenseConfig::default()
+    });
+    // 无 license 文件 → absent
+    assert!(m.load(&dir.path().join("nope.lic")).is_ok());
+    let s = m.current();
+    assert!(!s.present);
+    assert_eq!(s.tier, Tier::Core);
+    // 关键：走 absent 兜底（100/1），而非 core 档（500/3）
+    assert_eq!(s.quota.max_points, Some(100));
+    assert_eq!(s.quota.max_protocols, Some(1));
+    assert_eq!(s.quota_source, QuotaSource::AbsentFallback);
+}
+
+/// 语义修正：授权失效降级（present=false）时同样不查 tier_quotas。
+#[test]
+fn test_degraded_license_does_not_use_tier_quotas() {
+    use crate::config::{LicenseConfig, TierQuotaEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(dir.path());
+    m.set_quota_config(LicenseConfig {
+        tier_quotas: Some(vec![TierQuotaEntry {
+            tier: Tier::Core,
+            quota: Quota {
+                max_points: Some(500),
+                max_protocols: Some(3),
+                ..Quota::default()
+            },
+        }]),
+        ..LicenseConfig::default()
+    });
+    let mut p = test_payload();
+    p.expires_at = Some("2020-01-01T00:00:00Z".to_string());
+    let lic = write_lic(dir.path(), &sign_payload(&p));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let (s, _err) = m.evaluate_at(&lic, &matching_fp(), now);
+    assert!(!s.present);
+    m.replace_state_for_test(s);
+    let s = m.current();
+    assert_eq!(s.status, LicenseStatus::Expired);
+    assert_eq!(s.quota.max_points, Some(100));
+    assert_eq!(s.quota.max_protocols, Some(1));
+    assert_eq!(s.quota_source, QuotaSource::AbsentFallback);
+}
+
+/// API 视图必须带 quota_source 键（前端据此提示降级原因）
+#[test]
+fn test_to_json_value_includes_quota_source() {
+    let s = LicenseState::absent();
+    let v = s.to_json_value();
+    assert_eq!(v["quota_source"], serde_json::json!("absent_fallback"));
+    assert!(v.get("quota_source").is_some());
+}
+
 #[test]
 fn test_load_rejects_and_degrades() {
     let dir = tempfile::tempdir().unwrap();

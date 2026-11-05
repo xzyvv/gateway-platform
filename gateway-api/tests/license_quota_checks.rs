@@ -42,6 +42,7 @@ fn manager_with_quota(tier: gateway_core::license::Tier, quota: Quota) -> Arc<Li
         present: true,
         tier,
         quota: quota.clone(),
+        quota_source: gateway_core::license::QuotaSource::License,
         status: LicenseStatus::Ok,
         expires_at: None,
         license_id: Some("LIC-TEST".into()),

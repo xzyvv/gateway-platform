@@ -33,6 +33,7 @@ function snapshot(): LicenseSnapshot {
       storage_days: 30,
       northbound_channels: null,
     },
+    quota_source: 'license',
     status: 'ok',
     expires_at: null,
     license_id: 'lic-1',

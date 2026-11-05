@@ -29,6 +29,7 @@ function licState(over: Partial<LicenseState> = {}): LicenseState {
       storage_days: null,
       northbound_channels: null,
     },
+    quota_source: 'license',
     status: 'ok',
     expires_at: null,
     license_id: 'LIC-TEST-0001',

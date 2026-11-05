@@ -58,6 +58,8 @@ async fn test_get_license_returns_absent_when_no_file() {
     assert_eq!(v["present"], serde_json::json!(false));
     assert_eq!(v["tier"], serde_json::json!("core"));
     assert_eq!(v["status"], serde_json::json!("ok"));
+    // v2.0：quota_source 暴露配额来源——无 license 走 absent 兜底（预期行为）
+    assert_eq!(v["quota_source"], serde_json::json!("absent_fallback"));
     // v2.0 Step 2：GET 响应包含 quota 字段。
     // 无 license 时 `LicenseManager::current()` 走安全兜底（Bug T7）：
     // license 自带 quota 全空 → 回退 `DEFAULT_ABSENT_QUOTA`（100 点 / 1 协议 / 7 天 / 1 通道），
@@ -82,6 +84,7 @@ async fn test_get_license_returns_quota_from_state() {
             storage_days: Some(365),
             northbound_channels: Some(8),
         },
+        quota_source: gateway_core::license::QuotaSource::License,
         status: LicenseStatus::Ok,
         expires_at: None,
         license_id: Some("LIC-QUOTA-0001".into()),
@@ -102,6 +105,8 @@ async fn test_get_license_returns_quota_from_state() {
     assert_eq!(v["quota"]["max_protocols"], serde_json::json!(16));
     assert_eq!(v["quota"]["storage_days"], serde_json::json!(365));
     assert_eq!(v["quota"]["northbound_channels"], serde_json::json!(8));
+    // v2.0：license 自带 quota → 来源 = license
+    assert_eq!(v["quota_source"], serde_json::json!("license"));
 }
 
 #[tokio::test]
@@ -110,6 +115,7 @@ async fn test_get_license_returns_active_state() {
         present: true,
         tier: Tier::Pro,
         quota: gateway_core::license::Quota::default(),
+        quota_source: gateway_core::license::QuotaSource::AbsentFallback,
         status: LicenseStatus::Ok,
         expires_at: Some(1_790_000_000),
         license_id: Some("LIC-2026-0001".into()),
@@ -159,6 +165,7 @@ async fn test_replace_state_for_test_propagates_to_current() {
         present: true,
         tier: Tier::Ultra,
         quota: gateway_core::license::Quota::default(),
+        quota_source: gateway_core::license::QuotaSource::AbsentFallback,
         status: LicenseStatus::Ok,
         expires_at: None,
         license_id: Some("LIC-DIRECT".into()),

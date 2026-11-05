@@ -33,6 +33,15 @@
       </el-descriptions>
       <div v-else class="lic-empty">{{ loadError || '加载中...' }}</div>
 
+      <!-- 配额降级告警：tier_quotas 漏配某档时配额被静默降到 absent 兜底，此处显式提示 -->
+      <el-alert
+        v-if="quotaSourceHint"
+        type="warning"
+        :title="quotaSourceHint"
+        :closable="false"
+        class="lic-quota-alert"
+      />
+
       <!-- 导入授权文件 -->
       <h4 class="lic-section-title">导入授权文件</h4>
       <div class="lic-import-row">
@@ -180,6 +189,17 @@ const quotaRows = computed(() => {
     { label: '数据保留(天)', value: fmt(q?.storage_days) },
     { label: '上行通道数', value: fmt(q?.northbound_channels) },
   ]
+})
+
+// 配额来源异常提示：tier_missing = 配置缺该档位，配额已降级到无 license 默认配额。
+// absent_fallback 属预期（无 license / 授权失效），不打扰用户。
+const quotaSourceHint = computed(() => {
+  const s = snapshot.value
+  if (!s) return ''
+  if (s.quota_source === 'tier_missing') {
+    return `配置未定义「${TIER_LABEL[s.tier]}」档位的默认配额，当前配额已降级到无授权默认配额。请在 config.json 的 license.tier_quotas 中补齐该档位。`
+  }
+  return ''
 })
 
 // ===== 设备码展示与复制 =====

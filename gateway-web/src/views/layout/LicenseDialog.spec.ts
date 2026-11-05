@@ -26,6 +26,7 @@ const SNAPSHOT = {
     storage_days: 90,
     northbound_channels: 2,
   },
+  quota_source: 'license',
   status: 'ok',
   expires_at: 1_790_000_000,
   license_id: 'LIC-2026-0001',
@@ -147,5 +148,27 @@ describe('LicenseDialog', () => {
     fetchLicenseMock.mockRejectedValue(new Error('gateway not ready'))
     await mountDialog()
     expect(document.body.textContent).toContain('授权状态获取失败')
+  })
+
+  it('配额降级（tier_quotas 漏配该档）：显式提示而非静默显示低配额', async () => {
+    fetchLicenseMock.mockResolvedValue({
+      ...SNAPSHOT,
+      quota_source: 'tier_missing',
+      quota: {
+        max_points: 100,
+        max_protocols: 1,
+        storage_days: 7,
+        northbound_channels: 1,
+      },
+    })
+    await mountDialog()
+    const alert = document.querySelector('.lic-quota-alert')
+    expect(alert?.textContent).toContain('专业版')
+    expect(alert?.textContent).toContain('tier_quotas')
+  })
+
+  it('正常来源（license 自带 quota）：不展示降级告警', async () => {
+    await mountDialog()
+    expect(document.querySelector('.lic-quota-alert')).toBeNull()
   })
 })

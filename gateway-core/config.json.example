@@ -1,5 +1,30 @@
 {
   "_comment": "本文件是配置片段示例，不会被网关加载（网关只读同目录的 config.json）。把需要的片段合并进 config.json 即可。",
+  "license": {
+    "_comment": "授权与配额配置节。tier_quotas 是 tier → 配额默认映射，license 文件自带 quota 时优先使用 license 自带的；license 未自带 quota（老 payload / 签发遗漏）时按 tier 查本表。",
+    "_comment_tier_quotas": "⚠️ 必须显式写全四档（core / standard / pro / ultra）。缺任何一档时，使用该档且 license 未自带 quota 的设备会静默降级到 absent_quota（100 点 / 1 协议 / 7 天 / 1 通道），启动日志会打出 WARN 提示缺哪几档。字段值为 null = 该项不限。",
+    "tier_quotas": [
+      {
+        "tier": "core",
+        "quota": { "max_points": 500, "max_protocols": 3, "storage_days": 30, "northbound_channels": 1 }
+      },
+      {
+        "tier": "standard",
+        "quota": { "max_points": 1500, "max_protocols": 8, "storage_days": 90, "northbound_channels": 3 }
+      },
+      {
+        "tier": "pro",
+        "quota": { "max_points": 5000, "max_protocols": 16, "storage_days": 365, "northbound_channels": 8 }
+      },
+      {
+        "_comment": "旗舰版不限配额：四个字段全部为 null。",
+        "tier": "ultra",
+        "quota": { "max_points": null, "max_protocols": null, "storage_days": null, "northbound_channels": null }
+      }
+    ],
+    "_comment_absent_quota": "无 license / 授权失效 / tier 未配置时回退到的配额（开源版体验）。缺省为 100 点 / 1 协议 / 7 天 / 1 通道。",
+    "absent_quota": { "max_points": 100, "max_protocols": 1, "storage_days": 7, "northbound_channels": 1 }
+  },
   "sim_consumer": {
     "_comment": "内置模拟消费者：无北向 MQTT 时用于本地演练 / 消除「队列积压 has_consumer=false」告警歧义。开启后队列数据会走完「出队 → 处理 → ack」链路，但不会被上报到任何外部通道。与 mqtt.enabled 互斥（同时开会分流同一批数据导致静默丢数），MQTT 已启用时本开关会被忽略。",
     "enabled": false,

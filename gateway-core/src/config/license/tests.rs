@@ -94,3 +94,88 @@ fn test_tier_quotas_json_round_trip() {
     let absent = cfg.effective_absent_quota();
     assert_eq!(absent.max_points, Some(100));
 }
+
+// ===== tier 缺失判定（启动告警 / 前端提示的依据）=====
+
+/// tier_configured：只有显式配了该 tier 才算已配置
+#[test]
+fn test_tier_configured_only_for_explicit_entries() {
+    let cfg = LicenseConfig {
+        tier_quotas: Some(vec![TierQuotaEntry {
+            tier: Tier::Pro,
+            quota: Quota {
+                max_points: Some(5000),
+                ..Quota::default()
+            },
+        }]),
+        ..LicenseConfig::default()
+    };
+    assert!(cfg.tier_configured(Tier::Pro));
+    assert!(!cfg.tier_configured(Tier::Ultra));
+    assert!(!cfg.tier_configured(Tier::Core));
+    assert!(!cfg.tier_configured(Tier::Standard));
+}
+
+/// 整个 tier_quotas 未配置 → 四档全缺
+#[test]
+fn test_missing_tiers_all_when_unconfigured() {
+    let cfg = LicenseConfig::default();
+    let missing = cfg.missing_tiers();
+    assert_eq!(missing.len(), 4);
+    assert!(missing.contains(&Tier::Core));
+    assert!(missing.contains(&Tier::Standard));
+    assert!(missing.contains(&Tier::Pro));
+    assert!(missing.contains(&Tier::Ultra));
+}
+
+/// 只配了一档 → 其余三档列为缺失
+#[test]
+fn test_missing_tiers_reports_only_unconfigured_ones() {
+    let cfg = LicenseConfig {
+        tier_quotas: Some(vec![TierQuotaEntry {
+            tier: Tier::Standard,
+            quota: Quota {
+                max_points: Some(1500),
+                ..Quota::default()
+            },
+        }]),
+        ..LicenseConfig::default()
+    };
+    let missing = cfg.missing_tiers();
+    assert_eq!(missing.len(), 3);
+    assert!(!missing.contains(&Tier::Standard));
+    assert!(missing.contains(&Tier::Core));
+    assert!(missing.contains(&Tier::Pro));
+    assert!(missing.contains(&Tier::Ultra));
+}
+
+/// 四档写全 → 无缺失
+#[test]
+fn test_missing_tiers_empty_when_all_configured() {
+    let q = Quota {
+        max_points: Some(500),
+        ..Quota::default()
+    };
+    let cfg = LicenseConfig {
+        tier_quotas: Some(vec![
+            TierQuotaEntry {
+                tier: Tier::Core,
+                quota: q.clone(),
+            },
+            TierQuotaEntry {
+                tier: Tier::Standard,
+                quota: q.clone(),
+            },
+            TierQuotaEntry {
+                tier: Tier::Pro,
+                quota: q.clone(),
+            },
+            TierQuotaEntry {
+                tier: Tier::Ultra,
+                quota: q,
+            },
+        ]),
+        ..LicenseConfig::default()
+    };
+    assert!(cfg.missing_tiers().is_empty());
+}

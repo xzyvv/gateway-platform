@@ -80,6 +80,11 @@ impl LicenseConfig {
             .unwrap_or_default()
     }
 
+    /// 该 tier 是否已在 tier_quotas 中显式配置
+    pub fn tier_configured(&self, tier: Tier) -> bool {
+        self.tier_quotas_map().contains_key(&tier)
+    }
+
     /// 按 tier 查有效配额（license 自带 quota 不在此函数内处理，那是 LicenseManager 逻辑）
     ///
     /// 优先级：tier_quotas[tier] → absent_quota（effective_absent_quota）
@@ -91,6 +96,17 @@ impl LicenseConfig {
         }
         // tier 在配置中无映射（运维没填），整体降级到 absent_quota
         self.effective_absent_quota()
+    }
+
+    /// 四档中尚未在 tier_quotas 里配置的档位（core / standard / pro / ultra）
+    ///
+    /// 运维漏配某档时，license 未自带 quota 的付费用户会被静默降到 absent 兜底配额。
+    /// 启动告警与前端提示都靠本方法把「缺哪几档」暴露出来。
+    pub fn missing_tiers(&self) -> Vec<Tier> {
+        [Tier::Core, Tier::Standard, Tier::Pro, Tier::Ultra]
+            .into_iter()
+            .filter(|t| !self.tier_configured(*t))
+            .collect()
     }
 }
 
