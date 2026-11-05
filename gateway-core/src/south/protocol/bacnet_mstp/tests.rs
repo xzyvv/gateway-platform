@@ -96,7 +96,7 @@ fn test_build_mstp_frame_with_data() {
 #[test]
 fn test_build_mstp_frame_max_data() {
     let data = vec![0xFF; MAX_DATA_LEN];
-    let frame = build_mstp_frame(0x04, 0, 1, &data);
+    let frame = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &data);
     // 前导码(2) + 头(5) + 头CRC(1) + data(512) + 数据CRC(2) = 522
     assert_eq!(frame.len(), 522);
     assert_eq!(
@@ -132,7 +132,7 @@ fn test_parse_mstp_frame_with_data() {
 fn test_parse_mstp_frame_roundtrip() {
     // 多种数据组合的往返测试
     for data in [vec![], vec![0x01], vec![0x01, 0x02], vec![0xFF; 100]] {
-        let frame = build_mstp_frame(0x04, 0, 1, &data);
+        let frame = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &data);
         let (_, _, _, parsed) = parse_mstp_frame(&frame, &test_metrics()).unwrap();
         assert_eq!(parsed, data);
     }
@@ -154,7 +154,7 @@ fn test_parse_mstp_frame_bad_header_crc() {
 #[test]
 fn test_parse_mstp_frame_bad_data_crc() {
     let data = vec![0x01, 0x02, 0x03];
-    let mut frame = build_mstp_frame(0x04, 0, 1, &data);
+    let mut frame = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &data);
     // 破坏数据 CRC
     frame[8 + data.len()] ^= 0xFF;
     assert!(parse_mstp_frame(&frame, &test_metrics()).is_err());
@@ -212,7 +212,7 @@ fn test_parse_master_addr_explicit() {
 fn test_extract_mstp_frame_complete() {
     let mut fb = FrameBuffer::new();
     let data = vec![0x01, 0x02, 0x03];
-    let frame = build_mstp_frame(0x04, 0, 1, &data);
+    let frame = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &data);
     fb.push(&frame);
     let extracted = extract_mstp_frame(&mut fb, None);
     assert!(extracted.is_some());
@@ -224,7 +224,7 @@ fn test_extract_mstp_frame_complete() {
 fn test_extract_mstp_frame_partial() {
     let mut fb = FrameBuffer::new();
     let data = vec![0x01, 0x02, 0x03, 0x04, 0x05];
-    let frame = build_mstp_frame(0x04, 0, 1, &data);
+    let frame = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &data);
     // 只推入半帧
     fb.push(&frame[..5]);
     assert!(extract_mstp_frame(&mut fb, None).is_none());
@@ -234,7 +234,7 @@ fn test_extract_mstp_frame_partial() {
 fn test_extract_mstp_frame_with_garbage() {
     let mut fb = FrameBuffer::new();
     let data = vec![0x01, 0x02];
-    let frame = build_mstp_frame(0x04, 0, 1, &data);
+    let frame = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &data);
     // 前面加垃圾字节
     let mut buf = vec![0xAA, 0xBB, 0xCC];
     buf.extend_from_slice(&frame);
@@ -248,7 +248,7 @@ fn test_extract_mstp_frame_with_garbage() {
 #[test]
 fn test_extract_mstp_frame_bad_crc() {
     let mut fb = FrameBuffer::new();
-    let mut frame = build_mstp_frame(0x04, 0, 1, &[0x01, 0x02]);
+    let mut frame = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &[0x01, 0x02]);
     // 破坏头 CRC
     frame[7] ^= 0xFF;
     fb.push(&frame);
@@ -268,8 +268,8 @@ fn test_extract_mstp_frame_empty_data() {
 #[test]
 fn test_extract_mstp_frame_multiple() {
     let mut fb = FrameBuffer::new();
-    let f1 = build_mstp_frame(0x04, 0, 1, &[0x01]);
-    let f2 = build_mstp_frame(0x04, 0, 1, &[0x02, 0x03]);
+    let f1 = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &[0x01]);
+    let f2 = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &[0x02, 0x03]);
     fb.push(&f1);
     fb.push(&f2);
 

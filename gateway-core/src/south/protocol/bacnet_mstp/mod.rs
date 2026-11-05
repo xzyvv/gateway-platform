@@ -34,12 +34,16 @@ use frames::*;
 const PREAMBLE: [u8; 2] = [0x55, 0xFF];
 /// MS/TP DataNotExpectingReply 帧类型（仅测试引用）
 #[cfg(test)]
-const FRAME_DATA_NOT_EXPECTING_REPLY: u8 = 0x04;
+const FRAME_DATA_NOT_EXPECTING_REPLY: u8 = 0x01;
 
-// ===== MS/TP 帧类型 =====
-const FRAME_TOKEN: u8 = 0x00;
-const FRAME_DATA_EXPECTING_REPLY: u8 = 0x03;
-const FRAME_TEST_REQUEST: u8 = 0x06;
+// ===== MS/TP 帧类型（ASHRAE 135 表 9-1，不可随意改）=====
+// 这几个值曾写成 0x00 / 0x03 / 0x04 / 0x06：Token 被写成 0x00（标准是 0x08），
+// DataExpectingReply 被写成 0x03（标准是 0x00，而 0x03 实际是 ReplyPostponed）。
+// 后果是网关发出的「请求数据」帧被从站当成 ReplyPostponed 忽略，永远收不到
+// 应答——现场表现就是「总线通、一帧数据都没有」。
+const FRAME_TOKEN: u8 = 0x08;
+const FRAME_DATA_EXPECTING_REPLY: u8 = 0x00;
+const FRAME_TEST_REQUEST: u8 = 0x09;
 
 /// 最大数据长度
 const MAX_DATA_LEN: usize = 512;
