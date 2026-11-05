@@ -203,6 +203,14 @@ html.dark .header {
 .health-badge.license-badge .license-icon {
   font-size: 0.875rem;
 }
+/* v2.0 配额用量：与档位名之间加细竖线分隔，字号略小以弱化「档位」主语义 */
+.health-badge.license-badge .license-quota {
+  padding-left: 8px;
+  border-left: 1px solid currentColor;
+  opacity: 0.85;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
 .health-badge.license-badge.ok {
   background: var(--color-success-bg);
   color: var(--text-success);

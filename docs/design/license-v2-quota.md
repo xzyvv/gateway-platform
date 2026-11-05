@@ -171,25 +171,66 @@ pub enum QuotaSource {
   "status": "ok",
   "expires_at": 1814822400,
   "license_id": "LIC-2026-0001",
-  "customer": "某某自动化"
+  "customer": "某某自动化",
+  "machine": { "machine_key": "...", "onboard_mac": "...", "storage_serial": "...", "device_serial": "..." },
+  "usage": { "points": 1820, "protocols": 8, "storage_days": 30, "northbound_channels": 3 },
+  "available": { "points": 3180, "protocols": 8, "storage_days": 335, "northbound_channels": 5 }
 }
 ```
 
-**前端配额可视化**（设置页 / 状态栏可选）：
+**前端配额可视化**（设置页 / 状态栏）：
 
 ```json
 {
   "tier": "pro",
   "quota": { "max_points": 5000, ... },
-  "usage": { "points": 1820, "protocols": 8, "storage_days": 365, "northbound_channels": 3 },
-  "available": { "points": 3180, "protocols": 8, "storage_days": 0, "northbound_channels": 5 }
+  "usage": { "points": 1820, "protocols": 8, "storage_days": 30, "northbound_channels": 3 },
+  "available": { "points": 3180, "protocols": 8, "storage_days": 335, "northbound_channels": 5 }
 }
 ```
+
+`usage` / `available` 挂在 `LicenseSnapshot` 层（不在 `LicenseState` 层）——配额用量来自
+**运行态**（当前生效配置 + 队列实际保留的历史），不属于授权文件本身状态；放 `LicenseState`
+会让授权状态被运行态数据污染。
+
+各字段口径（**与配额校验同源**，避免"显示的数"和"拦截的数"两套算法互相打架）：
+
+| 字段 | 上限来源 | 已用量（usage）口径 | 剩余（available）口径 |
+|---|---|---|---|
+| `points` | `quota.max_points` | 展开后的采集点数（模板展开口径，同 `check_config_quota`） | 上限 − 已用，饱和到 0 |
+| `protocols` | `quota.max_protocols` | 展开后点位 protocol 字段去重计数 | 上限 − 已用，饱和到 0 |
+| `storage_days` | `quota.storage_days` | 队列实际保留的历史跨度（now − 最旧数据时间戳，向上取整到天） | 上限 − 已用，饱和到 0 |
+| `northbound_channels` | `quota.northbound_channels` | 已启用的北向通道数（mqtt / webhook / cellular / opcua / modbus_server / modbus_passthrough / telemetry，共 7 类） | 上限 − 已用，饱和到 0 |
+
+约定：
+- 上限为 `null` → 该项**不限**，`available` 对应字段也是 `null`（不能退化成 0）
+- 已用量 > 上限（存量配置超出当前档位）→ `available` 饱和到 0，前端标红提示升级
+- `storage_days` 已用量取 `data_queue.timestamp` 与 `data_queue_aggregated.window_start`
+  两者的最小值——超过 24h 的原始行会被压成分钟桶搬进聚合表，只看原始表会低估历史跨度
 
 **超限提示策略**：
 - 仪表盘/状态栏展示档位 + 配额使用进度条（无 license 不展示，只显示"未授权"）
 - 配额超限时**配置保存接口直接拒绝**（如增加点位时返回 4021 `quota_exceeded` + 提示"当前档位支持最多 5000 点，当前已 5000 点，请升级档位或减少点位"）
 - **不影响采集连续性**（已有数据继续运行）
+
+**导入低档位 license 的超限告警**：
+
+场景：现场已有 2000 点位配置，运维导入了一份 `max_points=100` 的低档位 license。
+存量配置**瞬间**就超出了新档位配额，但导入接口此前只做「验签 + 指纹比对 + 落盘」，
+不做存量配置与新配额的对比 → **零提示**，用户要等到下次保存配置才收到 4021，
+而那时的报错指向"加点位"而非"导入 license 降了档"，排查方向被带偏。
+
+策略（`POST /api/license/import`）：
+
+| 动作 | 行为 |
+|---|---|
+| 是否阻断导入 | **不阻断**。license 已落盘生效、配额是既定事实，阻断只会造成"导入失败"的误解 |
+| 是否告警 | **必须告警**。写 `tracing::warn!` + 审计日志 `license.quota_exceeded`（含超限项中文名） |
+| 响应 | 返回 `usage` / `available`，`available` 饱和到 0；前端据此弹红色告警 |
+| 判定范围 | 只判 `points` / `protocols` / `northbound_channels` 三项（保存配置时会被拒绝的项）。`storage_days` 由运行时 FIFO 截断保证，不拒绝配置保存，拿它报警只制造噪音 |
+
+前端表现：导入成功后 `LicenseDialog` 立即显示红色告警条，列出超限项（如"采集点数"），
+提示用户升级档位或清理存量配置。
 
 ## 5. 代码调整范围
 
@@ -197,15 +238,21 @@ pub enum QuotaSource {
 
 | 模块 | 改动 |
 |---|---|
-| `gateway-core/src/license/verify.rs` | `LicensePayload` 删除 `features: Vec<String>`，新增 `quota: Quota` 字段 |
-| `gateway-core/src/license/mod.rs` | `LicenseState` 替换为新结构；`allows(min_tier, feature)` 替换为 `check_quota(quota_kind, current_value) -> Result<(), QuotaError>`；新增默认配额映射（core/standard/pro/ultra 各自的 Quota） |
+| `gateway-core/src/license/verify.rs` | `LicensePayload` 删除 `features: Vec<String>`，新增 `quota: Quota` 字段；新增 `QuotaUsage` / `QuotaAvailable` 结构体与 `Quota::available()` / `Quota::exceeded_kinds()` 计算 |
+| `gateway-core/src/license/mod.rs` | `LicenseState` 替换为新结构；`allows(min_tier, feature)` 替换为 `check_quota(quota_kind, current_value) -> Result<(), QuotaError>`；新增默认配额映射（core/standard/pro/ultra 各自的 Quota）；`LicenseSnapshot` 增加 `usage` / `available` 字段 |
 | `gateway-core/src/license/fingerprint.rs` | 无改动 |
+| `gateway-core/src/queue/storage/mod.rs` | `QueueStorage` 新增 `oldest_data_timestamp()`（默认 `None`） |
+| `gateway-core/src/queue/storage/sqlite/sqlite_storage.rs` | 实现 `oldest_data_timestamp()`：查 `data_queue.timestamp` 与 `data_queue_aggregated.window_start` 两表 MIN |
+| `gateway-core/src/queue/core/task.rs` | `QueueCommand` 新增 `OldestTs` 变体（真实 DB 查询走 `spawn_blocking`） |
+| `gateway-core/src/queue/mod.rs` | `DataQueue` 新增 `oldest_data_timestamp()` async 方法 |
 | `tools/license-issuer/src/main.rs` | CLI 参数：`--features` 删除，新增 `--max-points / --max-protocols / --storage-days / --northbound-channels` |
-| `gateway-api/src/web/api/license/mod.rs` | GET 响应增加 quota 字段；POST 导入逻辑不变 |
-| `gateway-web/src/api/generated/` | ts-rs 自动重新生成（`Quota.ts`, `QuotaUsage.ts`, `LicenseState.ts` 字段变化） |
-| `gateway-web/src/stores/tier.ts` | 删除 `features` 相关逻辑，改为 `quota + usage` 跟踪 |
-| `gateway-web/src/views/layout/Topbar.vue` | 徽章文案从"Ultra"改为"5000 点（已用 1820）"或保持档位简化显示 |
-| `gateway-web/src/views/layout/LicenseDialog.vue` | 现状展示从"档位+功能清单"改为"档位+配额表+使用量" |
+| `gateway-api/src/web/api/license/handlers/mod.rs` | GET / POST 响应装配 `usage` / `available`；配额计数复用 `config_apply::count_*`；导入成功后对存量配置做超限判定（不阻断 + `license.quota_exceeded` 审计告警） |
+| `gateway-api/src/web/config_apply.rs` | `count_points` / `count_protocols` / `count_northbound_channels` 提升为 `pub(crate)`（供用量统计复用同源口径） |
+| `gateway-api/src/web/traits.rs` | `DataQueueTrait` 新增 `oldest_data_timestamp()`（默认 `None`） |
+| `gateway-web/src/api/generated/` | ts-rs 自动重新生成（`Quota.ts`, `QuotaUsage.ts`, `QuotaAvailable.ts`, `LicenseSnapshot.ts`） |
+| `gateway-web/src/stores/tier.ts` | 删除 `features` 相关逻辑，改为 `quota + usage` 跟踪（`licenseUsage` / `licenseAvailable`） |
+| `gateway-web/src/views/layout/Topbar.vue` | 徽章文案从"Ultra"改为"5000 点（已用 1820）"；tooltip 追加配额明细 |
+| `gateway-web/src/views/layout/LicenseDialog.vue` | 现状展示从"档位+功能清单"改为"档位+配额表+使用量"（新增"配额使用"行：已用 / 上限 / 剩余，超限标红） |
 
 ### 5.2 feature gate 替换为配额校验
 

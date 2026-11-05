@@ -30,6 +30,16 @@
             </span>
           </div>
         </el-descriptions-item>
+        <!-- v2.0 配额使用量：已用 / 上限（剩余），超限项标红提示该升级档位 -->
+        <el-descriptions-item v-if="quotaUsageRows.length" label="配额使用">
+          <div class="lic-quota lic-quota-usage">
+            <span v-for="row in quotaUsageRows" :key="row.label" class="lic-quota-item">
+              {{ row.label }}：<b :class="row.over ? 'lic-quota-over' : undefined">{{ row.used }}</b>
+              / {{ row.limit }}
+              <span class="lic-quota-used">（剩余 {{ row.available }}）</span>
+            </span>
+          </div>
+        </el-descriptions-item>
       </el-descriptions>
       <div v-else class="lic-empty">{{ loadError || '加载中...' }}</div>
 
@@ -38,6 +48,15 @@
         v-if="quotaSourceHint"
         type="warning"
         :title="quotaSourceHint"
+        :closable="false"
+        class="lic-quota-alert"
+      />
+
+      <!-- 存量配置超出当前档位配额：导入低档位 license 后最常见，必须显式告知 -->
+      <el-alert
+        v-if="quotaExceededHint"
+        type="error"
+        :title="quotaExceededHint"
         :closable="false"
         class="lic-quota-alert"
       />
@@ -189,6 +208,56 @@ const quotaRows = computed(() => {
     { label: '数据保留(天)', value: fmt(q?.storage_days) },
     { label: '上行通道数', value: fmt(q?.northbound_channels) },
   ]
+})
+
+// ===== v2.0 配额使用量（已用 / 上限 / 剩余）=====
+interface QuotaUsageRow {
+  label: string
+  used: number
+  limit: number
+  available: number
+  /** 已用量超过上限（存量配置超出当前档位配额）→ 标红提示升级 */
+  over: boolean
+}
+const quotaUsageRows = computed<QuotaUsageRow[]>(() => {
+  const s = snapshot.value
+  if (!s) return []
+  const usage = s.usage
+  const avail = s.available
+  // 旧版本网关不返回 usage / available → 不展示该行（不伪造数据）
+  if (!usage || !avail) return []
+  const rows: QuotaUsageRow[] = []
+  const push = (
+    label: string,
+    limit: number | bigint | null | undefined,
+    used: number,
+    available: number | null | undefined,
+  ) => {
+    // 无上限（null）：没有"剩余"概念，不进使用量表
+    if (limit == null) return
+    const lim = Number(limit)
+    rows.push({
+      label,
+      used,
+      limit: lim,
+      available: available == null ? Math.max(lim - used, 0) : Number(available),
+      over: used > lim,
+    })
+  }
+  push('采集点数', s.quota?.max_points, usage.points, avail.points)
+  push('并发协议', s.quota?.max_protocols, usage.protocols, avail.protocols)
+  push('数据保留(天)', s.quota?.storage_days, usage.storage_days, avail.storage_days)
+  push('上行通道数', s.quota?.northbound_channels, usage.northbound_channels, avail.northbound_channels)
+  return rows
+})
+
+// 存量配置超出当前档位配额 → 显式告警。
+// 典型场景：导入低档位 license 后，原有 5000 点位配置仍在跑，但已超出新档位上限。
+const quotaExceededHint = computed(() => {
+  const over = quotaUsageRows.value.filter((r) => r.over)
+  if (!over.length) return ''
+  const items = over.map((r) => `${r.label} ${r.used}/${r.limit}`).join('，')
+  return `当前配置已超出该档位配额（${items}），保存配置时会被拒绝，请升级档位或精简配置`
 })
 
 // 配额来源异常提示：tier_missing = 配置缺该档位，配额已降级到无 license 默认配额。

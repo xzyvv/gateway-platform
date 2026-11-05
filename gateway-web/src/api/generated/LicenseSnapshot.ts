@@ -2,14 +2,27 @@
 import type { LicenseStatus } from "./LicenseStatus";
 import type { LocalFingerprints } from "./LocalFingerprints";
 import type { Quota } from "./Quota";
+import type { QuotaAvailable } from "./QuotaAvailable";
 import type { QuotaSource } from "./QuotaSource";
+import type { QuotaUsage } from "./QuotaUsage";
 import type { Tier } from "./Tier";
 
 /**
- * API 快照视图：授权状态 + 本机设备码（sha256 指纹哈希，无隐私风险）。
+ * API 快照视图：授权状态 + 本机设备码（sha256 指纹哈希，无隐私风险）+ 配额用量。
  * GET /api/license 返回此视图；客户在授权管理界面复制设备码 → 供应商凭码签发。
+ *
+ * `usage` / `available` 依赖运行时配置与队列数据（不属于 license 本身状态），
+ * 故放在快照层而非 `LicenseState`，避免授权状态被运行态数据污染。
  */
 export type LicenseSnapshot = { machine: LocalFingerprints, 
+/**
+ * 配额已用量（当前生效配置 / 数据的实际占用）
+ */
+usage: QuotaUsage, 
+/**
+ * 配额剩余量（None = 该项无上限）
+ */
+available: QuotaAvailable, 
 /**
  * 是否存在通过校验的 license（失效态为 false，但审计字段保留）
  */

@@ -22,7 +22,7 @@ use axum::{
 
 use crate::web::error::ApiError;
 use crate::web::types::AppState;
-use gateway_core::license::{LicenseError, LicenseSnapshot};
+use gateway_core::license::{LicenseError, LicenseSnapshot, QuotaUsage};
 
 mod handlers;
 mod routes;

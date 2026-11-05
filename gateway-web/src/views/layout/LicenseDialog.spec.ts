@@ -31,6 +31,8 @@ const SNAPSHOT = {
   expires_at: 1_790_000_000,
   license_id: 'LIC-2026-0001',
   customer: '某某自动化',
+  usage: { points: 820, protocols: 5, storage_days: 30, northbound_channels: 1 },
+  available: { points: 680, protocols: 3, storage_days: 60, northbound_channels: 1 },
   machine: {
     machine_key: 'a'.repeat(64),
     onboard_mac: 'b'.repeat(64),
@@ -170,5 +172,66 @@ describe('LicenseDialog', () => {
   it('正常来源（license 自带 quota）：不展示降级告警', async () => {
     await mountDialog()
     expect(document.querySelector('.lic-quota-alert')).toBeNull()
+  })
+
+  // v2.0：配额使用量展示（已用 / 上限 / 剩余）
+  it('展示配额使用量：已用 / 上限（剩余）', async () => {
+    await mountDialog()
+    const items = Array.from(document.querySelectorAll('.lic-quota-usage .lic-quota-item')).map((e) =>
+      (e.textContent ?? '').trim(),
+    )
+    const points = items.find((t) => t.includes('采集点数'))
+    expect(points).toBeDefined()
+    // 采集点数上限 1500，已用 820，剩余 680
+    expect(points).toContain('820')
+    expect(points).toContain('1500')
+    expect(points).toContain('680')
+  })
+
+  // 边界：旧网关不返回 usage / available → 不展示使用量行，也不伪造数字
+  it('快照缺 usage / available：不展示配额使用量行', async () => {
+    fetchLicenseMock.mockResolvedValue({
+      ...SNAPSHOT,
+      usage: undefined,
+      available: undefined,
+    })
+    await mountDialog()
+    expect(document.querySelector('.lic-quota-usage')).toBeNull()
+  })
+
+  // 超限：存量配置超出当前档位配额 → 已用量标红
+  it('已用量超过上限：已用数字标红', async () => {
+    fetchLicenseMock.mockResolvedValue({
+      ...SNAPSHOT,
+      usage: { points: 2000, protocols: 5, storage_days: 30, northbound_channels: 1 },
+      available: { points: 0, protocols: 3, storage_days: 60, northbound_channels: 1 },
+    })
+    await mountDialog()
+    expect(document.querySelector('.lic-quota-over')).not.toBeNull()
+  })
+
+  // 超限必须显式告警（导入低档位 license 后存量配置仍在跑的场景）
+  it('已用量超过上限：显式告警提示升级或精简配置', async () => {
+    fetchLicenseMock.mockResolvedValue({
+      ...SNAPSHOT,
+      usage: { points: 2000, protocols: 5, storage_days: 30, northbound_channels: 1 },
+      available: { points: 0, protocols: 3, storage_days: 60, northbound_channels: 1 },
+    })
+    await mountDialog()
+    const alerts = Array.from(document.querySelectorAll('.lic-quota-alert')).map((e) =>
+      (e.textContent ?? '').trim(),
+    )
+    const hit = alerts.find((t) => t.includes('超出该档位配额'))
+    expect(hit).toBeDefined()
+    expect(hit).toContain('2000/1500')
+  })
+
+  // 未超限 → 不出现超限告警（避免制造噪音）
+  it('未超限：不展示超限告警', async () => {
+    await mountDialog()
+    const alerts = Array.from(document.querySelectorAll('.lic-quota-alert')).map((e) =>
+      (e.textContent ?? '').trim(),
+    )
+    expect(alerts.some((t) => t.includes('超出该档位配额'))).toBe(false)
   })
 })

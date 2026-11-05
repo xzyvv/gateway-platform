@@ -20,7 +20,7 @@ use ts_rs::TS;
 
 pub use clock::{ClockGuard, ClockVerdict};
 pub use fingerprint::LocalFingerprints;
-pub use verify::{LicenseError, LicensePayload, Quota, QuotaKind};
+pub use verify::{LicenseError, LicensePayload, Quota, QuotaAvailable, QuotaKind, QuotaUsage};
 
 /// Ed25519 公钥（32 字节，编译期硬编码，随二进制分发，见 §5）。
 ///
@@ -281,19 +281,31 @@ impl LicenseState {
     }
 }
 
-/// API 快照视图：授权状态 + 本机设备码（sha256 指纹哈希，无隐私风险）。
+/// API 快照视图：授权状态 + 本机设备码（sha256 指纹哈希，无隐私风险）+ 配额用量。
 /// GET /api/license 返回此视图；客户在授权管理界面复制设备码 → 供应商凭码签发。
+///
+/// `usage` / `available` 依赖运行时配置与队列数据（不属于 license 本身状态），
+/// 故放在快照层而非 `LicenseState`，避免授权状态被运行态数据污染。
 #[derive(Debug, TS)]
 #[ts(export, export_to = "LicenseSnapshot.ts")]
 pub struct LicenseSnapshot {
     #[ts(flatten)]
     pub state: LicenseState,
     pub machine: LocalFingerprints,
+    /// 配额已用量（当前生效配置 / 数据的实际占用）
+    pub usage: QuotaUsage,
+    /// 配额剩余量（None = 该项无上限）
+    pub available: QuotaAvailable,
 }
 
 impl LicenseSnapshot {
     /// 手写 JSON（沿用 to_json_value 模式，字段与 TS 导出严格一致）
-    pub fn to_json_value(state: &LicenseState, machine: &LocalFingerprints) -> serde_json::Value {
+    pub fn to_json_value(
+        state: &LicenseState,
+        machine: &LocalFingerprints,
+        usage: &QuotaUsage,
+        available: &QuotaAvailable,
+    ) -> serde_json::Value {
         let mut v = state.to_json_value();
         v["machine"] = serde_json::json!({
             "machine_key": machine.machine_key,
@@ -301,6 +313,8 @@ impl LicenseSnapshot {
             "storage_serial": machine.storage_serial,
             "device_serial": machine.device_serial,
         });
+        v["usage"] = serde_json::to_value(usage).unwrap_or_else(|_| serde_json::json!({}));
+        v["available"] = serde_json::to_value(available).unwrap_or_else(|_| serde_json::json!({}));
         v
     }
 }

@@ -174,6 +174,16 @@ pub trait QueueStorage: Send + Sync {
     /// 默认 no-op：内存后端无持久化历史，无需按天截断；SQLite 后端覆写以生效。
     fn set_storage_retention_days(&self, _days: Option<u32>) {}
 
+    /// v2.0：最旧一条持久化数据的时间戳（unix 毫秒）。
+    ///
+    /// 用于配额用量统计：实际历史保留跨度 = now - oldest_ts，
+    /// 即 `storage_days` 配额的已用量口径。原始表与聚合表都需纳入，
+    /// 因为超过 24h 的原始行会被压成分钟桶写入聚合表。
+    /// 默认 None：内存后端无持久化历史，返回 None 表示"跨度为 0"。
+    fn oldest_data_timestamp(&self) -> Option<i64> {
+        None
+    }
+
     /// 是否需要定期维护。
     fn needs_maintenance(&self) -> bool;
 

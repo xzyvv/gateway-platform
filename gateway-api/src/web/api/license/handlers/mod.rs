@@ -4,9 +4,8 @@ use super::*;
 
 /// GET /api/license
 pub(crate) async fn get_license(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mgr = &state.platform.license;
-    let s = mgr.current();
-    Json(LicenseSnapshot::to_json_value(&s, mgr.machine()))
+    let usage = build_usage(&state).await;
+    Json(build_snapshot(&state, usage))
 }
 
 /// POST /api/license/import：导入授权文件（dry-run 通过才落盘）
@@ -29,10 +28,69 @@ pub(crate) async fn import_license(
                 ),
                 "api",
             );
-            Json(LicenseSnapshot::to_json_value(&s, mgr.machine())).into_response()
+            let usage = build_usage(&state).await;
+            // 导入低档位 license 后，存量配置可能已超出新档位配额。
+            // 此时**不能阻断导入**（license 已经生效，配额是既定事实），
+            // 但必须留痕 + 在响应里给出告警，否则用户要到下次保存配置才收到 4021。
+            let exceeded = s.quota.exceeded_kinds(&usage);
+            if !exceeded.is_empty() {
+                let detail = exceeded
+                    .iter()
+                    .map(|k| k.label_zh())
+                    .collect::<Vec<_>>()
+                    .join("、");
+                tracing::warn!(
+                    "导入 license 后存量配置已超出新档位配额: tier={:?} 超限项=[{}]",
+                    s.tier,
+                    detail
+                );
+                state.platform.audit.log(
+                    "license.quota_exceeded",
+                    "gateway",
+                    &format!("tier={:?} 超限项=[{}]", s.tier, detail),
+                    "api",
+                );
+            }
+            Json(build_snapshot(&state, usage)).into_response()
         }
         Err(e) => import_error(&e).into_response(),
     }
+}
+
+/// 组装授权快照 JSON：授权状态 + 设备码 + 配额用量 / 剩余量。
+///
+/// `usage` 的口径与配额校验**同源**（复用 `config_apply::count_*`），
+/// 保证「已用 / 剩余」与「超限判定」不会出现两套算法互相打架。
+fn build_snapshot(state: &Arc<AppState>, usage: QuotaUsage) -> serde_json::Value {
+    let mgr = &state.platform.license;
+    let s = mgr.current();
+    let available = s.quota.available(&usage);
+    LicenseSnapshot::to_json_value(&s, mgr.machine(), &usage, &available)
+}
+
+/// 当前生效配置的配额用量（口径同 `check_config_quota`）。
+async fn build_usage(state: &Arc<AppState>) -> QuotaUsage {
+    let cfg = state.config.load_full();
+    QuotaUsage {
+        points: crate::web::config_apply::count_points(state, &cfg),
+        protocols: crate::web::config_apply::count_protocols(state, &cfg),
+        storage_days: storage_days_usage(state).await,
+        northbound_channels: crate::web::config_apply::count_northbound_channels(&cfg),
+    }
+}
+
+/// `storage_days` 配额的已用量：队列中实际保留的历史数据跨度（天）。
+///
+/// 口径 = now - 最旧一条持久化数据的时间戳，向上取整到天。
+/// 队列无历史数据时为 0。查询失败时按 0 计（统计失败不该阻断授权查询）。
+async fn storage_days_usage(state: &Arc<AppState>) -> u32 {
+    let Some(oldest) = state.south.queue.oldest_data_timestamp().await else {
+        return 0;
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let span_ms = now.saturating_sub(oldest).max(0);
+    // 向上取整：不足一天的历史也算占 1 天
+    ((span_ms + 86_400_000 - 1) / 86_400_000) as u32
 }
 
 /// LicenseError → ApiError：按**失败性质**分类，而不是一律 400「参数不合法」。

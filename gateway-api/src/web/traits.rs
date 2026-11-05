@@ -100,6 +100,15 @@ pub trait DataQueueTrait: Send + Sync {
                 + 'a,
         >,
     >;
+    /// v2.0：最旧一条持久化数据的时间戳（unix 毫秒），None = 无历史数据。
+    ///
+    /// 用于 license 配额用量统计（实际历史保留跨度 = now - oldest_ts）。
+    /// 只暴露基础类型，避免 core 的 queue 类型泄漏进 web/api。
+    fn oldest_data_timestamp<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Option<i64>> + Send + 'a>> {
+        Box::pin(async { None })
+    }
 }
 
 /// Gateway trait（仅包含 web handler 实际调用的方法）
@@ -309,6 +318,11 @@ impl DataQueueTrait for DataQueue {
             limit,
             bucket_secs,
         ))
+    }
+    fn oldest_data_timestamp<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Option<i64>> + Send + 'a>> {
+        Box::pin(DataQueue::oldest_data_timestamp(self))
     }
 }
 

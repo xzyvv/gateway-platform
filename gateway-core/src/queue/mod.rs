@@ -649,6 +649,18 @@ impl DataQueue {
         rx.await
             .map_err(|e| GatewayError::Queue(format!("history_ex recv failed: {}", e)))?
     }
+
+    /// 最旧一条持久化数据的时间戳（unix 毫秒）；None = 队列无历史数据。
+    ///
+    /// v2.0：用于 license 配额用量统计——实际历史保留跨度
+    /// = now - oldest_ts，即 `storage_days` 配额的已用量口径。
+    pub async fn oldest_data_timestamp(&self) -> Option<i64> {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(QueueCommand::OldestTs(reply)).await.is_err() {
+            return None;
+        }
+        rx.await.unwrap_or(None)
+    }
 }
 
 #[cfg(test)]

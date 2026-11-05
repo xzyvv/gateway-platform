@@ -42,6 +42,15 @@
   color: var(--text-primary);
   font-weight: 600;
 }
+/* v2.0 配额使用量：辅助说明（已用 / 剩余）弱化显示 */
+.lic-quota-used {
+  color: inherit;
+  opacity: 0.75;
+}
+/* 已用量超过上限（存量配置超出当前档位配额）→ 红色警示 */
+.lic-quota-item b.lic-quota-over {
+  color: var(--color-danger);
+}
 
 /* 导入行 */
 .lic-import-row {

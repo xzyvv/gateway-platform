@@ -38,6 +38,15 @@ function licState(over: Partial<LicenseState> = {}): LicenseState {
   }
 }
 
+/** v2.0 快照：LicenseState + usage / available（LicenseSnapshot 结构） */
+function licSnapshot(over: Partial<LicenseState> = {}) {
+  return {
+    ...licState(over),
+    usage: { points: 1820, protocols: 8, storage_days: 30, northbound_channels: 3 },
+    available: { points: 3180, protocols: 8, storage_days: 335, northbound_channels: 5 },
+  }
+}
+
 describe('tier store（license 驱动）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -104,5 +113,29 @@ describe('tier store（license 驱动）', () => {
 
     expect(store.licenseState).toBeNull()
     expect(store.current).toBe(before)
+  })
+
+  // v2.0：配额用量随快照一并落地，供 Topbar 徽章 / 授权对话框展示"已用多少"
+  it('refreshFromLicense 同步配额用量与剩余量', async () => {
+    const store = useTierStore()
+    fetchLicenseMock.mockResolvedValue(licSnapshot())
+
+    await store.refreshFromLicense()
+
+    expect(store.licenseUsage?.points).toBe(1820)
+    expect(store.licenseUsage?.northbound_channels).toBe(3)
+    expect(store.licenseAvailable?.points).toBe(3180)
+    expect(store.licenseAvailable?.northbound_channels).toBe(5)
+  })
+
+  // 边界：旧版本网关不返回 usage / available → 用量显示为"未知"，不能伪造 0
+  it('快照缺 usage / available：用量保持 null（前端不伪造数字）', async () => {
+    const store = useTierStore()
+    fetchLicenseMock.mockResolvedValue(licState())
+
+    await store.refreshFromLicense()
+
+    expect(store.licenseUsage).toBeNull()
+    expect(store.licenseAvailable).toBeNull()
   })
 })

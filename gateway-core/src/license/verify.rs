@@ -102,6 +102,83 @@ impl Quota {
             && self.storage_days.is_none()
             && self.northbound_channels.is_none()
     }
+
+    /// 剩余额度 = 上限 - 已用（逐项饱和减法，已超限记 0）
+    ///
+    /// 上限为 None（无限）时该项剩余也是 None（前端显示"不限"）。
+    pub fn available(&self, usage: &QuotaUsage) -> QuotaAvailable {
+        fn rest(limit: Option<u32>, used: u32) -> Option<u32> {
+            limit.map(|l| l.saturating_sub(used))
+        }
+        QuotaAvailable {
+            points: rest(self.max_points, usage.points),
+            protocols: rest(self.max_protocols, usage.protocols),
+            storage_days: rest(self.storage_days, usage.storage_days),
+            northbound_channels: rest(self.northbound_channels, usage.northbound_channels),
+        }
+    }
+
+    /// 已超出上限的配额项（已用 > 上限）
+    ///
+    /// 只含**保存配置时会被拒绝**的三项（点数 / 协议数 / 北向通道数）。
+    /// `storage_days` 不在此列：它由运行时 FIFO 截断保证，不会拒绝配置保存，
+    /// 拿它报警只会制造噪音。
+    ///
+    /// 典型场景：导入低档位 license 后，原有配置已超出新档位配额。
+    pub fn exceeded_kinds(&self, usage: &QuotaUsage) -> Vec<QuotaKind> {
+        let mut out = Vec::new();
+        if self.max_points.is_some_and(|l| usage.points > l) {
+            out.push(QuotaKind::Points);
+        }
+        if self.max_protocols.is_some_and(|l| usage.protocols > l) {
+            out.push(QuotaKind::Protocols);
+        }
+        if self
+            .northbound_channels
+            .is_some_and(|l| usage.northbound_channels > l)
+        {
+            out.push(QuotaKind::NorthboundChannels);
+        }
+        out
+    }
+}
+
+/// 配额已用量（当前生效配置/数据的实际占用）
+///
+/// 与 `Quota` 的 4 个上限一一对应：
+/// - `points`：展开后的采集点数（模板展开口径，与配额校验同源）
+/// - `protocols`：已配置协议种类数
+/// - `storage_days`：实际保留的历史数据跨度（天）
+/// - `northbound_channels`：已启用的北向通道数
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS, schemars::JsonSchema,
+)]
+#[ts(export, export_to = "QuotaUsage.ts")]
+pub struct QuotaUsage {
+    /// 已用采集点数
+    pub points: u32,
+    /// 已用并发协议数
+    pub protocols: u32,
+    /// 已用数据保留天数（实际历史跨度）
+    pub storage_days: u32,
+    /// 已用北向通道数
+    pub northbound_channels: u32,
+}
+
+/// 配额剩余量（None = 该项无上限）
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS, schemars::JsonSchema,
+)]
+#[ts(export, export_to = "QuotaAvailable.ts")]
+pub struct QuotaAvailable {
+    /// 剩余可用采集点数
+    pub points: Option<u32>,
+    /// 剩余可用并发协议数
+    pub protocols: Option<u32>,
+    /// 剩余可用数据保留天数
+    pub storage_days: Option<u32>,
+    /// 剩余可用北向通道数
+    pub northbound_channels: Option<u32>,
 }
 
 /// 配额类型（LicenseManager::check_quota 第一个参数）

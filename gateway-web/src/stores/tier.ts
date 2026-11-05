@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import type { LicenseState } from '@/api/generated/LicenseState'
+import type { LicenseSnapshot } from '@/api/generated/LicenseSnapshot'
+import type { QuotaUsage } from '@/api/generated/QuotaUsage'
+import type { QuotaAvailable } from '@/api/generated/QuotaAvailable'
 import { fetchLicense } from '@/api/license'
 import { scopedGet, scopedSet } from '../utils/gatewayStorage'
 
@@ -54,6 +57,14 @@ export const useTierStore = defineStore('tier', () => {
   const licenseState = ref<LicenseState | null>(null)
   const licenseStatus = computed(() => licenseState.value?.status ?? null)
 
+  /**
+   * 配额已用量（v2.0）：当前生效配置 / 数据的实际占用。
+   * null = 快照未拉到（旧版本网关无此字段）。
+   */
+  const licenseUsage = ref<QuotaUsage | null>(null)
+  /** 配额剩余量（v2.0）：null = 该项无上限；快照未拉到时整体为 null。 */
+  const licenseAvailable = ref<QuotaAvailable | null>(null)
+
   watch(current, (v) => {
     try { scopedSet(STORAGE_KEY, v) } catch { /* ignore */ }
   })
@@ -70,13 +81,19 @@ export const useTierStore = defineStore('tier', () => {
    * 拉取失败静默返回（网关未就绪 / 匿名禁读 / 旧版本无此端点），不阻断登录与首屏。
    */
   async function refreshFromLicense(): Promise<void> {
-    let s: LicenseState
+    let s: LicenseSnapshot
     try {
       s = await fetchLicense()
     } catch {
       return
     }
     licenseState.value = s
+    // v2.0：配额用量随快照一并更新（后端始终返回；旧网关缺字段时按「未知」处理，
+    // 前端不伪造数字，避免用户被误导为"已用 0 点"）
+    const usage: QuotaUsage | undefined = s.usage
+    const available: QuotaAvailable | undefined = s.available
+    licenseUsage.value = usage ?? null
+    licenseAvailable.value = available ?? null
     current.value = s.tier
   }
 
@@ -86,5 +103,15 @@ export const useTierStore = defineStore('tier', () => {
     current.value = t
   }
 
-  return { current, rank, label, licenseState, licenseStatus, setTier, refreshFromLicense }
+  return {
+    current,
+    rank,
+    label,
+    licenseState,
+    licenseStatus,
+    licenseUsage,
+    licenseAvailable,
+    setTier,
+    refreshFromLicense,
+  }
 })

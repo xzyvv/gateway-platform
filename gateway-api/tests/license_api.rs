@@ -150,6 +150,76 @@ async fn test_get_license_via_anon_read_returns_200_or_401() {
     );
 }
 
+// ===== v2.0 配额用量可视化（usage / available）=====
+
+/// GET /api/license 必须带 usage / available 两个对象（前端据此展示"已用 / 剩余"）
+#[tokio::test]
+async fn test_get_license_includes_usage_and_available() {
+    let state = mock_app_state();
+    let app = gateway_api::web::build_router(state);
+    let resp = app
+        .oneshot(req_with_token("GET", "/api/license"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let v = &v["data"];
+    let usage = v["usage"].as_object().expect("usage 字段缺失");
+    for key in ["points", "protocols", "storage_days", "northbound_channels"] {
+        assert!(
+            usage.get(key).map(|x| x.is_u64()).unwrap_or(false),
+            "usage.{key} 必须是数字，实际: {:?}",
+            usage.get(key)
+        );
+    }
+    let avail = v["available"].as_object().expect("available 字段缺失");
+    for key in ["points", "protocols", "storage_days", "northbound_channels"] {
+        assert!(
+            avail
+                .get(key)
+                .map(|x| x.is_null() || x.is_u64())
+                .unwrap_or(false),
+            "available.{key} 必须是数字或 null，实际: {:?}",
+            avail.get(key)
+        );
+    }
+}
+
+/// available = 上限 - 已用（mock 态无设备/点位 → 已用为 0，剩余等于上限）
+#[tokio::test]
+async fn test_get_license_available_is_limit_minus_usage() {
+    use gateway_core::license::Quota;
+    let state = state_with_license(LicenseState {
+        present: true,
+        tier: Tier::Pro,
+        quota: Quota {
+            max_points: Some(5000),
+            max_protocols: Some(16),
+            storage_days: Some(365),
+            northbound_channels: Some(8),
+        },
+        quota_source: gateway_core::license::QuotaSource::License,
+        status: LicenseStatus::Ok,
+        expires_at: None,
+        license_id: Some("LIC-USAGE-0001".into()),
+        customer: None,
+    });
+    let app = gateway_api::web::build_router(state);
+    let resp = app
+        .oneshot(req_with_token("GET", "/api/license"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let v = &v["data"];
+    assert_eq!(v["usage"]["points"], serde_json::json!(0));
+    assert_eq!(v["available"]["points"], serde_json::json!(5000));
+    assert_eq!(v["available"]["protocols"], serde_json::json!(16));
+    assert_eq!(v["available"]["northbound_channels"], serde_json::json!(8));
+}
+
 // ===== LicenseManager 状态写入测试 =====
 
 #[tokio::test]
@@ -300,5 +370,174 @@ async fn test_import_accepts_signed_license() {
     assert_eq!(v["license_id"], serde_json::json!("LIC-TEST-0001"));
     // 文件已落盘到授权路径
     assert!(tmp.join("license.lic").exists(), "授权文件应写入配置路径");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ===== 导入低档位 license：存量配置超限告警 =====
+
+/// 构造 N 个点位的存量配置（占用配额）
+fn config_with_n_points(n: usize) -> gateway_core::config::GatewayConfig {
+    use gateway_core::config::{BusConfig, GatewayConfig, PointConfig};
+    GatewayConfig {
+        buses: vec![BusConfig::default()],
+        points: (0..n)
+            .map(|i| PointConfig {
+                id: format!("p{i}"),
+                name: Some(format!("point-{i}")),
+                device_id: None,
+                bus: "bus0".into(),
+                protocol: "modbus".into(),
+                address: format!("{i}"),
+                slave_id: Some(1),
+                address_num: Some(i as u16),
+                data_id: None,
+                function_code: Some(3),
+                data_type: Some("uint16".into()),
+                byte_order: None,
+                interval: 1,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// 当前时间（UTC 毫秒 epoch），用于审计日志的时间窗过滤
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 构造一份带 quota 的 license 文本（`max_points` 由调用方给）
+fn signed_license_with_quota(
+    state: &Arc<gateway_api::web::AppState>,
+    license_id: &str,
+    max_points: u32,
+) -> String {
+    use gateway_core::license::issuer_support;
+    let fp = state.platform.license.machine();
+    let payload = serde_json::json!({
+        "v": 1,
+        "license_id": license_id,
+        "customer": "某某自动化",
+        "tier": "core",
+        "quota": {
+            "max_points": max_points,
+            "max_protocols": null,
+            "storage_days": null,
+            "northbound_channels": null,
+        },
+        "machine_key": fp.machine_key.clone().unwrap_or_default(),
+        "machine": "",
+        "machine_parts": [
+            fp.onboard_mac.clone().unwrap_or_default(),
+            fp.storage_serial.clone().unwrap_or_default(),
+            fp.device_serial.clone().unwrap_or_default(),
+        ],
+        "issued_at": "2026-10-12T00:00:00Z",
+        "expires_at": null,
+    });
+    issuer_support::sign_payload_json(&payload.to_string())
+}
+
+/// 查审计日志里 `license.quota_exceeded` 的条目（按时间窗过滤，避开历史遗留文件内容）
+fn quota_exceeded_entries(
+    state: &Arc<gateway_api::web::AppState>,
+    ts_from: i64,
+) -> Vec<gateway_core::engine::audit::AuditEntry> {
+    state
+        .platform
+        .audit
+        .list(gateway_core::engine::audit::AuditFilter {
+            action: Some("license.quota_exceeded".to_string()),
+            target: None,
+            source: None,
+            ts_from: Some(ts_from),
+            ts_to: None,
+            limit: Some(50),
+        })
+        .unwrap()
+}
+
+/// 导入低档位 license 后，存量配置已超出新档位配额时：
+/// ① 导入**不被阻断**（license 已生效，配额是既定事实）；
+/// ② 响应里 usage 反映存量占用、available 饱和到 0（不是负数）；
+/// ③ 审计日志留下 `license.quota_exceeded` 痕迹。
+#[tokio::test]
+async fn test_import_low_tier_license_flags_existing_config_over_quota() {
+    let tmp = std::env::temp_dir().join(format!("lic_import_low_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let state = state_with_test_key_issuer(&tmp);
+
+    // 存量配置：2000 个点位，远超低档 license 的 100 点上限
+    state.config.store(Arc::new(config_with_n_points(2000)));
+
+    let lic = signed_license_with_quota(&state, "LIC-LOW-0001", 100);
+    let ts_from = now_ms();
+    let app = gateway_api::web::build_router(state.clone());
+
+    let resp = app.oneshot(post_import_request(&lic)).await.unwrap();
+    // 导入不被阻断
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let v = &v["data"];
+    assert_eq!(v["present"], serde_json::json!(true));
+    // 新档位配额生效（license 自带 quota 优先于 tier_quotas 配置）
+    assert_eq!(v["quota"]["max_points"], serde_json::json!(100));
+    assert_eq!(v["quota_source"], serde_json::json!("license"));
+    // usage 反映存量配置占用
+    assert_eq!(v["usage"]["points"], serde_json::json!(2000));
+    // available 饱和到 0（超限时不是负数）
+    assert_eq!(v["available"]["points"], serde_json::json!(0));
+    // 未设上限的项 → available 为 null（不限）
+    assert_eq!(v["available"]["protocols"], serde_json::Value::Null);
+
+    // 审计留痕：现场可查「导入低档 license 后存量配置超限」
+    let entries = quota_exceeded_entries(&state, ts_from);
+    assert!(
+        !entries.is_empty(),
+        "导入低档位 license 且存量配置超限时，应写入 license.quota_exceeded 审计"
+    );
+    assert!(
+        entries[0].detail.contains("采集点数"),
+        "审计 detail 应列出超限项，实际: {}",
+        entries[0].detail
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// 反例：存量配置未超配额时，导入**不得**产生超限审计（避免噪音告警）
+#[tokio::test]
+async fn test_import_license_within_quota_emits_no_exceeded_audit() {
+    let tmp = std::env::temp_dir().join(format!("lic_import_ok_quota_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let state = state_with_test_key_issuer(&tmp);
+
+    // 存量配置 2000 点位，新档位给 10000 点 → 不超限
+    state.config.store(Arc::new(config_with_n_points(2000)));
+
+    let lic = signed_license_with_quota(&state, "LIC-HIGH-0001", 10_000);
+    let ts_from = now_ms();
+    let app = gateway_api::web::build_router(state.clone());
+
+    let resp = app.oneshot(post_import_request(&lic)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let v = &v["data"];
+    assert_eq!(v["usage"]["points"], serde_json::json!(2000));
+    assert_eq!(v["available"]["points"], serde_json::json!(8000));
+
+    let entries = quota_exceeded_entries(&state, ts_from);
+    assert!(
+        entries.is_empty(),
+        "未超配额时不应写 license.quota_exceeded 审计，实际: {:?}",
+        entries
+    );
+
     let _ = std::fs::remove_dir_all(&tmp);
 }

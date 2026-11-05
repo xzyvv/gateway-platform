@@ -151,6 +151,8 @@
       >
         <el-icon class="license-icon"><Key /></el-icon>
         <span>{{ licenseBadgeText }}</span>
+        <!-- v2.0：配额用量（上限 + 已用），让用户不用点开授权对话框就知道剩余空间 -->
+        <span v-if="licenseQuotaText" class="license-quota">{{ licenseQuotaText }}</span>
       </div>
 
       <el-dropdown trigger="click" @command="onUserCmd">
@@ -341,6 +343,19 @@ const licenseBadgeText = computed(() => {
   if (st && LICENSE_DEGRADED_TEXT[st]) return LICENSE_DEGRADED_TEXT[st]
   return tierDisplayLabel.value
 })
+/**
+ * v2.0：徽章旁的点位用量（如 "5000 点（已用 1820）"，见设计文档 §5.1）。
+ *
+ * 仅在配额**有上限**且用量已知时显示——不限额时展示"已用 N 点"没有意义
+ * （用户看到"不限"已经知道没有上限约束），反而挤占顶栏空间。
+ * 旧版本网关无 usage 字段 → 不显示，不伪造数字。
+ */
+const licenseQuotaText = computed(() => {
+  const max = tier.licenseState?.quota?.max_points
+  const used = tier.licenseUsage?.points
+  if (typeof max !== 'number' || typeof used !== 'number') return ''
+  return `${max} 点（已用 ${used}）`
+})
 const licenseBadgeTitle = computed(() => {
   const s = tier.licenseState
   if (!s) return '授权状态未获取'
@@ -354,6 +369,26 @@ const licenseBadgeTitle = computed(() => {
     parts.push(`到期: ${formatDate(Number(s.expires_at) * 1000)}`)
   }
   if (s.status === 'expiring') parts.push('授权即将到期，请联系供应商续期')
+  // v2.0：配额用量明细（上限 / 已用 / 剩余），让用户一眼看出离上限还有多远
+  const usage = tier.licenseUsage
+  const avail = tier.licenseAvailable
+  if (usage && avail) {
+    const q = s.quota
+    const fmtLimit = (v: number | null | undefined) => (v == null ? '不限' : String(v))
+    const fmtAvail = (v: number | null | undefined) => (v == null ? '不限' : String(v))
+    parts.push(
+      `点位: ${fmtLimit(q.max_points)}（已用 ${usage.points}，剩余 ${fmtAvail(avail.points)}）`,
+    )
+    parts.push(
+      `协议: ${fmtLimit(q.max_protocols)}（已用 ${usage.protocols}，剩余 ${fmtAvail(avail.protocols)}）`,
+    )
+    parts.push(
+      `保留: ${fmtLimit(q.storage_days)} 天（实际 ${usage.storage_days} 天）`,
+    )
+    parts.push(
+      `通道: ${fmtLimit(q.northbound_channels)}（已用 ${usage.northbound_channels}，剩余 ${fmtAvail(avail.northbound_channels)}）`,
+    )
+  }
   return parts.join('　')
 })
 

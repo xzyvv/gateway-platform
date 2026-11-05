@@ -366,6 +366,45 @@ fn test_storage_retention_quota_truncates_old_records() {
     assert_eq!(kept[0].point_id, "p-recent");
 }
 
+/// v2.0 配额用量口径：`oldest_data_timestamp` 返回最旧一条持久化数据的时间戳。
+///
+/// 空库 → None（用量按 0 计）；有数据 → 最旧那条的时间戳（与保留天数配额同源）。
+#[test]
+fn test_oldest_data_timestamp_reflects_oldest_row() {
+    use crate::queue::storage::QueueStorage;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("queue.db");
+    let storage = SqliteStorage::new(db_path.to_str().unwrap(), Arc::new(Metrics::new())).unwrap();
+
+    // 空库 → None
+    assert_eq!(storage.oldest_data_timestamp(), None);
+
+    let now = DataPoint::now();
+    let old_ts = now - 5 * 24 * 3600 * 1000;
+    storage
+        .enqueue_batch(&[
+            make_point_at("p-old", 1.0, old_ts),
+            make_point_at("p-new", 2.0, now - 3600 * 1000),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        storage.oldest_data_timestamp(),
+        Some(old_ts),
+        "应返回最旧一条数据的时间戳"
+    );
+}
+
+/// v2.0：内存后端无持久化历史 → 恒为 None（用量按 0 计，不报错）。
+#[tokio::test]
+async fn test_oldest_data_timestamp_memory_backend_is_none() {
+    let queue = DataQueue::new_memory().unwrap();
+    queue.enqueue(vec![make_point("p1", 1.0)]).await.unwrap();
+    assert_eq!(queue.oldest_data_timestamp().await, None);
+}
+
 /// P0-2 回归：`storage_days` 配额必须对**未送达**行同样生效。
 ///
 /// 旧实现要求 `delivered = 1`，直连调试（没有北向消费者，delivered 恒为 0）时

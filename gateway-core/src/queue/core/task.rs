@@ -54,6 +54,9 @@ pub(crate) enum QueueCommand {
     },
     /// v2.0 Step 5: 设置历史数据保留天数（license storage_days 配额；None = 不限）
     SetStorageRetention(Option<u32>),
+    /// v2.0: 查询最旧一条持久化数据的时间戳（unix 毫秒），用于配额用量统计。
+    /// None = 无历史数据。
+    OldestTs(oneshot::Sender<Option<i64>>),
 }
 
 /// 磁盘满保护：检测到 SQLITE_FULL/IOERR 后暂停入队的时间（秒）
@@ -398,6 +401,23 @@ pub(crate) async fn queue_task(
         // 仅更新内存槽位（锁内赋值，无 IO），无需 spawn_blocking；
         // 实际截断由 maintenance 周期按新配额执行
                                     storage.set_storage_retention_days(days);
+                                }
+                                QueueCommand::OldestTs(reply) => {
+                                    // 真实 DB 查询（SQLite MIN 聚合）走 spawn_blocking，
+                                    // 与 HistoryEx 同范式，避免阻塞 tokio worker。
+                                    let storage_clone = storage.clone();
+                                    let result = tokio::task::spawn_blocking(move || {
+                                        storage_clone.oldest_data_timestamp()
+                                    })
+                                    .await;
+                                    let ts = match result {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            tracing::warn!("oldest_data_timestamp join failed: {}", e);
+                                            None
+                                        }
+                                    };
+                                    let _ = reply.send(ts);
                                 }
                             }
                         })

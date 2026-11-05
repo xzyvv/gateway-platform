@@ -137,7 +137,7 @@ pub(crate) fn check_config_quota(
 /// C21: 旧实现直接累加 `devices.len()`（每个 device 记 1 点），当模板每设备展开为
 /// 多点时会严重**低估**点数 → 可保存超出 license 许可的点位，配额形同虚设。
 /// 改为复用运行时同一套 [`expand_points`] 展开结果，保证「配额计数 = 实际运行点数」。
-fn count_points(state: &Arc<AppState>, cfg: &GatewayConfig) -> u32 {
+pub(crate) fn count_points(state: &Arc<AppState>, cfg: &GatewayConfig) -> u32 {
     expand_points(state, cfg).len() as u32
 }
 
@@ -146,7 +146,7 @@ fn count_points(state: &Arc<AppState>, cfg: &GatewayConfig) -> u32 {
 /// #12: 必须与点位计数同口径——按 devices 模板**展开后**的点位统计。
 /// 旧实现只遍历 `cfg.points`，而模板化配置下 `points` 常为空 → 协议数恒为 0，
 /// 「协议种类」配额形同虚设（可保存任意多协议）。改传 state 以复用 expand_points。
-fn count_protocols(state: &Arc<AppState>, cfg: &GatewayConfig) -> u32 {
+pub(crate) fn count_protocols(state: &Arc<AppState>, cfg: &GatewayConfig) -> u32 {
     use std::collections::HashSet;
     let mut seen = HashSet::new();
     for p in expand_points(state, cfg) {
@@ -168,7 +168,7 @@ fn count_protocols(state: &Arc<AppState>, cfg: &GatewayConfig) -> u32 {
 /// 1. 在本函数追加一行 `is_some_and(|c| c.enabled)` 计数；
 /// 2. 在 `tests/license_quota_checks.rs` 加 `test_northbound_quota_counts_all_sinks`
 ///    等覆盖，避免再次漏算。
-fn count_northbound_channels(cfg: &GatewayConfig) -> u32 {
+pub(crate) fn count_northbound_channels(cfg: &GatewayConfig) -> u32 {
     let mut n = 0;
     if cfg.mqtt.enabled {
         n += 1;

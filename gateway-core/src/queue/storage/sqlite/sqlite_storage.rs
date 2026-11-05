@@ -434,6 +434,32 @@ impl QueueStorage for SqliteStorage {
         }
     }
 
+    fn oldest_data_timestamp(&self) -> Option<i64> {
+        // 原始表与聚合表都要看：超过 24h 的原始行会被压成分钟桶搬进聚合表，
+        // 只看 data_queue 会把已保留的长历史误判为"没有历史"。
+        // 失败时降级为 None（用量按 0 计），不能因统计失败而阻断接口。
+        let sql = "SELECT MIN(t) FROM (SELECT MIN(timestamp) AS t FROM data_queue \
+                   UNION ALL SELECT MIN(window_start) AS t FROM data_queue_aggregated)";
+        let run = |conn: &Connection| -> rusqlite::Result<Option<i64>> {
+            conn.query_row(sql, [], |r| r.get::<_, Option<i64>>(0))
+        };
+        let res = if let Some(rc) = self.read_pool.get() {
+            let out = run(&rc);
+            self.read_pool.release(rc);
+            out
+        } else {
+            let guard = self.conn.lock();
+            run(&guard)
+        };
+        match res {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("oldest_data_timestamp query failed: {}", e);
+                None
+            }
+        }
+    }
+
     fn name(&self) -> &str {
         "sqlite"
     }
@@ -466,5 +492,45 @@ mod saturating_dec_tests {
         c.store(7, Ordering::Relaxed);
         SqliteStorage::saturating_dec(&c, 0);
         assert_eq!(c.load(Ordering::Relaxed), 7);
+    }
+}
+
+/// v2.0 配额用量口径：`oldest_data_timestamp` 必须同时看原始表与聚合表。
+///
+/// 超过 24h 的原始行会被压成分钟桶写入 `data_queue_aggregated`；只看原始表会
+/// 把"已保留的长历史"误判为"没有历史"，导致存储天数用量被低估。
+#[cfg(test)]
+mod oldest_ts_tests {
+    use super::SqliteStorage;
+    use crate::engine::metrics::Metrics;
+    use crate::queue::storage::QueueStorage;
+    use std::sync::Arc;
+
+    #[test]
+    fn includes_aggregated_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("queue.db");
+        let storage =
+            SqliteStorage::new(db_path.to_str().unwrap(), Arc::new(Metrics::new())).unwrap();
+
+        let old_ts = 1_700_000_000_000i64;
+        // 只往聚合表写一行（模拟原始行已被 retention 清理、只剩分钟桶的历史）
+        {
+            let guard = storage.conn.lock();
+            guard
+                .execute(
+                    "INSERT INTO data_queue_aggregated \
+                         (point_id, window_start, avg_value, min_value, max_value, sample_count) \
+                     VALUES (?1, ?2, 1.0, 1.0, 1.0, 1)",
+                    rusqlite::params!["p-agg", old_ts],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            storage.oldest_data_timestamp(),
+            Some(old_ts),
+            "聚合表里的历史也必须计入保留跨度"
+        );
     }
 }

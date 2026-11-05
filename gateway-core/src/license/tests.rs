@@ -540,6 +540,119 @@ fn test_current_quota_all_none_falls_back_to_safe_default_without_config() {
     assert!(m.check_quota(QuotaKind::Points, 100).is_ok());
 }
 
+// ===== v2.0 配额用量：Quota::available 计算 =====
+
+/// 上限有值时：剩余 = 上限 - 已用
+#[test]
+fn test_quota_available_subtracts_used_from_limit() {
+    let q = Quota {
+        max_points: Some(5000),
+        max_protocols: Some(16),
+        storage_days: Some(365),
+        northbound_channels: Some(8),
+    };
+    let usage = QuotaUsage {
+        points: 1820,
+        protocols: 8,
+        storage_days: 365,
+        northbound_channels: 3,
+    };
+    let a = q.available(&usage);
+    assert_eq!(a.points, Some(3180));
+    assert_eq!(a.protocols, Some(8));
+    assert_eq!(a.storage_days, Some(0));
+    assert_eq!(a.northbound_channels, Some(5));
+}
+
+/// 上限为 None（不限）时：剩余也是 None，不能退化成 0
+#[test]
+fn test_quota_available_none_limit_stays_none() {
+    let q = Quota::default();
+    let usage = QuotaUsage {
+        points: 100,
+        protocols: 4,
+        storage_days: 10,
+        northbound_channels: 2,
+    };
+    let a = q.available(&usage);
+    assert_eq!(a.points, None);
+    assert_eq!(a.protocols, None);
+    assert_eq!(a.storage_days, None);
+    assert_eq!(a.northbound_channels, None);
+}
+
+/// 已用超过上限时：饱和到 0，不出现负数（u32 不能为负）
+#[test]
+fn test_quota_available_saturates_at_zero_when_over_limit() {
+    let q = Quota {
+        max_points: Some(100),
+        max_protocols: None,
+        storage_days: None,
+        northbound_channels: None,
+    };
+    let usage = QuotaUsage {
+        points: 250,
+        protocols: 0,
+        storage_days: 0,
+        northbound_channels: 0,
+    };
+    let a = q.available(&usage);
+    assert_eq!(a.points, Some(0));
+}
+
+/// 已用量超过上限的配额项应被识别（导入低档位 license 后的告警依据）
+#[test]
+fn test_quota_exceeded_kinds_detects_over_limit() {
+    let q = Quota {
+        max_points: Some(1000),
+        max_protocols: Some(16),
+        storage_days: Some(365),
+        northbound_channels: Some(8),
+    };
+    let usage = QuotaUsage {
+        points: 5000,           // 超
+        protocols: 8,           // 未超
+        storage_days: 400,      // 超，但不在告警范围（运行时 FIFO 截断，不拒绝保存）
+        northbound_channels: 9, // 超
+    };
+    let kinds = q.exceeded_kinds(&usage);
+    assert_eq!(kinds.len(), 2);
+    assert!(kinds.contains(&QuotaKind::Points));
+    assert!(kinds.contains(&QuotaKind::NorthboundChannels));
+    assert!(!kinds.contains(&QuotaKind::Protocols));
+}
+
+/// 全部未超限 → 无告警项
+#[test]
+fn test_quota_exceeded_kinds_empty_when_within_limit() {
+    let q = Quota {
+        max_points: Some(5000),
+        max_protocols: Some(16),
+        storage_days: Some(365),
+        northbound_channels: Some(8),
+    };
+    let usage = QuotaUsage {
+        points: 1820,
+        protocols: 8,
+        storage_days: 30,
+        northbound_channels: 3,
+    };
+    assert!(q.exceeded_kinds(&usage).is_empty());
+}
+
+/// 无限额（None）不产生告警项
+#[test]
+fn test_quota_exceeded_kinds_none_limit_never_exceeded() {
+    let q = Quota::default();
+    let usage = QuotaUsage {
+        points: 999_999,
+        protocols: 999,
+        storage_days: 9999,
+        northbound_channels: 99,
+    };
+    assert!(q.exceeded_kinds(&usage).is_empty());
+}
+
 // ===== B3：换钥过渡期环境变量公钥解析 =====
 
 #[test]

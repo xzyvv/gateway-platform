@@ -38,6 +38,8 @@ function snapshot(): LicenseSnapshot {
     expires_at: null,
     license_id: 'lic-1',
     customer: '某公司',
+    usage: { points: 320, protocols: 4, storage_days: 12, northbound_channels: 1 },
+    available: { points: 680, protocols: null, storage_days: 18, northbound_channels: null },
   }
 }
 
