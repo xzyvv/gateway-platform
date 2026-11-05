@@ -1028,3 +1028,270 @@ async fn p2_disk_full_overflow_counts_dropped_metric() {
         "被容量淘汰的 1 个点必须计入 dropped_total"
     );
 }
+
+// ===== P2-9：fallback 反弹上限（FALLBACK_MAX_RETRIES）的端到端时序 =====
+//
+// 既有 `test_fallback_bounce_cap_drops_batch` 只覆盖纯函数的计数语义，
+// 没有覆盖真实 `queue_task` 的写失败分支。本组用例用「可切换失败的存储替身」
+// 真实驱动该分支，钉住三个现场可观测的行为：
+//   1. 预算耗尽前不丢任何数据；
+//   2. 耗尽那一次的写尝试把**积压整批**丢弃，并计入 dropped / bounce 指标；
+//   3. 成功写入会复位预算，瞬时故障不会长期污染后续的重试机会。
+
+/// 可切换写失败的存储替身。
+///
+/// 只拦截 `enqueue_batch`，其余方法全部委托给 `MemoryStorage`，
+/// 保证 len / dequeue 等观测路径与生产后端行为一致。
+struct FlakyEnqueueStorage {
+    inner: MemoryStorage,
+    fail: std::sync::atomic::AtomicBool,
+    enqueue_calls: std::sync::atomic::AtomicUsize,
+    maintenance_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl FlakyEnqueueStorage {
+    fn new() -> Self {
+        Self {
+            inner: MemoryStorage::new(),
+            fail: std::sync::atomic::AtomicBool::new(true),
+            enqueue_calls: std::sync::atomic::AtomicUsize::new(0),
+            maintenance_calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn recover(&self) {
+        self.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn break_again(&self) {
+        self.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 等到 `queue_task` 的首次维护 tick 真正执行完。
+    ///
+    /// `tokio::time::interval` 的首个 tick 立即就绪，而该分支也会 drain fallback
+    /// 去写库。若让它在第一轮 enqueue 之后才抢到运行权，就会替我们多消耗一次
+    /// 反弹预算，使次数断言不可复现。`needs_maintenance()` 返回 true 后维护调用
+    /// 可被计数，因此无需 sleep 猜时序。
+    async fn wait_first_maintenance_tick(&self) {
+        for _ in 0..400 {
+            if self
+                .maintenance_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+                >= 1
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("queue_task 的首次维护 tick 未在 2s 内执行");
+    }
+}
+
+impl QueueStorage for FlakyEnqueueStorage {
+    fn enqueue_batch(&self, points: &[DataPoint]) -> crate::engine::error::GatewayResult<usize> {
+        self.enqueue_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            // 文案刻意避开 disk full / I/O error：走 fallback 反弹计数路径，
+            // 而不是「磁盘满 30s 退避」路径。
+            return Err(crate::engine::error::GatewayError::Queue(
+                "test: simulated persist failure".into(),
+            ));
+        }
+        self.inner.enqueue_batch(points)
+    }
+
+    fn dequeue_batch(&self, limit: usize) -> crate::engine::error::GatewayResult<Vec<QueuedItem>> {
+        self.inner.dequeue_batch(limit)
+    }
+
+    fn ack_batch(&self, ids: &[i64]) -> crate::engine::error::GatewayResult<()> {
+        self.inner.ack_batch(ids)
+    }
+
+    fn release_in_flight(&self, ids: &[i64]) -> crate::engine::error::GatewayResult<()> {
+        self.inner.release_in_flight(ids)
+    }
+
+    fn cleanup_stale_in_flight(
+        &self,
+        cutoff_ts: i64,
+    ) -> crate::engine::error::GatewayResult<usize> {
+        self.inner.cleanup_stale_in_flight(cutoff_ts)
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn in_flight_count(&self) -> i64 {
+        self.inner.in_flight_count()
+    }
+
+    fn history_query(
+        &self,
+        point_id: &str,
+        start: i64,
+        end: i64,
+        limit: usize,
+    ) -> crate::engine::error::GatewayResult<Vec<QueuedItem>> {
+        self.inner.history_query(point_id, start, end, limit)
+    }
+
+    fn maintenance(&self) -> crate::engine::error::GatewayResult<()> {
+        self.maintenance_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.maintenance()
+    }
+
+    fn needs_maintenance(&self) -> bool {
+        // 置为 true 才能让维护 tick 有可观测的副作用（供测试握手）
+        true
+    }
+
+    fn name(&self) -> &str {
+        "flaky-enqueue"
+    }
+}
+
+/// P2-9：预算耗尽时序。前 3 轮（共 5 次写尝试）一条不丢；第 4 轮 flush
+/// 把积压整批重写时预算已耗尽 → 整批丢弃并计数，随后新点重新获得预算。
+#[tokio::test]
+async fn p2_fallback_retry_budget_exhausts_and_drops_accumulated_batch() {
+    use crate::engine::metrics::Metrics;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let storage = Arc::new(FlakyEnqueueStorage::new());
+    let queue = DataQueue::with_storage(storage.clone()).unwrap();
+    let metrics = Arc::new(Metrics::new());
+    queue.set_metrics(metrics.clone());
+    // 磁盘标志默认为 true：数据全部经 queue_task 写库，命中写失败分支
+    assert!(queue.is_disk_ok(), "默认应走正常写库路径");
+    // queue_task 的 30s 维护定时器用 `tokio::time::interval`，首次 tick 立即就绪，
+    // 且该分支也会 drain fallback 去写库——必须先确认它已执行完，否则它会替我们
+    // 额外消耗一次反弹预算，使下面的次数断言不可复现。
+    storage.wait_first_maintenance_tick().await;
+    assert_eq!(
+        storage.enqueue_calls.load(Ordering::SeqCst),
+        0,
+        "首次维护 tick 时缓冲为空，不应产生写尝试"
+    );
+
+    // 第 1~3 轮共 5 次写尝试（1 + 2 + 2），恰好耗尽 FALLBACK_MAX_RETRIES；
+    // 此期间一条都不能丢。
+    for (round, id) in ["a", "b", "c"].iter().enumerate() {
+        queue
+            .enqueue(vec![make_point(id, round as f64)])
+            .await
+            .unwrap();
+        // Len 与 Enqueue 走同一条 mpsc 且 FIFO：拿到 reply 即代表此前命令
+        // （含 spawn_blocking 写库）全部处理完毕，无需 sleep 等时序。
+        let _ = queue.len().await;
+        assert_eq!(
+            metrics
+                .queue_persist
+                .persist_dropped
+                .load(Ordering::Relaxed),
+            0,
+            "第 {} 轮：预算未耗尽前不得丢弃任何数据",
+            round + 1
+        );
+        assert_eq!(
+            queue.fallback_len(),
+            round + 1,
+            "第 {} 轮：新点应进入 fallback 缓冲",
+            round + 1
+        );
+    }
+    assert_eq!(
+        storage.enqueue_calls.load(Ordering::SeqCst),
+        5,
+        "前 3 轮应产生 5 次写尝试（每轮都先 flush 积压）"
+    );
+
+    // 第 4 轮：预算已耗尽 → 本轮的 flush（积压 3 条）被整批丢弃；
+    // 随后本批新点再失败，从 0 重新计数，因此仍能进缓冲。
+    queue.enqueue(vec![make_point("d", 3.0)]).await.unwrap();
+    let _ = queue.len().await;
+
+    assert_eq!(
+        metrics
+            .queue_persist
+            .persist_dropped
+            .load(Ordering::Relaxed),
+        3,
+        "积压的 3 条必须在预算耗尽时整批计入 dropped_total"
+    );
+    assert_eq!(
+        metrics
+            .queue_persist
+            .fallback_bounce
+            .load(Ordering::Relaxed),
+        1,
+        "反弹事件每次耗尽只记一次"
+    );
+    assert_eq!(
+        metrics.queue_persist.persist_failed.load(Ordering::Relaxed),
+        7,
+        "写失败计数必须包含被丢弃的那一批（1+2+2+2）"
+    );
+    assert_eq!(queue.fallback_len(), 1, "只剩本轮新点，积压已被丢弃");
+
+    // 恢复存储：缓冲里的新点落盘，且能查回 → 证明丢的是积压批，不是全部
+    storage.recover();
+    queue.flush_fallback().await.unwrap();
+    assert_eq!(queue.fallback_len(), 0, "恢复后缓冲应清空");
+    let items = queue.dequeue(10).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].point_id, "d", "被丢弃的是积压批，新点必须保留");
+}
+
+/// P2-9：成功写入必须复位反弹计数。否则一次瞬时故障烧掉的预算会让之后
+/// （相隔很久的）单次失败立刻丢数据，把「病态反弹保护」变成长期丢数开关。
+#[tokio::test]
+async fn p2_fallback_retry_budget_resets_after_successful_write() {
+    use crate::engine::metrics::Metrics;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let storage = Arc::new(FlakyEnqueueStorage::new());
+    let queue = DataQueue::with_storage(storage.clone()).unwrap();
+    let metrics = Arc::new(Metrics::new());
+    queue.set_metrics(metrics.clone());
+    // 同上前置：先确认 30s 维护定时器的首次立即 tick 已执行完，避免它替我们
+    // 消耗反弹预算
+    storage.wait_first_maintenance_tick().await;
+    assert_eq!(storage.enqueue_calls.load(Ordering::SeqCst), 0);
+
+    // 前 3 轮把预算烧到上限（retry == FALLBACK_MAX_RETRIES）
+    for (round, id) in ["a", "b", "c"].iter().enumerate() {
+        queue
+            .enqueue(vec![make_point(id, round as f64)])
+            .await
+            .unwrap();
+        let _ = queue.len().await;
+    }
+    assert_eq!(queue.fallback_len(), 3);
+
+    // 恢复后成功写一次：积压 3 条 + 新点 1 条全部落盘，计数复位
+    storage.recover();
+    queue.enqueue(vec![make_point("d", 3.0)]).await.unwrap();
+    assert_eq!(queue.len().await, 4, "积压与新点都应成功落盘");
+    assert_eq!(queue.fallback_len(), 0);
+
+    // 再次故障：若计数未复位，这次失败会立即被丢弃；复位后必须照常进缓冲
+    storage.break_again();
+    queue.enqueue(vec![make_point("e", 4.0)]).await.unwrap();
+    let _ = queue.len().await;
+    assert_eq!(
+        metrics
+            .queue_persist
+            .persist_dropped
+            .load(Ordering::Relaxed),
+        0,
+        "瞬时故障恢复后，新的失败必须重新获得完整重试预算"
+    );
+    assert_eq!(queue.fallback_len(), 1, "新失败的点应进入缓冲而非被丢弃");
+}
