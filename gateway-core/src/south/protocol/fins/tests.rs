@@ -556,3 +556,72 @@ async fn test_udp_missing_node_is_config_error() {
     );
     assert!(!c.is_connected());
 }
+
+// =========================================================================
+// P0-3：黄金报文（Golden）
+// -------------------------------------------------------------------------
+// FINS 的字节级基线：TCP 报头（"FINS" 魔数 + 大端长度/命令）+ FINS 帧头
+// （ICF/RSV/GCT/DNA/DA1/DA2/SNA/SA1/SA2/SID）+ MRC/SRC + 参数。
+// 这些字段任何一处字节序或常量写错，现场表现都是「连上了但读不到数」，
+// 没有字节基线时只能靠换一台 PLC 试。样本同时覆盖「TCP 封装」与「裸 FINS 帧」
+// 两种形态，因为 FINS/UDP 模式直接发后者。
+//
+// 刷新方式：$env:GOLDEN_UPDATE='1'; cargo test -p gateway-core --lib golden
+// =========================================================================
+
+#[test]
+fn golden_fins_node_addr_request() {
+    let f = build_node_addr_request(0x01);
+    crate::south::protocol::golden::assert_golden("fins/node_addr_request.hex", &f);
+}
+
+#[test]
+fn golden_fins_read_dm_words_request() {
+    // DM 字区（0x82）、起始地址 0x0000、读 2 项
+    let fins = build_read_frame(0x01, 0x02, 0x82, 0x0000, 0x0002);
+    crate::south::protocol::golden::assert_golden("fins/read_dm_words_fins_frame.hex", &fins);
+    let tcp = build_fins_frame_request(&fins);
+    crate::south::protocol::golden::assert_golden("fins/read_dm_words_tcp_request.hex", &tcp);
+}
+
+#[test]
+fn golden_fins_write_dm_words_request() {
+    // 写 1 个字：值 0x1234（大端字序列）
+    let data = encode_words(0x1234 as f64, ModbusDataType::U16);
+    let fins = build_write_frame(0x01, 0x02, 0x82, 0x0000, 0x0001, &data);
+    let tcp = build_fins_frame_request(&fins);
+    crate::south::protocol::golden::assert_golden("fins/write_dm_words_tcp_request.hex", &tcp);
+}
+
+#[test]
+fn golden_fins_cpu_run_request() {
+    let fins = build_cpu_control_frame(0x01, 0x02, CpuControl::Run);
+    let tcp = build_fins_frame_request(&fins);
+    crate::south::protocol::golden::assert_golden("fins/cpu_run_tcp_request.hex", &tcp);
+}
+
+/// 读应答样本（不含 TCP 报头）：FINS 帧头 10 字节 + MRC/SRC + MRES/SRES + 数据
+///
+/// 断言不止「字节没变」，还要「样本自己能解出正确值」——否则样本冻结的可能是
+/// 一份谁都解析不出来的垃圾。
+#[test]
+fn golden_fins_read_dm_words_response_decodes() {
+    let mut fins = vec![
+        0x80, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, 0x01, 0x00,
+        0x01, // 帧头（应答方向 DA/SA 互换）
+    ];
+    fins.extend_from_slice(&[0x01, 0x01, 0x00, 0x00]); // MRC/SRC=01/01，结束码 0000
+    fins.extend_from_slice(&[0x12, 0x34]); // 1 个字的读回数据
+    crate::south::protocol::golden::assert_golden("fins/read_dm_words_response.hex", &fins);
+
+    let loaded = crate::south::protocol::golden::load("fins/read_dm_words_response.hex");
+    let payload = parse_read_response(&loaded, MRC_MEMORY_READ, SRC_MEMORY_READ)
+        .expect("golden 读应答必须可解析");
+    assert_eq!(payload, vec![0x12, 0x34]);
+    assert_eq!(parse_read_end_code(&loaded).expect("结束码可读"), 0);
+    assert_eq!(
+        decode_words(&payload, ModbusDataType::U16),
+        Some(0x1234 as f64),
+        "读回数据应按大端解码为 0x1234"
+    );
+}

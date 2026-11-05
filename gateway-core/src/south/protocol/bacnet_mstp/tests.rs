@@ -448,3 +448,43 @@ fn parse_mstp_frame_hostile_input_never_panics() {
     assert!(parse_mstp_frame(&[], &m).is_err());
     assert!(parse_mstp_frame(&[0x55, 0xFF], &m).is_err());
 }
+
+// =========================================================================
+// P0-3：黄金报文（Golden）
+// -------------------------------------------------------------------------
+// MS/TP 帧的字节级基线：前导码 55 FF + 头(Type/DADDR/SADDR/Length/CRC8) +
+// 数据 + CRC16(低字节在前)。CRC 字节序（低前高后）与 CRC 计算范围（头字段不含
+// 前导码、数据 CRC 只覆盖数据）是最容易写错的两处，错了表现为「总线上全是
+// FrameError、一帧都收不到」，现场没有字节基线时无从判断。
+//
+// 说明：样本属于「编码器特征化冻结」——冻结的是当前实现的线上字节，
+// 不代表已对照 BACnet 标准逐字段核验（见本模块 frame type 常量的存疑点）。
+//
+// 刷新方式：$env:GOLDEN_UPDATE='1'; cargo test -p gateway-core --lib golden
+// =========================================================================
+
+#[test]
+fn golden_mstp_token_frame() {
+    let f = build_mstp_frame(FRAME_TOKEN, 5, 1, &[]);
+    crate::south::protocol::golden::assert_golden("bacnet_mstp/token_frame.hex", &f);
+
+    let loaded = crate::south::protocol::golden::load("bacnet_mstp/token_frame.hex");
+    let (ftype, dest, src, data) =
+        parse_mstp_frame(&loaded, &test_metrics()).expect("golden 令牌帧必须可解析");
+    assert_eq!((ftype, dest, src), (FRAME_TOKEN, 5, 1));
+    assert!(data.is_empty(), "令牌帧无数据负载");
+}
+
+#[test]
+fn golden_mstp_who_is_data_frame() {
+    // 负载形状：NPDU 版本 1 + 控制位 0x10 + Unconfirmed-Request 服务号 Who-Is(0x08)
+    let payload = [0x01_u8, 0x10, 0x08];
+    let f = build_mstp_frame(FRAME_DATA_EXPECTING_REPLY, 0xFF, 0, &payload);
+    crate::south::protocol::golden::assert_golden("bacnet_mstp/who_is_data_frame.hex", &f);
+
+    let loaded = crate::south::protocol::golden::load("bacnet_mstp/who_is_data_frame.hex");
+    let (ftype, dest, src, data) =
+        parse_mstp_frame(&loaded, &test_metrics()).expect("golden 数据帧必须可解析");
+    assert_eq!((ftype, dest, src), (FRAME_DATA_EXPECTING_REPLY, 0xFF, 0));
+    assert_eq!(data, payload, "数据负载必须逐字节还原（数据 CRC 校验通过）");
+}

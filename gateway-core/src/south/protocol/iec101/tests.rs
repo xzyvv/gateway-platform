@@ -531,3 +531,77 @@ async fn test_multiple_reads_share_link() {
     }
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
+
+// =========================================================================
+// P0-3：黄金报文（Golden）
+// -------------------------------------------------------------------------
+// FT1.2 的字节级基线。这里冻结三个最容易写错、且现场无法自证的字段：
+// 1) 固定帧的 CS = (C + A) mod 256（单字符帧 E5 无校验，容易混淆）；
+// 2) 可变帧的两个长度字节 L 必须相等，且 L 含 C、A 本身；
+// 3) ASDU 公共地址长度 1 / 2 字节两种形态（决策表 #28：现场老站常用 2 字节）。
+//
+// 刷新方式：$env:GOLDEN_UPDATE='1'; cargo test -p gateway-core --lib golden
+// =========================================================================
+
+#[test]
+fn golden_iec101_link_control_frames() {
+    crate::south::protocol::golden::assert_golden("iec101/reset_link.hex", &reset_link(1));
+
+    let fcb0 = request_class2(1, false);
+    crate::south::protocol::golden::assert_golden("iec101/request_class2_fcb0.hex", &fcb0);
+    let fcb1 = request_class2(1, true);
+    crate::south::protocol::golden::assert_golden("iec101/request_class2_fcb1.hex", &fcb1);
+
+    // FCB 位必须真的翻转，否则从站会判定为重发帧而丢弃
+    assert_eq!(fcb1[1] ^ fcb0[1], C_FCB);
+
+    for rel in [
+        "iec101/reset_link.hex",
+        "iec101/request_class2_fcb0.hex",
+        "iec101/request_class2_fcb1.hex",
+    ] {
+        let loaded = crate::south::protocol::golden::load(rel);
+        match parse_frame(&loaded).expect("golden 固定帧必须可解析") {
+            Ft12Frame::Fixed { control, addr } => {
+                assert_eq!(addr, 1, "{rel}: 链路地址");
+                assert_eq!(
+                    loaded[1], control,
+                    "{rel}: 解析出的控制域必须与线上字节一致"
+                );
+            }
+            other => panic!("{rel}: 期望固定帧，实际 {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn golden_iec101_interrogation_addr_len_1() {
+    let f = interrogation(1, 1, false, 1);
+    crate::south::protocol::golden::assert_golden("iec101/interrogation_addr1.hex", &f);
+    let loaded = crate::south::protocol::golden::load("iec101/interrogation_addr1.hex");
+    match parse_frame(&loaded).expect("golden 可变帧必须可解析") {
+        Ft12Frame::Variable {
+            control,
+            addr,
+            asdu,
+        } => {
+            assert_eq!(control, f[4]);
+            assert_eq!(addr, 1);
+            assert_eq!(asdu, f[6..f.len() - 2], "ASDU 必须逐字节一致");
+        }
+        other => panic!("期望可变帧，实际 {other:?}"),
+    }
+}
+
+#[test]
+fn golden_iec101_interrogation_addr_len_2() {
+    let f = interrogation(1, 1, true, 2);
+    crate::south::protocol::golden::assert_golden("iec101/interrogation_addr2.hex", &f);
+    // 2 字节公共地址比 1 字节形态多 1 字节 ASDU
+    let one = interrogation(1, 1, false, 1);
+    assert_eq!(
+        f.len(),
+        one.len() + 1,
+        "公共地址 2 字节形态的帧长应比 1 字节形态多 1"
+    );
+}

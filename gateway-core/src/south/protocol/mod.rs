@@ -31,8 +31,11 @@ pub mod fins;
 #[cfg(test)]
 #[cfg(any(
     feature = "bacnet",
+    feature = "bacnet-mstp",
     feature = "cjt188",
     feature = "dlt645",
+    feature = "fins",
+    feature = "iec101",
     feature = "iec104",
     feature = "mc",
     feature = "modbus",
