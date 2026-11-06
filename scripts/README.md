@@ -16,8 +16,16 @@
 | `release_gate.ps1` | 发版前 Windows 一键门禁：按 CI 同口径串起仓库健康度 / api-surface / Rust fmt+check+clippy+test / gatewayd 构建 / 前端 lint+类型+构建+体积+单测覆盖率 / Playwright E2E / 真实进程冒烟，输出每步日志与 `summary.md`；默认 fail-fast，`-KeepGoing` 全跑汇总，`-Only` 重跑单项，退出码 0 通过 / 1 失败 |
 | `gen_api_surface.py` | 从 `gateway-api/src/web/**/routes.rs` 解析路由，生成 `docs/api-surface.md`（端点/方法/鉴权/handler）；`--check` 只校验不一致并以退出码 1 失败（CI 门禁，防路由与文档漂移） |
 | `check_coverage.py` | 后端覆盖率"防回落地板"：解析 `lcov.info` 并按目录分桶（core 各模块 / api/web / total），低于阈值即退出码 1（CI 门禁）；`--print` 只打印实测值。口径对标前端 `gateway-web/vitest.config.ts` 的分目录 thresholds——下取整留约 3pp 余量，补测试只许上调不许下调。后端 lcov 无分支数据（`BRF` 恒 0），故只对 lines / functions 设阈值 |
+| `clean-targets.ps1` | 清理 Rust 构建产物：仓库根 `target/`（`-KeepRelease` 保留 release 产物）+ Trae 智能体会话沙箱（`%APPDATA%\...\work-mode-projects\`）里散落的 `target` / `*_target` 目录；`-DryRun` 只统计不删。删除走 `\\?\` 长路径接口，规避 Windows MAX_PATH 260 字符限制 |
 
 **何时用这里：** 需要同时操作多个子项目、或扫描整个仓库一致性时。
+
+## 构建产物目录约定
+
+- 仓库根 `.cargo/config.toml` 已固定 `[build] target-dir = "target"`，所有 cargo 调用（含子目录）统一落到 `<仓库根>/target`，可用 `cargo clean` 回收。
+- **不要**随手设置 `CARGO_TARGET_DIR` 或 `cargo --target-dir` 指向 `gateway_target` / `gcore_target` / `gw_target` / `linux_target` 之类的自定义目录：这些目录不受 cargo 管理、不被 `.gitignore` 的 `target/` 规则覆盖，会堆积到几十 GB。
+- 需要单独目录时（如覆盖率跑在不同 profile），用完请用 `scripts/clean-targets.ps1` 回收，或显式指到仓库根 `target/` 之下。
+- Trae 智能体在会话沙箱里构建时，产物落在 `%APPDATA%` 下而非仓库内——每轮开发结束跑一次 `scripts/clean-targets.ps1 -SandboxOnly` 即可清干净。
 
 ## 2. 核心专属：`/gateway-core/scripts/`
 

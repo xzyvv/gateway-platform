@@ -1,0 +1,20 @@
+# Cargo 构建配置
+#
+# 构建产物目录统一收敛到仓库根的 target/，禁止在仓库内散落 *_target 之类的目录。
+#
+# 背景：Trae 智能体在会话沙箱里执行 Rust 构建时，常会临时设置 CARGO_TARGET_DIR
+# 指向 gateway_target / gcore_target / gw_target / linux_target 等自定义目录。
+# 这些目录既不在 .gitignore 的 target/ 规则内，又不受 cargo 自身管理，
+# 会堆积到几十 GB 且无法用 cargo clean 清理。
+#
+# 这里显式固定 target-dir，让所有 cargo 调用（无论在仓库根还是子目录）都落到同一处：
+#   - 相对路径按本文件所在仓库根解析，最终为 <仓库根>/target
+#   - 已被 .gitignore 的 target/ 规则覆盖，不会污染工作区
+#   - 可用 cargo clean 一键回收
+#
+# 注意：环境变量 CARGO_TARGET_DIR 的优先级高于本文件。
+# 脚本中确需指定其它目录时（如 perf_baseline.py 的 --target），请显式传参并说明理由，
+# 切勿在日常构建命令里随手 export CARGO_TARGET_DIR。
+
+[build]
+target-dir = "target"
