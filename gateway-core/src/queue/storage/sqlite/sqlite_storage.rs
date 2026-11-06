@@ -207,8 +207,21 @@ impl QueueStorage for SqliteStorage {
             }
             Err(e) => {
                 tracing::warn!("ack batch failed, releasing in_flight: {}", e);
-                Self::release_in_flight(&mut guard, ids);
-                Self::saturating_dec(&self.in_flight, ids_len as i64);
+                // r15-Q4 (fix): 按**实际复位行数**扣减计数；失败则保留计数
+                // （DB 里那些行仍是 in_flight=1，扣了就是低估）。
+                match Self::release_in_flight(&mut guard, ids) {
+                    Ok(released) => {
+                        Self::saturating_dec(&self.in_flight, released as i64);
+                    }
+                    Err(release_err) => {
+                        tracing::error!(
+                            "release_in_flight after ack failure FAILED: {} — in_flight counter kept at {}; \
+                             the affected rows stay in_flight=1 in the DB and will be recovered by the stale sweep",
+                            release_err,
+                            self.in_flight.load(Ordering::Relaxed)
+                        );
+                    }
+                }
                 update_in_flight_metric(&self.in_flight, &self.metrics);
                 Err(GatewayError::Queue(format!("ack batch failed: {}", e)))
             }
@@ -219,10 +232,10 @@ impl QueueStorage for SqliteStorage {
         if ids.is_empty() {
             return Ok(());
         }
-        let ids_len = ids.len();
         let mut guard = self.conn.lock();
-        Self::release_in_flight(&mut guard, ids);
-        Self::saturating_dec(&self.in_flight, ids_len as i64);
+        // r15-Q4 (fix): 按实际复位行数扣减；失败上抛，调用方能感知。
+        let released = Self::release_in_flight(&mut guard, ids)?;
+        Self::saturating_dec(&self.in_flight, released as i64);
         update_in_flight_metric(&self.in_flight, &self.metrics);
         Ok(())
     }

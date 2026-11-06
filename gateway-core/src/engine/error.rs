@@ -90,7 +90,32 @@ impl From<serde_json::Error> for GatewayError {
 
 impl From<rusqlite::Error> for GatewayError {
     fn from(e: rusqlite::Error) -> Self {
-        GatewayError::Queue(e.to_string())
+        // r15-Q1 (fix): 旧实现直接 `e.to_string()`，把 rusqlite 的**结构化错误码**
+        // 压扁成一段自由文本。下游（如队列层的「磁盘满退避保护」）只能靠字符串
+        // 匹配 `contains("database or disk is full")` 来判定——一旦 rusqlite 升级、
+        // 换 SQLite 版本或措辞变化，判定即失效 → 磁盘满时走「普通错误」路径，
+        // 失去 30s 退避 → 持续重试写库，加剧 IO 劣化。
+        //
+        // 现在把 SQLite 主错误码**稳定地**编进消息前缀（`sqlite_error(code=N)`），
+        // 下游可按码判定，不再依赖文案。
+        match sqlite_error_code(&e) {
+            Some(code) => GatewayError::Queue(format!("sqlite_error(code={}): {}", code, e)),
+            None => GatewayError::Queue(e.to_string()),
+        }
+    }
+}
+
+/// 提取 rusqlite 错误的主错误码（SQLite 主码，如 SQLITE_FULL=13、SQLITE_IOERR=10）。
+///
+/// 拿不到（连接错误、绑定错误等非 `SqliteFailure` 变体）时返回 None。
+///
+/// 注意：`ffi::Error::code` 是 `ErrorCode` 枚举（libsqlite3-sys 0.28+），
+/// 这里统一取 `extended_code & 0xff`（SQLite 结果码低 8 位 = 主码），
+/// 得到与 SQLite 文档一致的主码整数，便于跨版本稳定判定。
+pub fn sqlite_error_code(e: &rusqlite::Error) -> Option<i32> {
+    match e {
+        rusqlite::Error::SqliteFailure(err, _) => Some(err.extended_code & 0xff),
+        _ => None,
     }
 }
 

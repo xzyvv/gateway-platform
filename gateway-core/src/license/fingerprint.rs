@@ -202,8 +202,33 @@ fn is_excluded_interface(name: &str) -> bool {
         || name.starts_with("br-")
 }
 
+/// 判断一个 sysfs 设备路径是否**由 USB 承载**（**纯函数**）。
+///
+/// r15-LIC1 (fix): USB 网卡（USB-Ethernet dongle）在 sysfs 下同样有
+/// `/sys/class/net/<n>/device` 节点，且其接口名通常是 `eth1` / `enx0011...`
+/// 这类**不以 `usb` 开头**的名字 → 接口名过滤（`is_excluded_interface`）
+/// 拦不住它。现场后果：运维插拔一个 USB 网卡 → 板载 MAC 指纹发生变化 →
+/// **许可证指纹漂移** → 已授权设备被判为未授权（现场"授权莫名失效"），
+/// 或反之（换机后仍能通过校验）。
+///
+/// 判定方式：USB 设备的 sysfs 路径必然经过某个 **USB 控制器目录**，
+/// 其目录名形如 `usb1` / `usb2`（内核按序号创建），例如
+/// `/sys/devices/pci0000:00/0000:00:14.0/usb1/1-1/1-1:1.0`。
+/// 注意不能简单匹配「含 `usb` 的路径段」——像 `usb_controller` 这样的
+/// 普通目录名会误判；必须匹配 `usb` + 纯数字序号。
+fn is_usb_backed_path(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        match s.strip_prefix("usb") {
+            Some(rest) => !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()),
+            None => false,
+        }
+    })
+}
+
 /// 枚举板载物理网卡 MAC：接口名过滤 + `/sys/class/net/<n>/device` 存在性
-/// （虚拟网卡/lo 无对应设备节点）。多网卡取接口名字典序第一个，保证确定性。
+/// （虚拟网卡/lo 无对应设备节点）+ 排除 USB 承载的网卡。多网卡取接口名
+/// 字典序第一个，保证确定性。
 fn enumerate_onboard_mac(root: &Path) -> Option<String> {
     let net_dir = root.join("sys/class/net");
     let mut names: Vec<String> = std::fs::read_dir(&net_dir)
@@ -213,6 +238,17 @@ fn enumerate_onboard_mac(root: &Path) -> Option<String> {
         .filter(|n| !is_excluded_interface(n))
         // 物理性检查：有 device 节点才算板载网卡
         .filter(|n| net_dir.join(n).join("device").exists())
+        // r15-LIC1 (fix): 排除 USB 承载的网卡（USB-Ethernet dongle），
+        // 避免插拔外设导致许可证指纹漂移。
+        .filter(|n| {
+            let dev = net_dir.join(n).join("device");
+            match std::fs::read_link(&dev) {
+                Ok(target) => !is_usb_backed_path(&target),
+                // 读不到链接目标（伪 sysfs / 权限不足）时保守放行：
+                // 真机上该路径必然可读，读不到说明环境异常，不应误杀全部网卡。
+                Err(_) => true,
+            }
+        })
         .collect();
     names.sort();
     let first = names.first()?;

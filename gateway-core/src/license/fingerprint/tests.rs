@@ -196,6 +196,36 @@ fn test_collect_linux_multi_nic_deterministic() {
     assert_eq!(fp.onboard_mac.unwrap(), sha256_hex(b"aabbccddee01"));
 }
 
+// ===== 纯逻辑：USB 承载网卡的识别 =====
+
+/// r15-LIC1 (fix): USB-Ethernet dongle 的 sysfs 路径经过 `usb<N>` 控制器目录
+/// → 必须被排除，否则插拔外设会导致许可证指纹漂移（现场"授权莫名失效"）。
+#[test]
+fn test_usb_backed_paths_are_detected() {
+    // 典型 USB 网卡：pci → usb1 控制器 → 网卡接口
+    assert!(is_usb_backed_path(std::path::Path::new(
+        "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-1/1-1:1.0"
+    )));
+    // 多控制器时的 usb2 也要命中
+    assert!(is_usb_backed_path(std::path::Path::new(
+        "/sys/devices/platform/soc/usb2/1-2/net/eth1"
+    )));
+    // 板载网卡（PCI/SoC 路径，无 usb<N> 段）→ 不判定为 USB
+    assert!(!is_usb_backed_path(std::path::Path::new(
+        "/sys/devices/pci0000:00/0000:00:14.0/net/eth0"
+    )));
+    assert!(!is_usb_backed_path(std::path::Path::new(
+        "/sys/devices/platform/soc/fe210000/ethernet@fe210000/net/eth0"
+    )));
+    // 目录名只是「含 usb」但不是 `usb` + 序号 → 不误判
+    assert!(!is_usb_backed_path(std::path::Path::new(
+        "/sys/devices/platform/soc/usb_controller/net/eth0"
+    )));
+    assert!(!is_usb_backed_path(std::path::Path::new(
+        "/sys/devices/platform/soc/usbnet/net/eth0"
+    )));
+}
+
 // ===== 整体指纹 =====
 
 #[test]

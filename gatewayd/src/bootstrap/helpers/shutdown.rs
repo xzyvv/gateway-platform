@@ -189,6 +189,29 @@ pub(crate) struct ShutdownInputs {
     pub(crate) metrics: Arc<Metrics>,
 }
 
+/// 看门狗解除守卫：Drop 时解除硬件看门狗的 armed 状态。
+///
+/// r15-SD3 (fix): 原实现在 `graceful_shutdown_inner` **最后一行**调用
+/// `stop_platform_watchdog()` 解除 `/dev/watchdog` 的 armed 状态。该函数被
+/// 外层 `tokio::time::timeout(80s)` 包裹——一旦总宽限命中（某子阶段卡死），
+/// inner future 被 drop，**最后一行永不执行** → `/dev/watchdog` 保持 armed。
+/// 现场表现：设备优雅停机后被 systemd 拉起，硬件看门狗仍在计时，无人喂狗
+/// → 整机被误复位，表现为「重启后莫名其妙又重启一次」，且日志里没有任何线索。
+///
+/// 守卫放在**外层** `graceful_shutdown`，其 Drop 在以下三种情况都会执行：
+/// - inner 正常返回
+/// - 外层 timeout 命中（inner future 被 drop）
+/// - inner panic（栈展开）
+///
+/// `stop_platform_watchdog()` 本身幂等（fd 被 take 后二次调用是 no-op）。
+struct WatchdogDisarmGuard;
+
+impl Drop for WatchdogDisarmGuard {
+    fn drop(&mut self) {
+        gateway_core::platform::hardware_watchdog::stop_platform_watchdog();
+    }
+}
+
 /// 优雅停机：先停采集 -> drain queue -> 停 MQTT -> 释放资源。
 ///
 /// #10: 完整停机序列——stop scheduler -> drain pipeline -> stop 北向 fan-out
@@ -394,6 +417,9 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
 /// 不增加指标。
 pub(crate) async fn graceful_shutdown(inputs: ShutdownInputs) {
     const TOTAL_DEADLINE: Duration = Duration::from_secs(80);
+    // r15-SD3 (fix): 守卫必须在**外层**——只有它能覆盖「外层 timeout 命中」
+    // 与「inner panic 栈展开」两种 inner 最后一行不可达的路径。
+    let _watchdog_disarm = WatchdogDisarmGuard;
     let inputs_for_outer = inputs;
     let timed_out = tokio::time::timeout(
         TOTAL_DEADLINE,

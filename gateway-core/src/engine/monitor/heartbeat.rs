@@ -223,12 +223,28 @@ pub fn get() -> Arc<Watchdog> {
     })
 }
 
+/// 心跳计时用的**单调时钟**毫秒数（进程启动以来的时长）。
+///
+/// r15-HB1 (fix): 旧实现用 `SystemTime`（挂钟）。挂钟会被 NTP 校时 / 运维
+/// 手动改时间影响，两种故障都很难排查：
+/// - **前跳**（NTP 从 12:00 跳到 13:00）：`elapsed` 瞬间变成 3.6e6 ms，
+///   远超 timeout → 所有心跳**同时**被判 stale → 误报僵死 + 误计
+///   `watchdog_timeout_total`，还可能触发自愈执行器去重启健康的服务。
+/// - **回拨**（手动校回过去）：`saturating_sub` 得 0 → elapsed 永远为 0
+///   → **僵死检测彻底失效**（最危险：进程真的卡死了也不会有人发现）。
+///
+/// 改用 `Instant`（单调钟）：不受任何挂钟调整影响。
+/// 与 `platform::hardware_watchdog::mono_millis` 口径统一——此前两处口径
+/// 不一致（一个挂钟一个单调钟），是「看门狗误报/漏报」类问题的常见来源。
 fn now_ms() -> u64 {
-    use std::time::SystemTime;
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = EPOCH.get_or_init(Instant::now);
+    // +1：`last_kick == 0` 是「从未 kick」的哨兵值（见 r54-WD2），
+    // 单调钟起点为 0 会在首次 kick 时存入 0 → 该心跳此后永远被当成
+    // 「从未 kick」→ 僵死检测静默失效。故保证返回值恒 ≥ 1。
+    epoch.elapsed().as_millis() as u64 + 1
 }
 
 #[cfg(test)]
@@ -380,5 +396,20 @@ mod tests {
         // try_arm_stale 内部分支：is_stale=false → 走"恢复"分支 → 返 false
         // 重置 armed=0，不会触发告警。
         assert!(!h.try_arm_stale(), "从未 kick 时 try_arm_stale 必返 false");
+    }
+
+    /// r15-HB1 (fix): 心跳计时必须用**单调钟**且恒 ≥ 1。
+    ///
+    /// 关键断言：
+    /// - 返回值恒 ≥ 1（`last_kick == 0` 是「从未 kick」哨兵，若 now_ms 可能返回 0
+    ///   则首次 kick 会被当成「从未 kick」→ 僵死检测静默失效）
+    /// - 单调递增（挂钟被 NTP 调整时不会跳变）
+    #[test]
+    fn r15_now_ms_is_monotonic_and_never_zero() {
+        let first = super::now_ms();
+        assert!(first >= 1, "now_ms 必须恒 ≥ 1，避免撞上 last_kick==0 哨兵");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let second = super::now_ms();
+        assert!(second > first, "now_ms 必须单调递增（单调钟口径）");
     }
 }

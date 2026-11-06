@@ -62,13 +62,40 @@ pub(crate) enum QueueCommand {
 /// 磁盘满保护：检测到 SQLITE_FULL/IOERR 后暂停入队的时间（秒）
 const DISK_FULL_BACKOFF_SECS: u64 = 30;
 
+/// SQLite 主错误码：磁盘满。
+const SQLITE_FULL: i32 = 13;
+/// SQLite 主错误码：磁盘 I/O 错误。
+const SQLITE_IOERR: i32 = 10;
+
 /// 判断底层存储错误是否为磁盘满相关（SQLITE_FULL=13, SQLITE_IOERR=10）
+///
+/// r15-Q1 (fix): 旧实现只做**字符串匹配**（`contains("database or disk is full")`
+/// 等）。根因是 `From<rusqlite::Error>` 把结构化错误码压扁成了自由文本——一旦
+/// rusqlite / SQLite 升级或措辞变化，判定即失效 → 磁盘满时走「普通错误」路径，
+/// 失去 30s 退避保护 → 持续重试写库，刷日志 + 加重 IO 劣化。
+///
+/// 现在优先按 `sqlite_error(code=N)` 前缀里的**主错误码**判定（稳定），
+/// 文案匹配仅作兜底（兼容未经过 `From` 转换的错误）。
 fn is_disk_full_error(e: &GatewayError) -> bool {
+    if let Some(code) = sqlite_code_from_message(&e.to_string()) {
+        return code == SQLITE_FULL || code == SQLITE_IOERR;
+    }
+    // 兜底：文案匹配（未带 code 前缀的历史消息）
     let msg = e.to_string();
     msg.contains("database or disk is full")
         || msg.contains("disk I/O error")
         || msg.contains("SQLITE_FULL")
         || msg.contains("SQLITE_IOERR")
+}
+
+/// 从错误消息的 `sqlite_error(code=N)` 前缀里解析 SQLite 主错误码。
+///
+/// 纯函数：消息不含该前缀时返回 None。
+fn sqlite_code_from_message(msg: &str) -> Option<i32> {
+    let start = msg.find("sqlite_error(code=")? + "sqlite_error(code=".len();
+    let rest = &msg[start..];
+    let end = rest.find(')')?;
+    rest[..end].parse::<i32>().ok()
 }
 
 /// 修复(审查#B6)：Dequeue 的反压 / 陈旧 in_flight 清理逻辑从 match 分支中抽离，
@@ -126,12 +153,20 @@ async fn dequeue_with_backpressure(
         }
     }
     let storage_clone = storage.clone();
-    match tokio::task::spawn_blocking(move || {
-        storage_clone.dequeue_batch(limit).unwrap_or_default()
-    })
-    .await
-    {
-        Ok(items) => items,
+    // r15-Q2 (fix): 旧实现 `dequeue_batch(limit).unwrap_or_default()` 把 DB 错误
+    // 伪装成「队列为空」——上层拿到空批，无法区分「确实没有数据」与「DB 查询失败」
+    // → 表现为**北向静默无数据**（采集正常、MQTT 收不到东西、日志无异常）。
+    // 现在错误必须上抛。
+    match tokio::task::spawn_blocking(move || storage_clone.dequeue_batch(limit)).await {
+        Ok(Ok(items)) => items,
+        Ok(Err(e)) => {
+            tracing::error!(
+                "dequeue_batch failed (DB error): {} — the batch is NOT empty, it is UNREADABLE; \
+                 the northbound channel will see no data for this round",
+                e
+            );
+            Vec::new()
+        }
         Err(e) => {
             tracing::error!("dequeue spawn_blocking failed: {}", e);
             Vec::new()
@@ -196,6 +231,14 @@ pub(crate) async fn queue_task(
                                     let n_points = points.len();
                                     // #2: 存储操作移出 tokio worker 线程，避免阻塞 channel 处理
                                     let storage_clone = storage.clone();
+                                    // r15-Q3 (fix): points 用 `Arc` 共享，闭包只拿一份 clone。
+        // 旧实现把 `Vec<DataPoint>` **move** 进闭包：闭包 panic / task 被取消时
+        // `spawn_blocking` 返回 `Err(JoinError)`，points 已被闭包消费 →
+        // `Err(e) => tracing::error!(...)` 分支**无法回退到 fallback 缓冲** →
+        // 该批数据静默丢失（与 `Ok(Err((pts, e)))` 分支行为不一致）。
+        // 现在调用方持有 Arc 副本，JoinError 分支也能把整批点回退进缓冲。
+        let points_shared = std::sync::Arc::new(points);
+        let points_for_task = points_shared.clone();
                                     // A9: 用 catch_unwind 包裹存储操作，避免 panic
         // 触发 spawn_blocking JoinError 后上层只能 log，无法区分"已部分写入"和"完全未写"，
         // 误判为失败重试可能引入重复数据，误判为成功则丢数据。改为捕获 panic 后
@@ -207,12 +250,12 @@ pub(crate) async fn queue_task(
         let sql_result = tokio::task::spawn_blocking(
                                         move || -> Result<usize, (Vec<DataPoint>, GatewayError)> {
                                             let inner_result = std::panic::catch_unwind(
-                                                std::panic::AssertUnwindSafe(|| storage_clone.enqueue_batch(&points))
+                                                std::panic::AssertUnwindSafe(|| storage_clone.enqueue_batch(&points_for_task))
                                             );
                                             match inner_result {
                                                 Ok(Ok(n)) => Ok(n),
                                                 // 失败：把整批点原样带回调用方，便于回退缓冲
-                                                Ok(Err(e)) => Err((points, e)),
+                                                Ok(Err(e)) => Err(((*points_for_task).clone(), e)),
                                                 Err(p) => {
                                                     let msg = if let Some(s) = p.downcast_ref::<&str>() {
                                                         (*s).to_string()
@@ -221,7 +264,7 @@ pub(crate) async fn queue_task(
                                                     } else {
                                                         "<unknown panic>".to_string()
                                                     };
-                                                    Err((points, GatewayError::Queue(format!("enqueue panic: {}", msg))))
+                                                    Err(((*points_for_task).clone(), GatewayError::Queue(format!("enqueue panic: {}", msg))))
                                                 }
                                             }
                                         },
@@ -300,7 +343,44 @@ pub(crate) async fn queue_task(
                                                 );
                                             }
                                         }
-                                        Err(e) => tracing::error!("spawn_blocking join failed: {}", e),
+                                        Err(e) => {
+                                            // r15-Q3 (fix): JoinError 分支原先只打一行日志就丢点。
+                                            // 现在用调用方持有的 Arc 副本把整批点回退进降级缓冲，
+                                            // 与 `Ok(Err((pts, e)))` 分支行为对齐 —— 不再静默丢点。
+                                            let pts = (*points_shared).clone();
+                                            metrics
+                                                .lock()
+                                                .queue_persist.persist_failed
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            tracing::error!(
+                                                "enqueue spawn_blocking join failed: {} — {} points reclaimed into fallback",
+                                                e,
+                                                pts.len()
+                                            );
+                                            let mut cnt = fallback_retry_count.lock();
+                                            let (retained, dropped) = {
+                                                let mut buf = fallback.lock();
+                                                crate::queue::push_into_fallback(
+                                                    &mut buf,
+                                                    crate::queue::FALLBACK_CAPACITY,
+                                                    pts,
+                                                    &mut cnt,
+                                                )
+                                            };
+                                            if dropped > 0 {
+                                                metrics
+                                                    .lock()
+                                                    .queue_persist.persist_dropped
+                                                    .fetch_add(dropped as u64, Ordering::Relaxed);
+                                                tracing::error!(
+                                                    "enqueue join failed: {} points ({} retained, {} dropped, bounce={})",
+                                                    n_points,
+                                                    retained,
+                                                    dropped,
+                                                    *cnt
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                                 QueueCommand::Dequeue { limit, reply } => {
@@ -549,4 +629,74 @@ pub(crate) async fn queue_task(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_disk_full_error, sqlite_code_from_message};
+    use crate::engine::error::GatewayError;
+
+    /// r15-Q1 (fix): 错误码前缀解析必须可靠。
+    ///
+    /// 关键断言：解析出的主码要与写入时一致；没有前缀时返回 None
+    /// （不能瞎猜，否则会把普通 DB 错误误判成磁盘满 → 误触发 30s 退避）。
+    #[test]
+    fn parses_sqlite_code_prefix() {
+        assert_eq!(
+            sqlite_code_from_message("sqlite_error(code=13): full"),
+            Some(13)
+        );
+        assert_eq!(
+            sqlite_code_from_message("sqlite_error(code=10): io"),
+            Some(10)
+        );
+        // 嵌在 GatewayError::Queue 的 Display 前缀里也要能解析
+        assert_eq!(
+            sqlite_code_from_message(
+                "queue error: sqlite_error(code=13): database or disk is full"
+            ),
+            Some(13)
+        );
+        // 无前缀 → None
+        assert_eq!(sqlite_code_from_message("queue error: locked"), None);
+        assert_eq!(sqlite_code_from_message(""), None);
+        // 前缀不完整 / 数字非法 → None
+        assert_eq!(sqlite_code_from_message("sqlite_error(code=): x"), None);
+        assert_eq!(sqlite_code_from_message("sqlite_error(code=abc): x"), None);
+        assert_eq!(sqlite_code_from_message("sqlite_error(code=13"), None);
+    }
+
+    /// r15-Q1 (fix): 磁盘满判定必须**优先按主码**，文案仅作兜底。
+    ///
+    /// 关键断言：
+    /// - code=13 (SQLITE_FULL) / code=10 (SQLITE_IOERR) → 判为磁盘满
+    /// - 其它主码 → **不**判为磁盘满（即使文案里出现 disk full 字样，
+    ///   说明主码是权威来源）
+    /// - 无前缀的历史消息 → 走文案兜底
+    #[test]
+    fn disk_full_detection_prefers_stable_code() {
+        assert!(is_disk_full_error(&GatewayError::Queue(
+            "sqlite_error(code=13): database or disk is full".into()
+        )));
+        assert!(is_disk_full_error(&GatewayError::Queue(
+            "sqlite_error(code=10): disk I/O error".into()
+        )));
+        // 主码是权威的：主码不是 13/10 时不判为磁盘满（文案不参与）
+        assert!(!is_disk_full_error(&GatewayError::Queue(
+            "sqlite_error(code=5): database or disk is full".into()
+        )));
+        assert!(!is_disk_full_error(&GatewayError::Queue(
+            "sqlite_error(code=2): no such table".into()
+        )));
+        // 无前缀 → 文案兜底（旧消息格式）
+        assert!(is_disk_full_error(&GatewayError::Queue(
+            "database or disk is full".into()
+        )));
+        assert!(is_disk_full_error(&GatewayError::Queue(
+            "disk I/O error".into()
+        )));
+        assert!(!is_disk_full_error(&GatewayError::Queue(
+            "no such table: points".into()
+        )));
+    }
 }

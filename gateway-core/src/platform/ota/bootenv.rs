@@ -184,6 +184,57 @@ fn uboot_setenv(name: &str, value: &str) -> GatewayResult<()> {
     Ok(())
 }
 
+/// `fw_printenv <name>` 的执行结果分类（**纯函数，跨平台可测**）。
+///
+/// 抽成纯函数的原因：`uboot_printenv` 只在 Linux 上编译，本机（Windows）
+/// 无法覆盖其分支——而它恰恰决定「是否需要 A/B 回滚」这个变砖判定点。
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PrintenvOutcome {
+    /// 变量存在，值可用。
+    Value(String),
+    /// 变量不存在（u-boot 报 `not defined`）——这是正常情形，非故障。
+    Undefined,
+    /// 读取失败（工具不存在 / env 分区损坏 / 其它 IO 错误）——不可信。
+    Unavailable,
+}
+
+/// 判定 `fw_printenv` 的执行结果（**纯函数**）。
+///
+/// - `spawn_ok`：命令是否成功启动（false = `fw_printenv` 未安装 / PATH 缺失）
+/// - `success`：退出码是否为 0
+/// - `stdout` / `stderr`：命令输出
+///
+/// 关键：`fw_printenv` 在「变量不存在」时也返回**非零退出码**，并在 stderr
+/// 打印 `## Error: "bootcount" not defined`。这属于正常情形，不能当成故障。
+/// 但真正需要区分的是「变量未定义」与「env 分区读取失败」——后者若被当成
+/// 未定义，`bootcount` 会静默变成 `None` → `check_bootcount_rollback` 永远
+/// 返回 false → **需要回滚的新分区被反复加载，设备变砖且无人察觉**。
+#[cfg(any(target_os = "linux", test))]
+fn classify_printenv(
+    spawn_ok: bool,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+    name: &str,
+) -> PrintenvOutcome {
+    if !spawn_ok {
+        return PrintenvOutcome::Unavailable;
+    }
+    if success {
+        return match parse_printenv_output(stdout, name) {
+            Some(v) => PrintenvOutcome::Value(v),
+            None => PrintenvOutcome::Undefined,
+        };
+    }
+    // 退出码非零：区分「变量未定义」与「读取失败」
+    let combined = format!("{}{}", stdout, stderr);
+    if combined.contains("not defined") || combined.contains("not found") {
+        return PrintenvOutcome::Undefined;
+    }
+    PrintenvOutcome::Unavailable
+}
+
 /// `fw_printenv <name>`：读 bootloader 环境变量，返回变量值。
 ///
 /// 兼容两种输出格式：`fw_printenv NAME` 既可能只打印裸值（`a`），
@@ -191,9 +242,33 @@ fn uboot_setenv(name: &str, value: &str) -> GatewayResult<()> {
 #[cfg(target_os = "linux")]
 fn uboot_printenv(name: &str) -> Option<String> {
     use std::process::Command;
-    let output = Command::new("fw_printenv").arg(name).output().ok()?;
+    let output = match Command::new("fw_printenv").arg(name).output() {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(
+                "OTA: fw_printenv spawn failed ({}): {} — bootloader env is UNREADABLE; \
+                 A/B rollback detection (bootcount) cannot be trusted",
+                name,
+                e
+            );
+            return None;
+        }
+    };
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_printenv_output(&stdout, name)
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match classify_printenv(true, output.status.success(), &stdout, &stderr, name) {
+        PrintenvOutcome::Value(v) => Some(v),
+        PrintenvOutcome::Undefined => None,
+        PrintenvOutcome::Unavailable => {
+            tracing::error!(
+                "OTA: fw_printenv {} failed (exit={:?}) — bootloader env read FAILED; \
+                 bootcount/boot_partition are unreliable, A/B rollback detection is DISABLED",
+                name,
+                output.status.code()
+            );
+            None
+        }
+    }
 }
 
 /// 从 `fw_printenv` 输出里取出指定变量的值。
@@ -294,15 +369,67 @@ fn uboot_sync() -> GatewayResult<()> {
     Ok(())
 }
 
+/// `reboot` 的执行结果分类（**纯函数，跨平台可测**）。
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RebootOutcome {
+    /// 已发起重启（或重启命令成功执行）。
+    Initiated,
+    /// `reboot` 命令不存在 / 无法启动——重启**没有发生**。
+    SpawnFailed,
+    /// `reboot` 执行了但退出码非零——重启**多半没有发生**。
+    Failed,
+}
+
+/// 判定 `reboot` 的执行结果（**纯函数**）。
+#[cfg(any(target_os = "linux", test))]
+fn classify_reboot(spawn_ok: bool, success: bool) -> RebootOutcome {
+    if !spawn_ok {
+        RebootOutcome::SpawnFailed
+    } else if success {
+        RebootOutcome::Initiated
+    } else {
+        RebootOutcome::Failed
+    }
+}
+
 /// `reboot`：重启设备使 env 生效。
 ///
-/// 失败不阻断（历史行为）：reboot 命令的退出码不可靠，真正的失败信号是
-/// 上游 `fw_setenv` 的退出码——那里已经做了严格检查。
+/// r15-OTA-REBOOT (fix): 旧实现 `let _ = Command::new("reboot").status();`
+/// **同时吞掉 spawn 失败与退出码**。在 systemd 管理的容器 / minimal rootfs 上
+/// `reboot` 常常不在 PATH（或需要 root），此时 `perform_rollback` 以为重启成功
+/// 返回 Ok，但设备**根本没有重启** → 继续运行故障分区 → 现场表现为
+/// "设备重启后还是坏的"，而日志里没有任何线索。
+///
+/// 现在：spawn 失败或退出码非零都**上抛错误**，让调用方明确知道「重启未发生」。
+/// 注意 `reboot` 成功时通常不会返回（进程被系统带下去），因此能走到
+/// `status()` 返回就说明命令自身退出了。
 #[cfg(target_os = "linux")]
 fn uboot_reboot() -> GatewayResult<()> {
     use std::process::Command;
-    let _ = Command::new("reboot").status();
-    Ok(())
+    let status = Command::new("reboot").status();
+    let (spawn_ok, success, code) = match &status {
+        Ok(s) => (true, s.success(), s.code()),
+        Err(e) => {
+            tracing::error!(
+                "OTA: `reboot` spawn failed: {} — the device did NOT reboot; \
+                 bootloader env changes (rollback) will NOT take effect until a manual reboot",
+                e
+            );
+            return Err(GatewayError::Io(format!("reboot spawn failed: {}", e)));
+        }
+    };
+    match classify_reboot(spawn_ok, success) {
+        RebootOutcome::Initiated => Ok(()),
+        RebootOutcome::SpawnFailed => Err(GatewayError::Io(
+            "reboot spawn failed: device did not reboot".to_string(),
+        )),
+        RebootOutcome::Failed => Err(GatewayError::Io(format!(
+            "reboot failed: exit code {:?} — the device did NOT reboot; \
+             bootloader env changes (rollback) will NOT take effect until a manual reboot",
+            code
+        ))),
+    }
 }
 
 /// 非 Linux 不支持 A/B 回滚重启：no-op 并留痕。
@@ -410,5 +537,78 @@ mod tests {
         assert_eq!(classify_sync(true, true), SyncDecision::Flushed);
         assert_eq!(classify_sync(true, false), SyncDecision::Failed);
         assert_eq!(classify_sync(false, false), SyncDecision::Missing);
+    }
+
+    /// r15-OTA5: `fw_printenv` 结果必须区分「变量未定义」与「读取失败」。
+    ///
+    /// 关键断言：`not defined`（u-boot 的正常未定义提示）判为 `Undefined`，
+    /// 其它失败一律判为 `Unavailable`——若把「读取失败」误判成「未定义」，
+    /// `bootcount` 会静默变成 None → A/B 回滚判定彻底失效 → 变砖。
+    #[test]
+    fn printenv_undefined_is_distinguished_from_unavailable() {
+        // spawn 失败（fw_printenv 未安装 / PATH 缺失）→ Unavailable
+        assert_eq!(
+            classify_printenv(false, false, "", "", "bootcount"),
+            PrintenvOutcome::Unavailable
+        );
+        // spawn 失败但退出码为 true（防御性：spawn_ok 优先）→ Unavailable
+        assert_eq!(
+            classify_printenv(false, true, "1", "", "bootcount"),
+            PrintenvOutcome::Unavailable
+        );
+        // 正常：变量存在（裸值格式）→ Value
+        assert_eq!(
+            classify_printenv(true, true, "3\n", "", "bootcount"),
+            PrintenvOutcome::Value("3".to_string())
+        );
+        // 正常：变量存在（行格式）→ Value
+        assert_eq!(
+            classify_printenv(true, true, "bootcount=0\n", "", "bootcount"),
+            PrintenvOutcome::Value("0".to_string())
+        );
+        // 退出码 0 但输出里没有该变量 → Undefined（等价于「未定义」）
+        assert_eq!(
+            classify_printenv(true, true, "other=1\n", "", "bootcount"),
+            PrintenvOutcome::Undefined
+        );
+        // 退出码非零 + u-boot 的 "not defined" → Undefined（正常情形）
+        assert_eq!(
+            classify_printenv(
+                true,
+                false,
+                "",
+                "## Error: \"bootcount\" not defined",
+                "bootcount"
+            ),
+            PrintenvOutcome::Undefined
+        );
+        // 退出码非零 + "not found" → Undefined
+        assert_eq!(
+            classify_printenv(true, false, "", "variable not found", "bootcount"),
+            PrintenvOutcome::Undefined
+        );
+        // 退出码非零 + 其它错误（env 分区读取失败）→ Unavailable
+        assert_eq!(
+            classify_printenv(
+                true,
+                false,
+                "",
+                "## Error: unable to read environment",
+                "bootcount"
+            ),
+            PrintenvOutcome::Unavailable
+        );
+    }
+
+    /// r15-OTA6: `reboot` 结果必须区分「没重启」与「已重启」。
+    ///
+    /// 关键断言：spawn 失败与退出码非零都**不能**判为 `Initiated`——
+    /// 否则 `perform_rollback` 返回 Ok 但设备根本没重启 → 继续跑故障分区。
+    #[test]
+    fn reboot_outcomes_are_classified() {
+        assert_eq!(classify_reboot(false, false), RebootOutcome::SpawnFailed);
+        assert_eq!(classify_reboot(false, true), RebootOutcome::SpawnFailed);
+        assert_eq!(classify_reboot(true, true), RebootOutcome::Initiated);
+        assert_eq!(classify_reboot(true, false), RebootOutcome::Failed);
     }
 }

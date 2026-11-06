@@ -199,7 +199,27 @@ impl Watchdog {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
-            *guard = hw_fd;
+            // r15-WD4 (fix): 二次 `Watchdog::start` 会把**已有**的硬件 fd 覆盖掉。
+            // Linux 下 `/dev/watchdog` 是独占设备，第二次 open 必然 EBUSY →
+            // `hw_fd` 为 None → 旧写法 `*guard = hw_fd` 把槽位里的有效句柄
+            // 替换成 None → 旧 File 被 drop → **fd 被关闭**，硬件看门狗失去
+            // 喂狗通道（设备仍 armed，但没人再写心跳）→ 整机在超时后被复位。
+            // 现在：槽位已有句柄时保留旧的，绝不覆盖。
+            if guard.is_some() {
+                if hw_fd.is_some() {
+                    tracing::error!(
+                        "hardware watchdog device is already open — refusing to replace the existing handle; \
+                         a second Watchdog::start would silently stop feeding the hardware watchdog"
+                    );
+                } else {
+                    tracing::error!(
+                        "hardware watchdog device is already open (second open failed, probably EBUSY) — \
+                         keeping the existing handle; the hardware watchdog stays fed"
+                    );
+                }
+            } else {
+                *guard = hw_fd;
+            }
         }
 
         // 软件看门狗监控线程
@@ -244,7 +264,22 @@ impl Watchdog {
                 }
             });
 
-        *inner.handle.lock().unwrap_or_else(|e| e.into_inner()) = handle.ok();
+        // r15-WD5 (fix): 旧写法 `handle.ok()` 吞掉线程创建失败。线程 spawn 失败
+        // （线程数上限 / 资源耗尽 / 内存不足）时软件看门狗**根本不存在**——
+        // 进程卡死不会被 abort，且日志里没有任何线索（看起来像"看门狗在跑"）。
+        // 现在：失败必须 error 级告警。
+        match handle {
+            Ok(h) => {
+                *inner.handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
+            }
+            Err(e) => {
+                tracing::error!(
+                    "software watchdog thread spawn FAILED: {} — the software watchdog is NOT running; \
+                     a hung process will NOT be aborted by the watchdog",
+                    e
+                );
+            }
+        }
 
         let wd = Self { inner };
         // 立即喂狗一次：确保硬件看门狗在返回前已有心跳，

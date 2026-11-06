@@ -380,18 +380,26 @@ impl SqliteStorage {
     }
 
     /// 释放 in_flight 标志（不删除数据）（SQL 实现）
-    pub(super) fn release_in_flight(conn: &mut Connection, ids: &[i64]) {
+    ///
+    /// r15-Q4 (fix): 返回**实际被复位的行数**，并把 SQL 错误上抛。
+    /// 旧实现吞掉错误只打 warn，调用方无从得知 DB 是否真的释放成功，
+    /// 却照样执行 `saturating_dec(&self.in_flight, ids_len)` → 内存计数被减，
+    /// 而 DB 里那些行仍是 `in_flight = 1`。后果有二：
+    /// 1. `in_flight` 计数**低估** → `MAX_IN_FLIGHT` 反压阈值被提前放宽；
+    /// 2. 那批 `in_flight = 1` 的行在 dequeue 的 `WHERE in_flight = 0` 里**永不入选**
+    ///    → 数据滞留不投递（现场表现为"采集正常但北向数据越来越旧"）。
+    ///
+    /// 现在按实际复位行数扣减计数，且失败必须让调用方知道。
+    pub(super) fn release_in_flight(conn: &mut Connection, ids: &[i64]) -> rusqlite::Result<usize> {
         if ids.is_empty() {
-            return;
+            return Ok(0);
         }
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
             "UPDATE data_queue SET in_flight = 0 WHERE id IN ({})",
             placeholders.join(",")
         );
-        if let Err(e) = conn.execute(&sql, rusqlite::params_from_iter(ids.iter())) {
-            tracing::warn!("release_in_flight failed: {}", e);
-        }
+        conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
     }
 
     // ===== #19: 主动 retention + WAL checkpoint =====

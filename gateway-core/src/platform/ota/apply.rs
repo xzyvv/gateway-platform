@@ -125,6 +125,23 @@ impl OtaManager {
     }
 
     /// 写入分区（Linux 下直接写块设备，带超时 + 重试）
+    ///
+    /// r15-OTA1 (fix) —— **超时后不再重试**。旧实现在 timeout 后进入下一次
+    /// attempt，会**第二次 open 同一块设备**。但 `spawn_blocking` 派生的阻塞任务
+    /// **不可取消**：`tokio::time::timeout` 只丢弃等待句柄，底层写仍在继续
+    /// （持有 fd、正在 `write_all`）。于是第二次 attempt 打开同一设备并发写入
+    /// → 两个写者的字节交错 → 分区内容是「两次固件的混合体」。
+    /// `verify_partition` 只读回 `payload_len` 字节，CRC 校验可能**恰好通过**
+    /// （因为头部字节来自同一个 payload），但分区后半段是垃圾 → 设备变砖。
+    ///
+    /// 现在：超时即视为**写入结果不确定**，直接上抛 `TimedOut`，不再重试。
+    /// 上层 `verify_partition` 的 CRC 读回校验是最后一道防线，超时场景下
+    /// 由它来判定分区是否可用。
+    ///
+    /// r15-OTA2 (fix) —— 目标是**普通文件**时，写完截断到 payload 长度。
+    /// 新固件比旧固件短时，旧固件的尾部残留会被误当作新固件的一部分
+    /// （「新头 + 旧尾」混合体）。块设备（`/dev/mmcblk0p*`）不支持 `ftruncate`，
+    /// 该场景由 `verify_partition` + 真机验收覆盖，不在此处处理。
     pub(super) async fn write_partition(
         &self,
         device: &Path,
@@ -132,6 +149,7 @@ impl OtaManager {
     ) -> std::io::Result<()> {
         let device = device.to_path_buf();
         let payload = payload.to_vec();
+        let payload_len = payload.len();
 
         for attempt in 0..WRITE_MAX_RETRIES {
             let dev = device.clone();
@@ -143,6 +161,15 @@ impl OtaManager {
                     let mut f = std::fs::OpenOptions::new().write(true).open(&dev)?;
                     f.write_all(&data)?;
                     f.sync_all()?;
+                    // 普通文件：截断到固件长度，清除旧固件尾部残留。
+                    // 块设备上 `set_len` 会返回 EINVAL/ENOTTY，故按文件类型判定。
+                    if f.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                        let cur = f.metadata()?.len();
+                        if cur > payload_len as u64 {
+                            f.set_len(payload_len as u64)?;
+                            f.sync_all()?;
+                        }
+                    }
                     Ok::<(), std::io::Error>(())
                 }),
             )
@@ -163,17 +190,22 @@ impl OtaManager {
                     }
                 }
                 Err(_elapsed) => {
+                    // r15-OTA1 (fix): 超时 = 写入结果不确定，**不重试**
+                    // （重试会与仍在运行的阻塞写任务并发写同一设备）。
                     tracing::error!(
-                        "write partition attempt {} timed out after {}s",
+                        "write partition attempt {} timed out after {}s — NOT retrying: \
+                         the blocking write task is not cancellable and may still be writing \
+                         to the same device; a concurrent retry would corrupt the partition",
                         attempt + 1,
                         WRITE_TIMEOUT_SECS
                     );
-                    if attempt + 1 == WRITE_MAX_RETRIES {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            format!("write timeout after {}s", WRITE_TIMEOUT_SECS),
-                        ));
-                    }
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "write timeout after {}s (not retried: write task may still be in flight)",
+                            WRITE_TIMEOUT_SECS
+                        ),
+                    ));
                 }
             }
             // r31-OTA2: 重试间固定 1s 等待改为 attempt 线性退避 + ±25% 抖动，
@@ -184,7 +216,7 @@ impl OtaManager {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos() as u64)
                 .unwrap_or(0);
-            let jitter_ms = (now_nanos % 500).saturating_sub(0); // 0..500ms
+            let jitter_ms = now_nanos % 500; // 0..500ms
             let total_ms = base_ms + jitter_ms;
             tokio::time::sleep(Duration::from_millis(total_ms)).await;
         }
@@ -351,8 +383,39 @@ impl OtaManager {
         // 升级生效后（active_slot 已是新槽）反而把启动分区切回旧槽，导致每次重启
         // 都回退、新固件永不生效。注意：本检查不修改 active_slot。
         let marker = self.pending_reboot_marker_path();
-        if let Ok(bytes) = std::fs::read(&marker) {
-            match Self::decode_pending_reboot(&bytes) {
+        // r15-OTA3 (fix): 旧实现 `if let Ok(bytes) = std::fs::read(&marker)` 把
+        // 「读失败（权限 / IO 错误）」与「文件不存在」等同处理，且**无任何日志**
+        // → 整个 pending_reboot 复核逻辑被静默跳过，现场无法察觉。
+        // 现在区分「不存在」（正常）与「读失败」（异常，必须告警）。
+        match std::fs::read(&marker) {
+            Ok(bytes) => {
+                self.handle_pending_reboot_marker(&marker, &bytes);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // 正常：没有待确认的升级。
+            }
+            Err(e) => {
+                tracing::error!(
+                    "OTA: failed to read pending_reboot marker at {}: {} — the pending-upgrade \
+                     re-check is SKIPPED; if this device just rebooted after an upgrade, the \
+                     boot partition may not have been switched correctly",
+                    marker.display(),
+                    e
+                );
+            }
+        }
+
+        if self.check_bootcount_rollback() {
+            if let Err(e) = self.perform_rollback() {
+                tracing::error!("ota: auto rollback failed: {}", e);
+            }
+        }
+    }
+
+    /// 处理读到的 pending_reboot 标记内容（**纯逻辑，独立函数便于审阅**）。
+    fn handle_pending_reboot_marker(&self, marker: &std::path::Path, bytes: &[u8]) {
+        {
+            match Self::decode_pending_reboot(bytes) {
                 Some((target_version, target_slot)) => {
                     if self.partition.active_slot == target_slot {
                         tracing::warn!(
@@ -388,12 +451,6 @@ impl OtaManager {
                     );
                     self.clear_pending_reboot_marker();
                 }
-            }
-        }
-
-        if self.check_bootcount_rollback() {
-            if let Err(e) = self.perform_rollback() {
-                tracing::error!("ota: auto rollback failed: {}", e);
             }
         }
     }
@@ -450,7 +507,9 @@ impl OtaManager {
         self.boot_env.sync()?;
 
         // 同步文件系统后重启
-        self.boot_env.sync()?;
+        // r15-OTA4: 旧实现此处有**连续三次** `sync()`（第三次与第二次完全重复），
+        // 多起一个 `sync` 子进程。语义上「setenv 成功即刷盘」已由上面的 sync 保证，
+        // 此处只需再刷一次文件系统。
         tracing::warn!("rebooting to apply rollback...");
         self.boot_env.reboot()?;
         Ok(())

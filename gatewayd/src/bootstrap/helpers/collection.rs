@@ -223,6 +223,52 @@ pub(crate) fn spawn_software_watchdog(metrics: Arc<gateway_core::engine::metrics
     info!("watchdog started, check interval = 5s");
 }
 
+/// 硬件看门狗设备的候选路径（按优先级）。
+///
+/// r15-WD7 (fix): 原实现硬编码 `/dev/watchdog`。不同 BSP / 内核配置下设备名
+/// 可能是 `/dev/watchdog0`、`/dev/watchdog1`（多路看门狗时内核按序号创建），
+/// 少数板卡用 `/dev/softdog` / `/dev/intel-wdt` 等兼容节点。硬编码路径在
+/// 这些板卡上直接 open 失败 → 只剩软件看门狗 → 整机卡死时不会被复位。
+///
+/// 判定逻辑（选哪个候选）抽成纯函数 [`select_watchdog_device`]，可在
+/// Windows 上直接单测。
+#[cfg(any(target_os = "linux", test))]
+pub(crate) const WATCHDOG_DEVICE_CANDIDATES: &[&str] = &[
+    "/dev/watchdog",
+    "/dev/watchdog0",
+    "/dev/watchdog1",
+    "/dev/softdog",
+];
+
+/// 从候选列表中选出第一个存在的设备路径（**纯函数**）。
+///
+/// - `exists`：给定路径是否存在（调用方注入，便于跨平台单测）
+#[cfg(any(target_os = "linux", test))]
+fn select_watchdog_device(candidates: &[&str], exists: impl Fn(&str) -> bool) -> Option<String> {
+    candidates
+        .iter()
+        .copied()
+        .find(|p| exists(p))
+        .map(|p| p.to_string())
+}
+
+/// 探测硬件看门狗设备路径；一个都不存在时返回 None（纯软件看门狗）。
+#[cfg(target_os = "linux")]
+fn pick_watchdog_device() -> Option<String> {
+    let selected = select_watchdog_device(WATCHDOG_DEVICE_CANDIDATES, |p| {
+        std::path::Path::new(p).exists()
+    });
+    match &selected {
+        Some(dev) => info!("hardware watchdog device detected: {}", dev),
+        None => warn!(
+            "no hardware watchdog device found (tried: {}) — only the software watchdog \
+             will protect the device; a hard hang will NOT trigger a hardware reset",
+            WATCHDOG_DEVICE_CANDIDATES.join(", ")
+        ),
+    }
+    selected
+}
+
 // ============================================================================
 // 阶段函数：Step 2-7（采集链初始化）
 // ============================================================================
@@ -248,8 +294,8 @@ pub(crate) async fn init_collection_chain(
     // ===== Step 3: Watchdog =====
     #[cfg(target_os = "linux")]
     {
-        let watchdog_hw = Some("/dev/watchdog");
-        let watchdog = Watchdog::start(Duration::from_secs(15), watchdog_hw);
+        let watchdog_hw = pick_watchdog_device();
+        let watchdog = Watchdog::start(Duration::from_secs(15), watchdog_hw.as_deref());
         // P0 修复：原实现为 `let _watchdog = Watchdog::start(...)`，该绑定随本块
         // 结束即被 drop；而 `Watchdog` 没有 `Drop` 实现，其监控线程仍持有 Arc 存活，
         // 此后**全进程再无任何 `kick()` 调用**（其余 kick 属另一套 Heartbeat）→
@@ -259,7 +305,13 @@ pub(crate) async fn init_collection_chain(
         // 现将句柄移入常驻 task 周期喂狗：只要 tokio 运行时仍在正常调度，进程即存活；
         // 若运行时整体卡死（死锁/调度饥饿），本 task 不再被调度，看门狗仍会在 15s 后
         // 按设计 abort —— 保留了它作为"整机兜底"的能力，同时不再误杀正常进程。
-        tokio::spawn(async move {
+        //
+        // r15-WD6 (fix): 原用裸 `tokio::spawn` —— task panic 会被 tokio 静默吞掉
+        // （JoinHandle 被丢弃），表现为「喂狗循环莫名停止」且日志无任何线索，
+        // 15s 后整机被硬件看门狗复位。改用 `spawn_catch_unwind`（同文件
+        // `spawn_software_watchdog` 的做法）：panic 会被记录 error 日志并计入
+        // `task_panic_total` 指标。
+        gateway_core::engine::supervision::spawn_catch_unwind("hw_watchdog_kick", async move {
             // 5s 周期，为 15s 超时留出 3 倍余量，避免调度抖动导致误触发
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
             loop {
@@ -274,7 +326,12 @@ pub(crate) async fn init_collection_chain(
                 watchdog.kick();
             }
         });
-        info!("watchdog started (periodic kick every 5s)");
+        match watchdog_hw.as_deref() {
+            Some(dev) => info!("watchdog started (device={}, periodic kick every 5s)", dev),
+            None => info!(
+                "watchdog started (no hardware watchdog device found, periodic kick every 5s)"
+            ),
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -323,6 +380,8 @@ pub(crate) async fn init_collection_chain(
 #[cfg(test)]
 mod tests {
     use super::points_with_unavailable_bus;
+    use super::select_watchdog_device;
+    use super::WATCHDOG_DEVICE_CANDIDATES;
     use gateway_core::config::PointConfig;
     use gateway_core::south::bus::BusManager;
     use std::collections::HashMap;
@@ -352,6 +411,38 @@ mod tests {
             missing,
             vec![("ghost", "p_missing"), ("bus0", "p_other_bus")],
             "非 gpio 的缺失总线点位都要告警"
+        );
+    }
+
+    /// r15-WD7 (fix): 硬件看门狗设备路径必须**按候选顺序**探测，不能硬编码
+    /// `/dev/watchdog`。多路看门狗板卡上内核创建的是 `/dev/watchdog0`、`/dev/watchdog1`，
+    /// 硬编码路径 open 失败 → 整机卡死时不会被硬件复位。
+    #[test]
+    fn picks_first_existing_watchdog_candidate_in_order() {
+        // /dev/watchdog 存在 → 优先选它
+        assert_eq!(
+            select_watchdog_device(WATCHDOG_DEVICE_CANDIDATES, |p| p == "/dev/watchdog"),
+            Some("/dev/watchdog".to_string())
+        );
+        // /dev/watchdog 不存在但 /dev/watchdog0 存在 → 退到 watchdog0
+        assert_eq!(
+            select_watchdog_device(WATCHDOG_DEVICE_CANDIDATES, |p| p == "/dev/watchdog0"),
+            Some("/dev/watchdog0".to_string())
+        );
+        // 只有 softdog → 选 softdog
+        assert_eq!(
+            select_watchdog_device(WATCHDOG_DEVICE_CANDIDATES, |p| p == "/dev/softdog"),
+            Some("/dev/softdog".to_string())
+        );
+        // 多个都存在时取优先级最高的（列表顺序）
+        assert_eq!(
+            select_watchdog_device(WATCHDOG_DEVICE_CANDIDATES, |_| true),
+            Some("/dev/watchdog".to_string())
+        );
+        // 都不存在 → None（纯软件看门狗）
+        assert_eq!(
+            select_watchdog_device(WATCHDOG_DEVICE_CANDIDATES, |_| false),
+            None
         );
     }
 }
