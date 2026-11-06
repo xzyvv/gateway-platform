@@ -102,6 +102,30 @@ catch {
     $linuxCrossSkipReason = "能力探测失败：$($_.Exception.Message)"
 }
 
+# ARM 交叉编译能力探测。
+# 与上面的 Linux 交叉检查互补：那边验证「Linux 内核接口」，这边验证
+# 「ARM 架构差异」（cfg(target_arch="aarch64") 代码块、指针宽度、C 依赖的
+# ARM 专属 build.rs 分支）。CI 的 cross-arm 是手动触发的重作业且额度已死，
+# 所以 ARM 代码路径必须有一条本地通道，否则 ARM 产物等于没验证过。
+$armCrossReady = $false
+$armCrossSkipReason = "未检测 ARM 交叉编译能力"
+try {
+    $probeOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\arm_cross_check.ps1") -Probe 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $armCrossReady = $true
+        $armCrossSkipReason = ""
+    }
+    else {
+        $armCrossSkipReason = (@($probeOut) | ForEach-Object { "$_" }) -join "; "
+        if ([string]::IsNullOrWhiteSpace($armCrossSkipReason)) {
+            $armCrossSkipReason = "未检测到 zig / 未安装 aarch64、armv7 target"
+        }
+    }
+}
+catch {
+    $armCrossSkipReason = "能力探测失败：$($_.Exception.Message)"
+}
+
 $script:steps = New-Object System.Collections.ArrayList
 $script:results = New-Object System.Collections.ArrayList
 $script:stepNo = 0
@@ -346,6 +370,10 @@ if (-not $SkipBackend) {
     Add-Step -Id "linux-cross-check" -Title "Linux 交叉编译验证（cfg(target_os=linux) 代码块不被编译会静默腐烂）" -Action {
         return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\linux_cross_check.ps1"))
     } -SkipReason $linuxCrossSkipReason
+
+    Add-Step -Id "arm-cross-check" -Title "ARM 交叉编译验证（cfg(target_arch=aarch64) 代码块 + ARM 专属 C 依赖分支）" -Action {
+        return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\arm_cross_check.ps1"))
+    } -SkipReason $armCrossSkipReason
 
     if ($IncludeChaos) {
         Add-Step -Id "chaos" -Title "chaos 故障恢复场景（cargo test --test chaos）" -Action {
