@@ -206,7 +206,9 @@ fn duplicate_release_must_not_double_dec_in_flight() {
     f.assert_consistent("release");
     assert_eq!(f.storage.in_flight_count(), 3);
 
-    f.storage.release_in_flight(&ids[..2]).expect("duplicate release");
+    f.storage
+        .release_in_flight(&ids[..2])
+        .expect("duplicate release");
     f.assert_consistent("duplicate release");
     assert_eq!(
         f.storage.in_flight_count(),
