@@ -75,6 +75,7 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | 文档 | 说明 |
 |---|---|
 | [`docs/design/license-v2-quota.md`](design/license-v2-quota.md) | **现行模型** v2.0：license 仅约束 4 类产能配额（点数/协议数/存储天数/北向通道），调试分析功能全部免费 |
+| [`tools/license-issuer/README.md`](../tools/license-issuer/README.md) | 离线授权签发工具（Ed25519）：keygen / issue 用法、私钥红线、自签发自用说明 |
 
 ## 后端（Rust：gateway-core / gateway-api / gatewayd）
 

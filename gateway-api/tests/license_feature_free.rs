@@ -1,7 +1,7 @@
 //! v2.0 license 模型：调试/分析/批量功能全部免费测试
 //!
 //! 取代原 v1.2 license_feature_gates（已删除——v1.2 行为"调试被拦截"被 v2.0 推翻）。
-//! v2.0 核心承诺：客户调试不被甲方 license 卡脖子，调试功能全 tier 全状态放行。
+//! v2.0 核心承诺：调试能力不被授权状态阻断，调试功能全 tier 全状态放行。
 //!
 //! 覆盖：所有原 feature gate 路由（packet-capture / step-debug / slave-sim / perf-monitor
 //! / batch-cmd / protocol-scan）在 core 档 + degraded 态都返回 200 而非 403。

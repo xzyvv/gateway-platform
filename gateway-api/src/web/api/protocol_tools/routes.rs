@@ -8,7 +8,7 @@
 //!
 //! License gate（v2.0）：所有协议工具（packet-capture / step-debug / slave-sim /
 //! protocol-scan / packet-editor / protocol-convert）全部免费，不挂中间件。
-//! 客户调试不被甲方 license 卡脖子——这是 v2.0 模型的核心承诺。
+//! 调试能力永远不被授权状态阻断——这是 v2.0 模型的核心承诺。
 
 use std::sync::Arc;
 

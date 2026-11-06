@@ -19,7 +19,7 @@ default-members = [
 version = "0.1.0"
 edition = "2021"
 authors = ["XingZhiYuan"]
-# 闭源内部项目，不发布到 registry；cargo-deny 据此跳过这些 crate 的许可证检查
+# 本项目以源码形式分发，不发布到 crates.io registry；cargo-deny 据此跳过这些 crate 的许可证检查
 publish = false
 
 # 统一依赖版本，子 crate 用 { workspace = true } 引用，升级时只改一处。

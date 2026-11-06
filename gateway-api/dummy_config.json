@@ -95,9 +95,9 @@
     "sync_interval": 3600
   },
   "web": {
-    "api_token": "enc:RU5DMsdJWtHYG0Lv1OeepolcfimvW+NsGPFrC3yraBtE9eAiPFU=",
+    "api_token": "dummy-local-token-please-change-me",
     "username": "admin",
-    "password_hash": "enc:RU5DMiV7YcOqTB1hTT+QMwsC16fEbxfGtHGiXTj40W5mSjW+ahSB",
+    "password_hash": "",
     "listen_addr": "127.0.0.1:0",
     "allow_anon_read": true,
     "realtime_buffer": 1024,
