@@ -7,6 +7,7 @@
 # 用法：
 #   .\scripts\soak.ps1                          # 默认 24h
 #   .\scripts\soak.ps1 -DurationSecs 120        # 2 分钟冒烟
+#   .\scripts\soak.ps1 -Storage sqlite          # 用生产同款 SQLite 队列后端
 #   .\scripts\soak.ps1 -SkipRun                 # 只对已有产物重新判定
 #
 # 产物（默认 .\soak-out）：metrics.jsonl / proc.jsonl / events.jsonl / final.json / report.md
@@ -20,6 +21,9 @@ param(
     [int]$PointsPerSlave = 50,
     [int]$IntervalSecs = 5,
     [int]$SampleMs = 10000,
+    # 队列存储后端：memory（默认）/ sqlite（生产同款，WAL + 持久化 + 淘汰 + retention）
+    [ValidateSet("memory", "sqlite")]
+    [string]$Storage = "memory",
     [string]$OutDir = "",
     [switch]$SkipRun,
     [switch]$NoBuild
@@ -42,6 +46,7 @@ $env:SOAK_SLAVES_PER_BUS = $SlavesPerBus
 $env:SOAK_POINTS_PER_SLAVE = $PointsPerSlave
 $env:SOAK_INTERVAL_SECS = $IntervalSecs
 $env:SOAK_SAMPLE_MS = $SampleMs
+$env:SOAK_STORAGE = $Storage
 $env:SOAK_OUT_DIR = $OutDir
 # 隔离 cargo 目标目录，避免与日常构建互相踢锁
 if (-not $env:CARGO_TARGET_DIR) {
@@ -51,6 +56,7 @@ if (-not $env:CARGO_TARGET_DIR) {
 Write-Host "[soak] 输出目录 : $OutDir"
 Write-Host "[soak] 规模     : $Buses 总线 x $SlavesPerBus 从站 x $PointsPerSlave 点 = $($Buses * $SlavesPerBus * $PointsPerSlave) 点 / 周期 ${IntervalSecs}s"
 Write-Host "[soak] 时长     : ${DurationSecs}s / 采样 ${SampleMs}ms"
+Write-Host "[soak] 队列后端 : $Storage"
 
 $exitCode = 0
 

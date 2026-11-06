@@ -18,7 +18,7 @@ use gateway_core::south::bus::{BusDeps, BusManager, SerialHandle};
 use gateway_core::south::protocol::{Collector, ProtocolRegistry};
 use gateway_core::south::scheduler::Scheduler;
 
-use super::chaos_harness::{real_memory_queue, MockOpener, RecordingGpio};
+use super::chaos_harness::{real_queue_for, MockOpener, RecordingGpio, StorageBackend};
 use super::throttle::ThrottledModbusPort;
 
 /// 农场规模。默认 4 总线 × 75 点/总线 = 300 点，4800 baud。
@@ -32,6 +32,8 @@ pub struct FarmSpec {
     pub slave_id: u8,
     /// 每总线开头静默的事务次数（L3 恢复场景用；正常为 0）
     pub silent_first: usize,
+    /// 队列存储后端（默认 memory；`LOAD_STORAGE=sqlite` 切到生产同款后端）
+    pub storage: StorageBackend,
 }
 
 impl FarmSpec {
@@ -43,6 +45,7 @@ impl FarmSpec {
             interval_secs: env_usize("LOAD_INTERVAL_SECS", 1) as u64,
             slave_id: 1,
             silent_first: 0,
+            storage: StorageBackend::from_env("LOAD_STORAGE"),
         }
     }
 
@@ -67,12 +70,15 @@ pub struct Farm {
     pub realtime_bus: Arc<RealtimeBus>,
     /// 每总线串口桩（可断言事务数）
     pub ports: Vec<ThrottledModbusPort>,
+    /// sqlite 后端时保留 DB 所在 tempdir，必须活到农场析构
+    _sqlite_dir: Option<tempfile::TempDir>,
 }
 
 impl Farm {
     pub async fn build(spec: FarmSpec) -> Self {
         let metrics = Arc::new(Metrics::new());
-        let queue = real_memory_queue().await;
+        // A1：后端可切换（`LOAD_STORAGE=sqlite`），覆盖生产真实持久化路径。
+        let (queue, sqlite_dir) = real_queue_for(spec.storage).await;
         let realtime_bus = RealtimeBus::new(4096);
         let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
             edge: Arc::new(EdgeProcessor::new()),
@@ -152,6 +158,7 @@ impl Farm {
             queue,
             realtime_bus,
             ports,
+            _sqlite_dir: sqlite_dir,
         }
     }
 

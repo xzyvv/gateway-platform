@@ -49,6 +49,19 @@ pub(super) struct OverflowReport {
     pub undelivered_deleted: i64,
 }
 
+/// A1：ack 的实际影响行数（按「状态跃迁」计数）。
+///
+/// 只统计真正发生状态跃迁的行，因此 ack 天然幂等：
+/// - `delivered` = 本次由「未送达」变为「已送达」的行数 → 对应 `depth` 扣减
+/// - `released` = 本次由「在途」变为「非在途」的行数 → 对应 `in_flight` 扣减
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct AckOutcome {
+    /// 由「未送达」跃迁为「已送达」的行数（对应 depth 扣减）
+    pub delivered: i64,
+    /// 由「在途」跃迁为「非在途」的行数（对应 in_flight 扣减）
+    pub released: i64,
+}
+
 impl SqliteStorage {
     /// 队列总行数超限时删除最旧的**不在途**记录（P0-2 修复）。
     ///
@@ -121,10 +134,15 @@ impl SqliteStorage {
         let mut undelivered_deleted = 0i64;
         if total > max_rows {
             let overflow = total - max_rows;
-            // 先统计拟删除区间里有多少未送达行（删后要同步扣 depth）。
+            // A1：探针与 DELETE 的排序键必须**完全一致**，否则两者选中的行集
+            // 可能不同（同一毫秒的多行在 `ORDER BY timestamp` 下顺序不确定），
+            // 于是「统计到的未送达行数」与「真正删掉的未送达行数」对不上 →
+            // depth 漂移。追加 `id ASC` 作为确定性 tie-break：
+            // `id` 是 rowid 别名，`idx_queue_ts(timestamp)` 隐含携带 rowid，
+            // 因此 (timestamp, id) 排序仍可走索引，无需额外 sort。
             undelivered_deleted = match tx.query_row(
                 "SELECT COUNT(*) FROM (
-                    SELECT delivered FROM data_queue WHERE in_flight = 0 ORDER BY timestamp ASC LIMIT ?1
+                    SELECT delivered FROM data_queue WHERE in_flight = 0 ORDER BY timestamp ASC, id ASC LIMIT ?1
                 ) WHERE delivered = 0",
                 params![overflow],
                 |r| r.get(0),
@@ -137,7 +155,7 @@ impl SqliteStorage {
             };
             deleted = match tx.execute(
                 "DELETE FROM data_queue WHERE id IN (
-                    SELECT id FROM data_queue WHERE in_flight = 0 ORDER BY timestamp ASC LIMIT ?1
+                    SELECT id FROM data_queue WHERE in_flight = 0 ORDER BY timestamp ASC, id ASC LIMIT ?1
                 )",
                 params![overflow],
             ) {
@@ -362,21 +380,42 @@ impl SqliteStorage {
     /// 注意：ack 后行仍满足 `in_flight = 0`，所以 `dequeue_batch` 的 SELECT
     /// **必须**一并过滤 `delivered = 0`，否则已送达行会被反复出队重发
     /// （重复上报/重复计费）。
-    pub(super) fn ack_batch(conn: &mut Connection, ids: &[i64]) -> rusqlite::Result<()> {
+    ///
+    /// A1：拆成两条**带状态守卫**的 UPDATE，并返回各自的实际影响行数。
+    /// 旧实现是单条 `SET delivered=1, in_flight=0 WHERE id IN (...)` + 调用方按
+    /// `ids.len()` 扣减，而 SQLite 的 UPDATE 只要命中 WHERE 就计入变化行数
+    /// （哪怕新值与旧值相同），于是：
+    /// - 对**已送达**的行二次 ack（生产里存在 publish 通道与 outbox replay 通道
+    ///   两条独立 ack 路径，可能对同一批 row id 各 ack 一次）→ 库里无可更新行，
+    ///   内存 `depth` 却被再减一次 → **depth 漂移**（队列深度虚低，健康判据失真）；
+    /// - ack 的 ids 里含已被 retention/容量淘汰删除的行 → 同样按 ids.len() 扣减
+    ///   → depth 漂移。
+    ///
+    /// 现在按「状态跃迁」计数（`delivered = 0` → `delivered = 1` 才算送达，
+    /// `in_flight = 1` → `0` 才算释放在途），ack 天然幂等，且计数与库内真值一致。
+    pub(super) fn ack_batch(conn: &mut Connection, ids: &[i64]) -> rusqlite::Result<AckOutcome> {
         if ids.is_empty() {
-            return Ok(());
+            return Ok(AckOutcome::default());
         }
         let tx = conn.transaction()?;
+        let mut outcome = AckOutcome::default();
         for chunk in ids.chunks(INSERT_CHUNK_SIZE) {
             let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            // ① 标记送达：只影响「尚未送达」的行（已送达行不再计数）。
             let sql = format!(
-                "UPDATE data_queue SET delivered = 1, in_flight = 0 WHERE id IN ({})",
+                "UPDATE data_queue SET delivered = 1 WHERE id IN ({}) AND delivered = 0",
                 placeholders.join(",")
             );
-            tx.execute(&sql, rusqlite::params_from_iter(chunk.iter()))?;
+            outcome.delivered += tx.execute(&sql, rusqlite::params_from_iter(chunk.iter()))? as i64;
+            // ② 释放在途：只影响「仍在途」的行（已释放在途行不再计数）。
+            let sql = format!(
+                "UPDATE data_queue SET in_flight = 0 WHERE id IN ({}) AND in_flight = 1",
+                placeholders.join(",")
+            );
+            outcome.released += tx.execute(&sql, rusqlite::params_from_iter(chunk.iter()))? as i64;
         }
         tx.commit()?;
-        Ok(())
+        Ok(outcome)
     }
 
     /// 释放 in_flight 标志（不删除数据）（SQL 实现）
@@ -389,14 +428,15 @@ impl SqliteStorage {
     /// 2. 那批 `in_flight = 1` 的行在 dequeue 的 `WHERE in_flight = 0` 里**永不入选**
     ///    → 数据滞留不投递（现场表现为"采集正常但北向数据越来越旧"）。
     ///
-    /// 现在按实际复位行数扣减计数，且失败必须让调用方知道。
+    /// A1：补 `AND in_flight = 1` 状态守卫。只影响「仍在途」的行 →
+    /// 重复 release 不会二次扣减（否则 `in_flight` 计数被多减，反压阈值失真）。
     pub(super) fn release_in_flight(conn: &mut Connection, ids: &[i64]) -> rusqlite::Result<usize> {
         if ids.is_empty() {
             return Ok(0);
         }
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
-            "UPDATE data_queue SET in_flight = 0 WHERE id IN ({})",
+            "UPDATE data_queue SET in_flight = 0 WHERE id IN ({}) AND in_flight = 1",
             placeholders.join(",")
         );
         conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))

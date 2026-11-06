@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use gateway_core::north::ConversionManager;
 
+use super::chaos_harness::StorageBackend;
 use super::farm::{Farm, FarmSpec};
 use super::north_stub::CountingSink;
 use super::report::{sample, Report};
@@ -107,6 +108,7 @@ async fn load_baud_throughput_fidelity() {
         interval_secs: 1,
         slave_id: 1,
         silent_first: 0,
+        storage: StorageBackend::from_env("LOAD_STORAGE"),
     };
 
     let mut slow_spec = base.clone();
@@ -141,6 +143,7 @@ async fn load_transient_silence_recovery() {
         interval_secs: 1,
         slave_id: 1,
         silent_first: 2,
+        storage: StorageBackend::from_env("LOAD_STORAGE"),
     };
     let (report, _farm, sink) = run_load(spec, 12).await;
 

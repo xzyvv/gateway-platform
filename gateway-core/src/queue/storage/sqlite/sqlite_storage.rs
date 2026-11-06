@@ -195,12 +195,16 @@ impl QueueStorage for SqliteStorage {
         if ids.is_empty() {
             return Ok(());
         }
-        let ids_len = ids.len();
         let mut guard = self.conn.lock();
         match Self::ack_batch(&mut guard, ids) {
-            Ok(()) => {
-                Self::saturating_dec(&self.depth, ids_len as i64);
-                Self::saturating_dec(&self.in_flight, ids_len as i64);
+            // A1：按**实际状态跃迁行数**扣减，不再按 ids.len() 扣减。
+            // 旧实现按 ids.len() 扣 → 重复 ack（publish 通道 + outbox replay 通道
+            // 两条独立 ack 路径可能对同一批 row id 各 ack 一次）或 ids 含已被
+            // retention/容量淘汰删除的行时，内存计数被多扣 → depth 漂移
+            // （队列深度虚低、健康判据与反压阈值失真，且无任何告警）。
+            Ok(outcome) => {
+                Self::saturating_dec(&self.depth, outcome.delivered);
+                Self::saturating_dec(&self.in_flight, outcome.released);
                 update_queue_depth_metric(&self.depth, &self.metrics);
                 update_in_flight_metric(&self.in_flight, &self.metrics);
                 Ok(())

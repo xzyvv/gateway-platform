@@ -17,6 +17,57 @@ use gateway_core::engine::model::DataPoint;
 use gateway_core::north::mqtt::outbox::{OutboxStore, OutgoingMsg};
 use gateway_core::queue::DataQueue;
 
+/// 队列存储后端选择（供 soak / load 场景切换真实后端）。
+///
+/// A1：生产现场部署的是 **SQLite 后端**（WAL + 持久化 + 容量淘汰 + retention），
+/// 而 soak / load 框架此前全程只跑 memory 后端 —— 生产主路径在长跑验证里零覆盖。
+/// 这里把后端做成开关，让同一套长跑框架能跑在真后端上。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageBackend {
+    /// 内存后端（默认；快，但不覆盖持久化/淘汰/retention 路径）
+    Memory,
+    /// SQLite 后端（生产同款）
+    Sqlite,
+}
+
+impl StorageBackend {
+    /// 解析环境变量（`SOAK_STORAGE` / `LOAD_STORAGE`），默认 memory。
+    pub fn from_env(key: &str) -> Self {
+        match std::env::var(key)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "sqlite" | "sqlite3" => StorageBackend::Sqlite,
+            _ => StorageBackend::Memory,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StorageBackend::Memory => "memory",
+            StorageBackend::Sqlite => "sqlite",
+        }
+    }
+}
+
+/// 按后端类型构造真实 DataQueue。
+///
+/// sqlite 时返回 `(queue, tempdir)` —— tempdir 必须活到测试结束，
+/// 否则 SQLite 文件在句柄关闭前被删除会报错。
+pub async fn real_queue_for(
+    backend: StorageBackend,
+) -> (Arc<DataQueue>, Option<tempfile::TempDir>) {
+    match backend {
+        StorageBackend::Sqlite => {
+            let (queue, dir) = real_sqlite_queue();
+            (Arc::new(queue), Some(dir))
+        }
+        StorageBackend::Memory => (real_memory_queue().await, None),
+    }
+}
+
 /// 构造一个真实 DataQueue（memory 后端）。
 pub async fn real_memory_queue() -> Arc<DataQueue> {
     let storage = Arc::new(gateway_core::queue::MemoryStorage::new());

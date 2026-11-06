@@ -29,7 +29,7 @@ use tokio::task::JoinHandle;
 
 use super::port::{SoakControl, SoakOpener, SoakPort};
 use super::spec::SoakSpec;
-use crate::chaos_harness::{real_memory_queue, RecordingGpio};
+use crate::chaos_harness::{real_queue_for, RecordingGpio};
 
 /// 北向桩：在批次 / 点位计数之外，额外按质量码区分 Good / 非 Good。
 ///
@@ -105,13 +105,17 @@ pub struct SoakFarm {
     pub controls: Vec<Arc<SoakControl>>,
     /// 已出队（=已“发往北向”）的点位数
     pub drained: Arc<AtomicU64>,
+    /// sqlite 后端时保留 DB 所在 tempdir，必须活到农场析构
+    _sqlite_dir: Option<tempfile::TempDir>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl SoakFarm {
     pub async fn build(spec: SoakSpec) -> Self {
         let metrics = Arc::new(Metrics::new());
-        let queue = real_memory_queue().await;
+        // A1：后端可切换（`SOAK_STORAGE=sqlite`）——生产部署的是 SQLite 后端，
+        // 长跑必须覆盖真实持久化路径（WAL / 容量淘汰 / retention / 计数器对账）。
+        let (queue, sqlite_dir) = real_queue_for(spec.storage).await;
         let realtime_bus = RealtimeBus::new(8192);
         let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
             edge: Arc::new(EdgeProcessor::new()),
@@ -230,6 +234,7 @@ impl SoakFarm {
             sink,
             controls,
             drained,
+            _sqlite_dir: sqlite_dir,
             tasks: vec![cm_handle, drain_handle],
         }
     }

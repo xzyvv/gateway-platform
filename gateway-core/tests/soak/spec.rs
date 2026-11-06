@@ -9,6 +9,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::chaos_harness::StorageBackend;
+
 /// 浸泡运行配置。
 #[derive(Clone, Debug)]
 pub struct SoakSpec {
@@ -32,6 +34,8 @@ pub struct SoakSpec {
     pub sample: Duration,
     /// 输出目录
     pub out_dir: PathBuf,
+    /// 队列存储后端（默认 memory；`SOAK_STORAGE=sqlite` 切到生产同款后端）
+    pub storage: StorageBackend,
 }
 
 impl SoakSpec {
@@ -52,6 +56,7 @@ impl SoakSpec {
             out_dir: PathBuf::from(
                 std::env::var("SOAK_OUT_DIR").unwrap_or_else(|_| "soak-out".to_string()),
             ),
+            storage: StorageBackend::from_env("SOAK_STORAGE"),
         }
     }
 

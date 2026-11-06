@@ -11,4 +11,7 @@ mod retention;
 mod sqlite_storage;
 mod wal;
 
+#[cfg(test)]
+mod consistency_tests;
+
 pub use sqlite_storage::SqliteStorage;
