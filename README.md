@@ -1,4 +1,4 @@
-﻿# Gateway Platform
+# Gateway Platform
 
 工业协议网关统一仓库 — Vue 3 调试前端 + Rust 核心引擎，同仓库 / 分目录协作。
 
@@ -93,4 +93,40 @@ E2E 为 6 条只读冒烟链路（栈健康 / 登录 / 路由巡游 / 暗色 / 4
 - [`gateway-core/scripts/README.md`](gateway-core/scripts/README.md) — CI / 性能脚本说明
 - [`gateway-web/VISUAL_SPEC.md`](gateway-web/VISUAL_SPEC.md) — 前端视觉规范
 - [`gateway-desktop/README.md`](gateway-desktop/README.md) — Tauri 桌面端说明
+
+## 开源许可
+
+本仓库源码采用 **Apache-2.0**（见 [`LICENSE`](LICENSE) 与 [`NOTICE`](NOTICE)）。
+允许自由使用、修改、再分发（含闭源集成与商业使用），但需保留版权与变更声明。
+
+### 源码许可与「产品授权」是两件事
+
+Apache-2.0 管的是**代码怎么用**；授权文件（license）管的是**官方发行版能跑多大负载**。
+两者互不冲突：
+
+| | 覆盖范围 | 约束 |
+|---|---|---|
+| **Apache-2.0** | 全部源码 | 代码怎么用都行：改、商用、闭源集成均可 |
+| **产品授权（license）** | 官方发行版二进制 | 4 项产能配额：采集点数 / 并发协议数 / 历史保留天数 / 北向上行通道数 |
+
+- 自编译本仓库源码的用户**不需要**任何授权文件即可运行，此时按兜底配额工作
+  （100 点 / 1 协议 / 7 天 / 1 通道）；
+- 官方发行版通过签名授权文件提升配额，签发工具见
+  [`tools/license-issuer/README.md`](tools/license-issuer/README.md)（社区可自签发自用）；
+- 调试、分析、批量类工具能力**全部免费**，不受授权状态影响。
+
+配额模型详见 [`docs/design/license-v2-quota.md`](docs/design/license-v2-quota.md)。
+
+### 贡献
+
+提交 PR 即表示同意你的贡献按 Apache-2.0 授权。涉及依赖变更时，本地需通过：
+
+```bash
+cargo deny check     # 许可证合规 + 依赖来源校验（allowlist 见 deny.toml）
+cargo audit          # RustSec 漏洞扫描
+```
+
+## 安全
+
+漏洞请按 [`SECURITY.md`](SECURITY.md) 报告（GitHub 私密漏洞上报为首选渠道）。
 

@@ -3,6 +3,8 @@ name = "gatewayd"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
+repository.workspace = true
 publish.workspace = true
 
 # 网关守护进程：仅承载启动编排（13 步）+ main 入口。

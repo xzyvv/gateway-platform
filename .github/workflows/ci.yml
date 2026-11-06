@@ -447,9 +447,10 @@ jobs:
   # 平台专属代码（license 指纹走注册表 MachineGuid，见 gateway-core 的
   # license/fingerprint.rs 与 crypto/secret.rs），需要真实 Windows 编译器守住。
   #
-  # macOS 曾在基线初始化时随模板带进来（commit d748f7b），但它只多验了
-  # crypto/secret.rs 里一段 license 指纹回退分支（IOPlatformUUID），而该分支
-  # 在 Linux 交叉编译产物中根本不会被编译进去。代价却最高：macOS runner
+  # macOS 曾在基线初始化时随模板带进来（commit d748f7b），但它唯一多验的
+  # 是 crypto/secret.rs 里的 license 指纹回退分支（IOPlatformUUID）——该分支
+  # 已在移除 macOS 作业时一并删除（指纹现在只有 Linux / Windows 两条路径），
+  # 在 Linux 交叉编译产物中本就不会被编译进去。代价却最高：macOS runner
   # $0.062/min（Linux 的 10 倍），且按 10 倍倍率消耗 included 分钟
   # （2000 分钟额度只够跑 200 分钟 macOS）。故已移除。
   #

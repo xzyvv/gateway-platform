@@ -3,6 +3,8 @@ name = "gateway-api"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
+repository.workspace = true
 publish.workspace = true
 
 # Web 调试面：axum + tower 路由装配与 HTTP handler。

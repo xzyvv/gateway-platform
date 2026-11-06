@@ -59,7 +59,8 @@ allow = [
     "MIT-0",
     "CDLA-Permissive-2.0",
 ]
-# workspace 内部 crate 均 publish=false（私有，不发布到 registry），跳过其许可证检查
+# workspace 内部 crate 均 publish=false（以源码形式分发，不发布到 registry），
+# cargo-deny 据此跳过这些 crate 的许可证检查
 private = { ignore = true }
 # 以下许可证需人工复核（出现即警告，不阻断 CI）
 confidence-threshold = 0.8

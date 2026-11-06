@@ -3,6 +3,8 @@ name = "gateway-desktop"
 version.workspace = true
 description = "工业网关调试控制台（桌面客户端）"
 authors.workspace = true
+license.workspace = true
+repository.workspace = true
 edition.workspace = true
 publish.workspace = true
 
