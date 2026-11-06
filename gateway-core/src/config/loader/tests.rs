@@ -392,3 +392,173 @@ fn legacy_schema_version_is_migrated_not_rejected() {
         "v0 配置加载后应升到当前版本"
     );
 }
+
+// ===== A3：加载失败现场取证 / 默认配置落盘 / 热重载正常路径 =====
+//
+// 这三条覆盖的是「配置加载器的边界行为」，此前只有失败路径有测试覆盖：
+// 1. load() 遇到坏配置要留下现场（config.json.bak），且**不能覆盖历史现场**；
+// 2. load() 遇到文件缺失要生成默认配置并落盘（下次启动不再走 fallback），
+//    落盘失败必须返回 Err 而不是静默成功；
+// 3. reload() 对有效文件的热重载正常路径必须返回最新内容。
+
+/// load() 遇到坏配置时应留备份现场；连续失败**不得覆盖**首次现场的备份。
+///
+/// Bug 115 修复：`bak` 只在不存在时复制。覆盖会让连续失败时只能看到最后一次
+/// 状态，现场无法回溯「第一次坏在哪」。
+#[test]
+fn load_failure_creates_backup_once_and_preserves_first_failure() {
+    let dir = tempdir().expect("should succeed");
+    let path = dir.path().join("config.json");
+    let loader = loader_with_json(&dir, |v| {
+        // 缺必填字段 port_name：schema 校验阶段就会失败
+        v["buses"] = serde_json::json!([{"protocol": "modbus"}]);
+    });
+    let first_bad = fs::read_to_string(&path).expect("读原始坏配置");
+
+    let err = loader.load().expect_err("坏配置必须加载失败");
+    assert!(
+        err.to_string().contains("port_name"),
+        "报错应点名缺失字段，实际: {err}"
+    );
+
+    // 备份现场必须生成
+    let bak = path.with_extension("json.bak");
+    assert!(bak.exists(), "加载失败应生成备份现场 {}", bak.display());
+    let first_bak = fs::read_to_string(&bak).expect("读备份现场");
+    assert_eq!(first_bak, first_bad, "备份现场应与首次失败时的原始配置一致");
+
+    // 第二次失败：配置内容变了，备份现场**不得**被覆盖
+    let mut value = serde_json::to_value(GatewayConfig::default()).expect("默认配置应可序列化");
+    value["buses"] = serde_json::json!([{"protocol": "modbus", "port_name": "COM9"}]);
+    value["points"] = serde_json::json!([{"id": "p1"}]);
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&value).expect("JSON 应可序列化"),
+    )
+    .expect("写入第二份坏配置");
+    let second_bad = fs::read_to_string(&path).expect("读第二份坏配置");
+
+    let err = loader.load().expect_err("第二份坏配置同样必须加载失败");
+    assert!(
+        err.to_string().contains("points"),
+        "第二份坏配置应报点位缺失字段，实际: {err}"
+    );
+
+    let second_bak = fs::read_to_string(&bak).expect("读备份现场");
+    assert_eq!(
+        second_bak, first_bad,
+        "连续失败时备份现场不得被覆盖（应保留第一次的现场）"
+    );
+    assert_ne!(
+        second_bak, second_bad,
+        "备份现场不应变成第二次失败时的配置内容"
+    );
+
+    // 失败路径不得篡改原始配置文件——现场取证的前提是原文件还在
+    let current = fs::read_to_string(&path).expect("读当前配置");
+    assert_eq!(current, second_bad, "加载失败时原始配置文件不得被改写");
+}
+
+/// load() 遇到配置文件缺失时应生成默认配置并**落盘**，下次启动不再走 fallback。
+#[test]
+fn load_missing_file_generates_and_persists_default_config() {
+    let dir = tempdir().expect("should succeed");
+    let path = dir.path().join("config.json");
+    assert!(!path.exists(), "前置条件：配置文件不存在");
+    let loader = ConfigLoader::new(&path);
+
+    let cfg = loader
+        .load()
+        .expect("配置文件缺失时应生成默认配置而不是报错");
+    assert_eq!(
+        cfg.schema_version,
+        crate::config::CURRENT_SCHEMA_VERSION,
+        "生成的默认配置版本应为当前版本"
+    );
+
+    // 默认配置必须真的写到磁盘（否则下次启动仍走 fallback，故障现场反复出现）
+    assert!(path.exists(), "默认配置应落盘到 {}", path.display());
+    let content = fs::read_to_string(&path).expect("读落盘的默认配置");
+    assert!(
+        content.contains("schema_version"),
+        "落盘的默认配置应包含 schema_version"
+    );
+
+    // 落盘后再次 load 走正常路径（try_load 成功），不再走 fallback 分支
+    let again = loader.load().expect("已落盘的默认配置应可正常加载");
+    assert_eq!(
+        again.schema_version,
+        crate::config::CURRENT_SCHEMA_VERSION,
+        "二次加载应同样得到当前版本配置"
+    );
+}
+
+/// load() 遇到配置文件缺失且默认配置**无法落盘**时必须返回 Err（不得静默成功）。
+///
+/// Bug 66 修复：原实现 `let _ = self.save(&cfg)` 静默吞掉保存错误，
+/// 磁盘满 / 权限不足时运维完全无感，直到现场设备根本没配置却以为已配置。
+#[test]
+fn load_missing_file_returns_err_when_default_cannot_be_persisted() {
+    let dir = tempdir().expect("should succeed");
+    // 用普通文件占住父目录，使 create_dir_all 失败
+    let blocking_file = dir.path().join("block");
+    fs::write(&blocking_file, "not a directory").expect("should succeed");
+    let path = blocking_file.join("config.json");
+    assert!(!path.exists(), "前置条件：配置文件不存在");
+    let loader = ConfigLoader::new(&path);
+
+    let err = loader
+        .load()
+        .expect_err("默认配置无法落盘时必须返回 Err，不能静默成功");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("create config parent dir") || msg.contains("failed"),
+        "报错应说明落盘失败原因，实际: {msg}"
+    );
+    assert!(!path.exists(), "落盘失败后不应留下半成品配置文件");
+}
+
+/// reload() 对有效文件的热重载正常路径必须返回磁盘上的最新内容。
+///
+/// 此前 reload 只有失败路径测试，「改文件 → reload 拿到新内容」这条主路径
+/// 从未被断言过——热重载若恒返回旧内容/默认值，现场改配置后不生效且无告警。
+#[test]
+fn reload_returns_updated_content_for_valid_file() {
+    let dir = tempdir().expect("should succeed");
+    let path = dir.path().join("config.json");
+
+    let mut value = serde_json::to_value(GatewayConfig::default()).expect("默认配置应可序列化");
+    value["mqtt"]["broker"] = serde_json::json!("tcp://broker-a:1883");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&value).expect("JSON 应可序列化"),
+    )
+    .expect("写入初始配置");
+
+    let loader = ConfigLoader::new(&path);
+    let first = loader.reload().expect("有效配置应可 reload");
+    assert_eq!(
+        first.mqtt.broker, "tcp://broker-a:1883",
+        "reload 应读到磁盘上的 broker"
+    );
+
+    // 现场改配置（模拟运维热更新），reload 必须反映最新内容
+    let mut value = serde_json::to_value(GatewayConfig::default()).expect("默认配置应可序列化");
+    value["mqtt"]["broker"] = serde_json::json!("tcp://broker-b:1883");
+    value["mqtt"]["publish_interval"] = serde_json::json!(30);
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&value).expect("JSON 应可序列化"),
+    )
+    .expect("写入更新后的配置");
+
+    let second = loader.reload().expect("更新后的配置应可 reload");
+    assert_eq!(
+        second.mqtt.broker, "tcp://broker-b:1883",
+        "reload 必须返回改后的 broker（热重载生效）"
+    );
+    assert_eq!(
+        second.mqtt.publish_interval, 30,
+        "reload 必须返回改后的 publish_interval"
+    );
+}

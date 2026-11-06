@@ -598,6 +598,34 @@ mod tests {
         );
     }
 
+    /// `Option<SelfHealConfig>` 上的 `#[validate(nested)]` 必须真正生效。
+    ///
+    /// 本文件上方对 `devices` / `points[].aggregation` / `buses[].opcua` 都做了
+    /// 手动展开，理由是「validator 未给 `Option<T>` 实现 `Validate`」。但实测
+    /// validator 0.21 + validator_derive 0.20 的 derive 对 `#[validate(nested)]`
+    /// 额外做了 Option 包裹（`if let Some(ref field) = ...`），嵌套校验照样跑。
+    /// 本用例把这一事实钉死：若将来升级 validator 导致 nested 失效，
+    /// `self_heal` 的 range 约束（周期/去抖/窗口等必须 >= 1）会静默失效，
+    /// 现场表现为自愈执行器按 0 周期疯狂重试。
+    #[test]
+    fn self_heal_option_nested_validation_is_enforced() {
+        let mut cfg = GatewayConfig::default();
+        cfg.self_heal = Some(crate::config::SelfHealConfig {
+            enabled: true,
+            check_interval_secs: 0, // 违反 range(min = 1)
+            ..Default::default()
+        });
+        let errs = cfg
+            .validate_all()
+            .expect_err("self_heal 嵌套校验必须生效，0 周期应被拒绝");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("self_heal") && e.contains("check_interval_secs")),
+            "错误应定位到 self_heal.check_interval_secs: {:?}",
+            errs
+        );
+    }
+
     /// 缺失必填字段（周期为 0 / Modbus 缺寻址字段 / 总线协议为空）一次性全部报出。
     #[test]
     fn missing_required_fields_are_rejected_by_gate() {
