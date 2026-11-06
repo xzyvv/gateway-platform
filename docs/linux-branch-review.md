@@ -13,13 +13,14 @@
 | 项 | 结果 |
 |---|---|
 | 审查的 Linux-only 代码块 | 14 处（见 §2） |
-| 修复的 P0/P1 缺陷 | 6 项（§1） |
-| 新增跨平台单测 | 20 个（§3） |
+| 修复的 P0/P1 缺陷 | 第一轮 6 项（§1）+ 第二轮 13 项（§8）= **19 项** |
+| 新增跨平台单测 | 27 个（§3 + §8.4） |
 | Linux 交叉编译验证 | `cargo check --target x86_64-unknown-linux-gnu --all-targets`（三个部署 crate）通过 |
-| Windows 侧单测 | `cargo test -p gateway-core --lib --features fins` → 1407 passed / 0 failed |
+| Windows 侧单测 | `cargo test -p gateway-core --lib --features fins` → **1415 passed / 0 failed** |
 | 剩余风险 | §4「无法在本机验证项」，需真机验收 |
 
-**核心结论**：本轮修复的 6 项缺陷全部属于**「错误被静默吞掉」**这一类。
+**核心结论**：两轮修复的 19 项缺陷全部属于**「错误被静默吞掉」**这一类
+（第二轮另有 1 项并发写导致的分区内容交错）。
 它们在 Windows 上不会暴露，但会**直接导致设备变砖或现场静默断网**——
 即「设备看起来正常，实际已经失去心跳/链路/加密保护」。
 
@@ -239,12 +240,17 @@ Unix 下另有 `keyfile_is_owner_only_on_unix` 断言权限恰为 0600。
 | 项 | 验收点 | 建议命令 |
 |---|---|---|
 | 硬件看门狗 | 写入 `'V'` 后设备不再 armed；写失败能被日志捕获 | `dmesg \| grep -i watchdog`；故意让 `/dev/watchdog` 不可写后启动 |
+| 硬件看门狗（设备名） | 实际设备节点是否为 `/dev/watchdog` / `/dev/watchdog0` / `/dev/softdog`，启动日志是否打印出选中的路径 | `ls -l /dev/watchdog*` + 启动日志中的 `hardware watchdog device detected` |
 | OTA 全流程 | 升级期间喂狗不失效、env 落盘后回滚可用 | 现场执行一次 OTA 演练 |
+| OTA 回滚判定 | `fw_printenv bootcount` 可读；未定义与读取失败在日志中可区分 | `fw_printenv bootcount`；人为破坏 env 分区看日志是否为 `A/B rollback detection is DISABLED` |
+| OTA 分区写入 | 写入超时后**不**出现二次写入；`verify_partition` CRC 能拦住损坏分区 | 在块设备上人为制造写超时（如限速/占用设备），观察日志 `NOT retrying` |
+| 优雅停机 | 停机后 `/dev/watchdog` **不再 armed**（不出现停机后的意外复位） | `systemctl restart` 后 `dmesg \| grep -i watchdog` 无超时复位记录 |
 | GPIO 采集 | 4 路 DI + 4 路 DO 全部可读可写，**无 EBUSY** | `gpiodetect` + 逐点翻转 |
 | 蜂窝 failover | eth 拔线后 30s 内切到 4G，且 `ip route` 真的指向 ppp0 | `ip route show default` |
 | SQLCipher | keyfile 权限 0600；重启后 DB 可解密打开 | `ls -l *.db.key` + 重启验证 |
 | 主机指标 | CPU/内存/温度/网卡在真机上有合理读数 | `curl /api/system/status` |
 | Modbus 写超时 | 真机上写超时被正确中断 | 触发 `transaction/tests.rs` 中被剥离的用例 |
+| 心跳僵死检测 | NTP 校时前后心跳均不误报；长时间运行后心跳仍能被判 stale | 校时后观察 `stale_loops` 与 `watchdog_timeout_total` |
 
 ---
 
@@ -294,4 +300,140 @@ cargo test -p gateway-core --lib --features fins
 1. **CI 增加 Linux 容器单测 job**（无需真机即可覆盖 `/proc` 解析、
    Modbus 写超时等用例）；
 2. 真机验收表按 §4 逐项签字后方可放行批量部署。
+
+---
+
+## 8. 第二轮复审（commit `2c5c4f8`）
+
+> 第一轮修的是「已被改坏的代码」；第二轮回到同一批 Linux 专属代码块重新逐行审，
+> 并把审查面从 `cfg(target_os="linux")` **扩展到跨平台的 Linux 相关路径**
+> （如队列存储、心跳计时、许可证指纹）。
+> 结果：查出 **3 项 P0 + 12 项 P1**，P0 全部修复，P1 修复 10 项
+> （余下 2 项为需真机数据的观测项，见 §8.5）。
+
+### 8.1 P0 — 优雅停机时硬件看门狗未解除（停机后被误复位）
+
+**位置**：`gatewayd/src/bootstrap/helpers/shutdown.rs`
+
+**问题**：解除 armed 的 `stop_platform_watchdog()` 放在
+`graceful_shutdown_inner` 的**最后一行**，而该函数被外层
+`tokio::time::timeout(80s)` 包裹。一旦总宽限命中（某个子阶段卡死），
+inner future 被 drop → **最后一行永不执行** → `/dev/watchdog` 保持 armed。
+现场表现：优雅停机后被 systemd 拉起，硬件看门狗仍在计时且无人喂狗 →
+整机被误复位，表现为「重启后莫名其妙又重启一次」，日志里没有任何线索。
+inner panic（栈展开）同样走不到最后一行。
+
+**修复**：新增 `WatchdogDisarmGuard`，`Drop` 时调用 `stop_platform_watchdog()`；
+守卫放在**外层** `graceful_shutdown`，因此三条路径全覆盖：
+inner 正常返回 / 外层 timeout 命中 / inner panic 栈展开。
+`stop_platform_watchdog()` 本身幂等（fd 被 take 后二次调用是 no-op）。
+
+### 8.2 P0 — OTA bootloader env 读取失败被吞（A/B 回滚失效 → 变砖）
+
+**位置**：`gateway-core/src/platform/ota/bootenv.rs`
+
+**问题**：`uboot_printenv()` 原实现用 `.ok()?` 吞掉 spawn 失败与读取失败，
+返回 `None`。而 `None` 与「变量未定义」在上层**不可区分**：
+`bootcount` 静默变成 `None` → `check_bootcount_rollback()` 永远返回 false →
+**需要回滚的新分区被反复加载** → 设备变砖且无人察觉。
+（对照：`fw_printenv` 在「变量不存在」时也返回非零退出码并打印
+`## Error: "bootcount" not defined`，这是**正常情形**，不能当成故障。）
+
+**修复**：抽出纯函数
+`classify_printenv(spawn_ok, success, stdout, stderr, name) -> PrintenvOutcome`，
+三态区分 `Value / Undefined / Unavailable`；`Unavailable` 分支打 `error!`
+并明确写出「A/B rollback detection is DISABLED」。
+
+### 8.3 P0 — `reboot` 的 spawn 失败与退出码被吞（以为重启了，其实没重启）
+
+**位置**：`gateway-core/src/platform/ota/bootenv.rs`
+
+**问题**：旧实现 `let _ = Command::new("reboot").status();` **同时吞掉
+spawn 失败与退出码**。在 systemd 管理的容器 / minimal rootfs 上
+`reboot` 常常不在 PATH（或需要 root），此时 `perform_rollback` 以为
+重启成功返回 `Ok`，但设备**根本没有重启** → 继续运行故障分区 →
+现场表现为「设备重启后还是坏的」，而日志里没有任何线索。
+
+**修复**：抽出纯函数 `classify_reboot(spawn_ok, success) -> RebootOutcome`
+（`Initiated / SpawnFailed / Failed`）；失败一律上抛 `GatewayError::Io`。
+
+### 8.4 P0 — OTA 分区写入超时后重试（并发写同一设备 → 分区内容交错 → 变砖）
+
+**位置**：`gateway-core/src/platform/ota/apply.rs`
+
+**问题**：`write_partition` 超时后进入下一次 attempt，而 attempt 会
+**第二次 open 同一块设备**。但 `spawn_blocking` 派生的阻塞任务
+**不可取消**：`tokio::time::timeout` 只丢弃等待句柄，底层写仍在继续
+（持有 fd、正在 `write_all`）。于是两个写者并发写同一设备 →
+字节交错 → 分区内容是「两次固件的混合体」。
+`verify_partition` 只读回 `payload_len` 字节，CRC 校验可能**恰好通过**
+（头部字节来自同一个 payload），但后半段是垃圾 → 设备变砖。
+
+**修复**：超时即视为**写入结果不确定**，直接上抛 `TimedOut`，**不再重试**；
+由上层 `verify_partition` 的 CRC 读回校验作为最后一道防线。
+
+### 8.5 P1 — 其余 10 项修复
+
+| # | 位置 | 问题 | 修复 |
+|---|---|---|---|
+| 1 | `ota/apply.rs` | 新固件比旧固件短时，旧固件尾部残留被当作新固件的一部分（「新头 + 旧尾」混合体） | 普通文件写完 `set_len` 截断到 payload 长度（块设备不支持 `ftruncate`，由 `verify_partition` + 真机验收覆盖） |
+| 2 | `ota/apply.rs` | `if let Ok(bytes) = fs::read(&marker)` 把「读失败」与「文件不存在」等同处理，且**无任何日志** → pending_reboot 复核逻辑被静默跳过 | 区分 `NotFound`（正常）与其它错误（`error!` 告警），拆出 `handle_pending_reboot_marker` |
+| 3 | `ota/apply.rs` | `perform_rollback` 里有**连续三次** `sync()`（第三次与第二次完全重复），多起一个子进程 | 去掉重复的第三次 `sync()` |
+| 4 | `platform/hardware_watchdog.rs` | 二次 `Watchdog::start` 会把**已有**的硬件 fd 覆盖掉：Linux 下 `/dev/watchdog` 独占，二次 open 必 `EBUSY` → `hw_fd` 为 `None` → 旧 File 被 drop → **fd 被关闭**，硬件看门狗失去喂狗通道（设备仍 armed，但没人写心跳）→ 整机超时被复位 | 槽位已有句柄时**保留旧的，绝不覆盖**，并 `error!` 告警 |
+| 5 | `platform/hardware_watchdog.rs` | 软件看门狗线程 spawn 失败被 `handle.ok()` 静默吞掉 → 软件看门狗**根本不存在**，进程卡死不会被 abort，且日志无任何线索 | spawn 失败改为 `error!` 告警，明确写出「the software watchdog is NOT running」 |
+| 6 | `gatewayd/.../collection.rs` | 硬件看门狗设备路径**硬编码** `/dev/watchdog`；多路看门狗板卡上内核创建的是 `/dev/watchdog0`、`/dev/watchdog1`，少数板卡用 `/dev/softdog` → open 失败 → 只剩软件看门狗 → 整机卡死不会被复位 | 候选列表按优先级探测（`/dev/watchdog`、`/dev/watchdog0`、`/dev/watchdog1`、`/dev/softdog`），判定逻辑抽成纯函数 `select_watchdog_device` |
+| 7 | `gatewayd/.../collection.rs` | 硬件喂狗循环用裸 `tokio::spawn` —— task panic 被 tokio **静默吞掉**（JoinHandle 被丢弃）→ 喂狗停止且日志无线索 → 15s 后整机被硬件看门狗复位 | 改用 `spawn_catch_unwind("hw_watchdog_kick", ...)`，panic 记 error 日志并计入 `task_panic_total` |
+| 8 | `queue/core/task.rs` | `dequeue_batch(limit).unwrap_or_default()` 把 DB 错误伪装成「队列为空」→ 上层拿到空批，无法区分「确实没有数据」与「DB 查询失败」→ **北向静默无数据**（采集正常、MQTT 收不到、日志无异常） | 区分 `Ok(Ok)` / `Ok(Err)`，`Ok(Err)` 分支 `error!` 告警 |
+| 9 | `queue/core/task.rs` | enqueue 把 `Vec<DataPoint>` **move** 进闭包；闭包 panic / task 被取消时 `spawn_blocking` 返回 `Err(JoinError)`，points 已被消费 → 该分支**无法回退到 fallback 缓冲** → 整批数据静默丢失 | points 改用 `Arc<Vec<DataPoint>>` 共享，JoinError 分支也能把整批点回退进降级缓冲（与 `Ok(Err)` 分支行为对齐） |
+| 10 | `queue/storage/sqlite/*.rs` + `engine/error.rs` | ①`release_in_flight` 吞掉错误只打 warn，调用方仍无条件 `saturating_dec(ids.len())` → 内存计数**低估** → `MAX_IN_FLIGHT` 反压阈值被提前放宽，且 DB 里那些行仍是 `in_flight = 1` → 在 dequeue 的 `WHERE in_flight = 0` 里**永不入选** → 数据滞留不投递（现场「采集正常但北向数据越来越旧」）。②磁盘满判定只做**字符串匹配**，rusqlite/SQLite 升级或措辞变化即失效 → 失去 30s 退避保护 | ①`release_in_flight` 返回**实际复位行数**并上抛错误，调用方按实际行数扣减（失败保留计数）。②`From<rusqlite::Error>` 把**主错误码**编进消息前缀 `sqlite_error(code=N)`，判定优先按码（`SQLITE_FULL=13` / `SQLITE_IOERR=10`），文案匹配仅作兜底 |
+
+### 8.6 第二轮建立的跨平台纯函数与单测
+
+| 纯函数 | 位置 | 判定内容 | 单测数 |
+|---|---|---|---|
+| `classify_printenv` + `PrintenvOutcome` | `platform/ota/bootenv.rs` | `fw_printenv` 三态：值 / 未定义 / 不可用 | 1 |
+| `classify_reboot` + `RebootOutcome` | `platform/ota/bootenv.rs` | `reboot` 三态：已发起 / spawn 失败 / 退出码非零 | 1 |
+| `select_watchdog_device` | `gatewayd/.../collection.rs` | 看门狗设备候选路径选取 | 1 |
+| `is_usb_backed_path` | `license/fingerprint.rs` | sysfs 路径是否由 USB 承载（`usb<N>` 控制器目录） | 1 |
+| `sqlite_code_from_message` | `queue/core/task.rs` | 从 `sqlite_error(code=N)` 前缀解析主码 | 1 |
+| `sqlite_error_code` | `engine/error.rs` | `rusqlite::Error` → SQLite 主码（`extended_code & 0xff`） | 2 |
+| `now_ms` | `engine/monitor/heartbeat.rs` | 心跳计时用单调钟且恒 ≥ 1 | 1 |
+
+> **心跳计时（`now_ms`）的修复**：旧实现用挂钟 `SystemTime`。挂钟会被 NTP 校时影响，
+> 两种故障都极难排查：
+> - **前跳**（12:00 → 13:00）：`elapsed` 瞬间变成 3.6e6 ms → 所有心跳**同时**
+>   被判 stale → 误报僵死 + 误计 `watchdog_timeout_total`，还可能触发自愈
+>   执行器去重启**健康**的服务；
+> - **回拨**（手动校回过去）：`saturating_sub` 得 0 → elapsed 恒为 0 →
+>   **僵死检测彻底失效**（最危险：进程真卡死了也不会有人发现）。
+>
+> 改用 `Instant`（单调钟），与 `platform::hardware_watchdog::mono_millis` 口径统一。
+> 返回值 +1，避免与「从未 kick」的 `last_kick == 0` 哨兵冲突。
+
+> **许可证指纹（`is_usb_backed_path`）的修复**：USB 网卡（USB-Ethernet dongle）
+> 在 sysfs 下同样有 `/sys/class/net/<n>/device` 节点，且接口名通常是 `eth1` /
+> `enx0011...` 这类**不以 `usb` 开头**的名字 → 接口名过滤拦不住它。
+> 现场后果：运维插拔一个 USB 网卡 → 板载 MAC 指纹变化 → **许可证指纹漂移** →
+> 已授权设备被判未授权（现场「授权莫名失效」）。
+> 判定方式：USB 设备的 sysfs 路径必然经过某个 USB 控制器目录（`usb1` / `usb2`），
+> 因此按 `usb` + 纯数字序号的路径段匹配（不能简单匹配「含 usb 的段」，
+> `usb_controller` 之类的普通目录名会误判）。
+
+### 8.7 第二轮未修复项（需真机数据）
+
+| 项 | 原因 |
+|---|---|
+| OTA 写分区超时后的实际残留状态 | 需要真机块设备（`/dev/mmcblk0p*`）上复现超时才能观察残留字节；本机只能验证「不再重试」这一逻辑 |
+| 块设备上的 `set_len` 截断 | 块设备不支持 `ftruncate`（`EINVAL`/`ENOTTY`），已按文件类型判定跳过；截断效果需真机验证 |
+
+### 8.8 第二轮验证结果
+
+| 项 | 结果 |
+|---|---|
+| `cargo test -p gateway-core --lib --features fins` | **1415 passed / 0 failed / 1 ignored** |
+| `cargo test -p gatewayd --features fins` | **8 passed / 0 failed** |
+| `cargo clippy -p gateway-core -p gatewayd --all-targets --features fins -- -D warnings` | 干净 |
+| `cargo fmt --all -- --check` | 干净 |
+| Linux 交叉 `cargo check`（zig 0.14.1，三个部署 crate，`--all-targets`） | 通过 |
+| 提交 | `2c5c4f8`（13 files, +805 / −56） |
 
