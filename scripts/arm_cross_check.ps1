@@ -27,6 +27,13 @@
 .PARAMETER Crates
     要验证的 crate 列表。默认 gateway-core / gateway-api / gatewayd。
 
+.PARAMETER MuslOnly
+    只验证静态 musl 产物（现场首选，免 glibc 版本耦合）。
+
+.PARAMETER Release
+    构建 release 二进制并校验 ELF 头 / 静态链接 / GLIBC 引用。
+    比 cargo check 更重（完整链接），但能证明「产物真的出得来」。
+
 .PARAMETER Features
     传给 cargo 的 features。默认 fins（与本地其它门禁口径一致）。
 
@@ -43,11 +50,14 @@
 .EXAMPLE
     powershell -File scripts/arm_cross_check.ps1
     powershell -File scripts/arm_cross_check.ps1 -Targets aarch64-unknown-linux-gnu
+    powershell -File scripts/arm_cross_check.ps1 -MuslOnly -Release
 #>
 param(
     [string[]]$Crates = @("gateway-core", "gateway-api", "gatewayd"),
     [string]$Features = "fins",
     [string[]]$Targets = @("aarch64-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf"),
+    [switch]$MuslOnly,
+    [switch]$Release,
     [switch]$Strict,
     [switch]$Probe
 )
@@ -104,6 +114,20 @@ if ($null -eq $zig) {
     exit 0
 }
 
+# musl 静态产物：现场设备 glibc 版本千差万别（Debian10=2.28 / Debian11=2.31 /
+# Yocto 常见 musl），gnu 动态产物带着构建机的 glibc 版本要求，在旧系统上直接
+# 报 "GLIBC_2.xx not found" —— 这是现场最典型的「装上去跑不起来」。
+# deploy/build-release.sh --target linux-arm64-musl 就是为免掉这层耦合。
+if ($MuslOnly) {
+    $Targets = @($Targets | Where-Object { $_ -match "musl" })
+    if ($Targets.Count -eq 0) {
+        Write-Host "[arm-check] -MuslOnly 但没有 musl target —— 跳过。" -ForegroundColor Yellow
+        if ($Probe) { exit 3 }
+        if ($Strict) { exit 1 }
+        exit 0
+    }
+}
+
 $toolchain = Get-RepoToolchain
 $installed = & rustup target list --toolchain $toolchain --installed 2>&1
 $missing = @($Targets | Where-Object { @($installed) -notcontains $_ })
@@ -140,37 +164,119 @@ if (-not (Test-Path $wrapperExe) -or
 # cc-rs 用相对路径调用会失败（工作目录随 crate 变化），必须给绝对路径
 $wrapperAbs = (Resolve-Path $wrapperExe).Path
 
+# rust 自带的 rust-lld（GNU flavor）。musl 静态链接需要它：
+# rustc 在 aarch64 musl target 上会传 `-Wl,--fix-cortex-a53-843419`
+# （Cortex-A53 erratum 缓解），zig cc 的 `-Wl,` 白名单不认这个参数会直接失败，
+# 而 zig 内嵌的 lld 与 rust-lld 都支持它。改用 ld.lld flavor 直接驱动
+# rust-lld 即可绕开白名单。
+$rustLld = $null
+$sysroot = (& rustc --print sysroot).Trim()
+foreach ($cand in @(
+        "$sysroot\lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe",
+        "$sysroot\lib\rustlib\x86_64-pc-windows-gnu\bin\rust-lld",
+        "$sysroot\lib\rustlib\aarch64-unknown-linux-gnu\bin\rust-lld"
+    )) {
+    if (Test-Path $cand) { $rustLld = $cand; break }
+}
+
 $failed = @()
 Push-Location $repoRoot
 try {
     foreach ($target in $Targets) {
-        Write-Host "[arm-check] cargo check --target $target （crate: $($Crates -join ', ')）" -ForegroundColor Cyan
+        $isMusl = $target -match "musl"
+        Write-Host "[arm-check] cargo build --target $target （crate: $($Crates -join ', ')）" -ForegroundColor Cyan
 
         $env:ZIG_EXE = $zig
         # cc-rs 约定：CC_<target> / AR_<target>（target 用连字符形式）
         Set-Item -Path "Env:CC_$target" -Value $wrapperAbs
         Set-Item -Path "Env:AR_$target" -Value $wrapperAbs
-        # cargo 约定：CARGO_TARGET_<TRIPLE>_LINKER，三元组的连字符必须换成下划线，
-        # 否则 cargo 会忽略该变量（并在 stderr 给出 warning），链接会回落到默认 linker 而失败。
-        $linkerEnvKey = "CARGO_TARGET_$($target.Replace('-', '_').ToUpper())_LINKER"
-        Set-Item -Path "Env:$linkerEnvKey" -Value $wrapperAbs
 
-        $cargoArgs = @("check", "--target", $target, "--all-targets", "--features", $Features)
+        if ($isMusl -and $null -ne $rustLld) {
+            # musl：链接器用 rust-lld（C 编译仍用 zig cc）
+            $linkerEnvKey = "CARGO_TARGET_$($target.Replace('-', '_').ToUpper())_LINKER"
+            Set-Item -Path "Env:$linkerEnvKey" -Value $rustLld
+            $env:RUSTFLAGS = "-C linker-flavor=ld.lld -C link-self-contained=yes"
+        }
+        else {
+            # cargo 约定：CARGO_TARGET_<TRIPLE>_LINKER，三元组的连字符必须换成下划线，
+            # 否则 cargo 会忽略该变量（并在 stderr 给出 warning），链接会回落到默认 linker 而失败。
+            $linkerEnvKey = "CARGO_TARGET_$($target.Replace('-', '_').ToUpper())_LINKER"
+            Set-Item -Path "Env:$linkerEnvKey" -Value $wrapperAbs
+            $env:RUSTFLAGS = ""
+        }
+
+        if ($Release) {
+            $cargoArgs = @("build", "--target", $target, "--release", "--features", $Features)
+        }
+        else {
+            $cargoArgs = @("check", "--target", $target, "--all-targets", "--features", $Features)
+        }
         foreach ($c in $Crates) { $cargoArgs += @("-p", $c) }
 
         & cargo @cargoArgs
         $code = $LASTEXITCODE
-        if ($code -eq 0) {
-            Write-Host "[arm-check] $target 通过" -ForegroundColor Green
-        }
-        else {
+        if ($code -ne 0) {
             Write-Host "[arm-check] $target 失败（exit $code）" -ForegroundColor Red
             $failed += $target
+            continue
         }
+
+        if ($Release) {
+            # 产物校验：架构要对、静态链接要成立、不能带 GLIBC 版本引用
+            $binName = if ($Crates -contains "gatewayd") { "gatewayd" } else { $Crates[0] }
+            $binPath = Join-Path $repoRoot "target\$target\release\$binName"
+            if (-not (Test-Path $binPath)) {
+                Write-Host "[arm-check] $target 产物缺失：$binPath" -ForegroundColor Red
+                $failed += $target
+                continue
+            }
+            $sizeMB = [math]::Round((Get-Item $binPath).Length / 1MB, 1)
+            Write-Host "[arm-check] $target 产物：$binPath （$sizeMB MB）" -ForegroundColor Cyan
+
+            $bytes = [System.IO.File]::ReadAllBytes($binPath)
+            # ELF magic
+            if (-not ($bytes[0] -eq 0x7F -and $bytes[1] -eq 0x45 -and $bytes[2] -eq 0x4C -and $bytes[3] -eq 0x46)) {
+                Write-Host "[arm-check] $target 产物不是 ELF 文件" -ForegroundColor Red
+                $failed += $target
+                continue
+            }
+            # e_machine @ 0x12 (小端) / 0x28 (大端)
+            $little = ($bytes[5] -eq 1)
+            $machine = if ($little) { [BitConverter]::ToUInt16($bytes, 0x12) } else { [BitConverter]::ToUInt16($bytes, 0x12) }
+            $expected = if ($target -match "aarch64") { 0xB7 } else { 0x28 }
+            if ($machine -ne $expected) {
+                Write-Host "[arm-check] $target 产物架构不符（machine=0x$('{0:X}' -f $machine)，期望 0x$('{0:X}' -f $expected)）" -ForegroundColor Red
+                $failed += $target
+                continue
+            }
+            Write-Host "[arm-check] $target 架构正确（machine=0x$('{0:X}' -f $machine)）" -ForegroundColor Green
+
+            if ($isMusl) {
+                # 静态链接：不应有 .dynamic 段
+                $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+                $hasDynamic = $text.Contains(".dynamic")
+                if ($hasDynamic) {
+                    Write-Host "[arm-check] $target 产物含 .dynamic 段 —— 静态链接未生效" -ForegroundColor Red
+                    $failed += $target
+                    continue
+                }
+                # 静态 musl 产物不应带 GLIBC 版本引用
+                $glibcRefs = [regex]::Matches($text, "GLIBC_2\.\d+") | ForEach-Object { $_.Value } | Sort-Object -Unique
+                if ($glibcRefs.Count -gt 0) {
+                    Write-Host "[arm-check] $target 产物含 GLIBC 版本引用：$($glibcRefs -join ', ') —— 静态 musl 链接未生效" -ForegroundColor Red
+                    $failed += $target
+                    continue
+                }
+                Write-Host "[arm-check] $target 静态链接确认（无 .dynamic 段、无 GLIBC 版本引用）" -ForegroundColor Green
+            }
+        }
+
+        Write-Host "[arm-check] $target 通过" -ForegroundColor Green
     }
 }
 finally {
     Pop-Location
+    $env:RUSTFLAGS = ""
 }
 
 if ($failed.Count -gt 0) {

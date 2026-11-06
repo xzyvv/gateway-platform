@@ -70,6 +70,20 @@ fn main() {
                 // 未知 target：原样透传，zig 会给出明确错误
                 None => out.push(a.clone()),
             }
+        } else if let Some(inner) = a.strip_prefix("-Wl,") {
+            // zig cc 对 `-Wl,` 后面跟的链接器参数有白名单，遇到不认识的会直接报
+            // "unsupported linker arg" —— 但它内嵌的 lld 本身**认识**这个参数。
+            //
+            // 具体场景：rustc 在 aarch64 musl target 上会传
+            // `-Wl,--fix-cortex-a53-843419`（Cortex-A53 erratum 缓解）。
+            // zig cc 拒绝它，但 `zig ld.lld` 完全支持。
+            // 解法：改用 `-Xlinker <arg>` 透传给 lld，绕开 zig cc 的白名单。
+            if inner.starts_with("--fix-cortex-a53-") {
+                out.push("-Xlinker".to_string());
+                out.push(inner.to_string());
+            } else {
+                out.push(a.clone());
+            }
         } else {
             out.push(a.clone());
         }

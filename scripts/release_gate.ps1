@@ -375,6 +375,13 @@ if (-not $SkipBackend) {
         return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\arm_cross_check.ps1"))
     } -SkipReason $armCrossSkipReason
 
+    Add-Step -Id "arm-musl-release" -Title "ARM 静态 musl 产物构建 + 校验（免 glibc 版本耦合，防 GLIBC_2.xx not found）" -Action {
+        # 现场设备 glibc 版本千差万别，静态 musl 是唯一稳妥的部署产物。
+        # 这一步会真正链接出 aarch64 静态二进制，并校验架构 / 静态链接 / 无 GLIBC 引用。
+        return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\arm_cross_check.ps1") `
+                -MuslOnly -Release -Targets aarch64-unknown-linux-musl)
+    } -SkipReason $armCrossSkipReason
+
     if ($IncludeChaos) {
         Add-Step -Id "chaos" -Title "chaos 故障恢复场景（cargo test --test chaos）" -Action {
             return (Run-Native -Exe "cargo" -Arguments @("test", "-p", "gateway-core", "--test", "chaos", "--quiet"))
