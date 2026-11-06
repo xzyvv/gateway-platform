@@ -414,43 +414,41 @@ impl OtaManager {
 
     /// 处理读到的 pending_reboot 标记内容（**纯逻辑，独立函数便于审阅**）。
     fn handle_pending_reboot_marker(&self, marker: &std::path::Path, bytes: &[u8]) {
-        {
-            match Self::decode_pending_reboot(bytes) {
-                Some((target_version, target_slot)) => {
-                    if self.partition.active_slot == target_slot {
-                        tracing::warn!(
-                            "OTA: pending upgrade v{} is now effective (active slot '{}'); \
-                             clearing pending_reboot marker",
-                            target_version,
-                            target_slot
-                        );
-                        self.clear_pending_reboot_marker();
-                    } else {
-                        tracing::warn!(
-                            "OTA: pending_reboot marker at {} — active slot '{}' != target slot '{}', re-affirming boot_partition",
-                            marker.display(),
-                            self.partition.active_slot,
-                            target_slot
-                        );
-                        if let Err(e) = self.set_boot_partition_slot(target_slot) {
-                            tracing::error!(
-                                "ota: failed to re-affirm boot_partition={} after detected pending reboot: {}",
-                                target_slot,
-                                e
-                            );
-                        }
-                    }
-                }
-                None => {
-                    // 标记损坏 / 旧格式（无槽位信息）：无法判定目标槽，若据此反向
-                    // 切换启动分区会造成「反复回退」。安全起见清除标记，让设备以
-                    // 当前分区稳定运行（操作员可重新发起升级）。
+        match Self::decode_pending_reboot(bytes) {
+            Some((target_version, target_slot)) => {
+                if self.partition.active_slot == target_slot {
                     tracing::warn!(
-                        "OTA: pending_reboot marker at {} is unreadable/legacy; clearing it to avoid boot-partition flapping",
-                        marker.display()
+                        "OTA: pending upgrade v{} is now effective (active slot '{}'); \
+                         clearing pending_reboot marker",
+                        target_version,
+                        target_slot
                     );
                     self.clear_pending_reboot_marker();
+                } else {
+                    tracing::warn!(
+                        "OTA: pending_reboot marker at {} — active slot '{}' != target slot '{}', re-affirming boot_partition",
+                        marker.display(),
+                        self.partition.active_slot,
+                        target_slot
+                    );
+                    if let Err(e) = self.set_boot_partition_slot(target_slot) {
+                        tracing::error!(
+                            "ota: failed to re-affirm boot_partition={} after detected pending reboot: {}",
+                            target_slot,
+                            e
+                        );
+                    }
                 }
+            }
+            None => {
+                // 标记损坏 / 旧格式（无槽位信息）：无法判定目标槽，若据此反向
+                // 切换启动分区会造成「反复回退」。安全起见清除标记，让设备以
+                // 当前分区稳定运行（操作员可重新发起升级）。
+                tracing::warn!(
+                    "OTA: pending_reboot marker at {} is unreadable/legacy; clearing it to avoid boot-partition flapping",
+                    marker.display()
+                );
+                self.clear_pending_reboot_marker();
             }
         }
     }
