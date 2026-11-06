@@ -46,7 +46,7 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | 文档 | 说明 |
 |---|---|
 | [`docs/故障处置卡.md`](故障处置卡.md) | 现场 6 类常见故障（证书过期 / License 到期 / NTP 失步 / 看门狗触发 / 网络切换 / 南向长时无响应）的判定入口、处置步骤与数据完整性核对口径 |
-| [`docs/linux-branch-review.md`](linux-branch-review.md) | **Linux 专属分支审查报告**（部署前风险排除）：14 处 `cfg(target_os="linux")` 代码块清单、已修 **19 项** P0/P1 缺陷（两轮：看门狗 / OTA 变砖 / GPIO EBUSY / failover 静默断网 / 密钥权限竞态 / 优雅停机误复位 / A/B 回滚失效 / 并发写分区交错 / 北向静默无数据 / 心跳僵死检测失效 / 许可证指纹漂移）、跨平台纯函数化验证手段、真机验收清单 |
+| [`docs/linux-branch-review.md`](linux-branch-review.md) | **Linux 专属分支审查报告**（部署前风险排除）：14 处 `cfg(target_os="linux")` 代码块清单、已修 **19 项** P0/P1 缺陷（两轮：看门狗 / OTA 变砖 / GPIO EBUSY / failover 静默断网 / 密钥权限竞态 / 优雅停机误复位 / A/B 回滚失效 / 并发写分区交错 / 北向静默无数据 / 心跳僵死检测失效 / 许可证指纹漂移）、跨平台纯函数化验证手段、长周期 soak 回归验证（3h 基线 + 2h post-fix，判定两次全绿）、真机验收清单 |
 
 ## 性能基线报告
 
