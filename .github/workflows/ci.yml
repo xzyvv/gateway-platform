@@ -442,20 +442,28 @@ jobs:
           if-no-files-found: warn
 
   # 跨平台编译检查（仅 check，不 build）
-  # macOS runner 是 GitHub 上最紧缺的资源，排队超时会被调度器直接取消（表现为灰/红，
-  # 与代码无关）。两点降噪：①只跑一遍 `-D dead_code`（原先"普通 check +严格 check"
-  # 要编译两遍，RUSTFLAGS 变化会让缓存全失效，耗时翻倍；严格版已包含普通版的覆盖）；
-  # ②macOS 结果设为 advisory，runner 短缺不再阻塞合并；Windows 仍为硬门禁。
+  # 只保留 Windows：出厂交付链路是 Linux 专用（build-release.sh + systemd +
+  # deliver.sh + ARM/x86 交叉编译），macOS 不在任何交付形态里。Windows 侧确有
+  # 平台专属代码（license 指纹走注册表 MachineGuid，见 gateway-core 的
+  # license/fingerprint.rs 与 crypto/secret.rs），需要真实 Windows 编译器守住。
+  #
+  # macOS 曾在基线初始化时随模板带进来（commit d748f7b），但它只多验了
+  # crypto/secret.rs 里一段 license 指纹回退分支（IOPlatformUUID），而该分支
+  # 在 Linux 交叉编译产物中根本不会被编译进去。代价却最高：macOS runner
+  # $0.062/min（Linux 的 10 倍），且按 10 倍倍率消耗 included 分钟
+  # （2000 分钟额度只够跑 200 分钟 macOS）。故已移除。
+  #
+  # 只跑一遍 `-D dead_code`（原先"普通 check +严格 check"要编译两遍，
+  # RUSTFLAGS 变化会让缓存全失效，耗时翻倍；严格版已包含普通版的覆盖）。
   cross-platform-check:
     name: check on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     needs: check
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1

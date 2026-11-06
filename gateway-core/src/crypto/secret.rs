@@ -278,7 +278,6 @@ fn decrypt_field(field: &mut String, name: &str) -> Result<(), String> {
 /// 取本机指纹，跨平台：
 /// - Linux: /etc/machine-id + /proc/cpuinfo Serial/Hardware
 /// - Windows: 注册表 MachineGuid（HKLM\SOFTWARE\Microsoft\Cryptography）
-/// - macOS: IOPlatformUUID（ioreg 命令）
 ///
 /// C-2 修复：所有来源都失败时返回 `Err`，不再静默回退到 hostname / computername。
 /// 旧实现在 Windows 上 `/etc/machine-id` 不存在、`read_windows_machine_guid` 失败
@@ -305,7 +304,7 @@ fn machine_fingerprint() -> Result<Vec<u8>, String> {
             }
         }
     }
-    // 1. Windows MachineGuid（注册表）
+    // 2. Windows MachineGuid（注册表）
     #[cfg(target_os = "windows")]
     {
         sources_tried.push("HKLM\\SOFTWARE\\Microsoft\\Cryptography\\MachineGuid");
@@ -315,18 +314,7 @@ fn machine_fingerprint() -> Result<Vec<u8>, String> {
             None => tracing::warn!("machine fingerprint: read_windows_machine_guid returned None"),
         }
     }
-    // 1. macOS IOPlatformUUID
-    #[cfg(target_os = "macos")]
-    {
-        sources_tried.push("ioreg IOPlatformUUID");
-        match read_macos_platform_uuid() {
-            Some(uuid) if !uuid.is_empty() => buf.extend_from_slice(uuid.as_bytes()),
-            Some(_) => tracing::warn!("machine fingerprint: macOS IOPlatformUUID is empty"),
-            None => tracing::warn!("machine fingerprint: read_macos_platform_uuid returned None"),
-        }
-    }
-
-    // 2. CPU 信息（Linux：取 Serial/Hardware 行）
+    // 3. CPU 信息（Linux：取 Serial/Hardware 行）
     #[cfg(target_os = "linux")]
     {
         sources_tried.push("/proc/cpuinfo Serial/Hardware");
@@ -379,27 +367,6 @@ fn read_windows_machine_guid() -> Option<String> {
         .find(|line| line.contains("MachineGuid"))
         .and_then(|line| line.split_whitespace().last())
         .map(|s| s.to_string())
-}
-
-/// A7: 读取 macOS IOPlatformUUID（ioreg 命令）。
-#[cfg(target_os = "macos")]
-fn read_macos_platform_uuid() -> Option<String> {
-    let output = std::process::Command::new("ioreg")
-        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
-        .find(|line| line.contains("IOPlatformUUID"))
-        .and_then(|line| {
-            line.split('=')
-                .last()
-                .map(|s| s.trim().trim_matches('"').to_string())
-        })
 }
 
 /// KDF 派生时混入的用途标签（Bug P0-CR1 fix：阻断跨域攻击）。

@@ -39,7 +39,7 @@
 - `e2e smoke`：Playwright 端到端；`deploy smoke (install + verify)`：出厂包安装 + 部署校验；`deploy script lint`：交付脚本静态检查
 - `soak smoke (memory leak gate)`：短时浸泡 + 判定，兜住内存 / 句柄泄漏回退（Linux 走 `scripts/soak.sh`）
 - `sku size matrix`：release 构建 5 个 SKU 出体积表（纯观测，仅 `push` / 手动触发时跑，不阻塞 PR）
-- 跨平台矩阵：`check on macos-latest` / `check on windows-latest`
+- 跨平台矩阵：`check on windows-latest`（Windows 侧有平台专属代码——license 指纹走注册表 MachineGuid）
 
 `.github/workflows/security.yml` 另跑供应链门禁：`cargo audit (RustSec)` / `npm audit (frontend deps)` / `cargo deny (licenses / bans / sources)`。
 
