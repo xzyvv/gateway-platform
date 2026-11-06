@@ -609,12 +609,14 @@ mod tests {
     /// 现场表现为自愈执行器按 0 周期疯狂重试。
     #[test]
     fn self_heal_option_nested_validation_is_enforced() {
-        let mut cfg = GatewayConfig::default();
-        cfg.self_heal = Some(crate::config::SelfHealConfig {
-            enabled: true,
-            check_interval_secs: 0, // 违反 range(min = 1)
+        let cfg = GatewayConfig {
+            self_heal: Some(crate::config::SelfHealConfig {
+                enabled: true,
+                check_interval_secs: 0, // 违反 range(min = 1)
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let errs = cfg
             .validate_all()
             .expect_err("self_heal 嵌套校验必须生效，0 周期应被拒绝");
