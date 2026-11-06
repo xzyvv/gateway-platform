@@ -1083,6 +1083,17 @@ jobs:
           shellcheck -S warning gateway-core/deploy/install.sh \
             deploy/verify-deploy.sh deploy/deliver.sh deploy/build-release.sh
 
+      # 部署脚本与代码的一致性断言（C1~C13）。
+      # 这层门禁补的是 shellcheck 查不出来的一类缺陷：
+      #   · systemd DeviceAllow 白名单漏掉代码会 open 的设备（→ 设备上被 EPERM 静默拒绝）
+      #   · DeviceAllow 写成「路径形式但非真实节点」（/dev/ttyUSB）→ systemd 整条丢弃该条目
+      #   · install.sh 与 gateway.service 的配置目录权限不一致（→ 在线改配置 500）
+      #   · install.sh 的 OTA 分区改写不幂等 / 同一变量写两遍
+      #   · build-release.sh 的协议白名单与 Cargo.toml feature 漂移
+      # ubuntu runner 自带 pwsh（见 check_repo_health.ps1 的既有用法）。
+      - name: deploy consistency assertions
+        run: pwsh scripts/deploy_lint.ps1
+
   # 真实交付冒烟：拼一个「发布包」目录 → sudo bash deliver.sh 一条命令走完
   # 安装 → 等待就绪 → 验证 → 导出交付检查单。runner 上有 systemd + 免密 sudo，
   # 因此 install.sh 的 useradd/systemctl/健康检查都是真跑，不是打桩。

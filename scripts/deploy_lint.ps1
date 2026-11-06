@@ -27,6 +27,14 @@
           与 gateway.service / install.sh 一致
       C8  gateway.service / install.sh 里的 Environment=GATEWAY_* 变量名
           必须在 Rust 源码里真实存在（写错名字 = 静默不生效）
+      C9  代码里真正会 open 的 /dev/* 路径都在 DeviceAllow 白名单内
+          （精确路径形式，或 char-<组名> 设备组形式）
+      C10 gateway.service 的 ReadWritePaths 覆盖配置目录
+          （= default_config_path 所在目录；ProtectSystem=strict 下唯一的写通道）
+      C11 install.sh 对配置目录的组权限 与 gateway.service 的写权限一致
+          （组可写 ⇔ ReadWritePaths 含该目录；且组名 = service 的 Group）
+      C12 DeviceAllow 的路径形式不得写成「非真实节点」的裸设备名
+          （/dev/ttyUSB 这类在 systemd v255 会被 stat 失败后整条丢弃）
 
 .PARAMETER Strict
     任何检查失败都返回 1；否则只打印警告并返回 0。
@@ -63,47 +71,68 @@ function Warn([string]$msg) {
 }
 
 # ── 定位 bash ──
-# Git for Windows 自带 bash（MSYS2）。不依赖 WSL / Linux 机器。
+# Windows：Git for Windows 自带 bash（MSYS2），不依赖 WSL。
+# Linux  ：系统自带 /usr/bin/bash（CI runner 上直接可用）。
 function Find-Bash {
+    $isWindows = ($env:OS -eq "Windows_NT")
     $candidates = @()
     $gitCmd = Get-Command git -ErrorAction SilentlyContinue
     if ($gitCmd) {
         # git.exe 通常在 <install>\cmd\git.exe，bash 在 <install>\bin\bash.exe
         $gitRoot = Split-Path -Parent (Split-Path -Parent $gitCmd.Source)
-        $candidates += (Join-Path $gitRoot "bin\bash.exe")
-        $candidates += (Join-Path $gitRoot "usr\bin\bash.exe")
+        $candidates += (Join-Path $gitRoot "bin/bash.exe")
+        $candidates += (Join-Path $gitRoot "usr/bin/bash.exe")
     }
     $candidates += @(
         "C:\Program Files\Git\bin\bash.exe",
         "C:\Program Files (x86)\Git\bin\bash.exe",
         "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe"
     )
+    if (-not $isWindows) {
+        # Linux / macOS：系统 bash（CI runner 上是 /usr/bin/bash）
+        $candidates += @("/usr/bin/bash", "/bin/bash", "/usr/local/bin/bash")
+    }
     foreach ($c in $candidates) {
         if ($c -and (Test-Path $c)) { return $c }
+    }
+    if (-not $isWindows) {
+        # PATH 兜底（Linux 上 bash 可能装在别处）
+        $onPath = Get-Command bash -ErrorAction SilentlyContinue
+        if ($onPath) { return $onPath.Source }
     }
     return $null
 }
 
+# ── 仓库内路径拼接 ──
+# 统一用正斜杠：Linux 上 Join-Path 不会把反斜杠当分隔符，
+# Windows 上正斜杠同样被 API 接受（Get-Content / Test-Path 都行）。
+function Join-Repo([string]$relPath) {
+    return (Join-Path $repoRoot ($relPath -replace '\\', '/'))
+}
+
 $bash = Find-Bash
 if ($null -eq $bash) {
-    Write-Host "[deploy-lint] 未找到 bash（需要 Git for Windows 自带的 Git Bash）—— 跳过本脚本。" -ForegroundColor Yellow
-    Write-Host "[deploy-lint] 安装：https://git-scm.com/download/win （或 winget install Git.Git）" -ForegroundColor Yellow
-    if ($Probe) { exit 3 }
-    if ($Strict) { exit 1 }
-    exit 0
+    # 只跳过 C1（bash -n），C2~C12 是纯文本断言，不需要 bash —— 必须继续跑，
+    # 否则「没装 Git」就会让整套一致性断言（含 CI 门禁）静默失效。
+    Write-Host "[deploy-lint] 未找到 bash —— 跳过 C1 语法检查，其余断言照常执行。" -ForegroundColor Yellow
+    if ($Strict) { Fail "缺少 bash，无法执行 C1 的 bash -n 语法检查" }
 }
 if ($Probe) {
+    if ($null -eq $bash) {
+        Write-Host "[deploy-lint] bash 不可用"
+        exit 3
+    }
     Write-Host "[deploy-lint] bash 可用: $bash"
     exit 0
 }
 
-Write-Host "[deploy-lint] bash: $bash"
+if ($bash) { Write-Host "[deploy-lint] bash: $bash" }
 Write-Host ""
 
 # 收集要检查的脚本
 $shFiles = @()
-foreach ($dir in @("deploy", "gateway-core\deploy")) {
-    $d = Join-Path $repoRoot $dir
+foreach ($dir in @("deploy", "gateway-core/deploy")) {
+    $d = Join-Repo $dir
     if (Test-Path $d) {
         $shFiles += Get-ChildItem $d -Filter "*.sh" -File -ErrorAction SilentlyContinue
     }
@@ -119,14 +148,19 @@ Write-Host "[C1] bash -n 语法检查" -ForegroundColor Cyan
 if ($shFiles.Count -eq 0) {
     Fail "没找到任何 .sh 脚本（deploy/*.sh 不存在？）"
 }
-foreach ($f in $shFiles) {
-    $rel = $f.FullName.Substring($repoRoot.Length + 1).Replace('\', '/')
-    $out = & $bash -n $f.FullName 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Ok "$rel 语法通过"
-    }
-    else {
-        Fail "$rel 语法错误: $($out -join ' ')"
+if ($null -eq $bash) {
+    Warn "跳过 C1（未找到 bash）"
+}
+else {
+    foreach ($f in $shFiles) {
+        $rel = $f.FullName.Substring($repoRoot.Length + 1).Replace('\', '/')
+        $out = & $bash -n $f.FullName 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Ok "$rel 语法通过"
+        }
+        else {
+            Fail "$rel 语法错误: $($out -join ' ')"
+        }
     }
 }
 Write-Host ""
@@ -137,7 +171,7 @@ Write-Host ""
 # 会把换行吃掉，导致「行首匹配」类的断言莫名其妙地失败
 # （曾表现为 DeviceAllow=/dev/watchdog 那行匹配不上，而 /dev/watchdog0 能匹配）。
 function ReadText([string]$relPath) {
-    $p = Join-Path $repoRoot $relPath
+    $p = Join-Repo $relPath
     if (-not (Test-Path $p)) { return $null }
     return (Get-Content $p -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
 }
@@ -149,8 +183,8 @@ function ReadText([string]$relPath) {
 # 未列出的设备一律拒绝。代码按候选顺序探测，systemd 少放行一个，
 # 设备上就在 open() 之前被 EPERM 拒绝 → 看门狗静默失效。
 Write-Host "[C2] gateway.service DeviceAllow 覆盖代码看门狗候选路径" -ForegroundColor Cyan
-$serviceText = ReadText "gateway-core\deploy\gateway.service"
-$collectionText = ReadText "gatewayd\src\bootstrap\helpers\collection.rs"
+$serviceText = ReadText "gateway-core/deploy/gateway.service"
+$collectionText = ReadText "gatewayd/src/bootstrap/helpers/collection.rs"
 if ($null -eq $serviceText) {
     Fail "找不到 gateway-core/deploy/gateway.service"
 }
@@ -180,7 +214,7 @@ Write-Host ""
 # C3  DeviceAllow 覆盖代码里的 OTA 默认分区设备
 # ══════════════════════════════════════════════════════════
 Write-Host "[C3] gateway.service DeviceAllow 覆盖 OTA 默认分区设备" -ForegroundColor Cyan
-$otaText = ReadText "gateway-core\src\platform\ota\mod.rs"
+$otaText = ReadText "gateway-core/src/platform/ota/mod.rs"
 if ($null -eq $serviceText) {
     # 已在 C2 报过
 }
@@ -213,7 +247,7 @@ Write-Host ""
 # C4  配置路径一致（代码默认值 vs 脚本里的硬编码）
 # ══════════════════════════════════════════════════════════
 Write-Host "[C4] 部署脚本里的配置路径 = 代码 default_config_path" -ForegroundColor Cyan
-$pathsText = ReadText "gateway-core\src\support\paths.rs"
+$pathsText = ReadText "gateway-core/src/support/paths.rs"
 if ($null -eq $pathsText) {
     Warn "找不到 gateway-core/src/support/paths.rs（跳过配置路径断言）"
 }
@@ -255,8 +289,8 @@ Write-Host ""
 # 与 gateway-core/Cargo.toml 的 [features] 是两份来源 —— 加协议时漏改一处
 # 会让「能编译但脚本拒绝」或「脚本放行但 cargo 不认」。
 Write-Host "[C5] build-release.sh 协议白名单 = Cargo.toml 协议 feature" -ForegroundColor Cyan
-$buildSh = ReadText "deploy\build-release.sh"
-$cargoToml = ReadText "gateway-core\Cargo.toml"
+$buildSh = ReadText "deploy/build-release.sh"
+$cargoToml = ReadText "gateway-core/Cargo.toml"
 if ($null -eq $buildSh) {
     Fail "找不到 deploy/build-release.sh"
 }
@@ -308,7 +342,7 @@ else {
             # 不能用「所有非聚合 feature」——那会把 default / tracing /
             # remote-shell / test-support 也算进来。
             $protoSet = New-Object System.Collections.Generic.HashSet[string]
-            $protoModText = ReadText "gateway-core\src\south\protocol\mod.rs"
+            $protoModText = ReadText "gateway-core/src/south/protocol/mod.rs"
             if ($null -ne $protoModText) {
                 foreach ($pm in [regex]::Matches($protoModText, '#\[cfg\(feature\s*=\s*"([^"]+)"\)\]')) {
                     [void]$protoSet.Add($pm.Groups[1].Value)
@@ -359,7 +393,7 @@ Write-Host ""
 # verify-deploy.sh 里写死了一串 API 路径。网关删/改端点后，脚本会
 # 「验证失败」但看不出是脚本过期了还是网关坏了 —— 现场浪费大量排查时间。
 Write-Host "[C6] verify-deploy.sh 的 API 端点在 gateway-api 路由里存在" -ForegroundColor Cyan
-$verifySh = ReadText "deploy\verify-deploy.sh"
+$verifySh = ReadText "deploy/verify-deploy.sh"
 if ($null -eq $verifySh) {
     Fail "找不到 deploy/verify-deploy.sh"
 }
@@ -374,7 +408,7 @@ else {
     }
     else {
         # 在 gateway-api 源码里找路由定义
-        $apiSrc = Join-Path $repoRoot "gateway-api\src"
+        $apiSrc = Join-Repo "gateway-api/src"
         $apiFiles = Get-ChildItem $apiSrc -Filter "*.rs" -Recurse -File -ErrorAction SilentlyContinue
         $apiText = ($apiFiles | ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue }) -join "`n"
         foreach ($e in $eps) {
@@ -484,8 +518,8 @@ Write-Host ""
 Write-Host "[C8] 服务环境变量名在代码中存在"
 $envNames = @()
 foreach ($f in @(
-        (Join-Path $repoRoot "gateway-core\deploy\gateway.service"),
-        (Join-Path $repoRoot "gateway-core\deploy\install.sh")
+        (Join-Repo "gateway-core/deploy/gateway.service"),
+        (Join-Repo "gateway-core/deploy/install.sh")
     )) {
     if (-not (Test-Path $f)) { continue }
     $rel = $f.Substring($repoRoot.Length + 1).Replace('\', '/')
@@ -502,7 +536,7 @@ if ($gwEnvNames.Count -eq 0) {
 }
 else {
     $rsFiles = Get-ChildItem $repoRoot -Recurse -File -Filter *.rs -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -notmatch '\\(target|node_modules|\.git)\\' }
+        Where-Object { $_.FullName -notmatch '[\\/](target|node_modules|\.git)[\\/]' }
     $rsText = ($rsFiles | ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n"
     foreach ($e in $gwEnvNames) {
         # \b 配合下划线：GATEWAY_CONFIG 不会误匹配到 GATEWAY_CONFIG_PATH
@@ -511,6 +545,446 @@ else {
         }
         else {
             Fail "$($e.File) 的 Environment=$($e.Name) 在代码里不存在 —— 该变量不生效（多半是名字写错）"
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C9  代码会 open 的设备路径 ⊆ DeviceAllow 白名单
+# ══════════════════════════════════════════════════════════
+# systemd 的 DeviceAllow 有两套语义（v255，src/core/bpf-devices.c）：
+#   · 路径形式  /dev/xxx      → 应用期先 stat(node)，stat 失败**整条丢弃**
+#                                （"Couldn't stat device %s: %m"）
+#   · 设备组形式 char-<组名>  → 按 /proc/devices 的设备组名匹配，
+#                                一次放行该 major 的全部次设备
+# 因此「代码里 open 的路径」必须能被白名单覆盖，否则进程在 open() 之前
+# 就被 EPERM 拒绝 → 该协议静默不上报数据。
+#
+# 扫描方式：遍历 Rust 源码，去掉注释与 #[cfg(test)] 之后的测试代码，
+# 再取被引号包裹的完整 "/dev/xxx" 字面量（避免 format! 拼接串误判）。
+function Remove-RustComments([string]$s) {
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0; $n = $s.Length
+    $inStr = $false; $inLine = $false; $inBlock = 0
+    while ($i -lt $n) {
+        $c = $s[$i]
+        $c2 = if ($i + 1 -lt $n) { $s[$i + 1] } else { [char]0 }
+        if ($inLine) {
+            if ($c -eq "`n") { $inLine = $false; [void]$sb.Append($c) }
+            $i++; continue
+        }
+        if ($inBlock -gt 0) {
+            # 保留换行：调用方按行号对齐原文与去注释后的文本
+            if ($c -eq "`n") { [void]$sb.Append($c) }
+            if ($c -eq '/' -and $c2 -eq '*') { $inBlock++; $i += 2; continue }
+            if ($c -eq '*' -and $c2 -eq '/') { $inBlock--; $i += 2; continue }
+            $i++; continue
+        }
+        if ($inStr) {
+            [void]$sb.Append($c)
+            if ($c -eq '\' -and $i + 1 -lt $n) { [void]$sb.Append($s[$i + 1]); $i += 2; continue }
+            if ($c -eq '"') { $inStr = $false }
+            $i++; continue
+        }
+        if ($c -eq '/' -and $c2 -eq '/') { $inLine = $true; $i += 2; continue }
+        if ($c -eq '/' -and $c2 -eq '*') { $inBlock = 1; $i += 2; continue }
+        if ($c -eq '"') { $inStr = $true; [void]$sb.Append($c); $i++; continue }
+        if ($c -eq "'") {
+            # 字符字面量 'x' / '\n' 吃掉三个字符；'a 这样的生命周期标注保留引号本身
+            if ($i + 2 -lt $n -and $s[$i + 2] -eq "'") {
+                [void]$sb.Append($c); [void]$sb.Append($s[$i + 1]); [void]$sb.Append($s[$i + 2]); $i += 3; continue
+            }
+            [void]$sb.Append($c); $i++; continue
+        }
+        [void]$sb.Append($c); $i++
+    }
+    return $sb.ToString()
+}
+
+# 标记属于 #[cfg(test)] 条目的行号。
+# 结果写入 $script:testLineSet（不用返回值：HashSet 经管道返回会被展开成 int 数组）。
+function Get-TestLineSet([string[]]$lines) {
+    $test = New-Object 'System.Collections.Generic.HashSet[int]'
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -notmatch '#\[cfg\(test\)\]') { continue }
+        # 从该行往后找条目体（函数 / 模块 / 单行声明）
+        $depth = 0; $started = $false; $j = $i
+        while ($j -lt $lines.Count) {
+            [void]$test.Add($j)
+            $code = ($lines[$j] -replace '//.*$', '')
+            $opens = ([regex]::Matches($code, '\{')).Count
+            $closes = ([regex]::Matches($code, '\}')).Count
+            if (-not $started) {
+                if ($opens -gt 0) {
+                    $started = $true; $depth += $opens - $closes
+                    if ($depth -le 0) { break }
+                    $j++; continue
+                }
+                if ($code -match ';') { break }   # 单行声明（use / const …）
+                $j++; continue
+            }
+            $depth += $opens - $closes
+            if ($depth -le 0) { break }
+            $j++
+        }
+        $i = $j
+    }
+    $script:testLineSet = $test
+}
+
+Write-Host "[C9] 代码 open 的设备路径都在 DeviceAllow 白名单内" -ForegroundColor Cyan
+# DeviceAllow 条目解析：路径形式与设备组形式分开收集
+$allowPaths = @()
+$allowGroups = @()
+if ($null -ne $serviceText) {
+    foreach ($m in [regex]::Matches($serviceText, '(?m)^\s*DeviceAllow=(\S+)(?:\s+(\S+))?\s*$')) {
+        $val = $m.Groups[1].Value
+        $perm = $m.Groups[2].Value
+        if ($val -match '^(char|block)-(.+)$') {
+            $allowGroups += [pscustomobject]@{ Kind = $Matches[1]; Name = $Matches[2]; Perm = $perm }
+        }
+        else {
+            $allowPaths += [pscustomobject]@{ Path = $val; Perm = $perm }
+        }
+    }
+}
+$allowPaths = @($allowPaths | Sort-Object Path -Unique)
+$allowGroups = @($allowGroups | Sort-Object Kind, Name -Unique)
+
+if ($null -eq $serviceText) {
+    Warn "找不到 gateway.service（已在 C2 报告），跳过 C9"
+}
+else {
+    # 收集生产代码里的设备路径
+    $codeDevices = @{}
+    $rsFiles = Get-ChildItem $repoRoot -Recurse -File -Filter *.rs -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '[\\/](target|node_modules|\.git)[\\/]' }
+    foreach ($f in $rsFiles) {
+        $rel = $f.FullName.Substring($repoRoot.Length + 1).Replace('\', '/')
+        # 跳过测试文件（tests/ 目录、*_tests.rs）
+        if ($rel -match '(^|/)tests/' -or $rel -match '(^|/)[^/]*tests\.rs$') { continue }
+        $text = Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($null -eq $text -or $text -notmatch '/dev/') { continue }
+        $lines = $text -split "`r?`n"
+        Get-TestLineSet $lines
+        $testLines = $script:testLineSet
+        # 去掉注释（保留换行，行号与原文对齐）
+        $cleanLines = (Remove-RustComments $text) -split "`r?`n"
+        for ($i = 0; $i -lt $cleanLines.Count; $i++) {
+            if ($testLines.Contains($i)) { continue }
+            foreach ($m in [regex]::Matches($cleanLines[$i], '"(/dev/[A-Za-z0-9_.\-/]+)"')) {
+                $p = $m.Groups[1].Value
+                if (-not $codeDevices.ContainsKey($p)) {
+                    $codeDevices[$p] = New-Object System.Collections.Generic.List[string]
+                }
+                $codeDevices[$p].Add("$rel`:$($i + 1)")
+            }
+        }
+    }
+    if ($codeDevices.Count -eq 0) {
+        Fail "未从 Rust 源码中解析到任何设备路径，C9 失效（正则或扫描范围需要更新）"
+    }
+    foreach ($p in ($codeDevices.Keys | Sort-Object)) {
+        $base = [System.IO.Path]::GetFileName($p)
+        $covered = $false
+        $how = ""
+        # ① 精确路径形式
+        foreach ($a in $allowPaths) {
+            if ($a.Path -eq $p) {
+                $covered = $true; $how = "路径形式 $p"
+                if ($a.Perm -notmatch 'w') { Fail "DeviceAllow=$p 未授予写权限（代码需要读写该设备）" }
+                break
+            }
+        }
+        # ② 设备组形式：basename 去掉尾部编号 == 设备组名
+        if (-not $covered -and $base -match '^(.*?)(\d+)$') {
+            $grp = $Matches[1]
+            foreach ($g in $allowGroups) {
+                if ($g.Name -eq $grp) {
+                    $covered = $true; $how = "$($g.Kind)-$grp 设备组"
+                    if ($g.Perm -notmatch 'w') { Fail "DeviceAllow=$($g.Kind)-$grp 未授予写权限（代码需要读写该设备）" }
+                    break
+                }
+            }
+        }
+        if ($covered) {
+            Ok "$p 被 DeviceAllow 覆盖（$how）"
+        }
+        else {
+            $src = (($codeDevices[$p] | Sort-Object -Unique) -join ', ')
+            Fail "代码会 open 设备 $p（来源：$src），但 gateway.service 的 DeviceAllow 未覆盖它 —— systemd 会在 open() 之前 EPERM 拒绝，该设备静默失效"
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C10  ReadWritePaths 覆盖配置目录
+# ══════════════════════════════════════════════════════════
+# ProtectSystem=strict 会把 /etc 整体挂成只读，ReadWritePaths= 是唯一例外通道。
+# 配置写回走 ConfigLoader::save() → atomic_write()（临时文件建在目标同目录
+# 再 rename 覆盖）→ 缺该目录时所有在线改配置端点 500「运行时已改、磁盘未改」。
+Write-Host "[C10] gateway.service 的 ReadWritePaths 覆盖配置目录" -ForegroundColor Cyan
+$cfgDirForRwp = ""
+if ($null -ne $pathsText) {
+    $pm = [regex]::Match($pathsText, '(?s)default_config_path,\s*"[^"]*",\s*"([^"]+)"')
+    if ($pm.Success) {
+        $cfgPath = $pm.Groups[1].Value
+        $cfgDirForRwp = $cfgPath.Substring(0, $cfgPath.LastIndexOf('/'))
+    }
+}
+if (-not $cfgDirForRwp) {
+    Warn "无法从 paths.rs 解析 default_config_path（跳过 C10）"
+}
+elseif ($null -eq $serviceText) {
+    Warn "找不到 gateway.service（已在 C2 报告），跳过 C10"
+}
+else {
+    $rwp = @()
+    foreach ($m in [regex]::Matches($serviceText, '(?m)^\s*ReadWritePaths=(.*)$')) {
+        $rwp += ($m.Groups[1].Value -split '\s+' | Where-Object { $_ })
+    }
+    if ($rwp.Count -eq 0) {
+        Fail "gateway.service 没有 ReadWritePaths= —— ProtectSystem=strict 下配置目录不可写，在线改配置会失败"
+    }
+    elseif ($rwp -contains $cfgDirForRwp) {
+        Ok "ReadWritePaths 包含配置目录 $cfgDirForRwp"
+    }
+    else {
+        Fail "ReadWritePaths=($($rwp -join ' ')) 不包含配置目录 $cfgDirForRwp —— 配置写回（atomic_write 临时文件建在同目录）会被拒，在线改配置端点 500"
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C11  install.sh 的配置目录权限 ⇔ gateway.service 的写权限
+# ══════════════════════════════════════════════════════════
+# ReadWritePaths= 只把路径 bind 成可写，目录内的文件仍受属主/权限约束 →
+# unit 与 install.sh 必须同时改，否则「路径可写但文件组不可写」依旧写不进去。
+Write-Host "[C11] install.sh 配置目录权限与 service 写权限一致" -ForegroundColor Cyan
+$installText = ReadText "gateway-core/deploy/install.sh"
+if ($null -eq $installText) {
+    Warn "找不到 gateway-core/deploy/install.sh（跳过 C11）"
+}
+elseif ($null -eq $serviceText) {
+    Warn "找不到 gateway.service（已在 C2 报告），跳过 C11"
+}
+else {
+    # install.sh 里的配置目录变量
+    $cm = [regex]::Match($installText, '(?m)^\s*CONFIG_DIR="([^"]+)"')
+    $installCfgDir = if ($cm.Success) { $cm.Groups[1].Value } else { "" }
+    if (-not $installCfgDir) {
+        Warn "无法从 install.sh 解析 CONFIG_DIR（跳过 C11）"
+    }
+    else {
+        # 该目录的属组（chown -R <user>:<group> "$CONFIG_DIR"）
+        $ownGroup = ""
+        foreach ($m in [regex]::Matches($installText, '(?m)chown\s+-R\s+\S+:(\S+)\s+"\$CONFIG_DIR"')) {
+            $ownGroup = $m.Groups[1].Value
+        }
+        # 该目录的组可写（chmod g+rwx / g+w 作用在 $CONFIG_DIR 上）
+        $groupWritable = $false
+        foreach ($line in ($installText -split "`n")) {
+            if ($line -match '\$CONFIG_DIR' -and $line -match 'chmod' -and $line -match 'g\+[rwx]*w') {
+                $groupWritable = $true
+            }
+        }
+        # service 侧的组与可写路径
+        $svcGroup = ([regex]::Match($serviceText, '(?m)^Group=(\S+)')).Groups[1].Value
+        $svcSupplementary = @()
+        foreach ($m in [regex]::Matches($serviceText, '(?m)^SupplementaryGroups=(\S+)')) {
+            $svcSupplementary += ($m.Groups[1].Value -split '\s+' | Where-Object { $_ })
+        }
+        $rwp2 = @()
+        foreach ($m in [regex]::Matches($serviceText, '(?m)^\s*ReadWritePaths=(.*)$')) {
+            $rwp2 += ($m.Groups[1].Value -split '\s+' | Where-Object { $_ })
+        }
+        $rwpHasCfg = $rwp2 -contains $installCfgDir
+
+        Ok "install.sh 的配置目录 = $installCfgDir"
+        if ($ownGroup) {
+            if ($ownGroup -eq $svcGroup -or $svcSupplementary -contains $ownGroup) {
+                Ok "配置目录属组 $ownGroup 与 service 的运行组一致（Group=$svcGroup / SupplementaryGroups=$($svcSupplementary -join ',')）"
+            }
+            else {
+                Fail "install.sh 把配置目录设为 $ownGroup 组，但 service 以 Group=$svcGroup 运行 —— 服务进程没有该组权限，配置目录不可写"
+            }
+        }
+        else {
+            Warn "install.sh 里未找到对 \$CONFIG_DIR 的 chown（跳过属组一致性断言）"
+        }
+        # 组可写 ⇔ ReadWritePaths 含该目录
+        if ($groupWritable -and -not $rwpHasCfg) {
+            Fail "install.sh 给了配置目录 $installCfgDir 组可写，但 gateway.service 的 ReadWritePaths 不含它 —— systemd 层仍是只读，配置写回失败"
+        }
+        elseif ($rwpHasCfg -and -not $groupWritable) {
+            Fail "gateway.service 的 ReadWritePaths 含 $installCfgDir，但 install.sh 没给该目录组可写 —— 目录内文件仍不可写，配置写回失败"
+        }
+        elseif ($groupWritable) {
+            Ok "配置目录的组可写权限与 ReadWritePaths 一致（$installCfgDir）"
+        }
+        else {
+            Warn "install.sh 未给配置目录组可写，且 ReadWritePaths 也不含它（若本就不需要在线改配置可忽略）"
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C12  DeviceAllow 里不得有「路径形式但非真实节点」的裸设备名
+# ══════════════════════════════════════════════════════════
+# /dev/ttyUSB 这类写法在 systemd v255 里语法合法，但应用期 stat 失败后
+# 整条被丢弃（"Couldn't stat device %s: %m"）→ 白名单形同虚设。
+# 判定：路径形式的 basename 不带编号 → 它要么是真实存在的单一节点
+# （/dev/watchdog、/dev/null …），要么是被误当成路径的设备组名。
+Write-Host "[C12] DeviceAllow 无「裸设备名」伪路径" -ForegroundColor Cyan
+$realSingleNodes = @(
+    "watchdog", "softdog", "null", "zero", "full", "random", "urandom",
+    "tty", "ptmx", "console", "kmsg", "stdin", "stdout", "stderr", "mem", "port"
+)
+if ($null -eq $serviceText) {
+    Warn "找不到 gateway.service（已在 C2 报告），跳过 C12"
+}
+else {
+    $bad = @()
+    foreach ($a in $allowPaths) {
+        if ($a.Path -notmatch '^/dev/') { continue }
+        $base = [System.IO.Path]::GetFileName($a.Path)
+        if ($base -match '\d') { continue }                     # 带编号 = 具体节点（gpiochip0 / watchdog0）
+        if ($realSingleNodes -contains $base) { continue }     # 真实存在的单一节点
+        $bad += $a.Path
+    }
+    if ($bad.Count -eq 0) {
+        Ok "DeviceAllow 的路径形式均为真实节点（无裸设备名）"
+    }
+    else {
+        foreach ($b in $bad) {
+            $bn = [System.IO.Path]::GetFileName($b)
+            Fail "DeviceAllow=$b 是「路径形式但非真实节点」—— systemd v255 解析时 stat 失败会**整条丢弃**该条目（Couldn't stat device），串口/设备在 open() 前被 EPERM 拒绝。应改用设备组形式（如 DeviceAllow=char-$bn rw）"
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C13  install.sh 的 OTA 改写：幂等 + 每个变量恰好一条赋值
+# ══════════════════════════════════════════════════════════
+# install.sh 用 awk 把 OTA 分区同时改写进 DeviceAllow 与 Environment。
+# 这段 awk 的输入是 unit 原文、输出是 unit 新文，两条路径（注释示例就地替换 /
+# RUST_LOG 之后补写）若同时命中就会把同一变量写两遍 —— systemd 取最后一行，
+# 表面能跑，实际生效值与现场介质可能对不上；重复执行 install.sh 也会叠加。
+# 这里把 install.sh 里那段 awk 抽出来实跑，验证：
+#   1) 幂等：对已改写的 unit 再改写一次，结果不变
+#   2) 每个 SLOT 变量恰好一条赋值，且 DeviceAllow 与之一致
+Write-Host "[C13] install.sh 的 OTA 改写幂等且赋值唯一" -ForegroundColor Cyan
+if ($null -eq $installText) {
+    Warn "找不到 gateway-core/deploy/install.sh（已在 C11 报告），跳过 C13"
+}
+elseif ($null -eq $serviceText) {
+    Warn "找不到 gateway.service（已在 C2 报告），跳过 C13"
+}
+elseif ($null -eq $bash) {
+    Warn "未找到 bash，无法实跑 install.sh 的改写块（跳过 C13）"
+}
+else {
+    # 从 install.sh 里抽出改写块：从 HAVE_SLOT_ENV 探测语句到 awk 结束行
+    $blockMatch = [regex]::Match(
+        $installText,
+        '(?s)(if printf ''%s\\n'' "\$SERVICE_CONTENT" \| grep -q?E.*?\n''\)"\n)')
+    if (-not $blockMatch.Success) {
+        Fail "无法从 install.sh 解析 OTA 改写块（脚本结构已变）—— C13 失效，请同步更新正则"
+    }
+    else {
+        $block = $blockMatch.Groups[1].Value
+        # 改写块通过 base64 传给 bash：避开 Windows/Linux 的路径与引号差异，
+        # 也避开「中文注释 + 引号」在 shell 里的转义地狱。
+        $blockB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($block))
+        $unitB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($serviceText))
+        # runner 脚本：解码 unit 与改写块 → 模拟 install.sh 的改写 → 输出结果
+        $runnerSh = @'
+set -u
+d="$(mktemp -d)"
+trap 'rm -rf "$d"' EXIT
+# base64 解码：GNU coreutils 用 -d，macOS/BSD 用 -D，两个都试
+b64dec() { base64 -d 2>/dev/null || base64 -D 2>/dev/null || base64 --decode; }
+printf '%s' "$GW_UNIT_B64" | b64dec > "$d/unit.service"
+printf '%s' "$GW_BLOCK_B64" | b64dec > "$d/block.sh"
+run_rewrite() {
+  SERVICE_CONTENT="$(cat "$d/unit.service")"
+  OTA_SLOT_A="$1"
+  OTA_SLOT_B="$2"
+  # shellcheck disable=SC1090
+  . "$d/block.sh"
+  printf '%s\n' "$SERVICE_CONTENT"
+}
+run_rewrite "$1" "$2" > "$d/out1.service"
+cp "$d/out1.service" "$d/unit.service"
+run_rewrite "$1" "$2" > "$d/out2.service"
+echo "=====OUT1====="
+cat "$d/out1.service"
+echo "=====OUT2====="
+cat "$d/out2.service"
+'@
+        $runner = Join-Path ([System.IO.Path]::GetTempPath()) ("deploy_lint_c13_" + [guid]::NewGuid().ToString("N") + ".sh")
+        try {
+            # 用 UTF-8 无 BOM 写：bash 不认 BOM（会被当成命令的一部分）
+            [System.IO.File]::WriteAllText($runner, $runnerSh, (New-Object System.Text.UTF8Encoding($false)))
+            $env:GW_UNIT_B64 = $unitB64
+            $env:GW_BLOCK_B64 = $blockB64
+            $out = & $bash $runner "/dev/sda2" "/dev/sda3" 2>&1
+            $raw = ($out -join "`n")
+            if ($LASTEXITCODE -ne 0) {
+                Fail "install.sh 的 OTA 改写块实跑失败: $raw"
+            }
+            else {
+                $m = [regex]::Match($raw, '(?s)=====OUT1=====\r?\n(.*?)\r?\n=====OUT2=====\r?\n(.*)$')
+                if (-not $m.Success) {
+                    Fail "install.sh 的 OTA 改写块输出格式异常，C13 失效"
+                }
+                else {
+                    $r1 = $m.Groups[1].Value
+                    $r2 = $m.Groups[2].Value.TrimEnd("`r", "`n")
+                    if ($r1 -eq $r2) {
+                        Ok "install.sh 的 OTA 改写幂等（对已改写 unit 再跑一次结果不变）"
+                    }
+                    else {
+                        Fail "install.sh 的 OTA 改写**不幂等** —— 重复部署会叠加 Environment/DeviceAllow 行（改写块有多条路径同时命中）"
+                    }
+                    # 每个 SLOT 变量恰好一条赋值
+                    $cntA = ([regex]::Matches($r1, '(?m)^Environment=GATEWAY_OTA_SLOT_A=')).Count
+                    $cntB = ([regex]::Matches($r1, '(?m)^Environment=GATEWAY_OTA_SLOT_B=')).Count
+                    if ($cntA -eq 1 -and $cntB -eq 1) {
+                        Ok "改写后每个 OTA SLOT 变量恰好一条 Environment 赋值（A=$cntA B=$cntB）"
+                    }
+                    else {
+                        Fail "改写后 Environment=GATEWAY_OTA_SLOT_A 出现 $cntA 次、_B 出现 $cntB 次（各应为 1 次）—— systemd 取最后一行，生效值可能与实际介质不符"
+                    }
+                    # DeviceAllow 与 Environment 必须指向同一分区
+                    $envA = [regex]::Match($r1, '(?m)^Environment=GATEWAY_OTA_SLOT_A=(\S+)').Groups[1].Value
+                    $envB = [regex]::Match($r1, '(?m)^Environment=GATEWAY_OTA_SLOT_B=(\S+)').Groups[1].Value
+                    $allowA = [regex]::Match($r1, "(?m)^DeviceAllow=$([regex]::Escape($envA)) rw\s*$").Success
+                    $allowB = [regex]::Match($r1, "(?m)^DeviceAllow=$([regex]::Escape($envB)) rw\s*$").Success
+                    if ($allowA -and $allowB) {
+                        Ok "DeviceAllow 与 Environment 指向同一对分区（$envA / $envB）"
+                    }
+                    else {
+                        Fail "改写后 DeviceAllow 与 Environment=GATEWAY_OTA_SLOT_A/B（$envA / $envB）不一致 —— OTA 会写错分区"
+                    }
+                    # 不得残留旧默认分区
+                    if ($r1 -match '(?m)^DeviceAllow=/dev/mmcblk0p[23] rw\s*$') {
+                        Fail "改写后仍残留默认分区 DeviceAllow=/dev/mmcblk0p2|p3 —— 现场介质非 eMMC 时 OTA 仍写错分区"
+                    }
+                    else {
+                        Ok "改写后无残留的默认 eMMC 分区白名单"
+                    }
+                }
+            }
+        }
+        finally {
+            Remove-Item Env:\GW_UNIT_B64 -ErrorAction SilentlyContinue
+            Remove-Item Env:\GW_BLOCK_B64 -ErrorAction SilentlyContinue
+            Remove-Item $runner -ErrorAction SilentlyContinue
         }
     }
 }
