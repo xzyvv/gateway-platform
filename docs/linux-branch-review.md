@@ -459,3 +459,97 @@ spawn 失败与退出码**。在 systemd 管理的容器 / minimal rootfs 上
 > `MemoryStorage`，**未覆盖 SQLite 后端**，也**未覆盖** Linux fd 语义、
 > NTP 校时与 Linux 内核专属接口（见 §4 / §8.7 真机验收表）。
 
+---
+
+## 9. 第三轮：全量 cfg 扫描 + ARM 产物链路编译验证（r16）
+
+> 前两轮（§1 / §8）是**按已知缺陷线索**复审；本轮改为**机械全量扫描**：
+> 把全仓所有 `cfg(target_os="linux")` / `cfg(unix)` / `cfg(not(windows))` /
+> `cfg!(target_os="linux")` 逐条过目，再补做此前从未跑通过的 ARM 产物链路。
+
+### 9.1 全量 cfg 扫描结果
+
+| 项 | 结果 |
+|---|---|
+| 扫描到的 Linux 分支点 | **60 处**（覆盖 `cfg(...)` 属性与 `cfg!(...)` 宏两种形态） |
+| §2 清单已覆盖 | 14 处 |
+| 本轮补审（§2 未列） | `support/cron.rs` / `crypto/cert.rs` / `config/loader.rs` / `engine/shutdown.rs` 等 4 个文件全读 |
+| 新发现的「错误被静默吞掉」缺陷 | **0 项** |
+| 新发现的其它缺陷 | 1 项（P2 权限，见 §9.2） |
+
+**结论**：按 r15 判据（缺陷会导致设备变砖 / 静默断网 / 保护机制失效），
+Linux 专属代码路径**未发现新的静默失效点**。§2 清单外的 4 个文件逐一读完，
+其 Linux 分支要么是纯数据变换（cron 解析、证书读取），要么的错误处理与
+跨平台路径一致，不构成「只在 Linux 上才静默」的缺陷。
+
+### 9.2 P2 — 看门狗快照文件权限过宽（已修）
+
+**位置**：`gateway-core/src/platform/watchdog_flush.rs`
+
+**问题**：`write_snapshot()` 用 `std::fs::write` 落盘 `watchdog_state.json`，
+Unix 默认权限 **0644**（同机其它用户可读可改）。
+
+**影响**：快照内容不含凭据（仅时间戳 / 队列水位 / OTA 状态），泄露后果有限；
+但它记录的是「上次是卡死 abort 还是正常退出」—— **现场排障依据**，
+可被任意本地用户篡改会让排障结论失真。定级 P2。
+
+**修复**：`std::fs::write` → `OpenOptions` + `#[cfg(unix)] opts.mode(0o600)`，
+**创建即 0600**（不走「先宽后紧再 chmod」，避免 chmod 竞态窗口）。
+新增 Unix 单测 `flush_once_snapshot_is_owner_only` 断言权限恰为 `0o600`。
+
+### 9.3 ARM 产物链路：此前从未跑通，现已四条全绿
+
+**「未验证」的真实含义**：CI 的 `cross-arm` 是重作业（`workflow_dispatch` 或
+`vars.RUN_HEAVY == 'true'` 才跑），且 GitHub Actions 额度已耗尽 →
+**ARM 代码路径长期没有被真正编译过**。本地虽有 `scripts/arm_cross_check.ps1`，
+但 zig 交叉链路从未成功跑通 release 产物。
+
+**本轮修掉的三个根因**（都在 `scripts/linux/zigwrap.rs`）：
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `unable to find dynamic system library 'util' ... util.dll` | rustc **只在编译阶段**传 `--target=`，**链接阶段不传** → zig 按宿主 Windows 找库 | ps1 注入 `ZIG_TARGET`；zigwrap 在链接器模式下补 `-target <zig 三元组>` |
+| 2 | `unsupported linker arg: --fix-cortex-a53-843419` | rustc 的 aarch64 gnu/musl target spec **无条件**注入该缓解参数；zig cc 的 `-Wl,` 有白名单，白名单外直接 `fatal` | gnu 分支由 zigwrap **丢弃**该参数并 stderr 留痕；musl 分支改 `-C linker-flavor=ld.lld` 直驱 rust-lld，因 `pre_link_args` 只对 Gnu flavor 生效 → 天然不注入 |
+| 3 | `unable to parse target query 'arm-unknown-linux-musleabihf'` | cc-rs 的 build.rs 传**不带版本号**的 rust 三元组，zigwrap 映射表缺 musl 变体 | 补 `armv7-/arm-` × `musleabi/musleabihf` 共 4 条映射 |
+
+> 根因 2 的绕过手段实测（zig 0.14.1）全部无效：`-Wl,--fix-cortex-a53-843419`、
+> `-Xlinker --fix-cortex-a53-843419`、裸 `--fix-cortex-a53-843419`、
+> `-fuse-ld=lld -Wl,--fix-cortex-...` 全部 fatal。白名单校验发生在
+> **参数解析阶段**，早于链接器选择，无法绕过。
+>
+> **丢弃该参数不影响线上行为**：现场产物由 `deploy/build-release.sh` /
+> CI 的 cross-arm 作业用 Ubuntu 原生 `aarch64-linux-gnu-gcc` 生成，
+> GNU ld（binutils ≥ 2.33）**支持** `--fix-cortex-a53-843419`，
+> 缓解照常生效；本地 zig 链路只是**编译验证门禁**，产物不部署。
+
+**验证结果**（zig 0.14.1 + rustc 1.98.1，`-Release -Strict`）：
+
+| 链路 | 产物 | 校验 | 结果 |
+|---|---|---|---|
+| `aarch64-unknown-linux-gnu` | 21 MB | ELF magic + `e_machine=0xB7` | ✅ |
+| `armv7-unknown-linux-gnueabihf` | 21.4 MB | ELF magic + `e_machine=0x28` | ✅ |
+| `aarch64-unknown-linux-musl` | 19.5 MB | `e_machine=0xB7` + 无 `.dynamic` 段 + 无 `GLIBC_2.xx` 引用 | ✅ |
+| `armv7-unknown-linux-musleabihf` | 20.8 MB | `e_machine=0x28` + 无 `.dynamic` 段 + 无 `GLIBC_2.xx` 引用 | ✅ |
+| `x86_64-unknown-linux-gnu`（`cargo check --all-targets`） | — | 三个部署 crate | ✅ |
+
+> musl 的两项检查（无 `.dynamic` 段、无 `GLIBC_2.xx` 引用）是「现场设备
+> glibc 版本千差万别」场景的关键判据 —— gnu 动态产物带着构建机的 glibc
+> 版本要求，在 Debian10(2.28) / Debian11(2.31) / Yocto musl 上直接
+> `GLIBC_2.xx not found`，这是现场最典型的「装上去跑不起来」。
+
+### 9.4 门禁脚本自身修掉的两个缺陷
+
+| 位置 | 缺陷 | 修法 |
+|---|---|---|
+| `scripts/arm_cross_check.ps1` L185-189 | 注释称「zig cc 白名单不认这个参数…改用 ld.lld flavor 直接驱动 rust-lld 即可绕开」—— 与实际机制不符（gnu 分支实际靠 zigwrap 丢弃参数通过，musl 分支才是 rust-lld 直驱） | 改写注释，分别说明 gnu / musl 两条**不同**的绕过路径 |
+| `scripts/arm_cross_check.ps1` L139-147 | `-MuslOnly` 对**默认的 gnu target 列表**做过滤 → 结果必为空 → **musl 链路永远「跳过」**，从未真正验证过 | 改为「优先用调用方显式传入的 musl target，否则回落到默认 musl 列表」 |
+
+### 9.5 第三轮验证结果
+
+| 项 | 结果 |
+|---|---|
+| `cargo test -p gateway-core --lib --features fins` | **1442 passed / 0 failed / 1 ignored** |
+| Linux x86_64 交叉 `cargo check --all-targets` | 通过 |
+| ARM gnu release 产物（2 个 target） | 通过（架构校验） |
+| ARM musl release 产物（2 个 target） | 通过（架构 + 静态链接校验） |
+
