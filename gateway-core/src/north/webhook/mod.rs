@@ -12,6 +12,9 @@ mod client;
 mod retry;
 
 #[cfg(test)]
+#[path = "retry_tests.rs"]
+mod retry_tests;
+#[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
 

@@ -48,6 +48,9 @@ pub(super) fn is_retriable_status(status: reqwest::StatusCode) -> bool {
 }
 
 /// Bug 171: 指数退避时长（base * 2^(attempts-1)，上限 5 分钟）。
+///
+/// 边界：`base_ms` 本身超过 5 分钟时以 `base_ms` 为准（退避不得短于主循环的
+/// flush 间隔，否则会退化成"立刻重试"）；`attempts = 0` 视作第 1 次。
 pub(super) fn retry_backoff(base_ms: u64, attempts: u32) -> Duration {
     const MAX_BACKOFF_MS: u64 = 300_000;
     let shift = attempts.saturating_sub(1).min(20);

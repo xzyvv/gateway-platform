@@ -30,4 +30,6 @@ pub use opcua_sink::OpcUaSink;
 const SINK_CHANNEL_CAPACITY: usize = 1024;
 
 #[cfg(test)]
+mod base_tests;
+#[cfg(test)]
 mod tests;

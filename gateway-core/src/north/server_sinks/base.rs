@@ -92,11 +92,18 @@ impl SinkCore {
                                         metrics_for_task
                                             .lifecyle.sink_reconnect_exhausted
                                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        // A2：`saturating_sub` 取代裸 `- 1`：
+                                        // 计数一旦被并发路径压到 0，裸减会溢出 panic
+                                        // （debug）把整个 sink task 带走。
                                         let n = in_flight_for_task
                                             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed)
-                                            - 1;
+                                            .saturating_sub(1);
                                         metrics_for_task
                                             .inc_sink_dropped(name);
+                                        // A2：丢弃分支原先只减了计数、没更新 gauge，
+                                        // 导致 `sink_channel_depth` 永久偏高
+                                        // （每丢一批偏 1）→ 现场看深度只涨不落。
+                                        metrics_for_task.set_sink_channel_depth(name, n as i64);
                                         let total = metrics_for_task.sink_dropped_total(name);
                                         tracing::error!(
                                             target: "north.server_sink",
@@ -111,7 +118,9 @@ impl SinkCore {
                                         );
                                     }
                                 }
-                                let depth = in_flight_for_task.fetch_sub(1, Ordering::Relaxed) - 1;
+                                let depth = in_flight_for_task
+                                    .fetch_sub(1, Ordering::Relaxed)
+                                    .saturating_sub(1);
                                 metrics_for_task.set_sink_channel_depth(name, depth as i64);
                             }
                             None => break,
@@ -122,7 +131,9 @@ impl SinkCore {
             // 退出时排空：每批都尝试一次。
             while let Ok(points) = rx.try_recv() {
                 let _ = apply(&points);
-                let depth = in_flight_for_task.fetch_sub(1, Ordering::Relaxed) - 1;
+                let depth = in_flight_for_task
+                    .fetch_sub(1, Ordering::Relaxed)
+                    .saturating_sub(1);
                 metrics_for_task.set_sink_channel_depth(name, depth as i64);
             }
             metrics_for_task.set_sink_channel_depth(name, 0);
@@ -146,13 +157,27 @@ impl SinkCore {
     /// 投递一批采集数据到通道（非阻塞 try_send）
     pub(super) fn send(&self, points: Vec<DataPoint>) {
         let name = self.name;
+        // A2：`in_flight` 必须**先于** `try_send` 自增。
+        //
+        // 旧实现把 `fetch_add(1)` 放在 `try_send` 成功之后，于是存在一个竞态窗口：
+        // 消费端拿到批次后会立刻 `fetch_sub(1)`，若此时消费端比生产者的
+        // `fetch_add(1)` 先跑，就会把 `in_flight` 从 0 减到 `usize::MAX`
+        // （debug 构建下紧接着的 `- 1` 直接 panic → sink task 挂掉 →
+        //   通道关闭 → 后续数据全丢；release 下 gauge 变成天文数字）。
+        // 正确顺序：先把批次"挂上号"再交给通道，失败时回滚。
+        let depth = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
         match self.tx.try_send(points) {
             Ok(()) => {
                 self.metrics.inc_sink_send(name);
-                let depth = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
                 self.metrics.set_sink_channel_depth(name, depth as i64);
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
+                // 未入队 → 回滚自增
+                let depth = self
+                    .in_flight
+                    .fetch_sub(1, Ordering::Relaxed)
+                    .saturating_sub(1);
+                self.metrics.set_sink_channel_depth(name, depth as i64);
                 let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
                 tracing::warn!(
                     target: "north.server_sink",
@@ -165,6 +190,11 @@ impl SinkCore {
                 // 导致通道关闭；旧实现空处理 `=> {}`，OPC UA/Modbus 服务端数据
                 // 从此永久静默丢失且无任何痕迹。现记 error + 计入 dropped 指标，
                 // 暴露"接收端已死"的故障。
+                let depth = self
+                    .in_flight
+                    .fetch_sub(1, Ordering::Relaxed)
+                    .saturating_sub(1);
+                self.metrics.set_sink_channel_depth(name, depth as i64);
                 let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
                 tracing::error!(
                     target: "north.server_sink",
