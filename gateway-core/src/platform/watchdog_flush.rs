@@ -122,8 +122,29 @@ fn write_snapshot(path: &Path, snapshot: &WatchdogFlushSnapshot) -> GatewayResul
     let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| GatewayError::Config(format!("serialize watchdog snapshot failed: {}", e)))?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json.as_bytes())
-        .map_err(|e| GatewayError::Config(format!("write watchdog snapshot tmp failed: {}", e)))?;
+    // 权限：创建即 0600（Unix）。
+    //
+    // 快照内容本身不含凭据（仅时间戳 / 队列水位 / OTA 状态），泄露后果有限，
+    // 但它记录的是「上次是卡死 abort 还是正常退出」——现场排障依据，
+    // 不应让同机其它用户可读可改。`std::fs::write` 走默认 0666&~umask
+    // （典型 0644），且 `File::create` 先宽后紧的写法会留下 chmod 竞态窗口，
+    // 故直接用 `OpenOptions::mode` 在创建时收紧。
+    {
+        use std::io::Write;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp).map_err(|e| {
+            GatewayError::Config(format!("write watchdog snapshot tmp failed: {}", e))
+        })?;
+        f.write_all(json.as_bytes()).map_err(|e| {
+            GatewayError::Config(format!("write watchdog snapshot tmp failed: {}", e))
+        })?;
+    }
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         GatewayError::Config(format!(
@@ -252,5 +273,28 @@ mod tests {
         // 原子写：tmp 文件不应残留
         let tmp = state_file.with_extension("json.tmp");
         assert!(!tmp.exists(), "原子写后不应残留 tmp 文件");
+    }
+
+    /// 权限契约：快照文件创建即 0600，不给同机其它用户留「可读可改」窗口。
+    ///
+    /// 该文件是现场排障依据（判断上次是否卡死 abort），默认 0644 会被任意
+    /// 本地用户读取甚至篡改。断言用 `cfg(unix)` 门控——Windows 无 POSIX 权限位。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn flush_once_snapshot_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let queue = DataQueue::new_memory().expect("should succeed");
+        let (_dir, state_file) = temp_state_file("watchdog_state.json");
+        let ota = test_ota();
+
+        flush_once(&queue, &ota, &state_file);
+
+        let mode = std::fs::metadata(&state_file)
+            .expect("should succeed")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "看门狗快照必须为 0600，实际为 {:o}", mode);
     }
 }
