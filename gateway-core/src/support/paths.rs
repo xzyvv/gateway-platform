@@ -55,14 +55,29 @@ macro_rules! impl_path_resolver {
     ($fn_name:ident, $env:literal, $linux:literal, $other:literal) => {
         pub fn $fn_name() -> &'static str {
             static CELL: LazyLock<String> = LazyLock::new(|| {
-                std::env::var($env).unwrap_or_else(|_| {
-                    if cfg!(target_os = "linux") {
+                match std::env::var($env) {
+                    Ok(value) => {
+                        // r33-PATH1：环境变量覆盖的路径必须落在白名单根下
+                        // （Linux: /etc/gateway、/var/lib/gateway、/var/log/gateway）。
+                        // 只告警不拒绝：现场确有把数据目录挂到 /data 的自定义部署，
+                        // 直接拒绝会让网关起不来；但「指向 /etc/passwd」这类越权必须留痕。
+                        if !is_path_under_allowed_root(std::path::Path::new(&value)) {
+                            tracing::warn!(
+                                env = $env,
+                                value = %value,
+                                allowed = ?allowed_config_roots(),
+                                "环境变量覆盖的路径不在白名单根目录下（仅告警，不拒绝启动）"
+                            );
+                        }
+                        value
+                    }
+                    Err(_) => if cfg!(target_os = "linux") {
                         $linux
                     } else {
                         $other
                     }
-                    .to_string()
-                })
+                    .to_string(),
+                }
             });
             CELL.as_str()
         }

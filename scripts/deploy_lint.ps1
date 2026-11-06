@@ -25,6 +25,8 @@
       C6  verify-deploy.sh 探测的 API 端点在 gateway-api 路由里真实存在
       C7  verify-deploy.sh 里的固定路径（GW_BIN / ui-dist / systemd 名）
           与 gateway.service / install.sh 一致
+      C8  gateway.service / install.sh 里的 Environment=GATEWAY_* 变量名
+          必须在 Rust 源码里真实存在（写错名字 = 静默不生效）
 
 .PARAMETER Strict
     任何检查失败都返回 1；否则只打印警告并返回 0。
@@ -441,7 +443,7 @@ else {
         $rel = $f.FullName.Substring($repoRoot.Length + 1).Replace('\', '/')
         $txt = Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
         $names = @()
-        foreach ($sm in [regex]::Matches($txt, 'systemctl\s+(?:is-active|status|restart|enable|show)([^\n;|&)]*)')) {
+        foreach ($sm in [regex]::Matches($txt, 'systemctl\s+(?:is-active|is-enabled|status|restart|enable|show)([^\n;|&)]*)')) {
             $toks = @($sm.Groups[1].Value -split '\s+' | Where-Object { $_ })
             # 从后往前找第一个既不是选项、也不是选项参数的 token。
             # 服务名只允许 [A-Za-z0-9_.-]，带引号/中文标点的（如 echo 里的
@@ -467,6 +469,48 @@ else {
             else {
                 Fail "$rel 引用 systemd 服务名 $n，但 gateway.service 的 SyslogIdentifier 不是它 —— 验证脚本查的是另一个服务"
             }
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C8 环境变量名一致性：服务里设的 GATEWAY_* 必须是代码真的读的名字
+# ══════════════════════════════════════════════════════════
+# 形态：gateway.service 里注释掉的示例曾写成 Environment=GATEWAY_CONFIG
+# （代码只读 GATEWAY_CONFIG_PATH），运维照抄取消注释后完全不生效、也没有任何报错。
+# 规则：只扫 `Environment=<NAME>=` 这类真正赋值的位置（含被注释的示例），
+# NAME 以 GATEWAY_ 开头时，必须能在 Rust 源码里作为完整 token 找到。
+Write-Host "[C8] 服务环境变量名在代码中存在"
+$envNames = @()
+foreach ($f in @(
+        (Join-Path $repoRoot "gateway-core\deploy\gateway.service"),
+        (Join-Path $repoRoot "gateway-core\deploy\install.sh")
+    )) {
+    if (-not (Test-Path $f)) { continue }
+    $rel = $f.Substring($repoRoot.Length + 1).Replace('\', '/')
+    $txt = Get-Content $f -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    foreach ($m in [regex]::Matches($txt, '(?m)^\s*#?\s*Environment=([A-Za-z_][A-Za-z0-9_]*)')) {
+        $envNames += [pscustomobject]@{ Name = $m.Groups[1].Value; File = $rel }
+    }
+}
+$envNames = @($envNames | Sort-Object Name, File -Unique)
+$gwEnvNames = @($envNames | Where-Object { $_.Name -match '^GATEWAY_' })
+
+if ($gwEnvNames.Count -eq 0) {
+    Fail "未从 gateway.service / install.sh 提取到任何 GATEWAY_* 环境变量，C8 失效（正则或文件路径需要更新）"
+}
+else {
+    $rsFiles = Get-ChildItem $repoRoot -Recurse -File -Filter *.rs -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\(target|node_modules|\.git)\\' }
+    $rsText = ($rsFiles | ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n"
+    foreach ($e in $gwEnvNames) {
+        # \b 配合下划线：GATEWAY_CONFIG 不会误匹配到 GATEWAY_CONFIG_PATH
+        if ($rsText -match "\b$([regex]::Escape($e.Name))\b") {
+            Ok "$($e.File) 的 Environment=$($e.Name) 在代码中存在"
+        }
+        else {
+            Fail "$($e.File) 的 Environment=$($e.Name) 在代码里不存在 —— 该变量不生效（多半是名字写错）"
         }
     }
 }

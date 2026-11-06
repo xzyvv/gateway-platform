@@ -27,7 +27,8 @@ StartLimitIntervalSec=0
 # 环境变量
 Environment=RUST_LOG=info
 Environment=RUST_BACKTRACE=1
-# Environment=GATEWAY_CONFIG=/etc/gateway/config.json
+# 覆盖配置文件路径（变量名必须是 GATEWAY_CONFIG_PATH，代码不读 GATEWAY_CONFIG）
+# Environment=GATEWAY_CONFIG_PATH=/etc/gateway/config.json
 
 # 时区（计划任务按**墙钟**解释 cron 表达式）
 # 优先级：GATEWAY_TZ（固定 UTC 偏移，不依赖 tzdata） > TZ（IANA 时区名，含夏令时）
