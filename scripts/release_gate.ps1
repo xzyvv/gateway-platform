@@ -387,6 +387,15 @@ if (-not $SkipBackend) {
         return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\arm_cross_check.ps1"))
     } -SkipReason $armCrossSkipReason
 
+    Add-Step -Id "deploy-lint" -Title "部署脚本静态检查 + 与代码默认值的一致性断言（DeviceAllow 白名单 / 配置路径 / 协议白名单 / API 端点）" -Action {
+        # CI 的 deploy-lint 用 actionlint + shellcheck（本机没有）。
+        # 本步骤补两件 CI 覆盖不到的事：
+        #   1. bash -n 语法检查（用 Git Bash）
+        #   2. 一致性断言 —— 部署脚本写死的路径 / 协议 / 端点必须与代码默认值一致。
+        #      S3 的 DeviceAllow 白名单缺陷正是这一类（脚本与代码漂移）。
+        return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\deploy_lint.ps1"))
+    }
+
     Add-Step -Id "arm-musl-release" -Title "ARM 静态 musl 产物构建 + 校验（免 glibc 版本耦合，防 GLIBC_2.xx not found）" -Action {
         # 现场设备 glibc 版本千差万别，静态 musl 是唯一稳妥的部署产物。
         # 这一步会真正链接出 aarch64 静态二进制，并校验架构 / 静态链接 / 无 GLIBC 引用。
