@@ -106,6 +106,11 @@ if (-not (Test-Path $wrapperExe) -or
 
 # ===== 执行交叉编译 =====
 $env:ZIG_EXE = $zig
+# 链接器模式必须显式告知目标：rustc 只在**编译阶段**传 `--target=`，
+# 链接阶段不传。缺了它，zig 会按宿主(Windows)找 `util.dll`/`rt.dll`/`dl.dll`，
+# 报 "unable to find dynamic system library 'util'" —— 看起来像缺依赖，
+# 实际是目标三元组丢失。
+$env:ZIG_TARGET = $target
 # cc-rs 约定：CC_<target> / AR_<target>（target 用连字符形式）
 Set-Item -Path "Env:CC_$target" -Value $wrapperExe
 Set-Item -Path "Env:AR_$target" -Value $wrapperExe

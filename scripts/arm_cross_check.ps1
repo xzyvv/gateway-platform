@@ -137,13 +137,16 @@ if ($null -eq $zig) {
 # 报 "GLIBC_2.xx not found" —— 这是现场最典型的「装上去跑不起来」。
 # deploy/build-release.sh --target linux-arm64-musl 就是为免掉这层耦合。
 if ($MuslOnly) {
-    $Targets = @($Targets | Where-Object { $_ -match "musl" })
-    if ($Targets.Count -eq 0) {
-        Write-Host "[arm-check] -MuslOnly 但没有 musl target —— 跳过。" -ForegroundColor Yellow
-        if ($Probe) { exit 3 }
-        if ($Strict) { exit 1 }
-        exit 0
+    # 注意：$Targets 的默认值是两个 **gnu** target，直接过滤必然为空 → 永远跳过。
+    # 所以这里做「优先用调用方显式传入的 musl target，否则回落到默认 musl 列表」。
+    $muslFromArgs = @($Targets | Where-Object { $_ -match "musl" })
+    $Targets = if ($muslFromArgs.Count -gt 0) {
+        $muslFromArgs
     }
+    else {
+        @("aarch64-unknown-linux-musl", "armv7-unknown-linux-musleabihf")
+    }
+    Write-Host "[arm-check] musl 静态链路 target：$($Targets -join ', ')" -ForegroundColor Cyan
 }
 
 $toolchain = Get-RepoToolchain
@@ -182,11 +185,21 @@ if (-not (Test-Path $wrapperExe) -or
 # cc-rs 用相对路径调用会失败（工作目录随 crate 变化），必须给绝对路径
 $wrapperAbs = (Resolve-Path $wrapperExe).Path
 
-# rust 自带的 rust-lld（GNU flavor）。musl 静态链接需要它：
-# rustc 在 aarch64 musl target 上会传 `-Wl,--fix-cortex-a53-843419`
-# （Cortex-A53 erratum 缓解），zig cc 的 `-Wl,` 白名单不认这个参数会直接失败，
-# 而 zig 内嵌的 lld 与 rust-lld 都支持它。改用 ld.lld flavor 直接驱动
-# rust-lld 即可绕开白名单。
+# rust 自带的 rust-lld（GNU flavor）。musl 静态链接需要它。
+#
+# 与 rustc 注入的 `-Wl,--fix-cortex-a53-843419`（Cortex-A53 erratum 缓解，
+# aarch64-unknown-linux-gnu / -musl 两个 target spec 的 pre_link_args 里都
+# 有）的关系 —— 两个 target 的绕过机制**不同**：
+#
+#   gnu 分支：仍走 zig cc 作链接器。zig cc 的 `-Wl,` 白名单不认该参数会直接
+#     fatal（白名单校验发生在参数解析阶段，早于链接器选择，`-Xlinker` /
+#     `-fuse-ld=lld` 均无法绕过）。改由 `scripts/linux/zigwrap.rs` 在传参时
+#     **丢弃**该参数并留痕。现场产物由 GNU ld（binutils ≥ 2.33）生成，
+#     缓解照常生效，故不影响线上行为。
+#
+#   musl 分支：改用 `-C linker-flavor=ld.lld` 直接驱动 rust-lld。由于
+#     pre_link_args 只对 Gnu flavor 生效，ld.lld flavor 下 rustc **根本不会**
+#     注入该参数，天然绕开，无需 zigwrap 介入。
 $rustLld = $null
 $sysroot = (& rustc --print sysroot).Trim()
 foreach ($cand in @(
@@ -206,6 +219,11 @@ try {
         Write-Host "[arm-check] cargo $cargoVerb --target $target （crate: $($Crates -join ', ')）" -ForegroundColor Cyan
 
         $env:ZIG_EXE = $zig
+        # 链接器模式必须显式告知目标：rustc 只在**编译阶段**传 `--target=`，
+        # 链接阶段不传。缺了它，zig 会按宿主(Windows)找 `util.dll`/`rt.dll`/`dl.dll`，
+        # 报 "unable to find dynamic system library 'util'" —— 看起来像缺依赖，
+        # 实际是目标三元组丢失。
+        $env:ZIG_TARGET = $target
         # cc-rs 约定：CC_<target> / AR_<target>（target 用连字符形式）
         Set-Item -Path "Env:CC_$target" -Value $wrapperAbs
         Set-Item -Path "Env:AR_$target" -Value $wrapperAbs
