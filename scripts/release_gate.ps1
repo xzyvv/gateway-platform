@@ -12,6 +12,9 @@
 #     encryption-check job 单独覆盖，本地发布机不重复承担。
 #   - 协议 feature 矩阵 / SKU 矩阵 / chaos / 覆盖率基线等 Linux CI 专属 job 不在此处
 #     重复；需要时用 -IncludeChaos 单独跑 chaos，其余以 CI 结论为准。
+#   - ARM 侧做三件事：cargo check --all-targets（架构差异代码块）、
+#     cargo build --release（静态 musl 产物）、cargo test --no-run（测试二进制链接）。
+#     CI 的 cross-arm 是手动触发的重作业且额度已死，这三条是本地唯一的 ARM 通道。
 #
 # 用法：
 #   .\scripts\release_gate.ps1                     # 全量门禁（默认 fail-fast）
@@ -164,6 +167,10 @@ function Add-Result {
 }
 
 function Run-Native {
+    # CmdletBinding 让无法匹配的具名参数直接报错，而不是静默丢弃。
+    # 门禁步骤「看起来跑了但实际用的默认值」是最危险的失败模式：
+    # 它给出 PASS，却什么也没验证。
+    [CmdletBinding()]
     param(
         [string]$Exe,
         [string[]]$Arguments,
@@ -189,6 +196,11 @@ function Run-Native {
 }
 
 function Run-PsScript {
+    # CmdletBinding 是必须的：没有它，PowerShell 会把无法匹配的具名参数
+    # （如 -MuslOnly）静默塞进 $args 并丢弃 —— 门禁步骤看起来跑了，
+    # 实际用的却是脚本默认值。已因此漏掉一次真实验证（arm-musl-release
+    # 长期退化成默认 cargo check，从未真正构建 musl 产物）。
+    [CmdletBinding()]
     param([string]$ScriptPath, [string[]]$Arguments = @())
     $allArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath) + $Arguments
     return (Run-Native -Exe $psExe -Arguments $allArgs)
@@ -378,8 +390,18 @@ if (-not $SkipBackend) {
     Add-Step -Id "arm-musl-release" -Title "ARM 静态 musl 产物构建 + 校验（免 glibc 版本耦合，防 GLIBC_2.xx not found）" -Action {
         # 现场设备 glibc 版本千差万别，静态 musl 是唯一稳妥的部署产物。
         # 这一步会真正链接出 aarch64 静态二进制，并校验架构 / 静态链接 / 无 GLIBC 引用。
+        # 注意：参数必须走 -Arguments 数组，直接写 -MuslOnly 会被 Run-PsScript 丢弃。
         return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\arm_cross_check.ps1") `
-                -MuslOnly -Release -Targets aarch64-unknown-linux-musl)
+                -Arguments @("-MuslOnly", "-Release", "-Targets", "aarch64-unknown-linux-musl"))
+    } -SkipReason $armCrossSkipReason
+
+    Add-Step -Id "arm-test-link" -Title "ARM 测试二进制链接验证（cargo test --no-run：测试代码里的架构假设）" -Action {
+        # arm-cross-check 只做 cargo check --all-targets —— 只做类型检查，**不产出可执行文件**。
+        # 测试代码里的架构假设（指针宽度、libc 结构体布局、#[cfg(target_arch="aarch64")]
+        # 分支）在链接阶段才暴露。CI 的 cross-arm 是手动触发的重作业且额度已死，
+        # 所以这条通道必须留在本地门禁里。
+        return (Run-PsScript -ScriptPath (Join-Path $repoRoot "scripts\arm_cross_check.ps1") `
+                -Arguments @("-MuslOnly", "-TestNoRun", "-Targets", "aarch64-unknown-linux-musl"))
     } -SkipReason $armCrossSkipReason
 
     if ($IncludeChaos) {

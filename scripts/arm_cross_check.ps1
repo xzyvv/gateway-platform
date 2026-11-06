@@ -18,6 +18,15 @@
       - aarch64-unknown-linux-gnu（64 位 ARM，真机主流）
       - armv7-unknown-linux-gnueabihf（32 位 ARM，老设备）
 
+    三种验证深度（互斥选用）：
+
+      - 默认      `cargo check --all-targets` —— 只做类型检查，最快
+      - -Release  `cargo build --release` + ELF/静态链接/GLIBC 校验
+      - -TestNoRun `cargo test --no-run` —— 编译**测试二进制**并校验 ELF。
+        check 阶段不产出可执行文件，测试代码里的架构假设（指针宽度、
+        libc 结构体布局、`#[cfg(target_arch = "aarch64")]` 分支）
+        直到链接阶段才暴露。
+
     与 linux_cross_check.ps1 的区别：那边验证「Linux 内核接口」，
     这边验证「ARM 架构差异」——两者互补，都不可省略。
 
@@ -33,6 +42,13 @@
 .PARAMETER Release
     构建 release 二进制并校验 ELF 头 / 静态链接 / GLIBC 引用。
     比 cargo check 更重（完整链接），但能证明「产物真的出得来」。
+
+.PARAMETER TestNoRun
+    编译测试二进制（`cargo test --no-run`）并校验 ELF 头 / 静态链接。
+    `cargo check --all-targets` 只做类型检查，**不产出可执行文件**——测试代码里
+    的架构假设（指针宽度、`libc` 结构体布局、`#[cfg(target_arch = "aarch64")]`
+    分支）在链接阶段才暴露。本开关把「测试代码能否在 ARM 上链接出可执行文件」
+    纳入本地门禁。
 
 .PARAMETER Features
     传给 cargo 的 features。默认 fins（与本地其它门禁口径一致）。
@@ -51,6 +67,7 @@
     powershell -File scripts/arm_cross_check.ps1
     powershell -File scripts/arm_cross_check.ps1 -Targets aarch64-unknown-linux-gnu
     powershell -File scripts/arm_cross_check.ps1 -MuslOnly -Release
+    powershell -File scripts/arm_cross_check.ps1 -MuslOnly -TestNoRun
 #>
 param(
     [string[]]$Crates = @("gateway-core", "gateway-api", "gatewayd"),
@@ -58,6 +75,7 @@ param(
     [string[]]$Targets = @("aarch64-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf"),
     [switch]$MuslOnly,
     [switch]$Release,
+    [switch]$TestNoRun,
     [switch]$Strict,
     [switch]$Probe
 )
@@ -184,7 +202,8 @@ Push-Location $repoRoot
 try {
     foreach ($target in $Targets) {
         $isMusl = $target -match "musl"
-        Write-Host "[arm-check] cargo build --target $target （crate: $($Crates -join ', ')）" -ForegroundColor Cyan
+        $cargoVerb = if ($Release) { "build --release" } elseif ($TestNoRun) { "test --no-run" } else { "check --all-targets" }
+        Write-Host "[arm-check] cargo $cargoVerb --target $target （crate: $($Crates -join ', ')）" -ForegroundColor Cyan
 
         $env:ZIG_EXE = $zig
         # cc-rs 约定：CC_<target> / AR_<target>（target 用连字符形式）
@@ -208,6 +227,12 @@ try {
         if ($Release) {
             $cargoArgs = @("build", "--target", $target, "--release", "--features", $Features)
         }
+        elseif ($TestNoRun) {
+            # 编译测试二进制但不运行：`cargo check --all-targets` 只做类型检查，
+            # 不产出可执行文件 → 测试代码里的架构假设（指针宽度、libc 结构体布局）
+            # 直到链接阶段才暴露。
+            $cargoArgs = @("test", "--target", $target, "--no-run", "--features", $Features)
+        }
         else {
             $cargoArgs = @("check", "--target", $target, "--all-targets", "--features", $Features)
         }
@@ -219,6 +244,64 @@ try {
             Write-Host "[arm-check] $target 失败（exit $code）" -ForegroundColor Red
             $failed += $target
             continue
+        }
+
+        if ($TestNoRun) {
+            # 产物校验：测试二进制必须真的存在、是 ARM ELF、musl 下必须静态链接。
+            # cargo test --no-run 成功但没产物 = 门禁没生效，等于白跑。
+            $depsDir = Join-Path $repoRoot "target\$target\debug\deps"
+            if (-not (Test-Path $depsDir)) {
+                Write-Host "[arm-check] $target 测试二进制目录缺失：$depsDir" -ForegroundColor Red
+                $failed += $target
+                continue
+            }
+            # Linux target 下可执行文件没有扩展名；deps 目录里的 .d / .rlib / .rmeta
+            # 都带扩展名。因此「无扩展名 + ELF magic」= 测试可执行文件。
+            # 这里刻意**全量校验**（含 chaos / soak / load 等集成测试二进制）：
+            # 集成测试里的架构假设（指针宽度、libc 结构体布局）同样是 ARM 风险点。
+            $testBins = Get-ChildItem $depsDir -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -eq "" -and $_.Length -gt 0 }
+            if ($testBins.Count -eq 0) {
+                Write-Host "[arm-check] $target 未产出测试二进制（$depsDir）—— cargo test --no-run 未真正链接" -ForegroundColor Red
+                $failed += $target
+                continue
+            }
+
+            $expected = if ($target -match "aarch64") { 0xB7 } else { 0x28 }
+            $badBins = @()
+            foreach ($bin in $testBins) {
+                $bytes = [System.IO.File]::ReadAllBytes($bin.FullName)
+                if ($bytes.Length -lt 0x18 -or
+                    -not ($bytes[0] -eq 0x7F -and $bytes[1] -eq 0x45 -and $bytes[2] -eq 0x4C -and $bytes[3] -eq 0x46)) {
+                    $badBins += "$($bin.Name)（非 ELF）"
+                    continue
+                }
+                $machine = [BitConverter]::ToUInt16($bytes, 0x12)
+                if ($machine -ne $expected) {
+                    $badBins += "$($bin.Name)（machine=0x$('{0:X}' -f $machine)，期望 0x$('{0:X}' -f $expected)）"
+                    continue
+                }
+                if ($isMusl) {
+                    $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+                    if ($text.Contains(".dynamic")) {
+                        $badBins += "$($bin.Name)（含 .dynamic 段，静态链接未生效）"
+                        continue
+                    }
+                    $glibcRefs = [regex]::Matches($text, "GLIBC_2\.\d+") | ForEach-Object { $_.Value } | Sort-Object -Unique
+                    if ($glibcRefs.Count -gt 0) {
+                        $badBins += "$($bin.Name)（含 GLIBC 引用：$($glibcRefs -join ', ')）"
+                        continue
+                    }
+                }
+            }
+            if ($badBins.Count -gt 0) {
+                Write-Host "[arm-check] $target 测试二进制校验失败：" -ForegroundColor Red
+                $badBins | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+                $failed += $target
+                continue
+            }
+            $totalMB = [math]::Round((($testBins | Measure-Object -Property Length -Sum).Sum) / 1MB, 1)
+            Write-Host "[arm-check] $target 测试二进制：$($testBins.Count) 个（合计 $totalMB MB），架构/静态链接校验通过" -ForegroundColor Cyan
         }
 
         if ($Release) {
