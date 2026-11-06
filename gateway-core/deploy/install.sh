@@ -78,6 +78,13 @@ DATA_DIR="/var/lib/gateway"
 LOG_DIR="/var/log/gateway"
 SERVICE_FILE="/etc/systemd/system/gateway.service"
 PORT="${GATEWAY_PORT:-}"
+# OTA A/B 分区设备：现场介质不一定是 eMMC（可能是 SD / NVMe），分区节点名随之变化。
+# 这两个值必须同时体现在两处，缺一 OTA 直接失败：
+#   1) systemd unit 的 DeviceAllow（不放行 → 程序 open() 之前被 EPERM 拒绝）
+#   2) 进程环境变量 GATEWAY_OTA_SLOT_A / GATEWAY_OTA_SLOT_B（代码读它决定写哪个分区）
+# 部署时用环境变量指定：GATEWAY_OTA_SLOT_A=/dev/sda2 GATEWAY_OTA_SLOT_B=/dev/sda3 bash install.sh
+OTA_SLOT_A="${GATEWAY_OTA_SLOT_A:-/dev/mmcblk0p2}"
+OTA_SLOT_B="${GATEWAY_OTA_SLOT_B:-/dev/mmcblk0p3}"
 # 健康检查目标主机：gatewayd 只读 config.json，不读 GATEWAY_PORT；
 # 未显式指定端口时下面会按已落盘的 web.listen_addr 探测（自定义端口才能验证到真实监听）
 HEALTH_HOST="127.0.0.1"
@@ -177,6 +184,46 @@ if [ -n "$UI_DIST" ] && [ -d "$UI_DIST" ] && [ -f "$UI_DIST/index.html" ]; then
 else
     echo "  ⚠ 未找到前端产物，网关将返回内置调试控制台 (WEB_UI_HTML fallback)"
     echo "    生产部署应把 ui-dist（含 index.html）放在本脚本同级目录"
+fi
+
+# 4.5 预加载 USB 串口驱动模块
+#
+# 为什么要这一步：gateway.service 用 `DeviceAllow=char-ttyUSB rw` 这种
+# **设备组形式**放行串口（路径形式 /dev/ttyUSB 在 systemd v255 会被 stat
+# 失败后整条丢弃，见 gateway.service 的注释）。设备组名必须在服务启动那一刻
+# 能在 /proc/devices 里解析 —— 即驱动模块已加载。若 cp210x / ch341 等模块
+# 还没加载，/proc/devices 里没有 ttyUSB 组名，systemd 解析失败 →
+# 整条 DeviceAllow 被丢弃 → 程序 open() 之前就被 EPERM 拒绝 →
+# **全部串口协议采集不上来**（且无任何报错日志）。
+#
+# 写进 /etc/modules-load.d/ 让 systemd-modules-load.service 在开机时加载，
+# 早于我们的服务启动。
+echo "[4.5/7] 预加载 USB 串口驱动模块..."
+MODULES_DIR="/etc/modules-load.d"
+MODULES_FILE="$MODULES_DIR/gateway-serial.conf"
+# 只写实际存在（或可能存在）的模块名：modprobe 找不到的模块会在
+# systemd-modules-load.service 里报错，虽不影响开机但会污染 journal。
+# 这里覆盖常见的几种 USB 转串口芯片。
+SERIAL_MODULES=()
+# modinfo 不存在（极简容器 / BusyBox）时不要刷 "command not found" 噪声
+if command -v modinfo >/dev/null 2>&1; then
+    for m in cp210x ch341 ftdi_sio pl2303 cdc_acm; do
+        if modinfo "$m" >/dev/null 2>&1; then
+            SERIAL_MODULES+=("$m")
+        fi
+    done
+fi
+if [ ${#SERIAL_MODULES[@]} -gt 0 ]; then
+    mkdir -p "$MODULES_DIR"
+    printf '%s\n' "${SERIAL_MODULES[@]}" > "$MODULES_FILE"
+    # 立即加载，不等下次重启（否则本次安装后服务仍可能起不来）
+    for m in "${SERIAL_MODULES[@]}"; do
+        modprobe "$m" 2>/dev/null || true
+    done
+    echo "  ✓ 已写入 $MODULES_FILE 并立即加载：${SERIAL_MODULES[*]}"
+else
+    echo "  ⚠ 未发现可用的 USB 串口驱动模块（cp210x/ch341/ftdi_sio/pl2303/cdc_acm）"
+    echo "    若现场用 USB 串口，请手动确认驱动已加载，否则串口采集会被 systemd 拒绝"
 fi
 
 # 5. 拷贝配置和模板
@@ -291,6 +338,52 @@ fi
 if [ -n "$TZ_ENV_LINE" ] && ! echo "$SERVICE_CONTENT" | grep -qE "^Environment=(GATEWAY_TZ|TZ)="; then
     SERVICE_CONTENT="$(echo "$SERVICE_CONTENT" | sed '/^Environment=RUST_LOG=/a '"$TZ_ENV_LINE")"
 fi
+# OTA A/B 分区：把 **DeviceAllow 白名单** 与 **Environment 变量** 同步改写到实际介质。
+# 这两处必须同时改，缺一 OTA 现场直接失败：
+#   - 只改 Environment 不同步 DeviceAllow → systemd 在 open() 之前 EPERM 拒绝
+#   - 只改 DeviceAllow 不同步 Environment → 进程仍去写默认的 /dev/mmcblk0p2
+# 规则：
+#   1) 标记块（# OTA-PARTITIONS-BEGIN/END）内的 DeviceAllow 整块替换为本机分区
+#   2) 块外的同款行也替换（防止标记被手工删掉后留下默认值）
+#   3) Environment 赋值必须**有且只有一组**：
+#      - unit 里已有注释态示例（# Environment=GATEWAY_OTA_SLOT_A=…）→ 就地取消注释并替换值
+#      - 没有示例 → 在 Environment=RUST_LOG= 之后补写；连 RUST_LOG 都没有 → 写进标记块内
+#      （曾经两条路径都会命中，导致同一变量被写两遍 —— systemd 取最后一行，
+#        看似能跑，但 unit 与实际介质不一致时排查极困难）
+if printf '%s\n' "$SERVICE_CONTENT" | grep -E '^#? *Environment=GATEWAY_OTA_SLOT_A=' >/dev/null 2>&1; then
+    HAVE_SLOT_ENV=1
+else
+    HAVE_SLOT_ENV=0
+fi
+SERVICE_CONTENT="$(printf '%s\n' "$SERVICE_CONTENT" | awk -v a="$OTA_SLOT_A" -v b="$OTA_SLOT_B" -v haveenv="$HAVE_SLOT_ENV" '
+    /^# OTA-PARTITIONS-BEGIN/ {
+        inblk=1; print
+        print "DeviceAllow=" a " rw"; print "DeviceAllow=" b " rw"
+        if (haveenv + 0 == 0 && !placed) {
+            print "Environment=GATEWAY_OTA_SLOT_A=" a
+            print "Environment=GATEWAY_OTA_SLOT_B=" b
+            placed=1
+        }
+        next
+    }
+    /^# OTA-PARTITIONS-END/   { inblk=0; print; next }
+    inblk && /^DeviceAllow=/   { next }
+    /^DeviceAllow=\/dev\/mmcblk0p2/ { print "DeviceAllow=" a " rw"; next }
+    /^DeviceAllow=\/dev\/mmcblk0p3/ { print "DeviceAllow=" b " rw"; next }
+    /^# *Environment=GATEWAY_OTA_SLOT_A=/ { print "Environment=GATEWAY_OTA_SLOT_A=" a; placed=1; next }
+    /^# *Environment=GATEWAY_OTA_SLOT_B=/ { print "Environment=GATEWAY_OTA_SLOT_B=" b; placed=1; next }
+    /^Environment=GATEWAY_OTA_SLOT_A=/ { print "Environment=GATEWAY_OTA_SLOT_A=" a; placed=1; next }
+    /^Environment=GATEWAY_OTA_SLOT_B=/ { print "Environment=GATEWAY_OTA_SLOT_B=" b; placed=1; next }
+    /^Environment=RUST_LOG=/ && haveenv + 0 == 0 && !placed {
+        print
+        print "Environment=GATEWAY_OTA_SLOT_A=" a
+        print "Environment=GATEWAY_OTA_SLOT_B=" b
+        placed=1
+        next
+    }
+    { print }
+')"
+echo "  ✓ OTA 分区: $OTA_SLOT_A / $OTA_SLOT_B（已同步写入 DeviceAllow 与 Environment）"
 echo "$SERVICE_CONTENT" > "$SERVICE_FILE"
 systemctl daemon-reload
 systemctl enable gateway

@@ -95,12 +95,11 @@ pub(crate) fn build_app_state_dependencies(
     // Bug 216: 原实现此处新建独立 Metrics 实例，导致 Web /api/metrics 暴露的实例
     // 与调度器/处理链实际写入的实例不是同一个（所有运行期指标恒为 0）。
     // 改为使用调用方注入的共享实例。
+    // OTA A/B 分区：走 AbPartitionConfig::default()，与 gateway-core 保持单一来源。
+    // 分区路径可由 GATEWAY_OTA_SLOT_A / GATEWAY_OTA_SLOT_B 覆盖（现场介质不一定是
+    // eMMC）；此处不再写死 /dev/mmcblk0p2/p3，避免代码与 systemd DeviceAllow 漂移。
     let ota = OtaManager::new(
-        gateway_core::platform::ota::AbPartitionConfig {
-            slot_a: "/dev/mmcblk0p2".into(),
-            slot_b: "/dev/mmcblk0p3".into(),
-            active_slot: 'a',
-        },
+        gateway_core::platform::ota::AbPartitionConfig::default(),
         default_ota_staging(),
         ota_signing_key,
         metrics.clone(),

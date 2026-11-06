@@ -1,8 +1,12 @@
 [Unit]
 Description=Industrial Gateway Service
 Documentation=https://github.com/your-org/gateway
-After=network-online.target time-sync.target
+After=network-online.target time-sync.target systemd-modules-load.service
 Wants=network-online.target
+# systemd-modules-load.service 是静态 unit（默认不被拉起），After= 只排序不激活。
+# 必须显式 Wants=，否则 /etc/modules-load.d/ 里的串口驱动不会在开机时加载 ——
+# 而设备组形式（char-ttyUSB）的 DeviceAllow 依赖驱动已加载才能解析出组名。
+Wants=systemd-modules-load.service
 # 等待串口设备就绪（可选：根据实际设备名调整）
 # After=dev-ttyUSB0.device
 
@@ -85,15 +89,36 @@ DeviceAllow=/dev/softdog rw
 # 不放行则 systemd 在 open() 之前就 EPERM 拒绝 →
 # DI 采集 / DO 输出 / RS485 DE 方向控制全部静默失效。
 DeviceAllow=/dev/gpiochip0 rw
-DeviceAllow=/dev/ttyUSB rw
-DeviceAllow=/dev/ttyS rw
-# OTA A/B 分区：代码默认写 /dev/mmcblk0p2 / /dev/mmcblk0p3
+# 串口：**必须用设备组形式**（char-<组名>），不能写 /dev/ttyUSB 这种「路径形式」。
+# systemd v255 的实际行为（见 bpf-devices.c）：
+#   - 路径形式在应用期先 stat(node)，stat 失败就**整条丢弃**
+#     （"Couldn't stat device %s: %m"）——/dev/ttyUSB 不是真实节点
+#     （真实节点是 /dev/ttyUSB0、/dev/ttyUSB1 …），必然被丢弃 →
+#     程序 open() 之前被 EPERM 拒绝 → 全部串口协议采集不上来。
+#   - 设备组形式按 /proc/devices 里的**设备组名**匹配（ttyUSB / ttyS / ttyACM
+#     都是合法组名），一次放行该 major 的全部次设备：/dev/ttyUSB0..3、
+#     /dev/ttyS0..3 全部覆盖，也不用维护具体端口号。
+# 约束：组名必须在服务启动那一刻能在 /proc/devices 里解析（驱动模块已加载），
+# 否则 systemd 解析失败 → 整条 DeviceAllow 被丢弃 → open() 之前 EPERM 拒绝。
+# install.sh 会把 cp210x / ch341 / ftdi_sio / pl2303 / cdc_acm 写进
+# /etc/modules-load.d/gateway-serial.conf 并立即 modprobe（见 install.sh 的 4.5 步）。
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyS rw
+DeviceAllow=char-ttyACM rw
+# OTA A/B 分区（默认 eMMC）。这里用**路径形式**是对的：分区节点是真实节点
+# （/dev/mmcblk0p2、/dev/mmcblk0p3），不像串口那种裸设备名。
+# 现场若用 SD / NVMe 做 OTA 介质，分区路径会变（/dev/sda2、/dev/nvme0n1p2 …），
+# 必须同时改两处，缺一 OTA 直接失败：
+#   1) 下面的 DeviceAllow（systemd 白名单，不放行则 open() 之前 EPERM）
+#   2) 环境变量 GATEWAY_OTA_SLOT_A / GATEWAY_OTA_SLOT_B（决定写到哪个分区）
+# install.sh 会用这两个环境变量同时改写本段与 Environment= 行
 # （见 gateway-core/src/platform/ota/mod.rs 的 AbPartitionConfig::default）。
-# 不放行则 systemd 在程序 open() 之前就 EPERM 拒绝 → OTA 现场直接失败。
-# 现场若用 eMMC 以外的介质（/dev/sd* / /dev/nvme*），按实际分区补齐。
+# OTA-PARTITIONS-BEGIN
 DeviceAllow=/dev/mmcblk0p2 rw
 DeviceAllow=/dev/mmcblk0p3 rw
-DeviceAllow=/dev/mmcblk0 rw
+# OTA-PARTITIONS-END
+# Environment=GATEWAY_OTA_SLOT_A=/dev/mmcblk0p2
+# Environment=GATEWAY_OTA_SLOT_B=/dev/mmcblk0p3
 
 # 资源限制
 MemoryMax=512M

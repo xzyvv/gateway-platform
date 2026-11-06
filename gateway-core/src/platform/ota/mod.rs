@@ -63,11 +63,28 @@ pub struct AbPartitionConfig {
     pub active_slot: char,
 }
 
+/// OTA 活动分区设备的环境变量名。
+///
+/// 现场 OTA 介质不一定是 eMMC（SD 卡 / NVMe 都可能），分区节点名随之变化
+/// （/dev/sda2、/dev/nvme0n1p2 …）。写死 eMMC 分区名会让 OTA 在非 eMMC
+/// 介质上直接失败，因此分区路径可由环境变量覆盖。
+///
+/// **注意**：改了这里必须同步改 systemd unit 的 `DeviceAllow=`——
+/// 白名单里没有的节点会在程序 open() 之前被 systemd 以 EPERM 拒绝。
+/// `gateway-core/deploy/install.sh` 会同时改写这两处。
+pub const OTA_SLOT_A_ENV: &str = "GATEWAY_OTA_SLOT_A";
+/// OTA 备用分区设备的环境变量名（见 [`OTA_SLOT_A_ENV`]）。
+pub const OTA_SLOT_B_ENV: &str = "GATEWAY_OTA_SLOT_B";
+
 impl Default for AbPartitionConfig {
     fn default() -> Self {
         Self {
-            slot_a: PathBuf::from("/dev/mmcblk0p2"),
-            slot_b: PathBuf::from("/dev/mmcblk0p3"),
+            slot_a: PathBuf::from(
+                std::env::var(OTA_SLOT_A_ENV).unwrap_or_else(|_| "/dev/mmcblk0p2".to_string()),
+            ),
+            slot_b: PathBuf::from(
+                std::env::var(OTA_SLOT_B_ENV).unwrap_or_else(|_| "/dev/mmcblk0p3".to_string()),
+            ),
             active_slot: 'a',
         }
     }

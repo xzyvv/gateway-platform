@@ -8,9 +8,11 @@ set -uo pipefail
 #
 # 用法（发布包内，一条命令）:
 #   sudo bash deliver.sh [--port 8080] [--token xxx] [--host 127.0.0.1] \
-#                        [--report path] [--timeout 45] [--no-start]
+#                        [--report path] [--timeout 45] [--no-start] \
+#                        [--ota-slot-a /dev/sda2] [--ota-slot-b /dev/sda3]
 #
 #   --port/--host 省略时自动读 /etc/gateway/config.json 的 web.listen_addr。
+#   --ota-slot-a/b 指定 OTA A/B 分区设备（现场介质不是 eMMC 时必须给）。
 #
 #   或显式指定产物（源码/包布局均可）:
 #   sudo bash deliver.sh gatewayd-<target> ./ui-dist
@@ -40,6 +42,8 @@ REPORT="$DIR/out/delivery-checklist-$(date +%Y%m%d-%H%M%S).md"
 BINARY=""
 UI_DIST=""
 NO_START=0
+OTA_SLOT_A=""
+OTA_SLOT_B=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,9 +57,19 @@ while [[ $# -gt 0 ]]; do
     --report=*) REPORT="${1#*=}"; shift ;;
     --timeout)  WAIT_TIMEOUT="$2"; shift 2 ;;
     --timeout=*) WAIT_TIMEOUT="${1#*=}"; shift ;;
+    --ota-slot-a)   OTA_SLOT_A="$2"; shift 2 ;;
+    --ota-slot-a=*) OTA_SLOT_A="${1#*=}"; shift ;;
+    --ota-slot-b)   OTA_SLOT_B="$2"; shift 2 ;;
+    --ota-slot-b=*) OTA_SLOT_B="${1#*=}"; shift ;;
     --no-start) NO_START=1; shift ;;
     -h|--help)
-      sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}/  /'
+      # 打印文件头部的用法说明：取「头部注释块」并跳过纯分隔线。
+      # 头部的结束位置 = 第 2 根纯分隔线（纯分隔线 = 一长串 ─），
+      # 不写死行号 —— 上方注释增删行后不会截断正文。
+      _hdr_end="$(grep -n '^# ─\{10,\}' "${BASH_SOURCE[0]}" | sed -n '2p' | cut -d: -f1)"
+      sed -n "3,${_hdr_end:-3}p" "${BASH_SOURCE[0]}" \
+        | grep -v '^# ─\{10,\}' \
+        | sed 's/^# \{0,1\}/  /'
       exit 0
       ;;
     -*) echo "错误: 未知参数 '$1'"; exit 1 ;;
@@ -101,20 +115,30 @@ fi
 
 echo "── [1/3] 安装 ──"
 INSTALL_RC=0
-# 只在显式 --port 时钳住 install.sh 的探测端口；未指定则交给 install.sh
-# 读 config.json 的 web.listen_addr（gatewayd 不认 GATEWAY_PORT 环境变量）
+# 环境变量透传给 install.sh：
+#   GATEWAY_PORT   只在显式 --port 时钳住探测端口；未指定则交给 install.sh
+#                  读 config.json 的 web.listen_addr（gatewayd 不认 GATEWAY_PORT）
+#   GATEWAY_OTA_SLOT_A/B  现场 OTA 介质不是 eMMC 时指定分区设备；
+#                  不给则用 install.sh 的默认值（/dev/mmcblk0p2/p3）
+INSTALL_ENV=()
+[ -n "$PORT" ]       && INSTALL_ENV+=("GATEWAY_PORT=$PORT")
+[ -n "$OTA_SLOT_A" ] && INSTALL_ENV+=("GATEWAY_OTA_SLOT_A=$OTA_SLOT_A")
+[ -n "$OTA_SLOT_B" ] && INSTALL_ENV+=("GATEWAY_OTA_SLOT_B=$OTA_SLOT_B")
+
+# 注意：数组可能为空。bash 3.2（macOS 自带）在 set -u 下展开空数组会直接报错，
+# 这里显式分两条路径，避免依赖 bash 版本。
+run_install() {
+  if [ ${#INSTALL_ENV[@]} -gt 0 ]; then
+    env "${INSTALL_ENV[@]}" bash "$INSTALL" "$@"
+  else
+    bash "$INSTALL" "$@"
+  fi
+}
+
 if [ ${#INSTALL_ARGS[@]} -gt 0 ]; then
-  if [ -n "$PORT" ]; then
-    GATEWAY_PORT="$PORT" bash "$INSTALL" "${INSTALL_ARGS[@]}" || INSTALL_RC=$?
-  else
-    bash "$INSTALL" "${INSTALL_ARGS[@]}" || INSTALL_RC=$?
-  fi
+  run_install "${INSTALL_ARGS[@]}" || INSTALL_RC=$?
 else
-  if [ -n "$PORT" ]; then
-    GATEWAY_PORT="$PORT" bash "$INSTALL" || INSTALL_RC=$?
-  else
-    bash "$INSTALL" || INSTALL_RC=$?
-  fi
+  run_install || INSTALL_RC=$?
 fi
 if [ "$INSTALL_RC" -ne 0 ]; then
   echo ""
