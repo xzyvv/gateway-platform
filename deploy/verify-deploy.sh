@@ -7,7 +7,8 @@ set -euo pipefail
 #       --port/--host 省略时自动读 /etc/gateway/config.json 的 web.listen_addr
 #
 # 在目标 Linux 上跑完 install.sh 后执行。
-# 覆盖：systemd 服务 / 端口 / 健康检查 / API 契约 / 前端静态 / 硬件能力
+# 覆盖：systemd 服务（含开机自启）/ 环境变量 / 配置可解析性 / 时区 / 二进制兼容性 /
+#       端口 / 健康检查 / API 契约 / 运行态配置 / 授权 / 前端静态 / 硬件能力
 # 输出：彩色 PASS/FAIL 清单 + 最终总分 + Markdown 交付检查单（默认 deploy/out/）
 # ────────────────────────────────────────────────────────────
 
@@ -35,11 +36,33 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ── 监听地址：显式 --port/--host 优先，否则读 /etc/gateway/config.json ──
+# ── 生效配置路径 ──
+# 默认与代码 paths::default_config_path 一致；服务里若用 GATEWAY_CONFIG_PATH 覆盖则以它为准。
+# 必须先于端口探测解析：否则「配置被指到别处」的现场会用旧文件的 listen_addr 探测，
+# 把装在 9000 上的正常网关判成未监听。
+CFG_PATH="/etc/gateway/config.json"
+SVC_ENV=$(systemctl show -p Environment --value gateway 2>/dev/null || true)
+# 纯 bash 遍历，不走 `grep | head` 管道：脚本开着 pipefail，
+# `head` 提前退出会让上游 grep 收到 SIGPIPE，导致「明明匹配到了却判为失败」。
+svc_env_val() {
+  local kv
+  for kv in $SVC_ENV; do
+    case "$kv" in
+      "$1="*) printf '%s' "${kv#*=}"; return 0 ;;
+    esac
+  done
+  return 1
+}
+svc_env_set() { svc_env_val "$1" >/dev/null; }
+if svc_env_set "GATEWAY_CONFIG_PATH"; then
+  CFG_PATH=$(svc_env_val "GATEWAY_CONFIG_PATH")
+fi
+
+# ── 监听地址：显式 --port/--host 优先，否则读生效配置文件 ──
 # 自定义端口/绑定时若仍按 8080 探测，会把「装在 9000 上的正常网关」判成未监听。
 # 通配绑定（0.0.0.0 / * / [::]）在本机验证一律走回环；IPv6 字面量保留方括号。
 config_bind() {
-  [ -f /etc/gateway/config.json ] || return 0
+  [ -f "$CFG_PATH" ] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
   python3 -c 'import json, sys
 try:
@@ -57,7 +80,7 @@ if host in ("", "0.0.0.0", "*", "::"):
     host = "127.0.0.1"
 elif ":" in host:
     host = "[" + host + "]"
-print(host, port)' /etc/gateway/config.json 2>/dev/null || true
+print(host, port)' "$CFG_PATH" 2>/dev/null || true
 }
 if [ -z "$PORT" ] || [ -z "$HOST" ]; then
   BIND_FROM_CONFIG="$(config_bind)"
@@ -171,6 +194,15 @@ fi
 echo "${BOLD}[1/7] systemd 服务${RESET}"
 if systemctl is-active --quiet gateway; then
   ok "gateway.service 运行中"
+  # 「正在运行」不等于「开机自启」：现场断电重启后网关不起来，
+  # 看起来像服务崩溃，实际是安装时漏了 enable。install.sh 已执行 enable，这里核对结果。
+  if systemctl is-enabled --quiet gateway 2>/dev/null; then
+    ok "gateway.service 已设开机自启"
+  else
+    fail "gateway.service 未设开机自启（is-enabled: $(systemctl is-enabled gateway 2>&1 || true)）"
+    echo "    影响: 设备断电重启后网关不会自动启动"
+    echo "    处置: sudo systemctl enable gateway"
+  fi
   # 最近 500 条日志里的 panic / ERROR 数
   ERR_COUNT=$(journalctl -u gateway -n 500 --no-pager 2>/dev/null | grep -ci "panic\|ERROR\|FATAL" || true)
   if [ "$ERR_COUNT" -eq 0 ]; then
@@ -283,6 +315,116 @@ else
   ok "设备系统时间正常：$(date -Is 2>/dev/null || echo "$DEV_EPOCH")"
 fi
 
+# ── 1e. 服务环境变量 ──
+# 环境变量缺失/写错不会让服务起不来，只会「静默走默认值」：
+# 例如把变量名写成 GATEWAY_CONFIG（代码认的是 GATEWAY_CONFIG_PATH），
+# 改配置路径的意图完全不生效，现场表现为「我明明改了配置，网关读的还是旧的」。
+echo "${BOLD}[1e] 服务环境变量${RESET}"
+# SVC_ENV / svc_env_val / svc_env_set 与 CFG_PATH 已在脚本开头解析（端口探测要用到）
+
+if svc_env_set "GATEWAY_CONFIG"; then
+  fail "服务环境里有 GATEWAY_CONFIG=$(svc_env_val GATEWAY_CONFIG)，但程序只读 GATEWAY_CONFIG_PATH —— 该设置不生效"
+  echo "    处置: 改成 Environment=GATEWAY_CONFIG_PATH=... 后 daemon-reload + restart"
+elif svc_env_set "GATEWAY_CONFIG_PATH"; then
+  if [ -f "$CFG_PATH" ]; then
+    ok "GATEWAY_CONFIG_PATH=$CFG_PATH（文件存在）"
+  else
+    fail "GATEWAY_CONFIG_PATH=$CFG_PATH 指向的文件不存在 —— 服务会改写成默认配置并重启丢失现场设置"
+  fi
+else
+  info "未覆盖 GATEWAY_CONFIG_PATH，使用默认 $CFG_PATH"
+fi
+
+if svc_env_set "GATEWAY_TZ"; then
+  ok "时区变量 GATEWAY_TZ=$(svc_env_val GATEWAY_TZ)"
+elif svc_env_set "TZ"; then
+  ok "时区变量 TZ=$(svc_env_val TZ)"
+else
+  warn "服务环境里既无 GATEWAY_TZ 也无 TZ：计划任务按系统时区解释；系统无 /etc/localtime 时会回退 UTC"
+fi
+
+if svc_env_set "GATEWAY_WEB_DIR"; then
+  WEB_DIR=$(svc_env_val "GATEWAY_WEB_DIR")
+  if [ -f "$WEB_DIR/index.html" ]; then
+    ok "GATEWAY_WEB_DIR=$WEB_DIR（含 index.html）"
+  else
+    fail "GATEWAY_WEB_DIR=$WEB_DIR 下没有 index.html —— 控制台会退化为内置兜底页"
+  fi
+else
+  info "未设 GATEWAY_WEB_DIR，按 WorkingDirectory 下的 ./ui-dist 查找前端"
+fi
+
+if svc_env_set "RUST_LOG"; then
+  ok "RUST_LOG=$(svc_env_val RUST_LOG)"
+else
+  warn "未设 RUST_LOG：日志级别走默认，现场排障可能缺关键信息（建议 info）"
+fi
+
+# ── 1f. 配置文件可解析性 ──
+# 「文件存在」不等于「能解析」。现场最常见的两类故障：
+# 1) 手工编辑把 JSON 改坏（少逗号 / 中文引号 / 记事本写入 BOM）；
+# 2) include 引用的分片文件被删或改名——主配置还在，展开时整份加载失败。
+# 程序加载链路（gateway-core config::ConfigLoader）为
+# expand_includes → schema → 反序列化 → migrate → 解密 → validate_all，
+# 任一步失败都会让服务起不来或热重载失败。这里以无副作用的方式把前两类变成可见结论，
+# 运行态是否真的解析成功由 [4c] 用 GET /api/config 反证。
+echo "${BOLD}[1f] 配置文件可解析性${RESET}"
+if [ ! -f "$CFG_PATH" ]; then
+  fail "配置文件 $CFG_PATH 不存在"
+else
+  # BOM 必须像代码里的 strip_bom 一样先剥掉，否则会把「代码能读」的配置误判为坏 JSON
+  CFG_VERDICT=$(python3 - "$CFG_PATH" <<'PY' 2>/dev/null || echo "NO_PYTHON|"
+import glob, json, os, sys
+path = sys.argv[1]
+raw = open(path, "rb").read()
+if raw.startswith(b"\xef\xbb\xbf"):
+    raw = raw[3:]
+try:
+    data = json.loads(raw.decode("utf-8"))
+except Exception as e:
+    print("BAD_JSON|" + str(e))
+    raise SystemExit
+shards = data.get("include") or []
+if isinstance(shards, str):
+    shards = [shards]
+base = os.path.dirname(os.path.abspath(path))
+missing = []
+for s in shards:
+    if not isinstance(s, str) or not s:
+        continue
+    if any(ch in s for ch in "*?["):
+        if not glob.glob(os.path.join(base, s)):
+            missing.append(s + "(glob 无匹配)")
+    elif not os.path.exists(os.path.join(base, s)):
+        missing.append(s)
+print(("SHARD_MISSING|" + ",".join(missing)) if missing else ("OK|" + str(len(shards))))
+PY
+)
+  CFG_KIND="${CFG_VERDICT%%|*}"
+  CFG_DETAIL="${CFG_VERDICT#*|}"
+  case "$CFG_KIND" in
+    OK)
+      if [ "$CFG_DETAIL" = "0" ]; then
+        ok "配置 JSON 语法正确（无 include 分片）"
+      else
+        ok "配置 JSON 语法正确，include 引用的 $CFG_DETAIL 个分片文件都存在"
+      fi
+      ;;
+    BAD_JSON)
+      fail "配置 JSON 解析失败：$CFG_DETAIL"
+      echo "    影响: 网关重启/热重载会直接失败（不会拿着坏配置启动）"
+      echo "    处置: python3 -m json.tool $CFG_PATH 定位行号，修好后 sudo systemctl restart gateway"
+      ;;
+    SHARD_MISSING)
+      fail "include 引用的分片文件缺失：$CFG_DETAIL"
+      echo "    影响: 加载时 expand_includes 报错，网关启动/热重载失败"
+      ;;
+    *)
+      warn "无法解析 $CFG_PATH（缺 python3 或读取失败），请人工执行 python3 -m json.tool $CFG_PATH"
+      ;;
+  esac
+fi
+
 # ── 2. 端口监听 ──
 # 同时取本地绑定地址：仅回环说明「本机验证能过，但车间 LAN 打不开」，
 # 检查单不能再写「浏览器打开 http://<host>:PORT」而不加限定。
@@ -393,6 +535,75 @@ if [ -n "$NTP_JSON" ]; then
   esac
 else
   warn "未取到 /api/ntp/status（可能需要 api_token），无法判断网关校时状态"
+fi
+
+# ── 4c. 运行态配置一致性 ──
+# /api/config 能返回，说明进程内的配置对象是**程序自己解析成功**的
+# （启动时已走完 expand_includes → schema → 反序列化 → migrate → 解密 → validate_all）。
+# 但磁盘文件若在服务启动后被改过，运行态就没包含这些改动——「我改了配置没生效」正是如此。
+# /proc/<pid> 的 mtime 即进程创建时间，与 config.json 的 mtime 比对，全程无副作用。
+echo "${BOLD}[4c] 运行态配置${RESET}"
+CFG_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/config" 2>/dev/null || echo "000")
+if [ "$CFG_CODE" = "200" ]; then
+  ok "GET /api/config → 200（当前进程配置已成功解析）"
+  MAIN_PID=$(systemctl show -p MainPID --value gateway 2>/dev/null || true)
+  PROC_START=$(stat -c %Y "/proc/$MAIN_PID" 2>/dev/null || true)
+  CFG_MTIME=$(stat -c %Y "$CFG_PATH" 2>/dev/null || true)
+  if [ -n "$PROC_START" ] && [ -n "$CFG_MTIME" ] && [ "$CFG_MTIME" -gt "$PROC_START" ] 2>/dev/null; then
+    warn "磁盘配置在服务启动后被改动（晚于进程启动 $((CFG_MTIME - PROC_START))s）：运行态未包含这些改动，也可能解析失败"
+    echo "    处置: sudo systemctl restart gateway（或调用配置热重载接口）后重跑本脚本确认"
+  elif [ -n "$PROC_START" ] && [ -n "$CFG_MTIME" ]; then
+    ok "运行态配置与磁盘一致（配置文件最后修改早于服务启动）"
+  else
+    info "未能取到进程启动时间或配置 mtime，跳过一致性比对"
+  fi
+elif [ "$CFG_CODE" = "401" ] || [ "$CFG_CODE" = "403" ]; then
+  warn "GET /api/config → $CFG_CODE（无 token，无法读取运行态配置）"
+else
+  fail "GET /api/config → $CFG_CODE（期望 200；服务读不到运行态配置）"
+fi
+
+# ── 4d. 授权状态 ──
+# 授权失效不会让服务报错——程序静默降级到 absent 兜底配额继续跑，现场表现为
+# 「点数上限变小」却没有任何告警。这里把降级原因落成检查单结论。
+# 注意 GET /api/license 返回的是扁平 JSON（不是 ApiResponse 信封），且需要 token。
+echo "${BOLD}[4d] 授权状态${RESET}"
+LIC_JSON=$(curl -fsS --max-time 5 "${AUTH_HEADER[@]}" "$API/api/license" 2>/dev/null || true)
+if [ -z "$LIC_JSON" ]; then
+  warn "未取到 /api/license（需要 api_token），无法确认授权状态"
+else
+  LIC_STATUS=$(printf '%s' "$LIC_JSON" | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || true)
+  LIC_TIER=$(printf '%s' "$LIC_JSON" | grep -o '"tier":"[^"]*"' | cut -d'"' -f4 || true)
+  LIC_SRC=$(printf '%s' "$LIC_JSON" | grep -o '"quota_source":"[^"]*"' | cut -d'"' -f4 || true)
+  LIC_PRESENT=$(printf '%s' "$LIC_JSON" | grep -o '"present":[a-z]*' | cut -d: -f2 || true)
+  LIC_EXP=$(printf '%s' "$LIC_JSON" | grep -o '"expires_at":[0-9]*' | cut -d: -f2 || true)
+  LIC_EXP_TXT=""
+  if [ -n "$LIC_EXP" ]; then
+    LIC_EXP_TXT="，到期 $(date -d "@$LIC_EXP" +%Y-%m-%d 2>/dev/null || echo "$LIC_EXP")"
+  fi
+  case "$LIC_STATUS" in
+    ok)
+      if [ "$LIC_PRESENT" = "false" ]; then
+        ok "未安装授权文件，按 absent 兜底配额运行（tier=${LIC_TIER:-core}）"
+      else
+        ok "授权有效（tier=${LIC_TIER:-?}$LIC_EXP_TXT）"
+      fi
+      ;;
+    expiring)
+      warn "授权即将到期$LIC_EXP_TXT（tier=${LIC_TIER:-?}）：到期后自动降级到 absent 兜底配额" ;;
+    expired|mismatch|tampered|invalid)
+      fail "授权无效（status=$LIC_STATUS$LIC_EXP_TXT）：已降级到 absent 兜底配额，点数与协议数受限"
+      echo "    说明: mismatch=授权与本机设备码不符 / tampered=文件被改动 / invalid=格式或签名无效"
+      echo "    处置: GET /api/license 取 machine.machine_key → 向供应商重新签发 → POST /api/license/import"
+      ;;
+    "")
+      warn "未解析到授权状态字段，请人工查看 GET /api/license" ;;
+    *)
+      warn "授权状态为 $LIC_STATUS（未知取值）" ;;
+  esac
+  if [ "$LIC_SRC" = "tier_missing" ]; then
+    warn "配额来源 tier_missing：档位 ${LIC_TIER:-?} 未在配置 tier_quotas 中定义，已静默降级到 absent 兜底配额"
+  fi
 fi
 
 if [ -n "$TOKEN" ]; then
