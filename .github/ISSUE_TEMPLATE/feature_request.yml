@@ -1,0 +1,60 @@
+name: 功能建议
+description: 新能力、新协议族、现有功能的改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提建议前请先看一下仓库的 [功能清单与路线图](docs/functional-inventory-and-next-roadmap.md)，
+        确认这件事是不是已经被评估过、以及为什么被排在现在这个位置。
+
+        如果只是想讨论想法、不确定该不该做，去 Discussions 更合适。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题 ★
+      description: 不要写"我想要一个 XX 功能"，要写"现场遇到了什么，导致我不得不绕路"。绕路的成本才是这项功能的真实价值。
+      placeholder: |
+        现在要在 8 个设备上逐个点"读取"才能确认某类表计是否在线。
+        这个过程每次要 5 分钟，且中途失败无法知道是哪个设备。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的解决方式
+      description: 你的方案或设想。没有具体设想也没关系，描述清楚目标即可。
+      placeholder: |
+        比如：期望能按协议族批量执行"连通性诊断"，并导出一份结果表。
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: 影响范围
+      description: 这个能力大致涉及哪一层？
+      options:
+        - 南向协议（新协议族 / 现有协议族的新能力）
+        - 北向上行（MQTT / Webhook / OPC UA Server / Modbus Server）
+        - 现场调试工具
+        - 配置与设备管理
+        - 前端展示
+        - 部署与运维
+        - 文档
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 目前的绕路方式
+      description: 现在你是怎么解决的？用了脚本、Excel、还是手工？这能帮我们判断真实使用频率。
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 截图、现场照片、相关文档链接等。
+    validations:
+      required: false

@@ -1,0 +1,108 @@
+name: Bug 报告
+description: 现场问题、功能异常、行为与预期不符
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你反馈问题。
+
+        下面是定位一个工业网关问题所必需的信息。**带 ★ 的字段如果留空，
+        大概率需要来回追问几轮才能复现**——尤其是协议族和日志/诊断包。
+
+        如果你更倾向于讨论而不是报 bug，请去 Discussions。
+  - type: textarea
+    id: protocol
+    attributes:
+      label: 协议族与总线 ★
+      description: 涉及的协议族 + 总线类型。12 个协议族的帧格式、校验、超时策略完全不同，这一栏直接决定从哪里查起。
+      placeholder: |
+        协议族：modbus / dlt645 / cjt188 / opcua / iec104 / bacnet / bacnet_mstp / s7comm / mc / iec101 / fins / gpio
+        总线：RS485 / RS232 / TCP / 其它
+        从站或设备型号（可选）：
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 现场现象 ★
+      description: 实际发生了什么？越具体越好。避免只写"不工作"。
+      placeholder: |
+        - 采集值不动（最近一次有效值是 X 时间）
+        - 数值在两个值之间来回跳变
+        - 连不上，报"TCP 已连接但从站无应答"
+        - 重连风暴，30 秒内断了 20 次
+        - 前端页面报 500
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤 ★
+      description: 最小可复现路径。从什么状态开始，做了什么操作，期望什么，实际什么。
+      placeholder: |
+        1. 配置 1 个 modbus 设备，slave=1, 9600-8-N-1
+        2. 点击"采集诊断" → "协议诊断"
+        3. 实际：报"链路超时"；期望：读到保持寄存器值
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你认为正确的结果是什么？
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: 网关版本 / commit
+      description: 前端「系统总览」页可以看到版本号。也可以填 git commit。
+      placeholder: v0.1.0 / 6b0f210
+    validations:
+      required: false
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署形态
+      description: 影响配置路径、环境变量、证书路径。
+      options:
+        - 裸机直接运行 gatewayd
+        - systemd 服务
+        - Docker / 容器
+        - 其它
+        - 不确定
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 诊断包 ★
+      description: |
+        首选附上一键诊断包：「系统总览」页 → "导出诊断包(.zip)"。
+        里面包含 report.html / requests.har / packets.csv / meta.json /
+        gateway.log / config.snapshot.json / health.json / north.json。
+
+        没有的话，至少贴出相关日志片段（注意脱敏 api_token、密码、设备 IP 里的敏感信息）。
+      placeholder: |
+        粘贴相关日志片段，或拖入诊断包 zip
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: 相关配置
+      description: |
+        贴出涉及的配置片段（JSON）。请脱敏 api_token / password_hash 等凭据字段。
+        诊断包里的 config.snapshot.json 也可以直接用。
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其它信息
+      description: 截图、录屏、复现环境（是否有仿真器 / 真实设备）等。
+    validations:
+      required: false

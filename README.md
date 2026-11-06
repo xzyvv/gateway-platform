@@ -119,12 +119,15 @@ Apache-2.0 管的是**代码怎么用**；授权文件（license）管的是**�
 
 ### 贡献
 
-提交 PR 即表示同意你的贡献按 Apache-2.0 授权。涉及依赖变更时，本地需通过：
+欢迎参与。**开始动手前请先读 [`CONTRIBUTING.md`](CONTRIBUTING.md)** —— 里面写了这个项目最看重什么、
+提交前必须跑的门禁、协议族/端点/前端各自的改动清单，以及 issue 该怎么写才能被复现。
 
 ```bash
 cargo deny check     # 许可证合规 + 依赖来源校验（allowlist 见 deny.toml）
 cargo audit          # RustSec 漏洞扫描
 ```
+
+提交 PR 即表示同意你的贡献按 Apache-2.0 授权。
 
 ## 安全
 
