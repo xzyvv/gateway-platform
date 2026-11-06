@@ -23,6 +23,9 @@ export function useProtocolCaps() {
       const map: Record<string, ProtocolCapabilities> = {}
       for (const e of list) map[e.name] = e.capabilities
       caps.value = map
+      // 重试成功后必须复位：否则 caps 已填充但 failed 仍为 true，
+      // 调用方会同时看到「有数据」和「加载失败」两种互相矛盾的信号。
+      failed.value = false
     } catch {
       failed.value = true
     } finally {
