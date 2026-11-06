@@ -242,6 +242,11 @@ chown -R gateway:gateway "$DATA_DIR" "$LOG_DIR"
 # 归 root:gateway + 组读即可，旧实现 root:root 640 会让服务启动后读不到配置
 chown -R root:gateway "$CONFIG_DIR"
 chmod -R g+rX,o-rwx "$CONFIG_DIR"
+# 目录额外需要**组可写**：ConfigLoader::save() → atomic_write() 的临时文件建在
+# 目标同目录（/etc/gateway/）再 rename 覆盖，目录不可写时所有在线改配置端点
+# 都会 500「runtime reloaded but disk save failed」——运行时已改、磁盘未改，重启回滚。
+# 文件本身保持组只读（g+r，不给 g+w）：写回走的是 rename 替换，不需要文件写权限。
+find "$CONFIG_DIR" -type d -exec chmod g+rwx,o-rwx {} +
 chown -R root:root "$INSTALL_DIR"
 # gateway 进程需要能读 UI
 chmod -R a+rX "$UI_DIR"

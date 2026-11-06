@@ -60,7 +60,12 @@ LockPersonality=true
 RestrictNamespaces=true
 
 # 可写路径
-ReadWritePaths=/var/lib/gateway /var/log/gateway /tmp
+# 注意：ProtectSystem=strict 会把 /etc 整体挂成只读，ReadWritePaths= 是唯一的例外通道。
+# /etc/gateway 必须在这里：Web API 改配置走 ConfigLoader::save() → atomic_write()，
+# 临时文件建在**目标同目录**（/etc/gateway/）再 rename 覆盖，
+# 因此需要该目录可写；缺这一条时所有在线改配置端点都会返回
+# 500「runtime reloaded but disk save failed」——运行时已改、磁盘未改，重启回滚。
+ReadWritePaths=/var/lib/gateway /var/log/gateway /tmp /etc/gateway
 
 # 设备访问：硬件看门狗 + 串口
 # 注意：DeviceAllow 是**白名单**语义（一旦出现任何 DeviceAllow=，未列出的设备一律拒绝）。
@@ -73,6 +78,13 @@ DeviceAllow=/dev/watchdog rw
 DeviceAllow=/dev/watchdog0 rw
 DeviceAllow=/dev/watchdog1 rw
 DeviceAllow=/dev/softdog rw
+# GPIO 芯片：代码硬编码打开 /dev/gpiochip0
+# （见 gateway-core/src/platform/gpio.rs 的 gpiod::Chip::new("/dev/gpiochip0")），
+# 且 GPIO 协议走独立采集路径、不经过 BusManager
+# （见 gatewayd/src/bootstrap/helpers/collection.rs 的 init_collectors）。
+# 不放行则 systemd 在 open() 之前就 EPERM 拒绝 →
+# DI 采集 / DO 输出 / RS485 DE 方向控制全部静默失效。
+DeviceAllow=/dev/gpiochip0 rw
 DeviceAllow=/dev/ttyUSB rw
 DeviceAllow=/dev/ttyS rw
 # OTA A/B 分区：代码默认写 /dev/mmcblk0p2 / /dev/mmcblk0p3
