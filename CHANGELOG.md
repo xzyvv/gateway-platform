@@ -41,6 +41,17 @@
 
 ### 文档
 
+- **三个 800+ 行巨型文件拆分 + 新增 C23 门禁守护**（O-6）：`engine/metrics/scoped.rs`（944 行）、
+  `engine/monitor/remote_diag.rs`（999 行）、`engine/monitor/host.rs`（902 行）三个巨型文件
+  按关注点拆分为模块目录，**对外 API 与行为零变化**（逐行核对原实现，函数体与调用点一致，
+  仅模块归属与可见性变化）。
+  - `engine/metrics/scoped.rs` → `scoped.rs`（446 行）+ `scoped/tests.rs`（500 行）。
+  - `engine/monitor/remote_diag.rs` → `remote_diag.rs`（237 行）+ `remote_diag/{log_archive,tail,shell,tests}.rs`；
+    `shell.rs` 保留 feature=`remote-shell` 门控。
+  - `engine/monitor/host.rs` → `host.rs`（166 行）+ `host/{parsers,linux,windows,other,tests}.rs`；
+    按 `target_os` 分平台实现，`host.rs` 用 `platform::` 别名统一分发，三平台函数签名一致。
+  - `scripts/deploy_lint.ps1` 新增 C23 段（141 → 151 项）：钉死这三个文件均 < 500 行、
+    且拆分后的子模块文件均存在，文件被重新合并即转红。
 - **engine 层依赖方向倒置 + 新增 C22 门禁守护**（O-4）：`engine`（基础设施层）原先反向依赖
   `north` / `queue` / `pipeline` 三处成环，现改为「engine 定义契约、下游实现」的依赖倒置——
   新增 `engine/ports.rs`（`AlarmPublisher` / `DiskHealthSink`）与 `engine/bus.rs`

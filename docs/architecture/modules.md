@@ -142,7 +142,7 @@ ProcessingPipeline (mpsc 通道，背压)
 
 | 模块 | 职责 |
 |---|---|
-| `metrics/` | 指标采集（采集点数、队列深度、上送成功率等） |
+| `metrics/` | 指标采集（采集点数、队列深度、上送成功率等）；`scoped.rs` + `scoped/`（按作用域计数，O-6 拆分） |
 | `alarm.rs` | 告警规则引擎（比较阈值 → ActiveAlarm） |
 | `audit.rs` | 审计日志 |
 | `error.rs` | 通用错误类型（GatewayError 等） |
@@ -170,10 +170,34 @@ ProcessingPipeline (mpsc 通道，背压)
 | 模块 | 职责 |
 |---|---|
 | `health.rs` | 健康监控（磁盘/内存/CPU，更新 disk_full 标志；单测在同目录 `health/tests.rs`） |
-| `host.rs` | 主机信息采集（OS / CPU 核数 / 主机名 / 内存等，供状态接口与页面展示） |
+| `host.rs` + `host/` | 主机信息采集（OS / CPU 核数 / 主机名 / 内存等，供状态接口与页面展示）；按平台拆分，见下表 |
 | `heartbeat.rs` | 采集器心跳监控（超时置 disconnect） |
-| `remote_diag.rs` | 远程诊断通道（日志实时 tail 始终可用；只读白名单 shell 受 feature=`remote-shell` 门控，默认关闭，`POST /api/diagnostics/exec` 返回「功能未启用」） |
+| `remote_diag.rs` + `remote_diag/` | 远程诊断通道（日志实时 tail 始终可用；只读白名单 shell 受 feature=`remote-shell` 门控，默认关闭，`POST /api/diagnostics/exec` 返回「功能未启用」）；按关注点拆分，见下表 |
 | `otel.rs` | OTel metrics 桥接（OTLP 周期性导出，feature=`tracing-otlp`） |
+
+`engine/monitor/host/`（O-6 拆分，原 `host.rs` 单文件 902 行）：
+
+| 文件 | 职责 | 编译条件 |
+|---|---|---|
+| `host.rs` | 公共类型（`HostMetrics` / `NetInterfaceMetric`）、CPU 基线状态、跨平台入口 `collect()` | 全平台 |
+| `host/parsers.rs` | `/proc/*` 文本 → 数值的纯解析函数（`parse_proc_stat` / `parse_meminfo` / `parse_loadavg` / `parse_uptime` / `parse_thermal_milli`） | 全平台 |
+| `host/linux.rs` | Linux 采集实现（`/proc` + `/sys` + `getifaddrs`） | `target_os = "linux"` |
+| `host/windows.rs` | Windows 采集实现（`GetSystemTimes` / `GlobalMemoryStatusEx` / `GetAdaptersAddresses` + `GetIfTable2`） | `windows` |
+| `host/other.rs` | 其它平台：全部如实返回未知（`None` / 空列表），不编造数字 | 非 Linux 且非 Windows |
+| `host/tests.rs` | 单元测试 | `cfg(test)` |
+
+平台分发方式：`host.rs` 用 `use self::linux as platform;` / `use self::windows as platform;` / `use other as platform;` 三选一，
+调用点统一写 `platform::xxx()`，各平台模块的函数签名保持一致。
+
+`engine/monitor/remote_diag/`（O-6 拆分，原 `remote_diag.rs` 单文件 999 行）：
+
+| 文件 | 职责 | 编译条件 |
+|---|---|---|
+| `remote_diag.rs` | `Diagnostics` 结构体与对外方法、日志缓冲与 tail 游标状态 | 全平台 |
+| `remote_diag/log_archive.rs` | 日志归档切分与列举（`split_log_path` / `archive_path` / `list_log_archives_blocking`） | 全平台 |
+| `remote_diag/tail.rs` | 日志 tail 读取与续传偏移计算（`read_tail` / `tail_consumable` / `tail_resume_offset`） | 全平台 |
+| `remote_diag/shell.rs` | 只读白名单 shell：命令解析、白名单校验、输出截断 | `feature = "remote-shell"` |
+| `remote_diag/tests.rs` | 单元测试 | `cfg(test)` |
 
 ### 6.10 目录层次与命名约定
 

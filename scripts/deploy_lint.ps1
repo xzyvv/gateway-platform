@@ -1988,6 +1988,119 @@ else {
     Fail "pipeline 侧没有重导出 engine/bus 的总线契约 —— RealtimeBus 的归属又回到了 pipeline"
 }
 
+# ── C23  巨型文件拆分守护（O-6） ──
+#
+# 背景：engine 下有三个 800~1000 行的巨型文件——
+#   engine/metrics/scoped.rs       （944 行）
+#   engine/monitor/remote_diag.rs  （999 行）
+#   engine/monitor/host.rs         （902 行）
+# 单文件过千行时，改一个函数要在几百行里定位上下文；review 时也看不出
+# 「哪些是业务逻辑、哪些是平台差异、哪些是测试」，回归面靠肉眼兜不住。
+#
+# O-6 把它们按关注点拆成模块目录（对外 API 与行为零变化），
+# 这里用门禁钉死拆分结果不被悄悄合回去：
+#   ① 三个主文件行数均 < 500
+#   ② 拆出的子模块文件真实存在（防止"删了子模块、把代码塞回主文件"）
+#   ③ 主文件确实以 mod 声明引用子模块（防止子模块变成孤儿文件）
+Write-Host "[C23] 巨型文件拆分守护（三个 800+ 行文件均 < 500 行且子模块在位）" -ForegroundColor Cyan
+
+# 统计真实行数：
+#   - 不用 Measure-Object -Line（它会漏算空行，口径偏小）；
+#   - 也不用 Get-Content（Windows PowerShell 5.1 默认按 ANSI/GBK 解码 UTF-8，
+#     中文注释会被误解码成含 0x0A 的字节序列，行数被低估 10% 以上）；
+#   - 用 [System.IO.File]::ReadAllLines：按 UTF-8 解码，行数与编辑器一致，
+#     且 Windows PowerShell 5.1 / PowerShell 7 行为相同（门禁口径不随机器变）。
+function Get-RustLineCount([string]$relPath) {
+    $full = Join-Repo $relPath
+    if (-not (Test-Path $full)) { return -1 }
+    return [System.IO.File]::ReadAllLines($full).Count
+}
+
+$splitTargets = @(
+    @{ Main = "gateway-core/src/engine/metrics/scoped.rs";      Limit = 500 },
+    @{ Main = "gateway-core/src/engine/monitor/remote_diag.rs"; Limit = 500 },
+    @{ Main = "gateway-core/src/engine/monitor/host.rs";        Limit = 500 }
+)
+foreach ($t in $splitTargets) {
+    $n = Get-RustLineCount $t.Main
+    if ($n -lt 0) {
+        Fail ("找不到 " + $t.Main + " —— 拆分目标文件缺失")
+    }
+    elseif ($n -ge $t.Limit) {
+        Fail ($t.Main + " 有 $n 行（≥ $($t.Limit)）—— 巨型文件拆分被合回去了")
+    }
+    else {
+        Ok ($t.Main + " 共 $n 行（< $($t.Limit)）")
+    }
+}
+
+# 拆出的子模块必须真实存在：只查主文件行数不够——把代码塞回主文件、
+# 同时删掉子模块，也能让行数检查通过（但主文件就超了）。
+# 所以这里逐个核对子模块文件在位。
+$splitSubmodules = @(
+    @{ Main = "gateway-core/src/engine/metrics/scoped.rs";      Subs = @("scoped/tests.rs") },
+    @{ Main = "gateway-core/src/engine/monitor/remote_diag.rs"; Subs = @("remote_diag/log_archive.rs", "remote_diag/tail.rs", "remote_diag/shell.rs", "remote_diag/tests.rs") },
+    @{ Main = "gateway-core/src/engine/monitor/host.rs";        Subs = @("host/parsers.rs", "host/linux.rs", "host/windows.rs", "host/other.rs", "host/tests.rs") }
+)
+foreach ($s in $splitSubmodules) {
+    $baseDir = Split-Path -Parent $s.Main
+    $missing = @()
+    foreach ($sub in $s.Subs) {
+        $subPath = Join-Repo ($baseDir + "/" + $sub)
+        if (-not (Test-Path $subPath)) { $missing += $sub }
+    }
+    if ($missing.Count -gt 0) {
+        Fail ($s.Main + " 的子模块缺失: $($missing -join ', ') —— 拆分结果不完整")
+    }
+    else {
+        Ok ($s.Main + " 的 $($s.Subs.Count) 个子模块均在位")
+    }
+}
+
+# 主文件必须以 mod 声明真正引用子模块：否则子模块会变成没人用的孤儿文件
+# （Rust 会因未使用的 mod 报警，但若有人把它塞进别的模块，孤儿就静默了）。
+$splitModDecls = @(
+    @{ Main = "gateway-core/src/engine/metrics/scoped.rs";      Mods = @("tests") },
+    @{ Main = "gateway-core/src/engine/monitor/remote_diag.rs"; Mods = @("log_archive", "tail", "shell", "tests") },
+    @{ Main = "gateway-core/src/engine/monitor/host.rs";        Mods = @("parsers", "linux", "windows", "other", "tests") }
+)
+foreach ($m in $splitModDecls) {
+    $text = ReadText $m.Main
+    if ($null -eq $text) {
+        Fail ("找不到 " + $m.Main)
+        continue
+    }
+    $absent = @()
+    foreach ($modName in $m.Mods) {
+        if ($text -notmatch ("(?m)^\s*(pub\s+)?mod\s+" + $modName + "\s*;")) { $absent += $modName }
+    }
+    if ($absent.Count -gt 0) {
+        Fail ($m.Main + " 未声明 mod: $($absent -join ', ') —— 子模块成了孤儿文件")
+    }
+    else {
+        Ok ($m.Main + " 正确声明了 $($m.Mods.Count) 个子模块")
+    }
+}
+
+# 平台分发别名：host.rs 用 platform:: 统一调用点，三个平台实现签名必须一致。
+# 缺了别名，host.rs 就得在每个调用点写 #[cfg]，跨平台分支很容易漏。
+$hostText = ReadText "gateway-core/src/engine/monitor/host.rs"
+if ($null -eq $hostText) {
+    Fail "找不到 gateway-core/src/engine/monitor/host.rs"
+}
+else {
+    $aliasMissing = @()
+    foreach ($alias in @("use self::linux as platform;", "use self::windows as platform;", "use other as platform;")) {
+        if ($hostText -notmatch [regex]::Escape($alias)) { $aliasMissing += $alias }
+    }
+    if ($aliasMissing.Count -gt 0) {
+        Fail ("host.rs 缺平台分发别名: " + ($aliasMissing -join ', ') + " —— 跨平台调用点会散落成零散 cfg")
+    }
+    else {
+        Ok "host.rs 用 platform:: 别名统一分发三平台实现"
+    }
+}
+
 Write-Host ""
 Write-Host ""
 Write-Host ""
