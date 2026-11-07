@@ -42,7 +42,7 @@ jobs:
           EOF
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -78,7 +78,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Add llvm-tools-preview
         run: rustup component add llvm-tools-preview
@@ -171,7 +171,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.target }}
 
@@ -440,7 +440,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.target }}
 
@@ -585,7 +585,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -639,7 +639,7 @@ jobs:
       SOAK_OUT_DIR: gateway-core/soak-out
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -712,7 +712,7 @@ jobs:
       RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -815,7 +815,7 @@ jobs:
       RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v4
         with:
           path: |

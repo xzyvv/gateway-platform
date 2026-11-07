@@ -53,7 +53,7 @@ jobs:
           EOF
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -363,7 +363,7 @@ jobs:
         os: [windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -401,7 +401,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - uses: actions/cache@v4
         with:
@@ -429,7 +429,7 @@ jobs:
     needs: check
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -518,7 +518,7 @@ jobs:
           EOF
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
 
       # 独立 key（-cargo-e2e-）：与其他 job 的 target 缓存互不干扰
       - name: Cache cargo registry
@@ -680,7 +680,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Cache cargo registry
         uses: actions/cache@v4
