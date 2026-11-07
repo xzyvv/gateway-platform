@@ -846,7 +846,10 @@ jobs:
 
       # 真交付脚本：ARM64 + musl 静态链接（现场设备 glibc 版本千差万别）
       - name: Build release package via deploy/build-release.sh
-        run: ./deploy/build-release.sh --target linux-arm64-musl --sku standard
+        # 用 `bash <脚本>` 而不是 `./脚本`：后者依赖 git 里的可执行位，
+        # 而本仓库在 Windows 上开发（core.filemode=false），脚本在 git 里
+        # 可能记录成 100644 → Linux runner 上直接 Permission denied。
+        run: bash deploy/build-release.sh --target linux-arm64-musl --sku standard
 
       - name: Assert package layout and metadata
         run: |
@@ -901,6 +904,17 @@ jobs:
             echo "✗ protocols 期望 '$EXPECT'，实际 '$PROTOCOLS'" >&2
             exit 1
           fi
+
+          # 包内脚本必须带执行位：现场文档写的是 `./deliver.sh` / `./install.sh`，
+          # 没有执行位就是 Permission denied —— 包做出来了但现场跑不起来。
+          # 这条曾经真实发生过：脚本在 Windows 上开发，git 里记录成 100644。
+          for s in install.sh verify-deploy.sh deliver.sh serial-rules.sh; do
+            if [ ! -x "$PKG/$s" ]; then
+              echo "✗ 交付包里的 $s 没有执行位（现场 ./$s 会 Permission denied）" >&2
+              ls -l "$PKG/$s" >&2
+              exit 1
+            fi
+          done
 
       - name: Package tarball
         run: |

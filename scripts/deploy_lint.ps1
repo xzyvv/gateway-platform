@@ -1372,6 +1372,89 @@ else {
         }
     }
 }
+
+# ══════════════════════════════════════════════════════════
+# C17  交付脚本的执行位
+#
+# 真实发生过：heavy 的 release-package 报
+#   `./deploy/build-release.sh: Permission denied`（exit 126）
+# 根因是本仓库在 Windows 上开发（core.filemode=false），git 里把脚本记成
+# 100644（无执行位）。Linux 上 checkout 出来就没有 x 位，直接 ./ 执行必然失败。
+#
+# 这不只是 CI 的事：交付包里的 deliver.sh / install.sh 也是同一批文件，
+# 现场文档写的正是 `./deliver.sh` —— 包做出来了但现场跑不起来。
+#
+# 两道防线：
+#   ① git 索引里的 mode 必须是 100755（用 git ls-files -s 查，不是看磁盘属性：
+#      Windows 磁盘上没有 x 位，看磁盘永远查不出问题）
+#   ② CI 里不依赖执行位调用交付脚本（`bash xxx.sh`），这样即便有人在
+#      Windows 上新建脚本忘了加执行位，CI 也不会莫名其妙地挂在这上面
+Write-Host "[C17] 交付脚本执行位（git 索引 mode + CI 不依赖 x 位）" -ForegroundColor Cyan
+
+$execScripts = @(
+    "deploy/build-release.sh",
+    "deploy/deliver.sh",
+    "deploy/verify-deploy.sh",
+    "gateway-core/deploy/install.sh",
+    "gateway-core/deploy/serial-rules.sh",
+    "scripts/test_serial_rules.sh"
+)
+
+$gitBin = Get-Command git -ErrorAction SilentlyContinue
+if ($null -eq $gitBin) {
+    Warn "找不到 git 命令（跳过执行位断言）"
+}
+else {
+    $lsOut = & git -C $repoRoot ls-files -s -- $execScripts 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $lsOut) {
+        Warn "git ls-files 执行失败（跳过执行位断言）"
+    }
+    else {
+        $modeMap = @{}
+        foreach ($line in $lsOut) {
+            if ($line -match '^(\d+)\s+\S+\s+\d+\t(.+)$') { $modeMap[$Matches[2]] = $Matches[1] }
+        }
+        foreach ($s in $execScripts) {
+            if (-not $modeMap.ContainsKey($s)) {
+                Fail "交付脚本 '$s' 不在 git 索引里（路径写错了？）"
+                continue
+            }
+            $mode = $modeMap[$s]
+            if ($mode -eq "100755") {
+                Ok "执行位正确：$s（100755）"
+            }
+            else {
+                Fail "交付脚本 '$s' 在 git 索引里的 mode 是 $mode（应为 100755）—— Windows 上开发时 core.filemode=false，执行位不会被自动记录，Linux 上 ./ 执行会 Permission denied。用 'git update-index --chmod=+x $s' 修正"
+            }
+        }
+    }
+}
+
+# CI 里调用交付脚本必须用 `bash <脚本>`，不能是 `./<脚本>`
+foreach ($wf in @(@{ Name = "ci.yml"; Text = $ciText }, @{ Name = "heavy.yml"; Text = $heavyText })) {
+    if ($null -eq $wf.Text) { continue }
+    if ($wf.Text -match '(?m)^\s*run:\s*\./deploy/build-release\.sh') {
+        Fail "$($wf.Name) 里用 './deploy/build-release.sh' 调用交付脚本 —— 依赖 git 执行位，Windows 上开发的新脚本必然挂在这里。改用 'bash deploy/build-release.sh'"
+    }
+    else {
+        Ok "$($wf.Name) 用 'bash deploy/build-release.sh' 调用交付脚本（不依赖执行位）"
+    }
+}
+
+# 交付脚本必须给包内脚本显式补执行位：git 的 mode 只影响仓库，
+# build-release.sh 拷贝出来的文件权限取决于构建机，chmod 才管得住。
+if ($null -ne $buildSh) {
+    if ($buildSh -match '(?m)chmod \+x[^\n]*\$OUT/install\.sh') {
+        Ok "build-release.sh 给包内脚本显式补执行位（chmod +x）"
+    }
+    else {
+        Fail "build-release.sh 没有给包内脚本补执行位（chmod +x）—— 交付包在 Linux 上解出来可能不可执行，现场 ./deliver.sh 会 Permission denied"
+    }
+}
+else {
+    Warn "找不到 deploy/build-release.sh（跳过 chmod 断言）"
+}
+Write-Host ""
 Write-Host ""
 
 

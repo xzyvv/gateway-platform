@@ -719,7 +719,11 @@ jobs:
           npm ci --no-audit --no-fund
 
       - name: Build release package via deploy/build-release.sh
-        run: ./deploy/build-release.sh --target linux-x86_64-musl --sku standard
+        # 用 `bash <脚本>` 而不是 `./脚本`：后者依赖 git 里的可执行位，
+        # 而本仓库在 Windows 上开发（core.filemode=false），脚本在 git 里
+        # 可能记录成 100644 → Linux runner 上直接 Permission denied。
+        # 脚本内容本身是同一份，只是启动方式不依赖文件权限位。
+        run: bash deploy/build-release.sh --target linux-x86_64-musl --sku standard
         env:
           # 交付门禁不该被第三方 crate 在 release 模式下的告警卡住
           # （本仓库代码的 clippy/-D warnings 由 check job 负责）
