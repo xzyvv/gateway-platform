@@ -371,10 +371,17 @@ chmod +x "$OUT/install.sh" "$OUT/deploy-linux.sh" "$OUT/serial-rules.sh" \
 # install.sh 会从包内 templates/builtin 拷贝到 /etc/gateway/templates/builtin
 cp -r "$ROOT/templates" "$OUT/"
 
-# 完整 config.json 不随包提供：/etc/gateway/config.json 由交付方按现场填写
-# （web.listen_addr / api_token / password_hash）。仓库里的
-# gateway-core/config.json.example 只是「配置片段示例」，文件自身写明不会被网关加载，
-# 不能当整份配置安装。install.sh 仅在同级目录真的存在 config.json 时才落盘。
+# 出厂完整配置模板（P3-1b）随包分发。
+#
+# gateway-core/config.json.example 只是「配置片段示例」：缺 buses/points/mqtt 等
+# 必填段，文件自身也写明不会被网关加载 —— 交付方若拿它当整份配置，必然起不来。
+# config.factory.json 是一份**完整可加载**的 config.json 初值，含一条示例总线、
+# 一个示例点位、web 段与 license 四档配额；由
+#   - 单测 config::loader::tests::factory_template_in_package_is_loadable（真加载）
+#   - scripts/deploy_lint.ps1 的 C20（包内存在性 + 结构完整性）
+# 双重钉死，模板改坏会在 CI 直接失败，而不是等交付方在设备上复制过去才发现。
+# install.sh 在包内找不到 config.json 时会用它落盘，交付方只需改现场相关字段。
+cp "$ROOT/gateway-core/deploy/config.factory.json" "$OUT/"
 
 # ── 南向协议注册名推导（A4）──
 # cargo feature 名 ≠ 南向协议注册名（south/protocol/registry/entries.rs 的

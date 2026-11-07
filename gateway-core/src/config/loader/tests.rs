@@ -518,6 +518,99 @@ fn load_missing_file_returns_err_when_default_cannot_be_persisted() {
     assert!(!path.exists(), "落盘失败后不应留下半成品配置文件");
 }
 
+/// 出厂配置模板必须真的能被网关加载（P3-1b）。
+///
+/// `config.json.example` 是「配置片段示例」：缺 `buses`/`points`/`mqtt` 等必填段，
+/// 直接当配置用会加载失败。交付现场需要的是一份**完整可加载**的初值，
+/// 所以随包提供 `deploy/config.factory.json`，并由本用例把它钉死在 CI 里：
+/// 模板一旦改坏（漏字段、JSON 语法错、配额档位丢失），这里立刻失败，
+/// 而不是等交付方在设备上复制过去才发现起不来。
+#[test]
+fn factory_template_in_package_is_loadable() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("deploy")
+        .join("config.factory.json");
+    assert!(
+        path.exists(),
+        "出厂配置模板必须随包存在：{}",
+        path.display()
+    );
+
+    // reload() 走完整严格链路：schema 校验 + serde 反序列化 + 迁移 + 业务校验，
+    // 任何一环不过都会 Err —— 这正是「交付方复制过去就能起来」的判据。
+    let cfg = ConfigLoader::new(&path)
+        .reload()
+        .expect("出厂配置模板必须通过 schema + serde + validate_all");
+
+    assert!(
+        !cfg.buses.is_empty(),
+        "出厂模板必须带至少一条示例总线，否则设备首启无采集"
+    );
+    assert!(
+        !cfg.points.is_empty(),
+        "出厂模板必须带至少一个示例点位，否则开箱无法验证采集链路"
+    );
+
+    // web 段：模板必须给出听的地址，否则交付方还要自己猜
+    let web = cfg.web.as_ref().expect("出厂模板必须包含 web 段");
+    assert!(
+        !web.listen_addr.is_empty(),
+        "出厂模板的 web.listen_addr 不能为空"
+    );
+
+    // license 段：四档配额齐全（v2.1 口径：配额只管点位，四档仅 max_points 不同）
+    let license = cfg.license.as_ref().expect("出厂模板必须包含 license 段");
+    let quotas = license
+        .tier_quotas
+        .as_ref()
+        .expect("出厂模板必须带 tier_quotas（否则 license 未带 quota 时查不到档位）");
+    // 档位名用序列化后的字符串比对：配置里写的就是 "core"/"standard"/"pro"/"ultra"，
+    // 只有序列化形态一致，模板里的 tier 字符串才能被正确识别成对应档位。
+    let tiers: Vec<String> = quotas
+        .iter()
+        .map(|q| {
+            serde_json::to_value(q.tier)
+                .expect("tier 应可序列化")
+                .as_str()
+                .expect("tier 应序列化为字符串")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        tiers,
+        vec!["core", "standard", "pro", "ultra"],
+        "tier_quotas 必须覆盖四个档位且按 core→ultra 排列，实际: {:?}",
+        tiers
+    );
+    // 四档的 max_points 必须严格递增，否则「升级档位」在配额上没有任何意义
+    let points: Vec<u32> = quotas
+        .iter()
+        .map(|q| q.quota.max_points.unwrap_or(u32::MAX))
+        .collect();
+    assert!(
+        points.windows(2).all(|w| w[0] < w[1]),
+        "四档 max_points 必须严格递增，实际: {:?}",
+        points
+    );
+
+    // 模板里写死的四档数值必须与代码内置默认表一致。
+    // config 里的值**优先于**内置表，模板抄错一个数字就等于悄悄改了档位容量，
+    // 而现场只表现为「点数超限」——本仓库的 config.json.example 就与内置表
+    // 漂移过（pro 档），所以这里把两者钉在一起。
+    for entry in quotas {
+        let builtin = crate::config::DEFAULT_TIER_QUOTAS
+            .iter()
+            .find(|(t, _)| *t == entry.tier)
+            .map(|(_, q)| q)
+            .expect("模板里的档位必须存在于代码内置默认表");
+        assert_eq!(
+            &entry.quota, builtin,
+            "模板里 {:?} 档的配额与内置默认表不一致（模板值优先，等于悄悄改容量）",
+            entry.tier
+        );
+    }
+}
+
 /// reload() 对有效文件的热重载正常路径必须返回磁盘上的最新内容。
 ///
 /// 此前 reload 只有失败路径测试，「改文件 → reload 拿到新内容」这条主路径

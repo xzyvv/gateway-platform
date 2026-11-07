@@ -281,9 +281,22 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
         chmod 640 "$CONFIG_DIR/config.json"
         echo "  ✓ 写入 config.json（来源: 包内 config.json）"
     else
-        echo "  ⚠ 未提供 config.json：gatewayd 将以安全默认值启动"
-        echo "    （仅监听 127.0.0.1:8080，api_token 自动生成并打印在 journalctl 日志）"
-        echo "    需要 LAN 访问/固定 token 时，请按现场补一份完整 /etc/gateway/config.json 后重启服务"
+        # 包内没有现场 config.json 时，用出厂完整模板（P3-1b）兜底：
+        # 它是一份能被网关真加载的完整配置（一条示例总线 + 一个示例点位 + web +
+        # license 四档），交付方只需改现场相关字段，不必从零手写。
+        # 注意 priority：包内 config.json（现场定制）始终优先于模板。
+        if [ -f "$SCRIPT_DIR/config.factory.json" ]; then
+            cp "$SCRIPT_DIR/config.factory.json" "$CONFIG_DIR/config.json"
+            chmod 640 "$CONFIG_DIR/config.json"
+            echo "  ✓ 写入 config.json（来源: 包内出厂模板 config.factory.json）"
+            echo "    投运前请按现场改：buses[].port_name（建议用 serial-rules.sh 生成的稳定名）、"
+            echo "    points（示例点位 demo_modbus_1 仅用于开箱验链路）、mqtt.broker。"
+            echo "    web.api_token 留空 → 启动时随机生成并打印在 journalctl 日志。"
+        else
+            echo "  ⚠ 未提供 config.json：gatewayd 将以安全默认值启动"
+            echo "    （仅监听 127.0.0.1:8080，api_token 自动生成并打印在 journalctl 日志）"
+            echo "    需要 LAN 访问/固定 token 时，请按现场补一份完整 /etc/gateway/config.json 后重启服务"
+        fi
     fi
 else
     echo "  跳过 config.json（已存在，保留原值）"
