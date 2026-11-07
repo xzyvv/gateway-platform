@@ -107,9 +107,11 @@
 
 | 资产 | 现状 | 结论 |
 |---|---|---|
-| Windows 本地发布门禁 | `scripts/release_gate.ps1`，19 步（`-IncludeChaos` 为 20），失败项可定位到具体步骤，日志落 `target/release-gate/<时间戳>/` | **已闭环**（本次实跑 18 PASS / 1 SKIP：git 不在 PATH） |
+| Windows 本地发布门禁 | `scripts/release_gate.ps1`，19 步（`-IncludeChaos` 为 20），失败项可定位到具体步骤，日志落 `target/release-gate/<时间戳>/`；另含 `remote-gate` 步：触发 `release-gate.yml` 并轮询到出结论（无 gh CLI / 无 origin 远端 / 工作区有未提交改动时自动 SKIP 并写明原因） | **已闭环**（本次实跑 18 PASS / 1 SKIP：git 不在 PATH） |
 | CI 门禁 | check / dead_code / 协议 feature 矩阵 / SKU 矩阵 / 集成契约 / bundle 预算 / 覆盖率 / 仓库健康 / chaos / e2e / 加密 / 跨平台 / **ARM 交叉编译** | 覆盖完整；ARM 已纳入（见下） |
+| 发布门禁 | 重作业（cross-arm / static-musl / coverage / chaos / bench / soak-smoke / sku-size-matrix / release-package）抽在 `.github/workflows/heavy.yml`，由 `.github/workflows/release-gate.yml` **无条件**调用；推 `v*` tag、手动触发、每周定时三条路径都会跑，失败即门禁不通过 | **已闭环（P1-3）**：原先重作业只在 `workflow_dispatch`/`RUN_HEAVY=true` 时跑，"发布前必跑"实际不存在 |
 | ARM 交叉编译 | CI `cross-arm`：aarch64-unknown-linux-gnu + armv7-unknown-linux-gnueabihf，`-p gatewayd --features sku-standard` 与出厂包同口径，`file` 校验 ELF 架构 | **已闭环（G2）**：不再依赖开发机手工产包 |
+| 交付包真交付 | `deploy/build-release.sh` 的产出直接进 CI：`ci.yml` 的 `deploy-smoke` 真跑该脚本（musl 静态，包 = 脚本产出 + 现场 `config.json`）并跑 `deliver.sh` 一键安装 + 校验；`heavy.yml` 的 `release-package` 用 cross 产出 **ARM64 musl 真交付包**并逐项断言包内文件齐全、二进制静态链接、`BUILD-INFO.protocols` 与 `entries.rs` 的协议注册名一致 | **已闭环（P1-5）**：此前 CI 的 `deploy-smoke` 是手工复刻包布局 + 自造 `BUILD-INFO.txt`（`build_time=ci-smoke`），与交付脚本是**平行实现**，交付脚本的 bug 永远发现不了；`deploy_lint.ps1` C16 段（16 项断言）锁死「CI 必须调用真脚本 + 协议名映射不得漂移」 |
 | 交付链路 | `deploy/deliver.sh` 一条命令：install.sh → 等待就绪 → verify-deploy.sh → 交付检查单（Markdown，含构建信息/逐项 PASS/FAIL/诊断命令） | **已闭环（G5）**：检查单由 verify 脚本生成，判定逻辑单一来源 |
 | 桌面端 | `gateway-desktop` 已冻结：不再构建/打包/发布，CI `desktop-build` job 移除，代码保留（workspace 仍编译兜底） | 冻结（现场调试统一走 Web 控制台） |
 | 前端覆盖率 | 分目录阈值"只许上调"；**默认全量口径**（`include: ['src/**/*.{ts,vue}']`，开关已移除） | **已闭环（C1.4）**：阈值按全量实测基线重定，新增无测试文件不再免疫门禁 |
@@ -123,7 +125,7 @@
 | 层 | 载体 | 决定什么 | 现状 |
 |---|---|---|---|
 | 行业 SKU | `gateway-core/Cargo.toml` 的 `sku-*` 聚合 feature（**编译期**） | **二进制体积**：装不装得下（flash / RAM） | 5 档（互为并行切片，不是叠加）：standard（modbus/dlt645/cjt188/iec104/opcua）、building（modbus/bacnet/cjt188/opcua）、power（modbus/dlt645/iec104/iec101/opcua）、plc（modbus/s7comm/mc/opcua）、minimal（modbus/dlt645/cjt188 三件套）；`fins` / `bacnet-mstp` 为退役观察；`--protocols` 可自定义。**实测 5 档产物仅 25.9~26.7 MiB、依赖 crate 均为 335，裁剪当前基本无效（见下方实测基线）** |
-| 授权档 | License `tier` + `Quota`（**运行时**） | **约束规模上限**：点位 / 并发协议数 / 历史保留天数 / 北向通道数 | tier = core / standard / pro / ultra；配额数值载体是 `config.json` 的 `license.tier_quotas`，**仓库未内置默认表**，出厂配置必须写全四档 |
+| 授权档 | License `tier` + `Quota`（**运行时**） | **约束规模上限**：点位 / 并发协议数 / 历史保留天数 / 北向通道数 | tier = core / standard / pro / ultra；配额数值载体是 `config.json` 的 `license.tier_quotas`，**代码已内置同数值默认表**（`DEFAULT_TIER_QUOTAS`）作漏配兜底，出厂配置仍建议写全四档以便按现场调整 |
 
 分工原则（与主流厂商一致）：**编译期只裁体积，License 只管规模上限**——不用 License 去约束「二进制里已经没有的东西」
 （用户付了钱发现内存没降会直接投诉），也不用 License 做功能开关（v2.0 已删除 6 个 feature gate，调试功能全免费）。
@@ -154,8 +156,10 @@
 **待办（不阻塞主线 C）**：
 
 1. ~~**缺真实体积数据**~~ **已闭环**：CI 新增 `sku-size-matrix` 作业（纯观测不阻塞 PR），
-   默认仅在 `workflow_dispatch` 手动触发（或仓库变量 `RUN_HEAVY=true`）时跑 5 个 SKU 的
-   release 构建并出表，产物见 Actions artifact `sku-size-matrix`。数据来源见上表。
+   现已抽到 `.github/workflows/heavy.yml`，由 `release-gate.yml` 在推 `v*` tag /
+   手动触发 / 每周定时时跑（原先只在 `workflow_dispatch` 或仓库变量 `RUN_HEAVY=true`
+   时跑，等于"发布前必跑"不存在）。跑 5 个 SKU 的 release 构建并出表，
+   产物见 Actions artifact `sku-size-matrix`。数据来源见上表。
 2. ~~**`opcua` feature 同时打包南向 Client（`south/protocol/opcua`）与北向 Server（`north/server/opcua_server.rs`）**~~ **已闭环**：
    `async-opcua` 改为 optional，拆成 `opcua-client`（`async-opcua/client`）与
    `opcua-server`（`async-opcua/server`）两个 feature，`opcua` 保留为合并别名（既有构建命令不变）。
@@ -164,8 +168,17 @@
    而不是静默不启动（同 §8.4 时区隐患的处理口径）。
    实测：`sku-minimal` 依赖树 **335 → 288 crate**，不再链接 `async-opcua` 及其服务端子 crate；
    `sku-*` 体积新数值由下一次 `sku size matrix` 作业回填。
-3. **行业 SKU 与授权档目前完全独立**（`sku-minimal` 也能配 ultra 授权），缺推荐组合；
-   `tier_quotas` 的默认值也未随 SKU 场景给建议值。
+3. ~~**行业 SKU 与授权档目前完全独立**（`sku-minimal` 也能配 ultra 授权），缺推荐组合；
+   `tier_quotas` 的默认值也未随 SKU 场景给建议值。~~ **已闭环（v2.1 口径重定）**：
+   - 配额模型简化为**只管点位**：四档唯一差异是 `max_points`（500 / 1500 / 2500 / 5000），
+     `max_protocols` 与 `northbound_channels` 改为不限，历史保留天数四档统一 30 天。
+     依据见 `docs/design/license-v2-quota.md` §3「档位默认配额（v2.1 口径）」。
+   - 协议种类数 / 北向通道数超限从**硬拒绝（4021）降级为告警**，不阻断配置保存
+     （`Quota::exceeded_kinds` 只留 Points，新增 `Quota::warned_kinds`）。
+   - 新增 **SKU × 授权档采购推荐矩阵**（`gateway-core/src/domain/sku.rs`，
+     `Sku::recommended_tier()`），定位是**采购建议而非运行时约束**——
+     SKU 与授权档本就是两条独立售卖轴（行业惯例同此）。
+   - `license-issuer issue` 新增 `--sku`，不给 `--tier` / `--max-points` 时按推荐值自动填充。
 
 ---
 
@@ -269,9 +282,11 @@
 | 9 | ~~B6 万点位 soak~~ | — | 大 | 规模驱动 | ❌ 暂缓 |
 
 > **本阶段 C1/C2/C3 已全部落地**（C1.1–C1.5 + C2 + C3）。下文 §5 的验收口径即当前实际状态。
-> 尚未关闭的开放项集中在两类：**功能缺口**（[functional-review-and-next-phase.md](functional-review-and-next-phase.md) §5.8 已知边界里的
-> IEC104「未建点位按 IOA 直读」调试端点）与 **体积优化**（§1.4 结尾的「行业 SKU 尚未切 opcua client-only」），
-> 前者价值高成本小，后者需先确认现场是否依赖北向 UA Server。
+> 尚未关闭的开放项集中在一类：**体积优化**（§1.4 结尾的「行业 SKU 尚未切 opcua client-only」），
+> 需先确认现场是否依赖北向 UA Server。
+> 此前列为开放项的 IEC104「未建点位按 IOA 直读」调试端点已关闭——
+> `POST /api/protocol-tools/iec104/ioa-read` 已落地（见
+> [api-protocol-tools.md](api-protocol-tools.md) §4）。
 
 ### 明确不做（防止跑偏）
 

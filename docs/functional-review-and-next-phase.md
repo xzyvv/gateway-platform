@@ -227,9 +227,11 @@ BACnet 与 S7 此前已有 `diag`（Who-Is / SZL），本次不重复实现。
 - `cargo test -p gateway-core` 1222 passed / 1 ignored；`cargo test -p gateway-api` 全通过；
 - `python scripts/gen_api_surface.py --check` 通过（无新增路由）。
 
-已知边界：单点读值仍以「已配置点位」为前提（Tester 选设备 → 选点位），
-未提供「未建点位、直接按 IOA 读」的独立调试入口；如需该场景，后续可基于
-`read_point` 构造临时 `PointConfig` 增加一个调试端点。
+已知边界：单点读值以「已配置点位」为前提（Tester 选设备 → 选点位）；
+「未建点位、直接按 IOA 读」已由 `POST /api/protocol-tools/iec104/ioa-read` 补齐
+（一次总召唤取全站快照，返回命中 IOA 与全量快照，见
+[api-protocol-tools.md](api-protocol-tools.md) §4），
+但该端点只覆盖 IEC104，其余协议仍无对等入口。
 
 ### 5.9 后续：功能全景复核与主线 B 路线（2026-11-03）
 
