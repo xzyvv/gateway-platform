@@ -414,6 +414,17 @@ echo "  ✓ 绑定状态:   $STATE_FILE"
 # ── 生效 ──
 # 规则是「设备出现时才建软链」，所以重载规则后还要 trigger 一次，
 # 让当前已经在位的设备立刻拿到软链（否则要等下次热插拔）。
+#
+# 夹具模式跳过整段：夹具里的设备是清单里的假条目，udev 不认识它们，
+# 不可能有软链出现。在夹具模式做「软链是否就绪」的检查没有意义，
+# 只会让「规则写成功」被误判成失败（这条路径在有 udevadm 的机器上
+# 必然失败、在没有 udevadm 的机器上必然通过 —— 结果取决于宿主机，
+# 而不是被测逻辑，属典型的环境依赖型脆弱测试）。
+if [ -n "$FIXTURE" ]; then
+    echo "  （夹具模式：跳过 udev 生效校验）"
+    exit 0
+fi
+
 if command -v udevadm >/dev/null 2>&1; then
     udevadm control --reload-rules 2>/dev/null || echo "  ⚠ udevadm control --reload-rules 失败（规则将在下次重启生效）"
     udevadm trigger --subsystem-match=tty 2>/dev/null || echo "  ⚠ udevadm trigger 失败（新设备需热插拔后生效）"
@@ -425,7 +436,16 @@ if command -v udevadm >/dev/null 2>&1; then
             MISSING=1
         fi
     done
-    [ "$MISSING" -eq 0 ] && echo "  ✓ 稳定名软链已就绪"
+    if [ "$MISSING" -eq 0 ]; then
+        echo "  ✓ 稳定名软链已就绪"
+    else
+        # 规则文件与绑定状态都已写好（这才是「生成成功」的判据），
+        # 只是当前在位的设备还没拿到软链 → 明确告知，但退出码仍为 0。
+        # 现场若确认设备在位却无软链，install.sh 会照常打印这条告警。
+        echo "  ⚠ 部分软链未就绪（规则已写入，设备重新插拔后会补建）"
+    fi
 else
     echo "  ⚠ 未找到 udevadm：规则已写入，重启后生效"
 fi
+
+exit 0

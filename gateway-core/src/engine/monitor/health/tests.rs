@@ -349,3 +349,47 @@ async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// 磁盘检查路径不存在时必须向上回退到最近的存在目录，而不是直接失败。
+///
+/// 现场含义：设备上 `/var/lib/gateway` 通常由安装脚本创建，若它尚未存在
+/// （首启顺序颠倒 / CI runner 上根本没有该目录），statvfs 会 ENOENT →
+/// 磁盘监控循环只打一条 warn、`DiskStatus` 永不记录 →
+/// `disk_ok` 永远停在初始值，满盘保护静默失效。
+#[test]
+fn p2_disk_check_path_missing_falls_back_to_existing_ancestor() {
+    // 造一个「父目录存在、目标目录不存在」的路径
+    let base = std::env::temp_dir().join(format!(
+        "gw_disk_anc_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let missing = base.join("not-created-yet");
+    assert!(
+        !missing.is_dir(),
+        "前置条件：目标目录必须不存在，否则本用例无效"
+    );
+
+    // 回退结果必须是一个真实存在的目录
+    let resolved = nearest_existing_dir(missing.to_string_lossy().as_ref())
+        .expect("必须回退到某个存在的祖先目录");
+    assert!(
+        std::path::Path::new(&resolved).is_dir(),
+        "回退结果必须存在，实际 {resolved}"
+    );
+
+    // 关键断言：对不存在的路径做磁盘检查也必须成功（而不是 Err）
+    let free = check_disk_space(missing.to_string_lossy().as_ref())
+        .expect("路径不存在时必须回退而不是报错，否则磁盘监控静默失效");
+    assert!(free > 0.0, "回退后应读到真实剩余百分比，实际 {free}");
+
+    // 对存在的路径，回退逻辑不应改变结果
+    let base_free = check_disk_space(base.to_string_lossy().as_ref()).expect("存在的目录必须可查");
+    assert!(
+        (base_free - free).abs() < 1.0,
+        "存在目录与不存在的子路径应落在同一分区（{base_free} vs {free}）"
+    );
+}

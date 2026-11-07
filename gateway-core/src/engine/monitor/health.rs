@@ -310,6 +310,37 @@ pub fn read_rss_bytes() -> GatewayResult<u64> {
     }
 }
 
+/// 把磁盘检查路径回退到**最近的存在目录**。
+///
+/// 目标数据目录常常在进程启动时尚不存在：
+/// - 设备上 `/var/lib/gateway` 一般由安装脚本创建，首启顺序颠倒时还不存在；
+/// - CI runner 上根本没有 `/var/lib/gateway`。
+///
+/// 此时直接 stat 会 ENOENT，磁盘监控随之静默失效（`disk_ok` 永不更新、
+/// `DiskStatus` 永不记录），而这正是「满盘开机前 60 秒把数据写进 SQLite」
+/// 这段保护要挡的场景。向上回退到最近的存在祖先目录（`/var/lib` → `/var`
+/// → `/`）与目标分区同一文件系统，剩余空间口径一致，且不依赖目录已创建。
+fn nearest_existing_dir(path: &str) -> Option<String> {
+    let mut cur = PathBuf::from(path);
+    // 防御性上限：正常路径深度有限，避免异常输入导致长时间循环
+    for _ in 0..64 {
+        if cur.is_dir() {
+            return Some(cur.to_string_lossy().into_owned());
+        }
+        let p = cur.parent()?;
+        let next = if p.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            p.to_path_buf()
+        };
+        if next == cur {
+            return None;
+        }
+        cur = next;
+    }
+    None
+}
+
 /// 检查指定目录所在分区的剩余空间百分比
 ///
 /// `as u64` 转换在 32 位平台（如 armv7）是必要的：statvfs 的 f_frsize 类型跟随
@@ -317,11 +348,14 @@ pub fn read_rss_bytes() -> GatewayResult<u64> {
 /// 转换」，故在此局部放行该 lint，保留跨宽度可编译性。
 #[allow(clippy::unnecessary_cast)]
 fn check_disk_space(path: &str) -> GatewayResult<f64> {
+    // 目标目录可能尚不存在（见 nearest_existing_dir 的说明）：
+    // 统一回退到最近的存在目录，避免「路径不存在 → 磁盘监控静默失效」。
+    let effective = nearest_existing_dir(path).unwrap_or_else(|| path.to_string());
     #[cfg(unix)]
     {
         use std::mem::MaybeUninit;
         let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
-        let c_path = std::ffi::CString::new(path)?;
+        let c_path = std::ffi::CString::new(effective.as_str())?;
         // SAFETY:
         // - `c_path` 是 CString::new(path) 的结果，含 NUL 终止符，指针有效。
         // - `stat` 是 MaybeUninit<libc::statvfs>，as_mut_ptr() 指向其内存，
@@ -330,7 +364,8 @@ fn check_disk_space(path: &str) -> GatewayResult<f64> {
         unsafe {
             if libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) != 0 {
                 return Err(GatewayError::Io(format!(
-                    "statvfs failed: {}",
+                    "statvfs failed on {}: {}",
+                    effective,
                     std::io::Error::last_os_error()
                 )));
             }
@@ -360,7 +395,7 @@ fn check_disk_space(path: &str) -> GatewayResult<f64> {
             ) -> i32;
         }
 
-        let wide: Vec<u16> = OsStr::new(path)
+        let wide: Vec<u16> = OsStr::new(effective.as_str())
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
@@ -394,7 +429,7 @@ fn check_disk_space(path: &str) -> GatewayResult<f64> {
     }
     #[cfg(all(not(unix), not(windows)))]
     {
-        let _ = path;
+        let _ = (path, effective);
         Ok(50.0)
     }
 }
