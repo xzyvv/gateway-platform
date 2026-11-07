@@ -1,4 +1,4 @@
-﻿name: security
+name: security
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
     name: cargo audit (RustSec)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.98.1
@@ -48,7 +48,7 @@ jobs:
     name: cargo deny (licenses / bans / sources)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.98.1
@@ -73,7 +73,7 @@ jobs:
     name: npm audit (frontend deps)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
