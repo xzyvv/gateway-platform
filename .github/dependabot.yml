@@ -1,0 +1,59 @@
+# Dependabot 配置（P3-3）
+#
+# 只开两个生态，理由：
+#   - cargo：本项目依赖全部收敛在根 Cargo.toml 的 [workspace.dependencies]，Cargo.lock
+#     已提交；Dependabot 支持 workspace，根目录一条即覆盖 gateway-core / gateway-api /
+#     gatewayd / tools/license-issuer。gateway-desktop 已冻结但仍在 members 里，它的
+#     依赖也会被升级 —— 合入前注意它不在 default-members，常规 CI 不编译它。
+#   - github-actions：workflows 里大量使用第三方 action，tag 一旦被上游移动就是供应链
+#     风险，需要按固定节奏跟随（本项目 security.yml 只做静态扫描，不替代版本跟随）。
+#
+# 收敛策略（避免升级 PR 淹没真实告警）：
+#   - 每个生态最多 5 个待合并 PR；
+#   - minor + patch 合成一个 group PR，一次升完、CI 只跑一轮；
+#   - major 不分组，单独出 PR —— 必然含破坏性变更，需要逐个看 CHANGELOG 后决定；
+#   - 固定在周一凌晨跑，避免工作日反复刷 CI 队列（heavy 作业很贵）。
+#
+# 注意：升级 PR 会照常跑完整 CI（含 deploy-lint / deploy-smoke）。若 PR 卡在
+# deploy-lint 的 C9~C12，多半是新依赖间接引入了新的设备路径或落盘路径，
+# 应先判断是不是真缺陷，不要直接把依赖降回去。
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "rust"
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:30"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - "dependencies"
+      - "ci"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
