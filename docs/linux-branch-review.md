@@ -14,15 +14,21 @@
 |---|---|
 | 审查的 Linux-only 代码块 | 14 处（见 §2） |
 | 修复的 P0/P1 缺陷 | 第一轮 6 项（§1）+ 第二轮 13 项（§8）= **19 项** |
+| 部署侧沙箱缺陷（第四轮补记） | **3 项 P0**：配置写回被 systemd 沙箱拦住、GPIO 未放行、串口 DeviceAllow 写成伪路径（见 §10） |
 | 新增跨平台单测 | 27 个（§3 + §8.4） |
 | Linux 交叉编译验证 | `cargo check --target x86_64-unknown-linux-gnu --all-targets`（三个部署 crate）通过 |
 | Windows 侧单测 | `cargo test -p gateway-core --lib --features fins` → **1415 passed / 0 failed** |
-| 剩余风险 | §4「无法在本机验证项」，需真机验收 |
+| 剩余风险 | §4「无法在本机验证项」+ §10.6，需真机验收 |
 
 **核心结论**：两轮修复的 19 项缺陷全部属于**「错误被静默吞掉」**这一类
 （第二轮另有 1 项并发写导致的分区内容交错）。
 它们在 Windows 上不会暴露，但会**直接导致设备变砖或现场静默断网**——
 即「设备看起来正常，实际已经失去心跳/链路/加密保护」。
+
+> **第四轮补记（2026-11-06）**：前三轮审的是「代码里的 Linux 分支」，第四轮审的是
+> 「进程启动后**有没有权限**走到这些分支」——`gateway.service` 的 `ProtectSystem=strict`
+> 与 `DeviceAllow` 白名单会把三类功能在 `open()` / `create()` 之前就拒掉，代码全对也没用。
+> 结论见 §10。
 
 ---
 
@@ -552,4 +558,107 @@ Unix 默认权限 **0644**（同机其它用户可读可改）。
 | Linux x86_64 交叉 `cargo check --all-targets` | 通过 |
 | ARM gnu release 产物（2 个 target） | 通过（架构校验） |
 | ARM musl release 产物（2 个 target） | 通过（架构 + 静态链接校验） |
+
+---
+
+## 10. 第四轮：部署侧 systemd 沙箱与设备白名单（r17，2026-11-06 补记）
+
+> **本轮视角切换**：前三轮都在审「代码里的 Linux 分支对不对」；本轮审的是
+> 「进程启动后，**有没有权限**走到这些分支」。systemd 的 `ProtectSystem=strict`
+> 与 `DeviceAllow=` 白名单在 `open()` / `create()` **之前**生效，代码全对也没用，
+> 而且现场表现与前三轮同类：**静默失效**（只有一条 warn 或 EPERM，容易被判成硬件故障）。
+>
+> 三条缺陷都在 `gateway-core/deploy/gateway.service` 与 `install.sh` 的权限配置里，
+> 与 Rust 代码逻辑无关，因此在 Windows 开发机与 x86 CI 上跑单测永远发现不了。
+
+### 10.1 P0 — Web API 在线改配置在真机上必然落盘失败
+
+| 环节 | 事实 |
+|---|---|
+| 默认落盘路径 | `/etc/gateway/config.json`（`gateway-core/src/support/paths.rs`） |
+| 落盘实现 | `atomic_write()`，临时文件建在**目标同目录** `/etc/gateway/`，需要该目录对 `gateway` 用户**可写** |
+| 目录权限（修复前） | `chown -R root:gateway` + `chmod -R g+rX,o-rwx` → 组只有 `r-x`，**无 `w`** |
+| systemd 沙箱（修复前） | `ProtectSystem=strict` 令 `/etc` 只读，而 `ReadWritePaths` 只含 `/var/lib/gateway /var/log/gateway /tmp`，**不含 `/etc/gateway`** |
+| 唯一写回路径 | `reload_then_save()`：先 reload + 更新内存 → 再 `save()` → 失败返回 500 `runtime reloaded but disk save failed` |
+
+**后果**：Web 端改点表 / 总线 / 上行 / 认证 → 界面提示成功、运行时已生效，
+**磁盘未更新**，设备一重启配置全部回滚。受影响端点：config / points / groups /
+assets / virtual_points / find-replace / uplink / auth。
+
+**修复**：
+- `gateway.service` 的 `ReadWritePaths` 增加 `/etc/gateway`；
+- `install.sh` 保持 `root:gateway` 属主，目录改为 `g+rwx`（`find … -type d -exec chmod g+rwx,o-rwx`），
+  配置文件本身仍 `640` —— `atomic_write()` 走「同目录建 tmp → rename 覆盖」，只需要目录写权限，不需要文件写权限。
+
+### 10.2 P0 — DeviceAllow 缺 `/dev/gpiochip0`，GPIO 全线 EPERM
+
+**证据**：代码硬编码 `gpiod::Chip::new("/dev/gpiochip0")`（`platform/gpio.rs`），
+GPIO 协议走独立采集路径、不经 `BusManager`（`gatewayd/src/bootstrap/helpers/collection.rs`）；
+而 `DeviceAllow=` 一旦出现任意条目就是**白名单（closed）语义**，未列出的设备一律拒绝。
+
+**后果**：DI 采集、DO 输出、**RS485 DE 方向控制**在 `open()` 之前就被 EPERM 拒绝 →
+现场表现为「点位一直不更新」「DO 不动作」，日志里可能只是一条 warn。
+
+**修复**：`DeviceAllow=/dev/gpiochip0 rw`（`gpiod` 对同一批物理线复用 fd，
+代码已用全局 `OnceCell` 处理 EBUSY，无需改动）。
+
+### 10.3 P0 — `DeviceAllow=/dev/ttyUSB`、`/dev/ttyS` 是路径形式但不是真实设备节点
+
+**证据**：systemd 规范的 `DeviceAllow=` 只接受**真实设备节点路径**或
+`char-<组名>` / `block-<组名>` 设备组形式；通配只对设备组名生效。
+systemd v255 的 `bpf_devices_allow_list_device()` 先 `device_path_parse_major_minor()`，
+失败再 `stat()`，**路径不存在则 warning 后整条丢弃**，不会展开成前缀匹配。
+`/dev/ttyUSB`、`/dev/ttyS` 都不是真实节点（真实节点是 `/dev/ttyUSB0`、`/dev/ttyS1` …）。
+
+**后果**：串口设备在 `open()` 前被 EPERM 拒绝 → 全部串口协议采集不上来。
+
+**修复**：改用设备组形式 `DeviceAllow=char-ttyUSB rw` / `char-ttyS rw` / `char-ttyACM rw`
+（一次放行该 major 的全部次设备，不用维护端口号）；组名解析依赖驱动已加载，
+故 `install.sh` 会把 `cp210x / ch341 / ftdi_sio / pl2303 / cdc_acm` 写入
+`/etc/modules-load.d/gateway-serial.conf` 并立即 `modprobe`。
+
+**连带项**：OTA A/B 分区 `/dev/mmcblk0p2` / `/dev/mmcblk0p3` 硬编码 eMMC，
+现场若用 SD / NVMe 作 OTA 介质会直接失败。已改为参数化：
+`gateway.service` 的分区段落包在 `# OTA-PARTITIONS-BEGIN/END` 标记里，
+`install.sh` 按 `GATEWAY_OTA_SLOT_A` / `GATEWAY_OTA_SLOT_B` 同时改写
+`DeviceAllow` 与 `Environment=`（两处缺一，OTA 必然失败）。
+
+### 10.4 门禁（P0-4）：C9~C12 + 真实写回冒烟
+
+这三条缺陷的共同点是「改完就忘、下次又漂」，所以全部转成 `scripts/deploy_lint.ps1` 的静态断言：
+
+| 断言 | 拦截 |
+|---|---|
+| C9 代码里 open 的设备路径 ⊆ `gateway.service` 的 `DeviceAllow` | 10.2 / 10.3 |
+| C10 `ReadWritePaths` ⊇ 配置目录（从 `paths.rs` 的默认路径反查） | 10.1 |
+| C11 `install.sh` 的配置目录权限与 service 写权限一致（组可写 ⇔ `ReadWritePaths` 含该目录） | 10.1 |
+| C12 `DeviceAllow` 不得出现「路径形式但非真实节点」的裸设备名（`/dev/ttyUSB` 这类） | 10.3 |
+
+并且 `ci.yml` 的 `deploy-lint` job 已改为真跑 `pwsh scripts/deploy_lint.ps1`（此前只跑
+actionlint + shellcheck，**根本没调用过这个脚本**）。
+
+静态断言只能证明「文本一致」，证明不了「权限对了但就是写不进去」，因此 `deploy-smoke`
+增加一条**真实写回**链路：登录 → `POST /api/config` 把启动期固化字段
+`web.realtime_buffer` 从 1024 改成 4096 → 断言磁盘 `config.json` 内容确实变化且新值存在
+→ `systemctl restart` → 断言重启后磁盘仍是 4096、回读接口也是 4096。
+选「启动期固化字段」是因为它**只改内存不会体现**，能区分「改了内存」与「改了磁盘」。
+
+### 10.5 本轮验证结果
+
+| 项 | 结果 |
+|---|---|
+| `scripts/deploy_lint.ps1` | **121 项全过 / 0 失败 / 0 警告**（C9~C12 + 后续 C14~C20） |
+| `deploy-smoke`（真实 systemd + 真实安装） | GitHub Actions 实跑全绿（run `42375783484`）：安装 → 启动 → 配置写回 → 重启存活 → 健康度 31 通过 0 FAIL |
+| C9~C12 反向验证 | 4 个变异逐条还原缺陷，对应断言均报错：删 `ReadWritePaths /etc/gateway` → C10（+C11 交叉告警）；删 `DeviceAllow=/dev/gpiochip0` → C9；`char-ttyUSB` 写回 `/dev/ttyUSB` → C12（+C9 设备覆盖告警）；`install.sh` 目录改回 `g+rX` → C11 |
+
+### 10.6 本轮剩余风险
+
+1. **`DeviceAllow=char-*` 依赖驱动已加载**：若现场内核把驱动编译进内核（非模块），
+   `/etc/modules-load.d` 不生效但 `/proc/devices` 仍有组名，不影响；
+   若驱动是模块且 `modprobe` 失败，systemd 解析组名失败 → 整条丢弃 → 串口 EPERM。
+   现场验收需确认 `lsmod | grep -E 'cp210x|ch341|ftdi_sio'` 与 `/proc/devices` 里的 `ttyUSB`。
+2. **`ReadWritePaths=/etc/gateway` 会放宽 systemd 对 `/etc` 的只读保护**：范围仅限该目录，
+   且目录内文件仍 `640 root:gateway`，风险可控；但不能在此基础上再扩大。
+3. **OTA 分区参数化只覆盖 `DeviceAllow` 与 `Environment=` 两处**：若现场用 SD/NVMe，
+   还要确认 U-Boot 侧的 A/B 槽位定义同步（属真机验收项，见 §4）。
 

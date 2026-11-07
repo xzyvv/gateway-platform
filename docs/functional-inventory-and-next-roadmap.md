@@ -111,8 +111,9 @@
 | CI 门禁 | check / dead_code / 协议 feature 矩阵 / SKU 矩阵 / 集成契约 / bundle 预算 / 覆盖率 / 仓库健康 / chaos / e2e / 加密 / 跨平台 / **ARM 交叉编译** | 覆盖完整；ARM 已纳入（见下） |
 | 发布门禁 | 重作业（cross-arm / static-musl / coverage / chaos / bench / soak-smoke / sku-size-matrix / release-package）抽在 `.github/workflows/heavy.yml`，由 `.github/workflows/release-gate.yml` **无条件**调用；推 `v*` tag、手动触发、每周定时三条路径都会跑，失败即门禁不通过 | **已闭环（P1-3）**：原先重作业只在 `workflow_dispatch`/`RUN_HEAVY=true` 时跑，"发布前必跑"实际不存在 |
 | ARM 交叉编译 | CI `cross-arm`：aarch64-unknown-linux-gnu + armv7-unknown-linux-gnueabihf，`-p gatewayd --features sku-standard` 与出厂包同口径，`file` 校验 ELF 架构 | **已闭环（G2）**：不再依赖开发机手工产包 |
-| 交付包真交付 | `deploy/build-release.sh` 的产出直接进 CI：`ci.yml` 的 `deploy-smoke` 真跑该脚本（musl 静态，包 = 脚本产出 + 现场 `config.json`）并跑 `deliver.sh` 一键安装 + 校验；`heavy.yml` 的 `release-package` 用 cross 产出 **ARM64 musl 真交付包**并逐项断言包内文件齐全、二进制静态链接、`BUILD-INFO.protocols` 与 `entries.rs` 的协议注册名一致 | **已闭环（P1-5）并已实跑通过（2026-11-07）**：run `42375783484` 的 `deploy smoke` 全绿（musl 静态产物 → 真包 → `deliver.sh` install+verify → 健康度 31 通过 0 FAIL → 检查单导出成功）；run `42372915790` 的 `release-package` 全绿（cross ARM64 musl 真交付包校验通过）。此前 CI 的 `deploy-smoke` 是手工复刻包布局 + 自造 `BUILD-INFO.txt`（`build_time=ci-smoke`），与交付脚本是**平行实现**，交付脚本的 bug 永远发现不了。`deploy_lint.ps1` 由 102 项增至 **115 项**：C16 锁死「CI 必须调用真脚本 + 协议名映射不得漂移」，C17 锁死交付脚本执行位，C18 锁死工作流 shell 变量名笔误，C19 锁死 `sudo cp` 造成的 root 属主临时文件 |
+| 交付包真交付 | `deploy/build-release.sh` 的产出直接进 CI：`ci.yml` 的 `deploy-smoke` 真跑该脚本（musl 静态，包 = 脚本产出 + 现场 `config.json`）并跑 `deliver.sh` 一键安装 + 校验；`heavy.yml` 的 `release-package` 用 cross 产出 **ARM64 musl 真交付包**并逐项断言包内文件齐全、二进制静态链接、`BUILD-INFO.protocols` 与 `entries.rs` 的协议注册名一致 | **已闭环（P1-5）并已实跑通过（2026-11-07）**：run `42375783484` 的 `deploy smoke` 全绿（musl 静态产物 → 真包 → `deliver.sh` install+verify → 健康度 31 通过 0 FAIL → 检查单导出成功）；run `42372915790` 的 `release-package` 全绿（cross ARM64 musl 真交付包校验通过）。此前 CI 的 `deploy-smoke` 是手工复刻包布局 + 自造 `BUILD-INFO.txt`（`build_time=ci-smoke`），与交付脚本是**平行实现**，交付脚本的 bug 永远发现不了。`deploy_lint.ps1` 由 102 项增至 **115 项**（P3-1b 补 C20 后为 **121 项**）：C16 锁死「CI 必须调用真脚本 + 协议名映射不得漂移」，C17 锁死交付脚本执行位，C18 锁死工作流 shell 变量名笔误，C19 锁死 `sudo cp` 造成的 root 属主临时文件，C20 锁死出厂配置模板的存在性与结构完整性 |
 | 交付链路 | `deploy/deliver.sh` 一条命令：install.sh → 等待就绪 → verify-deploy.sh → 交付检查单（Markdown，含构建信息/逐项 PASS/FAIL/诊断命令） | **已闭环（G5）**：检查单由 verify 脚本生成，判定逻辑单一来源 |
+| 部署沙箱一致性 | `gateway.service` 的 `ProtectSystem=strict` / `ReadWritePaths` / `DeviceAllow` 与代码实际读写的路径必须一一对应；`deploy_lint.ps1` C9~C12 把这层约束变成断言，`deploy-smoke` 用真实 systemd 验配置写回 | **已闭环（P0-1~P0-4）**：三层缺陷（配置写回被沙箱拒、GPIO 未放行、串口 `DeviceAllow` 写成伪路径）已修，详见 §1.7 |
 | 桌面端 | `gateway-desktop` 已冻结：不再构建/打包/发布，CI `desktop-build` job 移除，代码保留（workspace 仍编译兜底） | 冻结（现场调试统一走 Web 控制台） |
 | 前端覆盖率 | 分目录阈值"只许上调"；**默认全量口径**（`include: ['src/**/*.{ts,vue}']`，开关已移除） | **已闭环（C1.4）**：阈值按全量实测基线重定，新增无测试文件不再免疫门禁 |
 | chaos | **47 场景**（源码口径，`gateway-core/tests/chaos/scenarios.rs`）；默认发行集实跑 **45**——另 2 条 `bacnet-mstp` 场景随该协议「退役观察」不在默认 feature 集内 | C1.3 的 6 类现场故障（证书过期、许可证到期、NTP 失步、看门狗触发、网络切换、南向长时无响应）**已落地**，四段结论见 `docs/故障处置卡.md` |
@@ -179,6 +180,28 @@
      `Sku::recommended_tier()`），定位是**采购建议而非运行时约束**——
      SKU 与授权档本就是两条独立售卖轴（行业惯例同此）。
    - `license-issuer issue` 新增 `--sku`，不给 `--tier` / `--max-points` 时按推荐值自动填充。
+
+### 1.7 部署侧 systemd 沙箱一致性（P0-1~P0-4，2026-11-06 补记）
+
+> 这一节记录的功能**不新增任何特性**，但它决定了前面 §1.1~§1.6 里那些「已闭环」的功能
+> 在真机上是否真的可用：`ProtectSystem=strict` 与 `DeviceAllow=` 白名单在 `open()` / `create()`
+> **之前**生效，代码全对也会被静默拒绝。详细取证与 systemd 源码依据见
+> [docs/linux-branch-review.md §10](linux-branch-review.md)。
+
+| 缺陷 | 现场表现 | 根因 | 修复 |
+|---|---|---|---|
+| **P0-1** 配置写回被层层拒绝 | Web 端改点表/总线/上行/认证提示成功，**重启后全部回滚** | ① `ReadWritePaths` 不含 `/etc/gateway`（`ProtectSystem=strict` 令其只读）；② `install.sh` 配置目录仅 `g+rX`，`atomic_write()` 建同目录临时文件需要**目录写权限** | `ReadWritePaths` 加 `/etc/gateway`；配置目录 `g+rwx`（文件仍 `640 root:gateway`） |
+| **P0-2** GPIO 全线 EPERM | DI 不更新、DO 不动作、RS485 DE 方向控制失效 | 代码硬编码 `/dev/gpiochip0`，但 `DeviceAllow` 白名单里没有它（白名单是 closed 语义） | `DeviceAllow=/dev/gpiochip0 rw` |
+| **P0-3** 串口白名单写成伪路径 | 所有串口协议采集不上来 | `DeviceAllow=/dev/ttyUSB`、`/dev/ttyS` 不是真实设备节点；systemd 解析时 `stat` 失败会**整条丢弃**，且不展开前缀 | 改用设备组 `char-ttyUSB` / `char-ttyS` / `char-ttyACM`，并由 `install.sh` 预加载 `cp210x/ch341/ftdi_sio/pl2303/cdc_acm` |
+| 连带：OTA 分区硬编码 eMMC | SD / NVMe 介质上 OTA 直接失败 | `/dev/mmcblk0p2`、`/dev/mmcblk0p3` 写死在 service 里 | 分区段落用 `# OTA-PARTITIONS-BEGIN/END` 标记，`install.sh` 按 `GATEWAY_OTA_SLOT_A/B` 同时改写 `DeviceAllow` 与 `Environment=` |
+| **P0-4** 门禁 | 同类问题改完就忘、下次又漂 | 此前 `deploy-lint` job **只跑 actionlint + shellcheck，从未调用 `deploy_lint.ps1`** | CI 改为真跑脚本；新增 C9（代码 open 的设备 ⊆ `DeviceAllow`）、C10（`ReadWritePaths` ⊇ 配置目录）、C11（`install.sh` 权限 ⇔ service 写权限）、C12（禁伪路径）；`deploy-smoke` 增加「Web 改配置 → 校验磁盘 → 重启仍在」的真实写回链路 |
+
+**验证**：`deploy_lint.ps1` **121 项全过**，C9~C12 用 4 个变异逐条反向验证均能报错；
+`deploy-smoke` 在 GitHub Actions 实跑全绿（run `42375783484`）。
+
+**这层约束的含义**：`gateway.service` 与 `install.sh` 从此被视为**功能代码的一部分**——
+新增任何设备、任何需要落盘的目录，都必须同步更新这三个清单（`DeviceAllow` /
+`ReadWritePaths` / `install.sh` 权限），否则 CI 会拦住。
 
 ---
 
