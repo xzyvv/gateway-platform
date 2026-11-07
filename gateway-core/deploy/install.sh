@@ -121,6 +121,16 @@ for candidate in "$SCRIPT_DIR/gateway.service" "$SCRIPT_DIR/deploy/gateway.servi
   fi
 done
 
+# ── 串口稳定名生成器：包布局在脚本同级，源码布局同样在 gateway-core/deploy ──
+# 4.6 步要调用它，5.x 步要把它装进 /opt/gatewayd，所以这里先解析出来。
+SERIAL_RULES_SRC=""
+for candidate in "$SCRIPT_DIR/serial-rules.sh" "$SCRIPT_DIR/deploy/serial-rules.sh"; do
+  if [ -f "$candidate" ]; then
+    SERIAL_RULES_SRC="$candidate"
+    break
+  fi
+done
+
 # ── 设备模板：包布局在 scripts 同级，源码布局在仓库根 ──
 TEMPLATES_SRC=""
 for candidate in "$SCRIPT_DIR/templates" "$SCRIPT_DIR/../templates" "$SCRIPT_DIR/../../templates"; do
@@ -174,6 +184,13 @@ fi
 cp "$BINARY" "$INSTALL_DIR/gatewayd"
 chmod 755 "$INSTALL_DIR/gatewayd"
 
+# 把串口稳定名生成器一并装到 /opt/gatewayd：现场后插设备、或换了 USB 口时
+# 需要能直接重跑它重新生成映射，不能依赖交付包还在手边。
+if [ -n "$SERIAL_RULES_SRC" ] && [ -f "$SERIAL_RULES_SRC" ]; then
+    cp "$SERIAL_RULES_SRC" "$INSTALL_DIR/serial-rules.sh"
+    chmod 755 "$INSTALL_DIR/serial-rules.sh"
+fi
+
 # 4. 安装前端静态资源
 echo "[4/7] 安装前端..."
 if [ -n "$UI_DIST" ] && [ -d "$UI_DIST" ] && [ -f "$UI_DIST/index.html" ]; then
@@ -224,6 +241,33 @@ if [ ${#SERIAL_MODULES[@]} -gt 0 ]; then
 else
     echo "  ⚠ 未发现可用的 USB 串口驱动模块（cp210x/ch341/ftdi_sio/pl2303/cdc_acm）"
     echo "    若现场用 USB 串口，请手动确认驱动已加载，否则串口采集会被 systemd 拒绝"
+fi
+
+# 4.6 生成串口稳定名 udev 规则
+#
+# 为什么要这一步：4.5 只保证**驱动模块**已加载，但设备名本身仍会漂移。
+# USB 串口的 /dev/ttyUSB* 编号由枚举顺序决定，重启一次可能变成
+# /dev/ttyUSB0 → /dev/ttyUSB1。config.json 里的 buses[].port_name 是
+# 裸字符串，直接进 tokio_serial::new()，名字对不上 → open() 失败 →
+# **采集全线静默停摆**，且日志里只有「找不到设备」，现场极易误判为硬件故障。
+#
+# 这里为每个物理串口生成一个跨重启稳定的名字 /dev/gateway-serialN，
+# 并把「序号 ↔ 物理设备」的绑定记在 /etc/gateway/serial-bindings.tsv：
+# 设备下次枚举成别的名字时，绑定不洗牌，配置里的 port_name 不用改。
+echo "[4.6/7] 生成串口稳定名 udev 规则..."
+if [ -n "$SERIAL_RULES_SRC" ]; then
+  # 失败不阻断安装：没有稳定名只是退回到「人工保证设备名不变」的老办法，
+  # 阻断安装反而会让现场完全装不上。
+  if bash "$SERIAL_RULES_SRC" --rules-file /etc/udev/rules.d/60-gateway-serial.rules \
+       --state-file "$CONFIG_DIR/serial-bindings.tsv"; then
+    echo ""
+    echo "  → 请把上面映射里的 /dev/gateway-serialN 填进 config.json 的 buses[].port_name"
+    echo "    （不要直接填 /dev/ttyUSB*，重启后编号会变）"
+  else
+    echo "  ⚠ 串口稳定名生成失败，继续安装（port_name 仍需人工保证设备名不变）"
+  fi
+else
+  echo "  ⚠ 未找到 serial-rules.sh，跳过稳定名生成"
 fi
 
 # 5. 拷贝配置和模板

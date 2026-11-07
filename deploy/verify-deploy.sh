@@ -602,7 +602,7 @@ else
       warn "授权状态为 $LIC_STATUS（未知取值）" ;;
   esac
   if [ "$LIC_SRC" = "tier_missing" ]; then
-    warn "配额来源 tier_missing：档位 ${LIC_TIER:-?} 未在配置 tier_quotas 中定义，已静默降级到 absent 兜底配额"
+    warn "配额来源 tier_missing：档位 ${LIC_TIER:-?} 未在配置 tier_quotas 中定义，配额取自代码内置默认表（如需按现场调整请补齐该档位）"
   fi
 fi
 
@@ -732,6 +732,78 @@ if ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | grep -q .; then
   ok "串口设备存在: $(ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | head -5 | tr '\n' ' ')"
 else
   warn "未发现 /dev/ttyUSB* / /dev/ttyACM* 串口（插设备后重测）"
+fi
+
+# ── 6b. 总线 port_name 存在性与稳定性 ──
+# config.json 的 buses[].port_name 是裸字符串，直接进 tokio_serial::new()。
+# 两个坑在这里都能被静态发现，不必等到采集静默失效：
+#   1) 设备不存在 → 该总线一启动就 open() 失败，采集全程无数据
+#   2) 写成 /dev/ttyUSB* 这类会漂移的名字 → 重启后编号可能变成别的，
+#      现场表现是「昨天还好好的，今天全采不上」，极易误判为硬件故障
+# 正确做法是填 /dev/gateway-serialN（由 udev 规则生成，见 serial-rules.sh）。
+echo "${BOLD}[6b] 总线 port_name${RESET}"
+PORT_VERDICT=$(python3 - "$CFG_PATH" <<'PY' 2>/dev/null || echo "NO_PYTHON"
+import json, sys
+try:
+    raw = open(sys.argv[1], "rb").read()
+except Exception:
+    print("NO_PYTHON"); raise SystemExit
+if raw.startswith(b"\xef\xbb\xbf"):
+    raw = raw[3:]
+try:
+    d = json.loads(raw.decode("utf-8"))
+except Exception:
+    print("BAD_JSON"); raise SystemExit
+buses = d.get("buses") or []
+if not isinstance(buses, list):
+    print("BAD_JSON"); raise SystemExit
+rows = []
+for i, b in enumerate(buses):
+    if not isinstance(b, dict):
+        continue
+    pn = (b.get("port_name") or "").strip()
+    if not pn:
+        continue
+    rows.append("%d\t%s\t%s" % (i, pn, b.get("protocol") or "?"))
+print("\n".join(rows))
+PY
+)
+if [ -z "$PORT_VERDICT" ]; then
+  info "config.json 里没有配置任何 buses[].port_name（无串口总线，跳过）"
+elif [ "$PORT_VERDICT" = "NO_PYTHON" ]; then
+  warn "无法读取 $CFG_PATH（缺 python3 或文件不可读），请人工核对 port_name"
+elif [ "$PORT_VERDICT" = "BAD_JSON" ]; then
+  warn "无法解析 $CFG_PATH 的 buses（JSON 有误），请人工核对 port_name"
+else
+  BUS_COUNT=0
+  while IFS=$'\t' read -r bidx bport bproto; do
+    [ -n "$bport" ] || continue
+    BUS_COUNT=$((BUS_COUNT + 1))
+    # 1) 存在性
+    if [ ! -e "$bport" ]; then
+      fail "buses[$bidx]（$bproto）port_name=$bport 不存在 —— 该总线采集必然失败"
+      echo "    处置: 插好设备后执行 sudo bash serial-rules.sh 看稳定名映射，改成 /dev/gateway-serialN 后重启服务"
+      continue
+    fi
+    # 2) 稳定性：裸 /dev/ttyUSB* / ttyACM* 编号会漂移
+    case "$bport" in
+      /dev/ttyUSB*|/dev/ttyACM*)
+        warn "buses[$bidx]（$bproto）port_name=$bport 是会漂移的裸设备名：USB 枚举顺序一变（重启/换口）就可能指向别的设备，采集会静默中断"
+        echo "    处置: 改用 /dev/gateway-serialN（sudo bash serial-rules.sh 生成 udev 规则）"
+        ;;
+      /dev/gateway-serial*)
+        if [ -L "$bport" ]; then
+          ok "buses[$bidx]（$bproto）port_name=$bport 使用 udev 稳定名（指向 $(readlink -f "$bport" 2>/dev/null || echo '?')）"
+        else
+          ok "buses[$bidx]（$bproto）port_name=$bport 存在"
+        fi
+        ;;
+      *)
+        ok "buses[$bidx]（$bproto）port_name=$bport 存在"
+        ;;
+    esac
+  done < <(printf '%s\n' "$PORT_VERDICT")
+  [ "$BUS_COUNT" -gt 0 ] && info "共核对 $BUS_COUNT 条串口总线的 port_name"
 fi
 
 # zigbee 协调器 / 蜂窝模块（USB 设备概览）
