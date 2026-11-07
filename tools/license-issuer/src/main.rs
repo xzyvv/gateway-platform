@@ -10,8 +10,8 @@
 //! - `--license-id`   唯一编号，如 LIC-2026-0001（必填）
 //! - `--customer`     客户标识（必填）
 //! - `--sku`          行业 SKU（sku-minimal / sku-standard / sku-building / sku-power / sku-plc / full）。
-//!                    传入后 `--tier` 与 `--max-points` 可省略，按**采购推荐**自动填充
-//!                    （推荐口径见 `gateway_core::domain::sku`）。
+//!   传入后 `--tier` 与 `--max-points` 可省略，按**采购推荐**自动填充
+//!   （推荐口径见 `gateway_core::domain::sku`）。
 //! - `--tier`         core / standard / pro / ultra（与 `--sku` 二选一提供；均缺则报错）
 //! - `--max-points`   v2.0 配额：最大采集点数（数字或 "none"=无限，可选；缺省按档位推荐值）
 //! - `--max-protocols`  v2.0 配额：最大协议数（同上；v2.1 起四档默认不限）
@@ -191,8 +191,10 @@ fn cmd_issue(args: &[String]) {
     // --max-points 未显式指定时：仅当给出了 --sku（明确的采购意图）才按推荐值填充。
     // 未给 --sku 时保持 quota=None（不写入 payload），由网关侧 tier_quotas 配置决定——
     // 这是既有行为，也让运维仍可通过 config.json 调整各档配额。
-    if max_points.is_none() && sku.is_some() && !has_opt(args, "--max-points") {
-        max_points = Some(sku.expect("已判定为 Some").recommended_max_points());
+    if max_points.is_none() && !has_opt(args, "--max-points") {
+        if let Some(s) = sku {
+            max_points = Some(s.recommended_max_points());
+        }
     }
     if expires_at.is_none() {
         println!(
