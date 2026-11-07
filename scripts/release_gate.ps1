@@ -24,6 +24,7 @@
 #   .\scripts\release_gate.ps1 -IncludeChaos       # 追加 chaos 场景
 #   .\scripts\release_gate.ps1 -InstallDeps        # 先 npm ci（缺 node_modules 时）
 #   .\scripts\release_gate.ps1 -InstallPlaywright  # 先装 Playwright chromium
+#   .\scripts\release_gate.ps1 -SkipRemoteGate     # 不触发远端发布门禁（只跑本地）
 #   .\scripts\release_gate.ps1 -Only fmt,web-lint  # 只跑指定步骤（重跑失败项）
 #   .\scripts\release_gate.ps1 -ListOnly           # 只看步骤清单，不执行
 #
@@ -43,6 +44,8 @@ param(
     [switch]$KeepGoing,
     [switch]$InstallDeps,
     [switch]$InstallPlaywright,
+    [switch]$SkipRemoteGate,
+    [int]$RemoteGateTimeoutMin = 120,
     [string[]]$Only = @(),
     [int]$E2EPort = 18081,
     [int]$SmokePort = 18080,
@@ -505,6 +508,115 @@ if (-not $SkipSmoke) {
         return (Run-Native -Exe "node" -Arguments @("scripts/smoke/chain-smoke.mjs"))
     } -SkipReason $(if ($null -eq $nodeCmd) { "未检测到 node，无法运行 scripts/smoke/chain-smoke.mjs" } elseif (-not $gatewaydReady) { "未找到 target\debug\gatewayd.exe，先 cargo build -p gatewayd" } else { "" })
 }
+
+# =============================================================================
+# 远端发布门禁（触发 .github/workflows/release-gate.yml 并轮询到出结论）
+# -----------------------------------------------------------------------------
+# 本地门禁跑的是 Windows 口径。发布前那套重作业（cross-arm 真启动、musl 静态
+# 构建、覆盖率地板、soak、chaos、SKU 体积矩阵）只能在 Linux runner 上跑 ——
+# 仓库里对应 .github/workflows/heavy.yml，由 release-gate.yml 在推 v* tag、
+# 手动触发、每周定时时**无条件**调用（重作业原先只在 ci.yml 里靠
+# `if: workflow_dispatch || RUN_HEAVY` 手动点，等于"发布前必跑"根本不存在）。
+#
+# 这一步做的是"发版前先把它跑起来并等到出结论"，免得打完 tag 才发现门禁没过。
+# 前置条件缺任何一样（没装 gh / 没有 origin 远端 / 默认分支上还没有那个
+# workflow / 工作区有未提交改动）都只 SKIP 并写明原因，不阻塞本地门禁。
+# =============================================================================
+$remoteGateWorkflow = "release-gate.yml"
+$remoteGateRef = ""
+$remoteGateSkip = ""
+$ghCmd = Get-Command gh -ErrorAction SilentlyContinue
+
+if ($SkipRemoteGate) {
+    $remoteGateSkip = "已通过 -SkipRemoteGate 显式跳过"
+}
+elseif ($null -eq $ghCmd) {
+    $remoteGateSkip = "未检测到 gh CLI，无法触发远端发布门禁"
+}
+elseif ($null -eq $gitCmd) {
+    $remoteGateSkip = "未检测到 git，无法确定要触发的 ref"
+}
+else {
+    $originUrl = (& $gitCmd.Source remote get-url origin 2>$null | Select-Object -First 1)
+    if (-not $originUrl) {
+        $remoteGateSkip = "未配置 origin 远端"
+    }
+    else {
+        $remoteGateRef = (& $gitCmd.Source rev-parse --abbrev-ref HEAD 2>$null | Select-Object -First 1)
+        if (-not $remoteGateRef) {
+            $remoteGateSkip = "无法确定当前分支"
+        }
+        elseif ($remoteGateRef -eq "HEAD") {
+            $remoteGateSkip = "当前处于游离 HEAD，不能作为 workflow_dispatch 的 ref"
+        }
+        else {
+            $dirty = (& $gitCmd.Source status --porcelain 2>$null)
+            if ($dirty) {
+                $remoteGateSkip = "工作区有未提交改动（远端门禁跑的是已提交状态，与本地验证的不是同一份代码）"
+            }
+            else {
+                & $ghCmd.Source workflow view $remoteGateWorkflow 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    $remoteGateSkip = "远端默认分支上还没有 $remoteGateWorkflow（workflow_dispatch 要求工作流已存在于默认分支）"
+                }
+            }
+        }
+    }
+}
+
+Add-Step -Id "remote-gate" -Title "远端发布门禁（触发 release-gate.yml 并轮询到出结论）" -Action {
+    $wf = $remoteGateWorkflow
+    $before = (& $ghCmd.Source run list --workflow $wf --limit 1 --json databaseId --jq '.[0].databaseId' 2>$null | Select-Object -First 1)
+
+    $dispatch = & $ghCmd.Source workflow run $wf --ref $remoteGateRef 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ("触发 {0} 失败：{1}" -f $wf, ($dispatch -join "`n")) -ForegroundColor Red
+        return $false
+    }
+    Write-Host "已触发 $wf（ref=$remoteGateRef），等待新运行出现……"
+
+    # 新运行不会立刻出现在列表里（最多几十秒），按"id 与触发前不同 + 同分支"认领
+    $runId = ""
+    $waitDeadline = (Get-Date).AddSeconds(300)
+    while ((Get-Date) -lt $waitDeadline) {
+        Start-Sleep -Seconds 5
+        $rows = & $ghCmd.Source run list --workflow $wf --limit 5 --json databaseId,status,conclusion,headBranch --jq '.[] | [.databaseId, .status, .conclusion, .headBranch] | join("|")' 2>$null
+        foreach ($row in @($rows)) {
+            $p = ("$row" -split '\|')
+            if ($p.Count -ge 4 -and $p[0] -ne "$before" -and $p[3] -eq $remoteGateRef) { $runId = $p[0]; break }
+        }
+        if ($runId) { break }
+    }
+    if (-not $runId) {
+        Write-Host "触发后 5 分钟内没有等到新运行" -ForegroundColor Red
+        return $false
+    }
+
+    Write-Host "运行 #$runId 已开始，轮询到结束（最长 $RemoteGateTimeoutMin 分钟）……"
+    $deadline = (Get-Date).AddMinutes($RemoteGateTimeoutMin)
+    $lastStatus = ""
+    while ((Get-Date) -lt $deadline) {
+        $info = & $ghCmd.Source run view $runId --json status,conclusion --jq '.status + "|" + (.conclusion // "")' 2>$null
+        $s = ("$info" -split '\|')
+        $status = if ($s.Count -ge 1) { $s[0] } else { "" }
+        $concl = if ($s.Count -ge 2) { $s[1] } else { "" }
+        if ($status -ne $lastStatus) {
+            Write-Host "  状态：$status $concl"
+            $lastStatus = $status
+        }
+        if ($status -eq "completed") {
+            if ($concl -eq "success") {
+                Write-Host "远端发布门禁通过。"
+                return $true
+            }
+            Write-Host ("远端发布门禁未通过：conclusion={0}" -f $concl) -ForegroundColor Red
+            return $false
+        }
+        Start-Sleep -Seconds 20
+    }
+    Write-Host ("等待超时（{0} 分钟），远端门禁未出结论" -f $RemoteGateTimeoutMin) -ForegroundColor Red
+    return $false
+} -SkipReason $remoteGateSkip
 
 # =============================================================================
 # 执行

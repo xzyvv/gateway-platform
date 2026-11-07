@@ -35,6 +35,9 @@
           （组可写 ⇔ ReadWritePaths 含该目录；且组名 = service 的 Group）
       C12 DeviceAllow 的路径形式不得写成「非真实节点」的裸设备名
           （/dev/ttyUSB 这类在 systemd v255 会被 stat 失败后整条丢弃）
+      C13 install.sh 的 OTA 分区改写幂等，且每个 SLOT 变量恰好一条赋值
+      C14 串口稳定名链路完整：生成器按稳定标识匹配并保留已有绑定、
+          install.sh 接入、build-release.sh 打包、verify-deploy.sh 核对 port_name
 
 .PARAMETER Strict
     任何检查失败都返回 1；否则只打印警告并返回 0。
@@ -991,8 +994,387 @@ cat "$d/out2.service"
 Write-Host ""
 
 # ══════════════════════════════════════════════════════════
-# 汇总
+# C14  串口稳定名链路（udev 规则 → config.json → 采集）
 # ══════════════════════════════════════════════════════════
+# P3-2：USB 串口的 /dev/ttyUSB* 编号由枚举顺序决定，重启一次就可能变成
+# /dev/ttyUSB1。config.json 的 buses[].port_name 是裸字符串，直接进
+# tokio_serial::new()，名字对不上 → open() 失败 → 采集全线静默停摆，
+# 现场表现是「昨天还好好的，今天全采不上」，极易误判为硬件故障。
+#
+# 修法是给它一个跨重启稳定的名字 /dev/gateway-serialN，由 udev 规则维护。
+# 这条链路有四个环节，缺一个就白做：
+#   1) gateway-core/deploy/serial-rules.sh —— 生成器本体
+#   2) install.sh 的 4.6 步 —— 部署时真的调用它并 reload udev
+#   3) build-release.sh —— 必须把生成器打进交付包，否则现场根本没这脚本
+#   4) verify-deploy.sh —— 交付检查单要核对 port_name 的存在性与稳定性
+# 少任何一环，现场就会退回「人工保证 /dev/ttyUSB0 不变」的老办法，
+# 而那正是本项要消灭的失效形态。
+Write-Host "[C14] 串口稳定名链路完整（生成器/安装/打包/校验）" -ForegroundColor Cyan
+$serialRulesText = ReadText "gateway-core/deploy/serial-rules.sh"
+$verifyText = ReadText "deploy/verify-deploy.sh"
+$buildText = ReadText "deploy/build-release.sh"
+if ($null -eq $serialRulesText) {
+    Fail "找不到 gateway-core/deploy/serial-rules.sh（串口稳定名生成器缺失）"
+}
+elseif ($null -eq $installText) {
+    Warn "找不到 gateway-core/deploy/install.sh（已在 C11 报告），跳过 C14"
+}
+else {
+    # 1) 生成器本体：必须用稳定标识（序列号 / 物理路径），不能用裸设备名
+    #
+    #    这里刻意断言的是 ATTRS{serial} / ATTRS{bInterfaceNumber} / ENV{DEVPATH}，
+    #    而不是 ENV{ID_SERIAL} / ENV{ID_PATH}。原因有两个，都踩过：
+    #      a) 导入时机 —— systemd 的 60-serial.rules 才是导入 ID_SERIAL/ID_PATH 的
+    #         地方，而我方生成的 60-gateway-serial.rules 文件名字典序在它之前
+    #         （g < s）→ 我方规则执行时属性还没被导入 → 匹配永不命中 → 软链
+    #         永不生成，整套机制静默失效。
+    #      b) ID_SERIAL 是「厂商_型号[_序列号]」的复合串，设备没有序列号时
+    #         依然非空 → 两块同型号无序列号的转换器得到同一个 ID_SERIAL →
+    #         抢同一个软链 → 配置指向错误设备。
+    #    ATTRS{} 直接匹配 sysfs 属性、沿父链向上查找，不依赖任何 builtin 导入、
+    #    不依赖规则文件顺序；ENV{DEVPATH} 是内核事件自带属性，同样零依赖。
+    if ($serialRulesText -match 'ATTRS\{serial\}' -and $serialRulesText -match 'ENV\{DEVPATH\}' -and $serialRulesText -match 'ATTRS\{bInterfaceNumber\}') {
+        Ok "serial-rules.sh 按稳定标识匹配（ATTRS{serial} / ATTRS{bInterfaceNumber} / ENV{DEVPATH}），不依赖 builtin 导入顺序"
+    }
+    else {
+        Fail "serial-rules.sh 未使用 ATTRS{serial} / ATTRS{bInterfaceNumber} / ENV{DEVPATH} 等稳定标识 —— 生成的规则无法跨重启保持"
+    }
+    # 反向断言：不得回退到会漂移/依赖导入顺序的属性
+    if ($serialRulesText -match 'ENV\{ID_SERIAL\}==' -or $serialRulesText -match 'ENV\{ID_PATH\}==') {
+        Fail "serial-rules.sh 仍用 ENV{ID_SERIAL}== / ENV{ID_PATH}== 匹配 —— 我方规则文件名字典序在 systemd 60-serial.rules 之前，属性未导入，匹配永不命中"
+    }
+    else {
+        Ok "serial-rules.sh 未使用 ENV{ID_SERIAL}== / ENV{ID_PATH}== —— 不受规则文件处理顺序影响"
+    }
+    # 生成器必须保留已有绑定（设备改名后序号不能被洗牌）
+    if ($serialRulesText -match 'serial-bindings\.tsv' -and $serialRulesText -match 'lookup_index') {
+        Ok "serial-rules.sh 维护绑定状态（serial-bindings.tsv + lookup_index），设备改名不洗牌"
+    }
+    else {
+        Fail "serial-rules.sh 未保留已有绑定 —— 设备换名后序号被重新分配，配置里的 port_name 会指向别的设备"
+    }
+
+    # 2) install.sh 接入：必须在安装流程里真的调用，且失败不阻断安装
+    if ($installText -match 'serial-rules\.sh') {
+        Ok "install.sh 调用了 serial-rules.sh"
+    }
+    else {
+        Fail "install.sh 未调用 serial-rules.sh —— 部署时不会生成 udev 规则"
+    }
+    if ($serialRulesText -match 'udevadm\s+control\s+--reload-rules' -and $serialRulesText -match 'udevadm\s+trigger') {
+        Ok "serial-rules.sh 重载并触发 udev 规则（规则写盘即生效，无需重启）"
+    }
+    else {
+        Fail "serial-rules.sh 未重载/触发 udev 规则 —— 规则写盘但不生效，需重启才建软链"
+    }
+
+    # 3) build-release.sh 打包：生成器不在包里 = 现场没脚本可用
+    if ($null -eq $buildText) {
+        Warn "找不到 deploy/build-release.sh（跳过打包断言）"
+    }
+    elseif ($buildText -match 'serial-rules\.sh') {
+        Ok "build-release.sh 把 serial-rules.sh 打进交付包"
+    }
+    else {
+        Fail "build-release.sh 未把 serial-rules.sh 打进交付包 —— 现场无从生成稳定名"
+    }
+
+    # 4) verify-deploy.sh 校验 port_name
+    if ($null -eq $verifyText) {
+        Warn "找不到 deploy/verify-deploy.sh（跳过 port_name 校验断言）"
+    }
+    elseif ($verifyText -match 'port_name' -and $verifyText -match 'gateway-serial') {
+        Ok "verify-deploy.sh 核对 buses[].port_name 的存在性与稳定性"
+    }
+    else {
+        Fail "verify-deploy.sh 未核对 buses[].port_name —— 交付检查单看不出串口配置是否会失效"
+    }
+
+    # 5) systemd 放行：稳定名是软链，最终落到 /dev/ttyUSB* 这个字符设备。
+    #    设备组形式（char-ttyUSB）按设备本身放行，与进程打开的是软链还是
+    #    真实节点无关 → 现有 gateway.service 无需改动。这里反向断言：
+    #    万一有人把 DeviceAllow 改成 /dev/gateway-serial0 路径形式，
+    #    systemd v255 会 stat 失败后整条丢弃该条目 → 串口被 EPERM 拒绝。
+    if ($null -ne $serviceText) {
+        if ($serviceText -match '(?m)^\s*DeviceAllow=char-ttyUSB\s+rw\s*$') {
+            Ok "gateway.service 用设备组形式放行串口（char-ttyUSB）—— udev 软链落到 ttyUSB 设备时同样生效"
+        }
+        else {
+            Fail "gateway.service 未以 char-ttyUSB 设备组形式放行串口 —— 稳定名软链会被 systemd 在 open() 之前 EPERM 拒绝"
+        }
+        if ($serviceText -match '(?m)^\s*DeviceAllow=/dev/gateway-serial') {
+            Fail "gateway.service 出现了 DeviceAllow=/dev/gateway-serial* 路径形式 —— systemd v255 会 stat 失败后整条丢弃该条目"
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C15  发布门禁链路（重作业 → heavy.yml → release-gate.yml）
+# ══════════════════════════════════════════════════════════
+# P1-3：7 个重作业（cross-arm / static-musl / coverage / chaos / bench /
+# soak-smoke / sku-size-matrix）原先长在 ci.yml 里，门禁是
+# `if: github.event_name == 'workflow_dispatch' || vars.RUN_HEAVY == 'true'`。
+# 也就是说：**默认 push 不跑、仓库没有 schedule、没有 release workflow**
+# ——「发布前必跑」根本不存在，全靠人记得点那个按钮。后果是 P1-2 刚扩到整个
+# lib 的 1382 条 cross-arm 测试只在手动触发时才生效，coverage 不跑则
+# check job 的覆盖率地板门禁形同虚设，发版时才发现某些重作业从没跑过。
+#
+# 修法：重作业抽到可复用工作流 heavy.yml，release-gate.yml 无条件调用它，
+# 由「推 v* tag / 手动触发 / 每周定时」三条路径驱动。
+#
+# 这里最要防的回归是**假门禁**：门禁若写在 heavy.yml（被调用方）内部，
+# 被 workflow_call 调用时 github.event_name 是**调用方**的事件名（tag push
+# 是 'push'），于是重作业被静默全部跳过 —— 门禁看起来在跑，实际一个作业
+# 都没执行。所以门禁只能放在调用方，heavy.yml 内部必须干净。
+Write-Host "[C15] 发布门禁链路（重作业可复用 + release-gate 无条件触发）" -ForegroundColor Cyan
+
+# 取出一个 job 的正文（顶层 job，缩进 2 空格）
+function Get-JobBlock([string]$yaml, [string]$jobName) {
+    $pat = "(?ms)^  " + [regex]::Escape($jobName) + ":\s*\r?\n(.*?)(?=^  [A-Za-z0-9_-]+:\s*\r?\n|\z)"
+    $m = [regex]::Match($yaml, $pat)
+    if ($m.Success) { return $m.Groups[1].Value }
+    return $null
+}
+
+$heavyJobs = @("chaos", "coverage", "cross-arm", "static-musl", "bench", "soak-smoke", "sku-size-matrix", "release-package")
+$ciText = ReadText ".github/workflows/ci.yml"
+$heavyText = ReadText ".github/workflows/heavy.yml"
+$gateText = ReadText ".github/workflows/release-gate.yml"
+$gatePsText = ReadText "scripts/release_gate.ps1"
+
+if ($null -eq $ciText) {
+    Warn "找不到 .github/workflows/ci.yml（跳过 C15）"
+}
+elseif ($null -eq $heavyText) {
+    Fail "找不到 .github/workflows/heavy.yml —— 重作业抽离后必须有独立可复用工作流，否则 release-gate 无从调用"
+}
+elseif ($null -eq $gateText) {
+    Fail "找不到 .github/workflows/release-gate.yml —— 没有发布门禁工作流，重作业仍然是「靠人记得点按钮」"
+}
+else {
+    # 1) heavy.yml 必须含全部重作业，且必须是可复用工作流
+    $missing = @()
+    foreach ($j in $heavyJobs) {
+        if ($null -eq (Get-JobBlock $heavyText $j)) { $missing += $j }
+    }
+    if ($missing.Count -eq 0) {
+        Ok "heavy.yml 含全部 $($heavyJobs.Count) 个重作业（$($heavyJobs -join ' / ')）"
+    }
+    else {
+        Fail "heavy.yml 缺少重作业：$($missing -join ' / ')"
+    }
+    if ($heavyText -match '(?m)^\s*workflow_call:\s*$') {
+        Ok "heavy.yml 声明 workflow_call —— 可被 ci.yml 与 release-gate.yml 复用"
+    }
+    else {
+        Fail "heavy.yml 未声明 workflow_call —— 无法作为可复用工作流被调用"
+    }
+
+    # 2) 关键反向断言：heavy.yml 内部不得带 job 级 if 门禁
+    #    （只看 4 空格缩进的 job 级键；step 级的 if（如 if: always()、
+    #     if: matrix.emu != ''）是步骤自身的正常条件，必须保留）
+    $gated = @()
+    foreach ($j in $heavyJobs) {
+        $blk = Get-JobBlock $heavyText $j
+        if ($null -ne $blk -and $blk -match '(?m)^ {4}if:') { $gated += $j }
+    }
+    # 只看 YAML 代码行（去掉注释行）——注释里引用原门禁写法是正常的说明文字
+    $heavyCode = (($heavyText -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    if ($gated.Count -eq 0 -and $heavyCode -notmatch 'vars\.RUN_HEAVY\s*==') {
+        Ok "heavy.yml 内部无 if 门禁 —— 被 workflow_call 调用时事件名是调用方的，门禁留在里面会被静默跳过（假门禁）"
+    }
+    else {
+        $why = if ($gated.Count -gt 0) { "作业：$($gated -join ' / ')" } else { "代码里出现了 vars.RUN_HEAVY == 形式的门禁" }
+        Fail "heavy.yml 内部存在 if 门禁（$why）—— 被 workflow_call 调用时会按调用方的事件名判定，重作业会被静默跳过"
+    }
+
+    # 3) ci.yml 仍以原条件调用 heavy.yml（手动触发 / RUN_HEAVY）
+    $ciHeavy = Get-JobBlock $ciText "heavy"
+    if ($null -ne $ciHeavy -and $ciHeavy -match 'uses:\s*\./\.github/workflows/heavy\.yml') {
+        Ok "ci.yml 通过 uses 调用 heavy.yml（重作业仍可手动触发，行为不变）"
+    }
+    else {
+        Fail "ci.yml 未调用 heavy.yml —— 重作业被抽走后 ci.yml 失去这 7 项检查"
+    }
+    if ($null -ne $ciHeavy -and $ciHeavy -match "github\.event_name == 'workflow_dispatch'" -and $ciHeavy -match 'vars\.RUN_HEAVY') {
+        Ok "ci.yml 调用方保留原触发条件（workflow_dispatch 或 RUN_HEAVY=true）"
+    }
+    else {
+        Fail "ci.yml 调用方的触发条件被改动 —— 原本手动触发即可跑全量重作业的行为丢失"
+    }
+    if ($null -ne $ciHeavy -and $ciHeavy -match '(?m)^\s*needs:\s*check\s*$') {
+        Ok "ci.yml 的 heavy 调用仍依赖 check（重作业在快门禁通过后才起跑）"
+    }
+    else {
+        Fail "ci.yml 的 heavy 调用未依赖 check —— 重作业会在 fmt/clippy/test 之前烧额度"
+    }
+
+    # 4) release-gate.yml：三条触发路径 + 无条件调用 + 不可取消
+    if ($gateText -match "(?m)^\s*workflow_dispatch:\s*$" -and $gateText -match "(?m)^\s*schedule:\s*$" -and $gateText -match "'v\*'") {
+        Ok "release-gate.yml 三条触发路径齐全（手动 / 推 v* tag / 每周定时）"
+    }
+    else {
+        Fail "release-gate.yml 触发路径不全 —— 至少要保留「推 v* tag」和「每周定时」两条，否则重作业又是靠人记得点按钮"
+    }
+    $gateHeavy = Get-JobBlock $gateText "heavy"
+    if ($null -ne $gateHeavy -and $gateHeavy -match 'uses:\s*\./\.github/workflows/heavy\.yml' -and $gateHeavy -notmatch '(?m)^ {4}if:') {
+        Ok "release-gate.yml 无条件调用 heavy.yml（发布门禁不设额外条件）"
+    }
+    else {
+        Fail "release-gate.yml 调用 heavy.yml 的方式不对 —— 必须是无 if 的无条件调用"
+    }
+    if ($gateText -match '(?m)^\s*cancel-in-progress:\s*false\s*$') {
+        Ok "release-gate.yml 不取消进行中的运行 —— 避免「门禁跑到一半被顶掉」造成假通过"
+    }
+    else {
+        Fail "release-gate.yml 的 cancel-in-progress 不是 false —— 后一次触发会取消前一次门禁，出现无结论的假通过"
+    }
+    if ($gateText -match 'needs\.heavy\.result' -and $gateText -match 'HEAVY_RESULT') {
+        Ok "release-gate.yml 用 always() + needs.heavy.result 判定真实结论（重作业失败时门禁明确失败）"
+    }
+    else {
+        Fail "release-gate.yml 未按 needs.heavy.result 判定结论 —— 重作业失败时门禁可能被跳过而非失败"
+    }
+
+    # 5) 本地门禁能触发远端门禁（发版前先跑起来并等到出结论）
+    if ($null -eq $gatePsText) {
+        Warn "找不到 scripts/release_gate.ps1（跳过本地触发断言）"
+    }
+    elseif ($gatePsText -match 'remote-gate' -and $gatePsText -match 'workflow run' -and $gatePsText -match 'run view') {
+        Ok "release_gate.ps1 会触发 release-gate.yml 并轮询到出结论（发版前不必打完 tag 才发现门禁没过）"
+    }
+    else {
+        Fail "release_gate.ps1 未接入远端发布门禁 —— 本地门禁全绿也不代表远端那套重作业过了"
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C16  交付脚本进 CI：feature→协议注册名映射 与「不允许平行实现」
+# ══════════════════════════════════════════════════════════
+# 两件事：
+#
+# 1) **映射表不能漂移**。build-release.sh 的 PROTO_NAME_MAP 把 cargo feature
+#    映射成南向协议**注册名**（entries.rs 的 ProtocolEntry.name）。
+#    两者不是一一对应（opcua-client → opcua；bacnet-mstp → bacnet_mstp）。
+#    BUILD-INFO.protocols 写的是注册名 —— 写错的话 verify-deploy.sh 的
+#    「协议裁剪一致性」会拿它跟线上 /api/protocols 比对，必然失败。
+#    映射表与 entries.rs 是两份来源，靠这里逐条锁死。
+#
+# 2) **不允许再出现平行实现**。CI 的 deploy-smoke 曾经手工复刻包布局、
+#    自造 BUILD-INFO.txt（build_time=ci-smoke）—— 交付脚本的产出从未被验证，
+#    交付脚本有 bug CI 永远发现不了。这里断言：CI 必须真的调用
+#    deploy/build-release.sh，且不得再出现自造的 build_time=ci-smoke。
+Write-Host "[C16] 交付脚本进 CI（协议名映射一致 + 无平行实现）" -ForegroundColor Cyan
+
+$entriesText = ReadText "gateway-core/src/south/protocol/registry/entries.rs"
+if ($null -eq $buildSh) {
+    Fail "找不到 deploy/build-release.sh（已在 C5 报告）"
+}
+elseif ($null -eq $entriesText) {
+    Warn "找不到 gateway-core/src/south/protocol/registry/entries.rs（跳过协议名映射断言）"
+}
+else {
+    # 1a) 从 entries.rs 抽出 feature → 注册名
+    #     只认「#[cfg(feature=..)] 紧跟 ProtocolEntry { name: ".." }」的注册项；
+    #     文件头部的 `use` 语句同样带 cfg，但形态不同，不会被误匹配。
+    $regMap = @{}
+    foreach ($em in [regex]::Matches(
+            $entriesText,
+            '#\[cfg\(feature\s*=\s*"([^"]+)"\)\]\s*\r?\n\s*ProtocolEntry\s*\{[^{}]*?name:\s*"([^"]+)"')) {
+        $regMap[$em.Groups[1].Value] = $em.Groups[2].Value
+    }
+    if ($regMap.Count -eq 0) {
+        Fail "无法从 entries.rs 解析任何 ProtocolEntry（正则或文件结构变了）—— C16 的映射断言已失效"
+    }
+
+    # 1b) 从 build-release.sh 抽出 PROTO_NAME_MAP
+    $pm = [regex]::Match($buildSh, '(?m)^PROTO_NAME_MAP="([^"]+)"')
+    if (-not $pm.Success) {
+        Fail "build-release.sh 里找不到 PROTO_NAME_MAP —— BUILD-INFO.protocols 无从推导（协议名映射会缺失）"
+    }
+    else {
+        $scriptMap = @{}
+        foreach ($pair in ($pm.Groups[1].Value -split '\s+' | Where-Object { $_ })) {
+            $kv = $pair -split '='
+            if ($kv.Count -eq 2) { $scriptMap[$kv[0]] = $kv[1] }
+        }
+        foreach ($f in $regMap.Keys) {
+            $expected = $regMap[$f]
+            if (-not $scriptMap.ContainsKey($f)) {
+                Fail "entries.rs 注册了 feature '$f'（注册名 '$expected'），但 build-release.sh 的 PROTO_NAME_MAP 没有它 —— BUILD-INFO.protocols 会漏写该协议，verify-deploy.sh 的协议裁剪一致性必然失败"
+            }
+            elseif ($scriptMap[$f] -ne $expected) {
+                Fail "协议名映射漂移：entries.rs 中 feature '$f' 的注册名是 '$expected'，build-release.sh 写的是 '$($scriptMap[$f])' —— BUILD-INFO.protocols 与线上 /api/protocols 口径不一致"
+            }
+            else {
+                Ok "协议名映射一致：$f → $expected"
+            }
+        }
+        foreach ($f in $scriptMap.Keys) {
+            if (-not $regMap.ContainsKey($f)) {
+                Fail "build-release.sh 的 PROTO_NAME_MAP 里有 entries.rs 未注册的 feature '$f' —— 映射表已过期"
+            }
+        }
+        if (($scriptMap.Keys | Where-Object { $regMap.ContainsKey($_) }).Count -eq $regMap.Count) {
+            Ok "PROTO_NAME_MAP 与 entries.rs 的注册项集合完全一致（$($regMap.Count) 项）"
+        }
+
+        # 1c) BUILD-INFO 必须同时写注册名与 feature 名两个字段
+        if ($buildSh -match '(?m)^protocols=\$PROTO_NAMES\s*$' -and $buildSh -match '(?m)^protocol_features=\$PROTO_FEATURES\s*$') {
+            Ok "BUILD-INFO 同时写 protocols（注册名）与 protocol_features（cargo feature 名）"
+        }
+        else {
+            Fail "BUILD-INFO.txt 没有同时写 protocols= 与 protocol_features= —— 两种口径混在一个字段里，verify-deploy.sh 与排障都会判错"
+        }
+    }
+}
+
+# 2) CI 必须真的调用交付脚本，且不得再有自造元信息的平行实现
+if ($null -eq $ciText) {
+    Warn "找不到 .github/workflows/ci.yml（跳过 CI 调用断言）"
+}
+else {
+    $smokeBlock = Get-JobBlock $ciText "deploy-smoke"
+    if ($null -eq $smokeBlock) {
+        Fail "ci.yml 里找不到 deploy-smoke 作业 —— 交付冒烟门禁没了"
+    }
+    else {
+        if ($smokeBlock -match 'deploy/build-release\.sh') {
+            Ok "ci.yml 的 deploy-smoke 直接调用 deploy/build-release.sh（交付脚本的产出被真实验证）"
+        }
+        else {
+            Fail "ci.yml 的 deploy-smoke 没有调用 deploy/build-release.sh —— 交付脚本的产出仍未进 CI，脚本有 bug 发现不了"
+        }
+        # 只看 YAML 代码行（去掉注释行）——注释里说明「以前是自造的」是正常的
+        $smokeCode = (($smokeBlock -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+        if ($smokeCode -match 'build_time=ci-smoke') {
+            Fail "ci.yml 的 deploy-smoke 仍在自造 BUILD-INFO.txt（build_time=ci-smoke）—— 这是平行实现，必须删除"
+        }
+        else {
+            Ok "ci.yml 的 deploy-smoke 不再自造 BUILD-INFO.txt"
+        }
+    }
+    if ($null -eq $heavyText) {
+        Warn "找不到 .github/workflows/heavy.yml（跳过 ARM 交付包断言）"
+    }
+    else {
+        $rpBlock = Get-JobBlock $heavyText "release-package"
+        if ($null -eq $rpBlock) {
+            Fail "heavy.yml 里找不到 release-package 作业 —— ARM64 真交付包无人产出，交叉架构的交付布局从未验证"
+        }
+        elseif ($rpBlock -match 'deploy/build-release\.sh') {
+            Ok "heavy.yml 的 release-package 调用 deploy/build-release.sh（ARM64 交付包由真脚本产出）"
+        }
+        else {
+            Fail "heavy.yml 的 release-package 没有调用 deploy/build-release.sh —— ARM64 交付包仍是手工拼装"
+        }
+    }
+}
+Write-Host ""
+
+
 Write-Host "[deploy-lint] 通过 $passes 项，失败 $($failures.Count) 项，警告 $($warnings.Count) 项"
 if ($failures.Count -gt 0) {
     Write-Host ""

@@ -1,0 +1,88 @@
+name: release-gate
+
+# ── 发布前必跑门禁 ──
+# 这个工作流解决的是一个很具体的问题：重作业（cross-arm / static-musl /
+# coverage / chaos / bench / soak-smoke / sku-size-matrix）在 ci.yml 里长期
+# 带着 `if: workflow_dispatch || RUN_HEAVY == 'true'` —— 默认 push 不跑，
+# 仓库又没有 schedule、没有 release workflow。于是：
+#   · cross-arm 刚扩到整个 lib 的 1382 条测试，只有人手动点按钮才跑
+#   · coverage 不跑 → check job 的「覆盖率地板」门禁形同虚设
+#   · 发版前没人知道这些重作业到底过没过 —— 「发布时才发现 CI 没跑过」
+#
+# 现在重作业抽在 .github/workflows/heavy.yml（可复用工作流），本工作流
+# **无条件**调用它。三条触发路径：
+#   1. push v* 版本 tag  → 发版即门禁，tag 就是"要发布"的唯一信号
+#   2. workflow_dispatch → 发版前手动跑一次
+#   3. schedule（每周一）→ 让覆盖率地板 / soak 这些平时没人跑的东西每周
+#                          真跑一次，而不是形同虚设
+#
+# 失败即门禁不通过：heavy 套件任一作业失败，本工作流整体失败。
+#
+# 注意：heavy.yml 内部**不带** if 门禁。被 workflow_call 调用时
+# github.event_name 是「调用方」的事件名（tag push 是 'push'），门禁写在
+# 被调用方会被静默跳过 —— 那是看起来在跑、其实一个作业都没执行的假门禁。
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  schedule:
+    # 每周一 03:17 UTC（北京时间 11:17）。错开整点是为了避开所有定时任务的
+    # 高峰 —— GitHub 定时任务在整点时排队严重，容易被延迟十几分钟。
+    - cron: '17 3 * * 1'
+
+# 门禁不允许被取消：cancel-in-progress 会让"跑到一半的发布门禁"被后一次
+# 触发顶掉，出现"看起来有结论、实际是被取消"的假通过。
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  heavy:
+    name: heavy suite (cross-arm / static-musl / coverage / chaos / bench / soak / sku-size)
+    # 无条件执行 —— 门禁在这里，不在被调用的 heavy.yml 里
+    uses: ./.github/workflows/heavy.yml
+
+  gate:
+    name: release gate conclusion
+    needs: heavy
+    # 用 always() 而不是默认行为：默认情况下 heavy 失败时本 job 会被"跳过"，
+    # 而跳过的 job 在 required checks 里同样算失败，但日志上看不出原因。
+    # 显式 always() 才能把真实结论写进摘要。
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: publish conclusion
+        env:
+          HEAVY_RESULT: ${{ needs.heavy.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## 发布门禁结论"
+            echo ""
+            echo "- 触发方式：${EVENT_NAME}"
+            echo "- ref：${REF_NAME}"
+            echo "- 重作业套件结果：**${HEAVY_RESULT}**"
+            echo ""
+            echo "| 重作业 | 覆盖内容 |"
+            echo "|---|---|"
+            echo "| cross-arm | aarch64/armv7 交叉构建 + QEMU 真启动（整个 lib 的测试） |"
+            echo "| static-musl | x86_64/aarch64/armv7 静态 musl 构建 + QEMU 真启动 |"
+            echo "| coverage | 后端覆盖率地板门禁 |"
+            echo "| chaos | 故障恢复场景 |"
+            echo "| bench | criterion 性能基准 |"
+            echo "| soak-smoke | 10 分钟 soak 内存泄漏门禁 |"
+            echo "| sku-size-matrix | 5 个 SKU 的体积矩阵 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${HEAVY_RESULT}" != "success" ]; then
+            echo "::error::发布门禁未通过：重作业套件结果 = ${HEAVY_RESULT}"
+            exit 1
+          fi
+          echo "发布门禁通过：重作业套件全绿。"
