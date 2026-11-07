@@ -98,3 +98,55 @@ Prometheus 暴露（`gateway_core::engine::metrics::sim_consumer`）：
 指标写入是可选旁路，不影响消费链路。
 
 ---
+
+## 7.3 数据留存与恢复边界
+
+> 本节是**产品边界声明**，不是实现说明。交付前必须让客户知道本节内容，
+> 否则"我以为数据有备份"会成为最贵的一类现场纠纷。
+
+### 7.3.1 唯一副本
+
+本产品形态为**单机边缘网关**（无云平台、无双机热备），因此：
+
+- 历史数据的**唯一副本**在本机 `data_queue.db`（路径见 `gateway-core/src/support/paths.rs`
+  的 `default_db_path`，默认 `/var/lib/gateway/data_queue.db`，可由 `GATEWAY_DB_PATH` 覆盖）。
+- **不存在异地副本**，也不存在集群副本。设备磁盘或整机损坏时，
+  该时段的历史数据**不可恢复**。
+- 交付检查单会打印本节结论（见 `deploy/verify-deploy.sh` 的 `[1g] 数据留存`），
+  并写入导出的 Markdown 检查单，供客户签字留档。
+
+### 7.3.2 已有的数据保护（及其边界）
+
+网关已实现下列保护，覆盖**逻辑损坏**与**进程级故障**，但**不覆盖物理损坏**：
+
+| 保护机制 | 覆盖场景 | 实现位置 |
+|---|---|---|
+| `synchronous=FULL` | 断电/掉电后不丢已提交数据 | `queue/storage/sqlite/db_init.rs` |
+| 启动时 `PRAGMA integrity_check` + 自动从备份恢复 | SQLite 文件逻辑损坏 | `queue/storage/sqlite/db_init.rs` |
+| 备份一致性（先 checkpoint 再拷贝） | 备份不漏掉 `-wal` 中已提交的行 | `queue/storage/sqlite/wal.rs` |
+| `disk_full` 标志 + 退避 | 磁盘满时退避，避免 CPU 空转 | 队列写入路径 |
+| 看门狗超时前冲刷 | 重启时未持久化数据 | `platform/watchdog_flush.rs` |
+| FIFO 按 `storage_days` 截断 | 超出保留期的数据按最旧优先丢弃 | 队列保留策略（配额见 `domain/license.rs` 的 `Quota.storage_days`） |
+
+> **关键区分**：备份文件 `data_queue.db.bak` 与主库**位于同一块盘**。
+> 它能救回「SQLite 文件逻辑损坏」，救不回「磁盘物理损坏」或「整机丢失」。
+> 交付时必须向客户讲清这个区别。
+
+### 7.3.3 需要审计留存时的唯一出路
+
+客户合同若含数据留存 SLA / 审计要求，**正确的做法是定期导出**，而不是指望本地冗余：
+
+- 导出入口：`GET /api/history/export`（见 `gateway-api/src/web/api/history/routes.rs`，
+  handler 为 `history_export_csv`），前端对应 `gateway-web/src/utils/exportCsv.ts` 与 `utils/zip.ts`。
+- 导出结果应落到**网关之外**的介质（客户侧 NAS / 人工归档），
+  落回本机不构成任何冗余。
+- 长周期查询走降采样表 `data_queue_aggregated`（分钟桶 avg/min/max），
+  导出长区间时不必逐行扫原始数据。
+
+### 7.3.4 明确不做
+
+- 不做本地多副本（RAID / 双盘镜像）——目标设备为低成本工控板，无冗余存储硬件。
+- 不做自动异地备份推送——无云平台即无备份通道；如需自动备份，
+  需客户侧提供接收端（当前形态下尚未支持自动推送，见 `docs/architecture/constraints.md` 的非目标声明）。
+
+---

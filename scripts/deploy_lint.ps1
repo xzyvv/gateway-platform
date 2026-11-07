@@ -1738,6 +1738,153 @@ else {
 Write-Host ""
 Write-Host ""
 Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C21  形态边界声明（数据唯一副本 + 非目标清单）
+#
+# 背景：本产品形态是**单机工业边缘网关**（无云平台、无双机热备）。
+# 这些不是"还没来得及做"，而是权衡后的产品边界——但边界只存在于
+# 口头共识里时，客户默认会以为"系统有备份""能不能两台互备"。
+# 现场最贵的纠纷不是 bug，是预期落差。
+#
+# 边界声明如果只写在文档里而没有落到**客户看得见的地方**（交付检查单），
+# 等于没写。所以这里钉死三件事：
+#   ① 文档层：data-flow.md 有「数据留存与恢复边界」，constraints.md 有「非目标声明」
+#   ② 交付层：verify-deploy.sh 真的检查数据留存、真的把边界写进导出的检查单
+#   ③ 一致性：文档里写的路径 / 导出端点与代码、路由真实存在
+#
+# 删掉任一处都会被本段抓住——这是防止"边界被静默抹掉"的保险丝。
+Write-Host "[C21] 形态边界声明（数据唯一副本 + 非目标清单）" -ForegroundColor Cyan
+
+$dataFlowText = ReadText "docs/architecture/data-flow.md"
+if ($null -eq $dataFlowText) {
+    Fail "找不到 docs/architecture/data-flow.md —— 数据留存边界无处声明"
+}
+else {
+    if ($dataFlowText -match '(?m)^##\s*7\.3\s+数据留存与恢复边界') {
+        Ok "data-flow.md 有「数据留存与恢复边界」章节"
+    }
+    else {
+        Fail "data-flow.md 缺「7.3 数据留存与恢复边界」章节 —— 历史数据唯一副本的边界无处声明"
+    }
+    # 必须讲清「唯一副本」与「不可恢复」，否则声明等于没说
+    $needPhrases = @(
+        @{ p = "唯一副本"; why = "客户必须知道历史数据没有第二个副本" },
+        @{ p = "不可恢复"; why = "物理损坏/整机丢失的后果必须写明" },
+        @{ p = "data_queue.db"; why = "必须点名实际存放历史数据的库" }
+    )
+    foreach ($np in $needPhrases) {
+        if ($dataFlowText.Contains($np.p)) {
+            Ok "data-flow.md 的边界声明含「$($np.p)」"
+        }
+        else {
+            Fail "data-flow.md 的边界声明缺「$($np.p)」—— $($np.why)"
+        }
+    }
+}
+
+$constraintsText = ReadText "docs/architecture/constraints.md"
+if ($null -eq $constraintsText) {
+    Fail "找不到 docs/architecture/constraints.md —— 非目标声明无处安放"
+}
+else {
+    if ($constraintsText -match '(?m)^##\s*11\.\s*非目标声明') {
+        Ok "constraints.md 有「非目标声明」章节"
+    }
+    else {
+        Fail "constraints.md 缺「11. 非目标声明」章节 —— 形态边界只存在于口头共识里"
+    }
+    # 四条形态边界必须齐全：漏一条就等于该边界没写
+    $nonGoals = @("云平台", "双机热备", "集群", "多租户")
+    $missingGoals = @()
+    foreach ($g in $nonGoals) {
+        if (-not $constraintsText.Contains($g)) { $missingGoals += $g }
+    }
+    if ($missingGoals.Count -gt 0) {
+        Fail "constraints.md 的非目标声明缺: $($missingGoals -join ', ') —— 这些边界漏写就会在交付时变成预期落差"
+    }
+    else {
+        Ok "constraints.md 的非目标声明覆盖 $($nonGoals -join ', ')"
+    }
+    # 每条非目标必须带「重新评估触发条件」，否则会被当成待补的缺陷
+    if ($constraintsText -match '重新评估触发条件') {
+        Ok "constraints.md 的非目标声明带「重新评估触发条件」列"
+    }
+    else {
+        Fail "constraints.md 的非目标声明没有「重新评估触发条件」列 —— 边界会退化成「还没做」而非设计决策"
+    }
+}
+
+# 交付层：verify-deploy.sh 必须真的检查数据留存，且把边界写进导出的检查单
+$verifyText = ReadText "deploy/verify-deploy.sh"
+if ($null -eq $verifyText) {
+    Fail "找不到 deploy/verify-deploy.sh"
+}
+else {
+    if ($verifyText -match '(?m)^\s*echo\s+"\$\{BOLD\}\[1g\]') {
+        Ok "verify-deploy.sh 有 [1g] 数据留存检查组"
+    }
+    else {
+        Fail "verify-deploy.sh 缺 [1g] 数据留存检查组 —— 客户签字的检查单上没有数据留存结论"
+    }
+    if ($verifyText.Contains('数据留存与恢复边界')) {
+        Ok "verify-deploy.sh 的导出检查单含「数据留存与恢复边界」段落"
+    }
+    else {
+        Fail "verify-deploy.sh 的导出检查单缺「数据留存与恢复边界」段落 —— 边界只写在内部文档，客户看不到"
+    }
+    # 检查单里必须点名导出端点，审计场景才知道往哪儿导
+    if ($verifyText.Contains('/api/history/export')) {
+        Ok "verify-deploy.sh 的边界段落点名了导出端点 /api/history/export"
+    }
+    else {
+        Fail "verify-deploy.sh 的边界段落没提导出端点 —— 有审计要求的客户不知道该往哪儿导数据"
+    }
+}
+
+# 一致性：文档与脚本里的数据路径必须等于代码里的默认值
+$pathsText = ReadText "gateway-core/src/support/paths.rs"
+if ($null -eq $pathsText) {
+    Fail "找不到 gateway-core/src/support/paths.rs —— 无法核对数据路径"
+}
+else {
+    $dbDefault = $null
+    if ($pathsText -match '(?s)default_db_path.*?"(/[^\"]*data_queue\.db)"') {
+        $dbDefault = $Matches[1]
+    }
+    if ($null -eq $dbDefault) {
+        Fail "paths.rs 里解析不出 default_db_path 的 Linux 默认值"
+    }
+    else {
+        if ($verifyText -and $verifyText.Contains($dbDefault)) {
+            Ok "verify-deploy.sh 的数据路径与代码 default_db_path 一致（$dbDefault）"
+        }
+        else {
+            Fail "verify-deploy.sh 的数据路径与代码 default_db_path（$dbDefault）不一致 —— 脚本会检查到一个不存在的库"
+        }
+        if ($dataFlowText -and $dataFlowText.Contains($dbDefault)) {
+            Ok "data-flow.md 的边界声明与代码 default_db_path 一致（$dbDefault）"
+        }
+        else {
+            Fail "data-flow.md 的边界声明里的库路径与代码 default_db_path（$dbDefault）不一致 —— 文档指向的库不是实际存数据的库"
+        }
+    }
+}
+
+# 一致性：导出的端点必须真实存在于路由表
+$histRoutes = ReadText "gateway-api/src/web/api/history/routes.rs"
+if ($null -eq $histRoutes) {
+    Fail "找不到 gateway-api/src/web/api/history/routes.rs"
+}
+elseif ($histRoutes.Contains('"/api/history/export"')) {
+    Ok "导出端点 /api/history/export 在路由表中真实存在"
+}
+else {
+    Fail "路由表里没有 /api/history/export —— 文档与检查单承诺的导出入口不存在"
+}
+
+Write-Host ""
+Write-Host ""
 Write-Host ""
 
 

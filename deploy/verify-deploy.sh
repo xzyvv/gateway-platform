@@ -146,6 +146,26 @@ write_report() {
       i=$((i + 1))
     done
     echo ""
+    echo "## 数据留存与恢复边界（请客户确认并签字）"
+    echo ""
+    echo "本产品为**单机工业边缘网关**（无云平台、无双机热备），以下为形态边界，非缺陷："
+    echo ""
+    echo "1. 历史数据的**唯一副本**在本机 \`data_queue.db\`，**无异地副本**。"
+    echo "   设备磁盘物理损坏或整机丢失时，该时段历史数据**不可恢复**。"
+    echo "2. 同盘备份 \`data_queue.db.bak\` 可恢复 **SQLite 文件逻辑损坏**，"
+    echo "   **不可**恢复磁盘物理损坏或整机丢失。"
+    echo "3. 本产品**不做**：双机热备 / 高可用 / 集群 / 多租户 / 异地备份 / 云平台。"
+    echo "4. 需审计留存的场景，唯一出路是定期用 \`GET /api/history/export\` 导出到"
+    echo "   **网关之外**的介质；落回本机不构成任何冗余。"
+    echo ""
+    echo "详见 \`docs/architecture/data-flow.md\` §7.3 与 \`docs/architecture/constraints.md\` §11。"
+    echo ""
+    echo "| 数据留存项 | 结论 |"
+    echo "|---|---|"
+    echo "| 数据队列库 | ${DB_PATH:-（未取到）} |"
+    echo "| 同盘备份 | ${DB_BAK:-（未取到）} |"
+    echo "| 边界确认 | ☐ 已理解并接受上述边界　签字：__________　日期：__________ |"
+    echo ""
     echo "## 处置建议"
     echo ""
     if [ "$FAIL" -eq 0 ]; then
@@ -423,6 +443,54 @@ PY
       warn "无法解析 $CFG_PATH（缺 python3 或读取失败），请人工执行 python3 -m json.tool $CFG_PATH"
       ;;
   esac
+fi
+
+# ── 1g. 数据留存与恢复边界 ──
+# 本产品形态是**单机边缘网关**（无云平台、无双机热备）：历史数据的唯一副本
+# 在本机 data_queue.db，没有异地副本。这不是缺陷，是形态的必然结果，
+# 但客户默认会以为"系统有备份"——所以必须让它变成检查单上看得见的一条结论。
+# 这里核的是「当前这台机器的实际状态」，边界声明本身写进检查单的固定段落。
+echo "${BOLD}[1g] 数据留存${RESET}"
+# 默认路径必须与代码 default_db_path（gateway-core/src/support/paths.rs）逐字一致，
+# 否则脚本会检查一个根本不存在的库。deploy_lint C21 会核对这一点。
+DB_PATH="${GATEWAY_DB_PATH:-/var/lib/gateway/data_queue.db}"
+# 路径可被 GATEWAY_DB_PATH 覆盖，与代码 default_db_path 一致
+if svc_env_set "GATEWAY_DB_PATH"; then
+  DB_PATH=$(svc_env_val "GATEWAY_DB_PATH")
+fi
+# 备份文件由代码 with_extension("db.bak") 派生：data_queue.db → data_queue.db.bak
+DB_BAK="${DB_PATH%.*}.db.bak"
+if [ ! -f "$DB_PATH" ]; then
+  warn "数据队列库 $DB_PATH 不存在 —— 若尚未采集过数据属正常；若无数据且已上线，请检查 GATEWAY_DB_PATH 是否被误配"
+else
+  DB_SIZE=$(du -h "$DB_PATH" 2>/dev/null | awk '{print $1}' || echo "?")
+  ok "数据队列库存在：$DB_PATH（$DB_SIZE）"
+  # 同盘备份：能救 SQLite 逻辑损坏，救不回磁盘物理损坏 —— 这条区别必须让客户知道
+  if [ -f "$DB_BAK" ]; then
+    BAK_SIZE=$(du -h "$DB_BAK" 2>/dev/null | awk '{print $1}' || echo "?")
+    ok "备份文件存在：$DB_BAK（$BAK_SIZE）"
+    DB_DIR_PATH=$(dirname "$DB_PATH")
+    BAK_DIR_PATH=$(dirname "$DB_BAK")
+    if [ "$DB_DIR_PATH" = "$BAK_DIR_PATH" ]; then
+      warn "备份与主库位于同一分区（$DB_DIR_PATH）：可恢复 SQLite 逻辑损坏，**不可**恢复磁盘物理损坏或整机丢失；需审计留存的客户应定期用 GET /api/history/export 导出到网关之外"
+    else
+      ok "备份与主库不在同一分区（$BAK_DIR_PATH vs $DB_DIR_PATH）"
+    fi
+  else
+    warn "未找到备份文件 $DB_BAK —— 启动时若主库逻辑损坏将无法自动恢复；网关会在首次写入后生成该备份"
+  fi
+  # 数据分区剩余空间：队列满了会 FIFO 丢最旧数据，磁盘满会触发退避
+  DB_PART=$(df -P "$DB_PATH" 2>/dev/null | tail -1 | awk '{print $4}' || echo "")
+  if [ -n "$DB_PART" ] && [ "$DB_PART" -gt 0 ] 2>/dev/null; then
+    DB_FREE_MB=$((DB_PART / 1024))
+    if [ "$DB_FREE_MB" -lt 512 ]; then
+      warn "数据分区剩余空间仅 ${DB_FREE_MB}MB —— 队列满后会按 FIFO 丢弃最旧数据，磁盘满还会触发退避；请清理或扩容"
+    else
+      ok "数据分区剩余空间充足（${DB_FREE_MB}MB）"
+    fi
+  else
+    info "未能取到 $DB_PATH 所在分区剩余空间，跳过空间检查"
+  fi
 fi
 
 # ── 2. 端口监听 ──
