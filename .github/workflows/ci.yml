@@ -269,7 +269,7 @@ jobs:
           test -f gateway-desktop/src-tauri/Cargo.toml || { echo "::error::missing gateway-desktop/src-tauri/Cargo.toml"; exit 1; }
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # vitest 5 的 engines 要求 node ^22.12：Node 20 上 vmThreads 池会
           # 整批报 ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING（212 个文件起不来）。
@@ -537,7 +537,7 @@ jobs:
           RUSTFLAGS: ""
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # 与前端作业保持一致：vite 8 / vitest 5 都要求 node ≥ 22.12
           node-version: '22'
@@ -706,7 +706,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends musl-tools
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # vite 8 要求 node ≥ 22.12（与前端作业同一运行时）
           node-version: '22'
