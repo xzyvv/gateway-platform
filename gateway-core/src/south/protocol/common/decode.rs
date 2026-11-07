@@ -5,7 +5,7 @@
 
 use crate::config::PointConfig;
 use crate::engine::model::{ByteOrder, ModbusDataType, Quality};
-use crate::pipeline::apply_formula;
+use crate::engine::util::formula::apply_formula;
 
 use super::super::CollectorError;
 use super::super::CollectorResult;

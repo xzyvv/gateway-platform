@@ -1,11 +1,21 @@
 //! 中立领域常量
 //!
 //! 本模块不依赖 `config` / `south` / gateway-api 的 `web` 等任何业务层，用于存放同时被多层引用的
-//! 领域常量，避免层间反向依赖。
+//! 领域常量与领域类型，避免层间反向依赖。
 //!
-//! 目前包含协议白名单 [`VALID_PROTOCOLS`]：它原先定义在南向
-//! `south::protocol::registry`，导致 `config::validate` 需要反向依赖 `south`。
-//! 下沉到本模块后，`config` 与 `south` 引用同一份常量，反向依赖被消除。
+//! 目前包含：
+//!
+//! - 协议白名单 [`VALID_PROTOCOLS`]：它原先定义在南向 `south::protocol::registry`，
+//!   导致 `config::validate` 需要反向依赖 `south`。下沉到本模块后，`config` 与 `south`
+//!   引用同一份常量，反向依赖被消除。
+//! - 授权档位与配额模型 [`license`]（[`Tier`] / [`Quota`] 等）：它们原先定义在
+//!   `license` 模块，但配置层 `config::license`（`LicenseConfig` / `TierQuotaEntry`）
+//!   同样需要引用，于是形成 `config → license → config` 的双向循环。下沉到本模块后，
+//!   `config` 与 `license` 共同引用同一份定义，反向依赖被消除。
+
+pub mod license;
+
+pub use license::{Quota, QuotaAvailable, QuotaKind, QuotaUsage, Tier};
 
 /// 合法协议名白名单（配置校验与 API 校验的唯一来源）
 ///
@@ -108,21 +118,6 @@ mod tests {
                 p
             );
         }
-    }
-
-    /// `opcua-client` 必须真的编译出南向采集器，而不只是把 async-opcua 拉进依赖树。
-    ///
-    /// 回归背景：拆分 OPC UA 双向能力时，南向模块的门控一度停留在合并别名 `opcua`，
-    /// 结果 `--features opcua-client` 只激活了 crate、模块与注册项全部被裁掉——
-    /// 构建通过、零告警，但现场配不了 OPC UA 采集。引用类型即可在编译期证伪。
-    #[cfg(feature = "opcua-client")]
-    #[test]
-    fn opcua_client_feature_compiles_south_collector() {
-        let _ = std::any::type_name::<crate::south::protocol::opcua::OpcUaCollector>();
-        assert!(
-            VALID_PROTOCOLS.contains(&"opcua"),
-            "opcua-client 已启用，但 VALID_PROTOCOLS 中没有 opcua：注册表与 feature 门控不一致"
-        );
     }
 
     /// 未编入 opcua-client 时，提示必须指向真正需要启用的 feature（而非合并别名）。

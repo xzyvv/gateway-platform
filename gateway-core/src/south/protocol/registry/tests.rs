@@ -469,3 +469,22 @@ fn test_supports_write_multi_only_native() {
         "gpio 未覆写 write_multi，能力位必须为 false"
     );
 }
+
+/// `opcua-client` 必须真的编译出南向采集器，而不只是把 async-opcua 拉进依赖树。
+///
+/// 回归背景：拆分 OPC UA 双向能力时，南向模块的门控一度停留在合并别名 `opcua`，
+/// 结果 `--features opcua-client` 只激活了 crate、模块与注册项全部被裁掉——
+/// 构建通过、零告警，但现场配不了 OPC UA 采集。引用类型即可在编译期证伪。
+///
+/// 本测试置于 south 侧（而非中立层 `domain`）：它需要引用南向采集器类型，
+/// 而中立层禁止依赖任何业务层（见 `tests/arch_deps.rs` 的
+/// `domain_must_be_layer_neutral`）。
+#[cfg(feature = "opcua-client")]
+#[test]
+fn test_opcua_client_feature_compiles_south_collector() {
+    let _ = std::any::type_name::<crate::south::protocol::opcua::OpcUaCollector>();
+    assert!(
+        VALID_PROTOCOLS.contains(&"opcua"),
+        "opcua-client 已启用，但 VALID_PROTOCOLS 中没有 opcua：注册表与 feature 门控不一致"
+    );
+}

@@ -10,7 +10,6 @@
 
 pub mod convert;
 pub mod edge;
-pub mod formula;
 pub mod nodes;
 pub mod point_cache;
 pub mod quality_rules;
@@ -19,7 +18,6 @@ pub mod virtual_point;
 
 pub use convert::ConvertEngine;
 pub use edge::EdgeProcessor;
-pub use formula::apply_formula;
 pub use virtual_point::VirtualPointEngine;
 
 use std::sync::Arc;

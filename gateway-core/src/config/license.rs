@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::license::{Quota, Tier};
+use crate::domain::{Quota, Tier};
 
 /// tier → 配额 配置项（serde 友好的 Vec 形式，BTreeMap 内部加速查找）
 ///

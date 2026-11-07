@@ -2,4 +2,5 @@
 
 pub mod crc;
 pub mod encoding;
+pub mod formula;
 pub mod model;

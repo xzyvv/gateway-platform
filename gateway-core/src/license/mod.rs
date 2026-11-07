@@ -20,7 +20,15 @@ use ts_rs::TS;
 
 pub use clock::{ClockGuard, ClockVerdict};
 pub use fingerprint::LocalFingerprints;
-pub use verify::{LicenseError, LicensePayload, Quota, QuotaAvailable, QuotaKind, QuotaUsage};
+pub use verify::{LicenseError, LicensePayload};
+
+/// 授权领域模型（档位 + 配额）下沉至中立层 `crate::domain::license`。
+///
+/// 这里 `pub use` 转出以保持既有公开路径 `gateway_core::license::Tier` /
+/// `::Quota` 等不变（gateway-api / gatewayd / tools 均按此路径引用）。
+/// 下沉目的是消除 `config → license → config` 双向循环：
+/// 配置层 `config::license` 现在直接引用 `crate::domain::{Tier, Quota}`。
+pub use crate::domain::license::{Quota, QuotaAvailable, QuotaKind, QuotaUsage, Tier};
 
 /// Ed25519 公钥（32 字节，编译期硬编码，随二进制分发，见 §5）。
 ///
@@ -113,31 +121,6 @@ pub fn extra_pubkeys_from_env() -> Vec<[u8; 32]> {
 /// 兼容旧调用：`PUBLIC_KEY` 作为第一把公钥的别名
 #[deprecated(since = "0.2.0", note = "use PUBLIC_KEYS instead")]
 pub const PUBLIC_KEY: [u8; 32] = PUBLIC_KEY_OLD;
-
-/// 档位（与前端 `type Tier` 一致，小写序列化）
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    TS,
-    schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-#[ts(export)]
-pub enum Tier {
-    #[default]
-    Core,
-    Standard,
-    Pro,
-    Ultra,
-}
 
 /// 授权状态（§7）。失效态对前端的表现由 status 驱动。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
