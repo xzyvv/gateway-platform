@@ -703,10 +703,51 @@ jobs:
             }
           }
 
-          # ① 架构敏感的纯函数（字节序 / CRC / 编码）：这部分在 x86 上过、
-          #    在 ARM 上未必过——正是 QEMU 模拟器能替真机提前抓到的差异。
+          # ① 整个 gateway-core lib 测试集在 QEMU 上真跑一遍。
+          #    之前只跑 engine::util:: 两组纯函数，其余 ARM 相关代码停留在
+          #    "能编译"——但编译通过不代表在 ARM 运行时成立：位宽、原子序、
+          #    字节序、Linux 专属分支（/proc 解析、gpiod、bootenv）都只在
+          #    真正执行时才暴露问题。现在 lib 里的 1400+ 用例全部上模拟器。
+          #
+          #    排除项：只有一类用例不能上 QEMU——依赖 wall-clock 的时序敏感
+          #    断言。QEMU 用户态模拟比原生慢 3~10 倍，"必须在 50ms 内退出"
+          #    这类上限断言必然假失败。这里按**完整测试路径**逐条排除
+          #    （libtest 的 --skip 是子串匹配，可重复传入）。
+          #    只排除"有上限断言"的用例；仅含下限断言（如 elapsed >= 50ms）
+          #    的用例在慢机器上只会更宽松，保留运行。
           run_tests lib cargo test -p gateway-core --target "$TARGET" --locked \
-            --lib -- engine::util::
+            --lib -- \
+            --skip crypto::password::tests::oversized_iteration_count_rejected_fast \
+            --skip crypto::password::tests::oversized_salt_rejected_fast \
+            --skip engine::alarm::tests::r73_alarm_run_exits_after_stop \
+            --skip engine::shutdown::tests::wait_returns_immediately_after_shutdown \
+            --skip engine::supervision::tests::r64_spawn_catch_unwind_handle_resolves_on_completion_and_panic \
+            --skip north::conversion::tests::r66_conversion_manager_run_exits_after_shutdown \
+            --skip north::mqtt::tests::r48_stop_before_waiter_registers_still_exits \
+            --skip north::mqtt::tests::r48_wait_shutdown_not_lost_when_notify_precedes_wait \
+            --skip north::mqtt::tests::r48_wait_shutdown_wakes_after_registration \
+            --skip north::server::mqtt_packet_passthrough::r73_tests::r73_passthrough_run_exits_after_stop \
+            --skip north::server::tests::passthrough_partial_frame_is_closed_after_read_timeout \
+            --skip north::server::tests::r60_wait_shutdown_notify_blocks_then_wakes_on_notify \
+            --skip north::server::tests::r60_wait_shutdown_notify_recovers_from_set_before_register_window \
+            --skip north::server::tests::r60_wait_shutdown_notify_returns_immediately_when_stopping_already_set \
+            --skip north::server_sinks::tests::test_modbus_sink_overflow_drops_without_blocking \
+            --skip north::server_sinks::tests::test_opcua_sink_overflow_drops_without_blocking \
+            --skip north::webhook::tests::r64_webhook_run_exits_after_stop \
+            --skip north::webhook::tests::r65_last_flush_slot_is_drained_after_run_exit \
+            --skip platform::cellular::modem::tests::bringup_fails_early_when_process_exits \
+            --skip platform::cellular::modem::tests::bringup_returns_up_when_ip_appears \
+            --skip platform::cellular::tests::stop_cancels_background_tasks_promptly \
+            --skip south::bus::serial_task::tests::write_hang_hits_short_write_timeout_and_releases_de \
+            --skip south::bus::serial_task::tests::write_timeout_scales_with_frame_len_and_baud \
+            --skip south::bus::tcp_task::tests::stale_disconnect_does_not_clear_new_pool \
+            --skip south::bus::tests::aborting_bus_task_stops_background_reconnect \
+            --skip south::bus::tests::self_check_fails_when_all_slaves_silent_and_reopens_port \
+            --skip south::bus::tests::self_check_passes_so_silent_device_does_not_reopen_port \
+            --skip south::bus::tests::transaction_fails_fast_bus_closed_when_task_dead \
+            --skip south::bus::tests::transaction_fails_fast_when_serial_cannot_be_opened \
+            --skip south::protocol::iec104::tests::keepalive::drop_closes_tcp_and_aborts_keepalive \
+            --skip south::scheduler::tests::reload_stops_changed_groups_via_per_group_signal
 
           # ② 采集 → 虚拟点位派生 → 入队 → 北向扇出的端到端接线：
           #    在 ARM 上真跑一遍，确认队列 / RealtimeBus / 转换链在目标架构上成立。
@@ -964,6 +1005,47 @@ jobs:
           cargo check --target x86_64-unknown-linux-gnu --all-targets --features fins \
             -p gateway-core -p gateway-api -p gatewayd
         env:
+          RUSTFLAGS: ""
+
+      # 只编译不算数：Linux 专属代码路径必须在 Linux 上真跑一遍用例。
+      # cfg(target_os="linux") / cfg(unix) 里的逻辑（/proc 解析、gpiod 分支、
+      # OTA 分区与 env 分支）在 Windows CI 上连编译都不参与 → 改坏了只有等
+      # 真机部署才发现。本 job 补三组真实执行：
+      #   ① engine::monitor::host —— /proc/cpuinfo、/proc/meminfo 读取与本机 IPv4 探测
+      #   ② platform::gpio        —— GPIO 通道映射；Linux 走 gpiod 分支（无硬件时断言"不误报平台不支持"）
+      #   ③ platform::ota         —— A/B 分区路径解析 + bootenv 读写分支
+      # 每组都必须真的跑到用例：过滤条件失配时 cargo 报 0 passed 却返回 0，
+      # 那样这道门禁会静默退化成空跑——必须显式卡住。
+      - name: run linux-only tests
+        run: |
+          set -euo pipefail
+          run_filter() {
+            local label="$1"; shift
+            local out="/tmp/linux-test-${label}.log"
+            set +e
+            "$@" 2>&1 | tee "$out"
+            local rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] || { echo "linux 测试失败: $label (rc=$rc)" >&2; exit "$rc"; }
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$out" || {
+              echo "linux 测试未实际执行任何用例: $label（过滤条件可能失配）" >&2
+              exit 1
+            }
+          }
+          # ① /proc 读取与本机 IPv4 探测（Linux 实现专属）
+          run_filter monitor cargo test --target x86_64-unknown-linux-gnu \
+            -p gateway-core --lib -- engine::monitor::host
+          # ② GPIO 通道映射：Linux 走 gpiod 分支，Windows 上整个模块被 cfg 掉
+          run_filter gpio cargo test --target x86_64-unknown-linux-gnu \
+            -p gateway-core --lib -- platform::gpio
+          # ③ OTA A/B 分区路径解析与 bootenv 分支（env 覆盖 / 默认回退 / 写回）
+          run_filter ota cargo test --target x86_64-unknown-linux-gnu \
+            -p gateway-core --lib -- platform::ota
+        env:
+          # 全局 env 里是 RUSTFLAGS: -D warnings（见文件头），测试代码里的
+          # warning 不该阻断"Linux 专属路径能不能跑通"这个判定；
+          # 生产代码的 warning 仍由 check job 严格把关。
+          # 只用默认 features（all-protocols）——encryption 需要 openssl，不进这道门禁。
           RUSTFLAGS: ""
 
   # Playwright E2E 冒烟（阶段 3：强制门禁）
@@ -1285,6 +1367,124 @@ jobs:
             exit 1
           fi
           echo "✓ ${CAP_MB} MiB / 50% CPU 下存活且健康（限额内 RSS 峰值 ${RSS_MAX_MIB} MiB，cgroup 峰值 ${PEAK_MIB} MiB）"
+
+      # P1-4：配置写回 + 重启存活。
+      # 为什么必须有这一步：deploy-smoke 是全 CI 里唯一跑真实 systemd 服务的 job，
+      # 但它用的配置是空的（buses/points 皆空），且**从不在线改配置**——
+      # 于是「Web API 改配置 → 落盘 → 重启后仍生效」这条链路上最容易坏的两处
+      #   ① ConfigLoader::save → atomic_write 在 ProtectSystem=strict 沙箱里
+      #      因 /etc/gateway 不可写而失败（表现为 500「runtime reloaded but
+      #      disk save failed」——运行时已改、磁盘未改，重启即回滚）
+      #   ② 落盘的是 enc: 密文，重启时若解不开 → 服务起不来
+      # 这两处一旦坏掉，CI 全绿而现场部署直接翻车。所以这里必须真改一次配置。
+      #
+      # 断言三件事：
+      #   ① POST /api/config 返回 code==0 且 status==ok
+      #   ② 磁盘 config.json 内容**确实变化**，且新值真的写进去了
+      #      （改 realtime_buffer：启动期固化字段，重启才生效，正好用来区分
+      #        「改了内存」和「改了磁盘」）
+      #   ③ systemctl restart 后新配置仍在（证明不是只改了内存）
+      - name: Verify config write-back and restart survival
+        run: |
+          set -euo pipefail
+          BASE="http://127.0.0.1:8080"
+          TOKEN="ci-smoke-token-0123456789"
+          CONF="/etc/gateway/config.json"
+          AUTH=(-H "Authorization: Bearer ${TOKEN}")
+
+          # ── ① 读当前配置（脱敏态）──
+          GET_CODE="$(curl -sS -o /tmp/cfg_get.json -w '%{http_code}' \
+            "${AUTH[@]}" "$BASE/api/config" || echo 000)"
+          if [ "$GET_CODE" != "200" ]; then
+            echo "GET /api/config 返回 HTTP $GET_CODE" >&2; cat /tmp/cfg_get.json >&2; exit 1
+          fi
+          jq -e '.code == 0 and (.data.web != null)' /tmp/cfg_get.json >/dev/null || {
+            echo "GET /api/config 未返回可用的 web 配置" >&2; cat /tmp/cfg_get.json >&2; exit 1;
+          }
+          sudo cp "$CONF" /tmp/cfg_disk_before.json
+
+          # ── ② 改一个启动期固化字段：realtime_buffer 1024 → 4096 ──
+          # 选它的原因：它属于「必须重启才生效」的一档（reload_scope 判定
+          # realtime_buffer 变更 → restart_required 含 web），因此改完重启后
+          # 回读仍是 4096，才真正证明**写进了磁盘**——若只改了内存，重启会退回 1024。
+          # 注意 `.data |` ——POST 收的是**裸配置对象**，不是 {code,message,data} 信封。
+          jq '.data | .web.realtime_buffer = 4096' /tmp/cfg_get.json > /tmp/cfg_put.json
+          # 脱敏占位 "********" 由服务端 restore_redacted_secrets 还原为旧明文，
+          # 所以原样回传即可，不丢 api_token。
+          POST_CODE="$(curl -sS -o /tmp/cfg_post.json -w '%{http_code}' \
+            -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/cfg_put.json "$BASE/api/config" || echo 000)"
+          if [ "$POST_CODE" != "200" ]; then
+            echo "POST /api/config 返回 HTTP $POST_CODE" >&2; cat /tmp/cfg_post.json >&2; exit 1
+          fi
+          jq -e '.code == 0 and (.data.status == "ok")' /tmp/cfg_post.json >/dev/null || {
+            echo "POST /api/config 未成功" >&2; cat /tmp/cfg_post.json >&2; exit 1;
+          }
+
+          # ── ③ 断言磁盘真的变了 ──
+          sudo cp "$CONF" /tmp/cfg_disk_after.json
+          if cmp -s /tmp/cfg_disk_before.json /tmp/cfg_disk_after.json; then
+            echo "POST /api/config 成功后磁盘 config.json 内容未变化：配置没有真正写回" >&2
+            exit 1
+          fi
+          if ! grep -q '"realtime_buffer": 4096' /tmp/cfg_disk_after.json; then
+            echo "磁盘 config.json 里没有 realtime_buffer=4096（新配置没落盘）" >&2
+            sudo grep -n 'realtime_buffer' /tmp/cfg_disk_after.json >&2 || true
+            exit 1
+          fi
+          if grep -q '"realtime_buffer": 4096' /tmp/cfg_disk_before.json; then
+            echo "改前磁盘就已是 realtime_buffer=4096，本次断言无意义" >&2
+            exit 1
+          fi
+
+          # ── ④ 重启：新配置必须活下来 ──
+          # 注意落盘的 api_token 是 enc: 密文，重启时要能解开（机器指纹一致），
+          # 否则服务会因 decrypt 失败而拒绝启动——这一并被下面的存活断言覆盖。
+          sudo systemctl restart gateway
+          READY=0
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 2 "$BASE/health/live" >/dev/null 2>&1; then
+              READY=1; break
+            fi
+            sleep 1
+          done
+          if [ "$READY" != "1" ]; then
+            echo "重启后服务未能恢复健康" >&2
+            sudo systemctl status gateway --no-pager >&2 || true
+            sudo journalctl -u gateway -n 80 --no-pager >&2 || true
+            exit 1
+          fi
+          sudo systemctl is-active --quiet gateway || {
+            echo "重启后 systemd 状态不是 active" >&2
+            sudo systemctl status gateway --no-pager >&2 || true
+            exit 1
+          }
+          # 磁盘仍是新值（重启不会把配置改回去）
+          sudo cp "$CONF" /tmp/cfg_disk_restarted.json
+          grep -q '"realtime_buffer": 4096' /tmp/cfg_disk_restarted.json || {
+            echo "重启后磁盘 config.json 的 realtime_buffer 不再是 4096" >&2
+            exit 1
+          }
+          # 回读接口：新进程确实加载了新配置（启动期固化字段此刻才真正生效）
+          curl -fsS "${AUTH[@]}" "$BASE/api/config" -o /tmp/cfg_after_restart.json
+          jq -e '.code == 0 and (.data.web.realtime_buffer == 4096)' /tmp/cfg_after_restart.json >/dev/null || {
+            echo "重启后回读配置 realtime_buffer 不是 4096：新配置没有真正生效" >&2
+            cat /tmp/cfg_after_restart.json >&2
+            exit 1
+          }
+          {
+            echo ""
+            echo "### 配置写回 + 重启存活"
+            echo ""
+            echo "| 指标 | 实测 | 判定 |"
+            echo "|---|---|---|"
+            echo "| POST /api/config | code=0, status=ok | ok |"
+            echo "| 磁盘 config.json 内容变化 | 已变化（且改前无 4096） | 变化 |"
+            echo "| 落盘 realtime_buffer | 4096 | 4096 |"
+            echo "| restart 后服务存活 | active + /health/live 200 | 存活 |"
+            echo "| restart 后回读 realtime_buffer | 4096 | 4096 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "✓ 配置写回 + 重启存活验证通过（磁盘/回读均为 realtime_buffer=4096）"
 
       # 失败时把现场留证：服务状态 + 日志 + 交付检查单
       - name: Collect systemd snapshot
