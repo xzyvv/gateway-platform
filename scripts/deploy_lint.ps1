@@ -1566,6 +1566,41 @@ foreach ($wj in $watchJobs) {
         Ok "$($wj.Wf) 的 $($wj.Job) 作业里没有形近的变量名笔误（赋值 $($assigned.Count) 个 / 引用 $($referenced.Count) 个）"
     }
 }
+
+# ══════════════════════════════════════════════════════════
+# C19  sudo 复制出的文件必须能被 runner 自己读
+#
+# 真实发生过：deploy smoke 报
+#   grep: /tmp/cfg_disk_after.json: Permission denied
+#   磁盘 config.json 里没有 realtime_buffer=4096（新配置没落盘）
+# 根因：`sudo cp "$CONF" /tmp/x.json` 由 root 创建文件，属主 root、
+# 权限 0600 → 后面以 runner 身份跑的 grep/cmp 读不到。
+# 内容其实完全正确（文件里就有 "realtime_buffer": 4096），
+# 断言在「结果为真」的情况下报了「结果为假」，排查方向被带偏。
+#
+# 正确写法：`sudo cat "$CONF" > /tmp/x.json`
+# —— 重定向由当前 shell 执行，文件归 runner 自己，权限 0644。
+Write-Host "[C19] sudo 产出的临时文件必须可被 runner 读取" -ForegroundColor Cyan
+
+foreach ($wj in $watchJobs) {
+    if ($null -eq $wj.Text) { continue }
+    $block = Get-JobBlock $wj.Text $wj.Job
+    if ($null -eq $block) { continue }
+    $code = (($block -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+
+    # 找出所有 `sudo cp <src> <dst>`：dst 由 root 创建，后续读取会 Permission denied
+    $bad = $false
+    foreach ($cm in [regex]::Matches($code, '(?m)^\s*sudo\s+cp\s+(\S+)\s+(\S+)\s*$')) {
+        $dst = $cm.Groups[2].Value
+        Fail "$($wj.Wf) 的 $($wj.Job) 作业里用了 'sudo cp ... $dst' —— 目标文件属主是 root、权限 0600，后续以 runner 身份 grep/cmp 会 Permission denied，断言会在内容正确时反而失败。改用 'sudo cat <src> > $dst'"
+        $bad = $true
+    }
+    if (-not $bad) {
+        Ok "$($wj.Wf) 的 $($wj.Job) 作业里没有 'sudo cp' 产出的 root 属主临时文件"
+    }
+}
+Write-Host ""
+Write-Host ""
 Write-Host ""
 Write-Host ""
 

@@ -911,7 +911,11 @@ jobs:
           jq -e '.code == 0 and (.data.web != null)' /tmp/cfg_get.json >/dev/null || {
             echo "GET /api/config 未返回可用的 web 配置" >&2; cat /tmp/cfg_get.json >&2; exit 1;
           }
-          sudo cp "$CONF" /tmp/cfg_disk_before.json
+          # 用 `sudo cat > 文件` 而不是 `sudo cp`：后者由 root 创建文件，
+          # 属主是 root、权限默认 0600 → 后面 runner 身份的 grep/cmp
+          # 会读不到（Permission denied），断言在「内容其实是对的」时
+          # 反而失败。重定向由当前 shell 执行，文件归 runner 所有。
+          sudo cat "$CONF" > /tmp/cfg_disk_before.json
 
           # ── ② 改一个启动期固化字段：realtime_buffer 1024 → 4096 ──
           # 选它的原因：它属于「必须重启才生效」的一档（reload_scope 判定
@@ -932,7 +936,7 @@ jobs:
           }
 
           # ── ③ 断言磁盘真的变了 ──
-          sudo cp "$CONF" /tmp/cfg_disk_after.json
+          sudo cat "$CONF" > /tmp/cfg_disk_after.json
           if cmp -s /tmp/cfg_disk_before.json /tmp/cfg_disk_after.json; then
             echo "POST /api/config 成功后磁盘 config.json 内容未变化：配置没有真正写回" >&2
             exit 1
@@ -970,7 +974,7 @@ jobs:
             exit 1
           }
           # 磁盘仍是新值（重启不会把配置改回去）
-          sudo cp "$CONF" /tmp/cfg_disk_restarted.json
+          sudo cat "$CONF" > /tmp/cfg_disk_restarted.json
           grep -q '"realtime_buffer": 4096' /tmp/cfg_disk_restarted.json || {
             echo "重启后磁盘 config.json 的 realtime_buffer 不再是 4096" >&2
             exit 1
