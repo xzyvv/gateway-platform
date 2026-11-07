@@ -41,7 +41,7 @@ jobs:
     name: check / clippy / fmt / test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -362,7 +362,7 @@ jobs:
       matrix:
         os: [windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: actions/cache@v4
         with:
@@ -391,7 +391,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -428,7 +428,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: actions/cache@v4
         with:
@@ -507,7 +507,7 @@ jobs:
     name: e2e smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -592,7 +592,7 @@ jobs:
     name: deploy script lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 工作流 YAML 语法检查。
       # P1-3 之后工作流文件从 3 个变成 5 个（新增 heavy.yml / release-gate.yml），
@@ -670,7 +670,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
