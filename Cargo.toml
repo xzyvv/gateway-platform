@@ -68,7 +68,7 @@ libc = "0.2"
 # 声明，所有引用方都会无条件打开 server+client，协议裁剪直接失效。
 async-opcua = { version = "0.19" }
 rcgen = "0.13"
-pem = "3"
+pem = "4"
 # S4: 加载系统 CA 证书（mTLS 场景下避免 ca 为空导致验证失败）
 rustls-native-certs = "0.6"
 x509-parser = "0.16"
