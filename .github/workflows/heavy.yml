@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload backend coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage-report
           path: |
@@ -564,7 +564,7 @@ jobs:
           done
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gatewayd-${{ matrix.target }}
           path: |
@@ -609,7 +609,7 @@ jobs:
 
       - name: Upload criterion HTML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: criterion-bench-report
           path: target/criterion/
@@ -692,7 +692,7 @@ jobs:
 
       - name: Upload soak artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-smoke-report
           path: gateway-core/soak-out/
@@ -792,7 +792,7 @@ jobs:
 
       - name: Upload size matrix
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sku-size-matrix
           path: ${{ runner.temp }}/sku-size/
@@ -927,7 +927,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/gatewayd-arm64-musl-release.tar.gz"
 
       - name: Upload release package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gatewayd-arm64-musl-release
           path: ${{ runner.temp }}/gatewayd-arm64-musl-release.tar.gz
