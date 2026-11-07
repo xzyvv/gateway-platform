@@ -1600,6 +1600,142 @@ foreach ($wj in $watchJobs) {
     }
 }
 Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C20  出厂完整配置模板（P3-1b）
+#
+# 背景：gateway-core/config.json.example 是「配置片段示例」——缺 buses/points/mqtt
+# 等必填段，文件自身也写明不会被网关加载；交付方若拿它当整份配置，网关必然起不来。
+# 现场需要的是一份**开箱可加载**的初值，于是随包提供
+# gateway-core/deploy/config.factory.json。
+#
+# 模板坏掉的方式都很安静：打包时漏拷一行 → 包里没这个文件；改 JSON 时手滑
+# → 语法错；删掉某个字段 → serde 反序列化失败；配额档位丢了 → license 未带
+# quota 时查不到档位。这些都要等交付方在设备上复制过去才发现，排查成本极高。
+# 所以这里三重钉死：
+#   ① 仓库里存在该文件且是合法 JSON
+#   ② 结构完整：buses/points 非空、mqtt/web/license 齐备、
+#      license.tier_quotas 四档 core→ultra 且 max_points 严格递增
+#   ③ 打包与安装两条链路真的用它：build-release.sh 拷进包、install.sh 兜底落盘
+Write-Host "[C20] 出厂完整配置模板（存在性 + 结构完整性 + 打包/安装链路）" -ForegroundColor Cyan
+
+$factoryRel = "gateway-core/deploy/config.factory.json"
+$factoryText = ReadText $factoryRel
+if ($null -eq $factoryText) {
+    Fail "找不到 $factoryRel —— 出厂完整配置模板缺失，交付包只能给片段示例，现场无从下手"
+}
+else {
+    $factory = $null
+    try {
+        $factory = $factoryText | ConvertFrom-Json -ErrorAction Stop
+        Ok "$factoryRel 是合法 JSON"
+    }
+    catch {
+        Fail "$factoryRel 不是合法 JSON（$($_.Exception.Message)）—— 交付方在设备上复制过去会直接起不来"
+    }
+
+    if ($null -ne $factory) {
+        # 顶层必填段：缺任何一段，ConfigLoader 的 serde 反序列化就会失败
+        $requiredSections = @("buses", "points", "mqtt", "web", "license")
+        $missing = @()
+        foreach ($sec in $requiredSections) {
+            if ($null -eq $factory.PSObject.Properties[$sec]) { $missing += $sec }
+        }
+        if ($missing.Count -gt 0) {
+            Fail "$factoryRel 缺必填段: $($missing -join ', ') —— 网关加载会因字段缺失直接失败"
+        }
+        else {
+            Ok "$factoryRel 含全部必填段: $($requiredSections -join ', ')"
+        }
+
+        # 示例采集配置必须非空：空 buses/points 虽然能加载，但开箱验不了采集链路
+        $busCount = 0; $pointCount = 0
+        if ($null -ne $factory.PSObject.Properties["buses"]) { $busCount = @($factory.buses).Count }
+        if ($null -ne $factory.PSObject.Properties["points"]) { $pointCount = @($factory.points).Count }
+        if ($busCount -lt 1 -or $pointCount -lt 1) {
+            Fail "$factoryRel 的 buses=$busCount / points=$pointCount —— 出厂模板至少要有一条示例总线和点位，否则开箱无法验证采集链路"
+        }
+        else {
+            Ok "$factoryRel 带示例采集配置（buses=$busCount, points=$pointCount）"
+        }
+
+        # license 四档配额：core→ultra，且 max_points 严格递增
+        $quotas = @()
+        if ($null -ne $factory.PSObject.Properties["license"] -and
+            $null -ne $factory.license.PSObject.Properties["tier_quotas"]) {
+            $quotas = @($factory.license.tier_quotas)
+        }
+        if ($quotas.Count -ne 4) {
+            Fail "$factoryRel 的 license.tier_quotas 应有四档（core/standard/pro/ultra），实际 $($quotas.Count) 档 —— license 文件未带 quota 时查不到档位"
+        }
+        else {
+            $tiers = @($quotas | ForEach-Object { [string]$_.tier })
+            $expectTiers = @("core", "standard", "pro", "ultra")
+            if (($tiers -join ',') -ne ($expectTiers -join ',')) {
+                Fail "$factoryRel 的档位顺序为 [$($tiers -join ', ')]，应为 [core, standard, pro, ultra]"
+            }
+            else {
+                Ok "$factoryRel 的 tier_quotas 覆盖四档且顺序正确"
+            }
+
+            $prevPoints = -1.0
+            $monotonic = $true
+            foreach ($q in $quotas) {
+                $mp = $null
+                if ($null -ne $q.PSObject.Properties["quota"] -and
+                    $null -ne $q.quota.PSObject.Properties["max_points"]) {
+                    $mp = $q.quota.max_points
+                }
+                if ($null -eq $mp) {
+                    Fail "$factoryRel 的档位 '$($q.tier)' 没有 quota.max_points —— 该档位无法限制点位数"
+                    $monotonic = $false
+                    break
+                }
+                if ([double]$mp -le $prevPoints) {
+                    Fail "$factoryRel 的 max_points 未严格递增（'$($q.tier)' = $mp，前一档 = $prevPoints）—— 升级档位在配额上没有意义"
+                    $monotonic = $false
+                    break
+                }
+                $prevPoints = [double]$mp
+            }
+            if ($monotonic) {
+                Ok "$factoryRel 的四档 max_points 严格递增"
+            }
+        }
+    }
+}
+
+# 打包链路：build-release.sh 必须真的把它拷进交付包
+if ($null -eq $buildSh) {
+    Warn "找不到 deploy/build-release.sh（跳过出厂模板打包断言）"
+}
+elseif ($buildSh -match '(?m)^\s*cp\s+[^\n]*config\.factory\.json[^\n]*"\$OUT/') {
+    Ok "build-release.sh 把出厂模板拷进交付包"
+}
+else {
+    Fail "build-release.sh 没有把 $factoryRel 拷进 `$OUT —— 交付包里只有片段示例，现场拿不到可加载的初值"
+}
+
+# 安装链路：install.sh 在包内没有现场 config.json 时要能用模板兜底落盘，
+# 且必须保证「包内 config.json（现场定制）优先于模板」。
+$installText = ReadText "gateway-core/deploy/install.sh"
+if ($null -eq $installText) {
+    Fail "找不到 gateway-core/deploy/install.sh"
+}
+else {
+    $iCustom = $installText.IndexOf('if [ -f "$SCRIPT_DIR/config.json" ]')
+    $iFactory = $installText.IndexOf('if [ -f "$SCRIPT_DIR/config.factory.json" ]')
+    if ($iFactory -lt 0) {
+        Fail "install.sh 没有用 config.factory.json 兜底 —— 包内无 config.json 时交付方只能从零手写配置"
+    }
+    elseif ($iCustom -lt 0 -or $iCustom -gt $iFactory) {
+        Fail "install.sh 里出厂模板的判断出现在包内 config.json 之前（或缺失）—— 现场定制的 config.json 会被模板覆盖"
+    }
+    else {
+        Ok "install.sh 用出厂模板兜底，且包内 config.json 优先于模板"
+    }
+}
+Write-Host ""
 Write-Host ""
 Write-Host ""
 Write-Host ""

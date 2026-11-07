@@ -858,7 +858,9 @@ jobs:
 
           # 交付包必须自成一体：install.sh / verify-deploy.sh / deliver.sh 同级，
           # 缺任何一个现场都装不了或验不了。
-          for f in install.sh verify-deploy.sh deliver.sh serial-rules.sh gateway.service BUILD-INFO.txt; do
+          # config.factory.json 是出厂完整配置模板（P3-1b）：包内没有现场 config.json 时
+          # install.sh 靠它落盘；漏了它交付方只能从零手写整份配置。
+          for f in install.sh verify-deploy.sh deliver.sh serial-rules.sh gateway.service BUILD-INFO.txt config.factory.json; do
             if [ ! -f "$PKG/$f" ]; then
               echo "✗ 交付包缺少 $f" >&2
               ls -l "$PKG" >&2

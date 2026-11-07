@@ -1,0 +1,128 @@
+{
+  "_comment": "出厂完整配置模板（P3-1b）。与 gateway-core/config.json.example 的区别：那份是「配置片段示例」，缺 buses/points/mqtt 等必填段，网关加载会失败；本文件是一份**完整可加载**的 config.json，可直接作为 /etc/gateway/config.json 的初值。install.sh 在包内找不到 config.json 且存在本文件时会自动用它落盘（web.api_token 留空 → 启动时随机生成并打印到 journalctl）。",
+  "_comment_how_to_use": "1) 复制为 config.json；2) 按现场改 buses[].port_name（建议用 serial-rules.sh 生成的 /dev/gateway-serialN）、points、mqtt.broker；3) 需要固定 API token / 登录密码时填 web.api_token 与 web.password_hash（可用 gatewayd 的密码哈希工具生成），留空则由程序在启动时随机生成并告警。",
+  "_comment_license": "license 段随包给出四档配额（v2.1 口径：配额只管点位，四档仅 max_points 不同）。license 文件未带 quota 时按此处 tier 查表；license 文件不存在时用 absent_quota（开源版体验）。",
+  "schema_version": 1,
+
+  "buses": [
+    {
+      "_comment": "示例串口总线：1 路 Modbus RTU。现场请按实际串口与波特率替换；device 重启后 ttyUSB 编号会漂移，建议先跑 serial-rules.sh 固定成 /dev/gateway-serialN 再填这里。",
+      "port_name": "/dev/ttyS1",
+      "protocol": "modbus",
+      "baud_rate": 9600,
+      "parity": "none",
+      "data_bits": 8,
+      "stop_bits": 1,
+      "timeout_ms": 1000,
+      "retry_count": 2,
+      "retry_delay_ms": 200,
+      "modbus_mode": "rtu"
+    }
+  ],
+
+  "points": [
+    {
+      "_comment": "示例点位：读从站 1 的保持寄存器 0（u16，倍率 1）。仅用于开箱验证链路是否通，投运前请替换为现场点表。",
+      "id": "demo_modbus_1",
+      "name": "示例点位",
+      "device_id": "demo-device",
+      "bus": "/dev/ttyS1",
+      "protocol": "modbus",
+      "address": "1",
+      "slave_id": 1,
+      "address_num": 0,
+      "function_code": 3,
+      "data_type": "u16",
+      "byte_order": "ABCD",
+      "register_count": 1,
+      "interval": 5,
+      "scale": 1.0,
+      "offset": 0.0,
+      "formula": null,
+      "deadband": 0.0,
+      "on_change": false,
+      "unit": null,
+      "aggregation": null,
+      "writable": false
+    }
+  ],
+
+  "mqtt": {
+    "_comment": "北向上报。出厂默认关闭：未接 broker 时开启只会让队列持续积压且不断重连。接好 broker 后把 enabled 改 true 并填 broker/topic/账号。",
+    "enabled": false,
+    "broker": "tcp://127.0.0.1:1883",
+    "topic": "gateway/data",
+    "publish_interval": 5,
+    "qos": 1,
+    "keep_alive": 60,
+    "username": null,
+    "password": null
+  },
+
+  "sim_consumer": {
+    "_comment": "内置模拟消费者：无北向通道时用它走完「出队 → 处理 → ack」，消除「有积压却无消费者」的告警歧义。与 mqtt.enabled 互斥（同时开会分流同一批数据导致丢数）。",
+    "enabled": false,
+    "batch_size": 100,
+    "interval_ms": 1000,
+    "log_every": 100
+  },
+
+  "web": {
+    "_comment": "listen_addr 默认对全网卡可见（现场通常需要 LAN 访问）；api_token 留空时启动随机生成并打印到 journalctl，password_hash 留空表示默认 admin/admin（启动会告警），投运前务必二者都设。",
+    "listen_addr": "0.0.0.0:8080",
+    "api_token": "",
+    "username": "admin",
+    "password_hash": "",
+    "allow_anon_read": false,
+    "realtime_buffer": 1024
+  },
+
+  "license": {
+    "_comment": "license 文件路径；环境变量 GATEWAY_LICENSE_PATH 优先级更高。文件不存在时视为未授权（tier=core + absent_quota）。",
+    "path": "/etc/gateway/license.lic",
+    "tier_quotas": [
+      {
+        "tier": "core",
+        "quota": {
+          "max_points": 500,
+          "max_protocols": null,
+          "storage_days": 30,
+          "northbound_channels": null
+        }
+      },
+      {
+        "tier": "standard",
+        "quota": {
+          "max_points": 1500,
+          "max_protocols": null,
+          "storage_days": 30,
+          "northbound_channels": null
+        }
+      },
+      {
+        "tier": "pro",
+        "quota": {
+          "max_points": 2500,
+          "max_protocols": null,
+          "storage_days": 30,
+          "northbound_channels": null
+        }
+      },
+      {
+        "tier": "ultra",
+        "quota": {
+          "max_points": 5000,
+          "max_protocols": null,
+          "storage_days": 30,
+          "northbound_channels": null
+        }
+      }
+    ],
+    "absent_quota": {
+      "max_points": 100,
+      "max_protocols": 1,
+      "storage_days": 7,
+      "northbound_channels": 1
+    }
+  }
+}
