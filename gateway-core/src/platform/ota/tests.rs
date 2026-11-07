@@ -664,3 +664,67 @@ fn bootcount_below_threshold_does_not_trigger_rollback() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 环境变量覆盖 A/B 分区节点路径（现场介质不是 eMMC 时必需）。
+///
+/// 该分支原先只能靠进程环境触发，无法在并行测试中稳定覆盖，
+/// 故抽出 `AbPartitionConfig::resolve_paths` 纯函数后在此断言。
+#[test]
+fn ab_partition_paths_prefer_env_override() {
+    let cfg = AbPartitionConfig::resolve_paths(
+        Some("/dev/sda2"),
+        Some("/dev/nvme0n1p3"),
+        "/dev/mmcblk0p2",
+        "/dev/mmcblk0p3",
+    );
+    assert_eq!(cfg.slot_a, PathBuf::from("/dev/sda2"));
+    assert_eq!(cfg.slot_b, PathBuf::from("/dev/nvme0n1p3"));
+    assert_eq!(cfg.active_slot, 'a');
+}
+
+/// 未设置（或设置成空串）时回退到 eMMC 默认节点。
+#[test]
+fn ab_partition_paths_fall_back_to_defaults() {
+    let cfg = AbPartitionConfig::resolve_paths(None, None, "/dev/mmcblk0p2", "/dev/mmcblk0p3");
+    assert_eq!(cfg.slot_a, PathBuf::from("/dev/mmcblk0p2"));
+    assert_eq!(cfg.slot_b, PathBuf::from("/dev/mmcblk0p3"));
+
+    // 空串视为未设置：现场 shell 导出空变量不应让 OTA 指向空路径
+    let cfg =
+        AbPartitionConfig::resolve_paths(Some(""), Some("   "), "/dev/mmcblk0p2", "/dev/mmcblk0p3");
+    assert_eq!(cfg.slot_a, PathBuf::from("/dev/mmcblk0p2"));
+    assert_eq!(cfg.slot_b, PathBuf::from("/dev/mmcblk0p3"));
+}
+
+/// 只覆盖一侧时，另一侧必须保持默认节点。
+#[test]
+fn ab_partition_paths_partial_override() {
+    let cfg = AbPartitionConfig::resolve_paths(
+        Some("/dev/sda2"),
+        None,
+        "/dev/mmcblk0p2",
+        "/dev/mmcblk0p3",
+    );
+    assert_eq!(cfg.slot_a, PathBuf::from("/dev/sda2"));
+    assert_eq!(cfg.slot_b, PathBuf::from("/dev/mmcblk0p3"));
+}
+
+/// `Default` 走的是与 `resolve_paths` 相同的解析规则：
+/// 结果要么等于环境变量值，要么等于默认节点，不能是别的东西。
+///
+/// 这里不写进程环境（并行测试会互相污染），只断言不变量。
+#[test]
+fn ab_partition_default_matches_resolve_rules() {
+    let env_a = std::env::var(OTA_SLOT_A_ENV).ok();
+    let env_b = std::env::var(OTA_SLOT_B_ENV).ok();
+    let expected = AbPartitionConfig::resolve_paths(
+        env_a.as_deref(),
+        env_b.as_deref(),
+        "/dev/mmcblk0p2",
+        "/dev/mmcblk0p3",
+    );
+    let actual = AbPartitionConfig::default();
+    assert_eq!(actual.slot_a, expected.slot_a);
+    assert_eq!(actual.slot_b, expected.slot_b);
+    assert_eq!(actual.active_slot, 'a');
+}

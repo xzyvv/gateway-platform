@@ -76,17 +76,42 @@ pub const OTA_SLOT_A_ENV: &str = "GATEWAY_OTA_SLOT_A";
 /// OTA 备用分区设备的环境变量名（见 [`OTA_SLOT_A_ENV`]）。
 pub const OTA_SLOT_B_ENV: &str = "GATEWAY_OTA_SLOT_B";
 
-impl Default for AbPartitionConfig {
-    fn default() -> Self {
+impl AbPartitionConfig {
+    /// 解析 A/B 分区节点路径：环境变量优先，否则回退到默认值。
+    ///
+    /// 抽成纯函数是为了能直接单测 env 覆盖分支——直接对进程环境做
+    /// `set_var` 在并行测试里会互相污染，且新版本 Rust 已不安全。
+    /// 空字符串视为未设置（现场 shell 导出空变量不应让 OTA 指向空路径）。
+    pub fn resolve_paths(
+        slot_a: Option<&str>,
+        slot_b: Option<&str>,
+        default_a: &str,
+        default_b: &str,
+    ) -> Self {
+        let pick = |env: Option<&str>, default: &str| -> PathBuf {
+            match env {
+                Some(v) if !v.trim().is_empty() => PathBuf::from(v),
+                _ => PathBuf::from(default),
+            }
+        };
         Self {
-            slot_a: PathBuf::from(
-                std::env::var(OTA_SLOT_A_ENV).unwrap_or_else(|_| "/dev/mmcblk0p2".to_string()),
-            ),
-            slot_b: PathBuf::from(
-                std::env::var(OTA_SLOT_B_ENV).unwrap_or_else(|_| "/dev/mmcblk0p3".to_string()),
-            ),
+            slot_a: pick(slot_a, default_a),
+            slot_b: pick(slot_b, default_b),
             active_slot: 'a',
         }
+    }
+}
+
+impl Default for AbPartitionConfig {
+    fn default() -> Self {
+        let slot_a = std::env::var(OTA_SLOT_A_ENV).ok();
+        let slot_b = std::env::var(OTA_SLOT_B_ENV).ok();
+        AbPartitionConfig::resolve_paths(
+            slot_a.as_deref(),
+            slot_b.as_deref(),
+            "/dev/mmcblk0p2",
+            "/dev/mmcblk0p3",
+        )
     }
 }
 

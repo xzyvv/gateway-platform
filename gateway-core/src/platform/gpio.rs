@@ -447,6 +447,31 @@ mod tests {
         assert!(read_gpio_line(4).is_err());
     }
 
+    /// Linux 专属：GPIO 读取必须真的走 Linux（gpiod）分支。
+    ///
+    /// CI runner 没有 `/dev/gpiochip0`，`get_gpio_chip()` 会失败——但失败原因
+    /// 必须是「打不开 gpiochip」，而不是「平台不支持 GPIO」。后者意味着
+    /// `cfg(target_os)` 判定错了，Linux 上的 GPIO 采集会全线失效且不报错。
+    ///
+    /// 有真实硬件的机器上可能读成功，因此只断言错误文案，不断言成败。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_gpio_line_takes_linux_gpiod_path() {
+        assert!(platform_supported(), "Linux 上平台应标记为支持 GPIO");
+
+        // pin 4 属于 DO 段（DI 段是 0..=3），走 gpiod request_lines 路径
+        match read_gpio_line(4) {
+            Ok(v) => assert!(v <= 1, "电平只能是 0/1，实际 {v}"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("当前平台不支持 GPIO 读取"),
+                    "Linux 上不得返回「平台不支持 GPIO」，实际: {msg}"
+                );
+            }
+        }
+    }
+
     /// DO 状态位图的置位/清零必须互不影响。
     #[test]
     fn do_bitmap_set_and_clear_are_independent() {

@@ -857,4 +857,46 @@ mod tests {
             assert!(!interfaces.is_empty(), "Windows 应能枚举到网卡");
         }
     }
+
+    /// Linux 专属：`/proc` 真实读取链路必须能拿到数据。
+    ///
+    /// 这些分支在非 Linux 平台上直接返回 `None`，因此只在 Linux 上断言。
+    /// CI 的 `linux-runtime` job 专门跑这一组，确保 Linux 采集链路在
+    /// 真实内核接口上不退化（解析逻辑本身由纯函数用例覆盖）。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_proc_readers_return_real_values() {
+        let load = load_avg_1m().expect("Linux 应能读 /proc/loadavg");
+        assert!(load >= 0.0, "负载不应为负: {load}");
+
+        let uptime = uptime_secs().expect("Linux 应能读 /proc/uptime");
+        assert!(uptime > 0, "运行时长应大于 0: {uptime}");
+
+        let mem = mem_usage_percent().expect("Linux 应能读 /proc/meminfo");
+        assert!(
+            (0.0..=100.0).contains(&mem),
+            "内存使用率应在 0-100 之间: {mem}"
+        );
+
+        let procs = process_count().expect("Linux 应能枚举 /proc 进程");
+        assert!(procs > 0, "进程数应大于 0: {procs}");
+
+        // /proc/stat 必须可读（CPU 使用率本身依赖进程级基线，由纯函数用例覆盖）
+        let stat = std::fs::read_to_string("/proc/stat").expect("Linux 应能读 /proc/stat");
+        assert!(
+            parse_proc_stat(&stat).is_some(),
+            "/proc/stat 首行应为可解析的 cpu 汇总行"
+        );
+    }
+
+    /// Linux 专属：`getifaddrs` 必须能取到回环接口的 IPv4 地址。
+    ///
+    /// 取不到说明 libc 调用或 AF_INET 过滤写错了——现场 IPv4 展示会整列为空。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_ipv4_lookup_finds_loopback() {
+        let addrs = ipv4_by_interface();
+        let lo = addrs.get("lo").expect("Linux 回环接口应有 IPv4 地址");
+        assert_eq!(lo, "127.0.0.1", "回环接口 IPv4 应为 127.0.0.1");
+    }
 }
