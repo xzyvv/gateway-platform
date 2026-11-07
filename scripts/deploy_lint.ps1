@@ -2105,6 +2105,78 @@ Write-Host ""
 Write-Host ""
 Write-Host ""
 
+# ── C24  行数预算：不允许新增巨型文件（O-8） ──
+#
+# 前端已经由 eslint 的 max-lines 强制（gateway-web/eslint.config.js）：
+# 未登记的新文件超过 300 行即告警，CI 用 `--max-warnings 0` 跑 lint → 等于阻断。
+# 后端历史上巨型文件较多（105 个），一上来全报会把门禁变成噪音，
+# 所以这里做「只禁新增」的棘轮：
+#   ① 未登记且 > 300 行                → WARN（新债，必须拆）
+#   ② 已登记但已降到 ≤ 300 行          → OK（提示可以从基线移除）
+#   ③ 已登记但文件不存在（改名/搬迁）  → WARN（基线腐烂）
+Write-Host "[C24] 行数预算：不允许新增巨型文件（> 300 行的 Rust 源文件）" -ForegroundColor Cyan
+
+$lineBudget = 300
+$frozenRel = "scripts/line_budget_frozen.txt"
+$frozenFull = Join-Repo $frozenRel
+$frozen = @{}
+if (-not (Test-Path $frozenFull)) {
+    Fail ("缺少行数预算基线 " + $frozenRel + " —— 没有基线就无法区分新旧债务")
+}
+else {
+    foreach ($line in [System.IO.File]::ReadAllLines($frozenFull)) {
+        $t = $line.Trim()
+        if ($t -eq "" -or $t.StartsWith("#")) { continue }
+        $frozen[$t] = $true
+    }
+    Ok ("行数预算基线已载入：$($frozen.Count) 个已知巨型文件")
+}
+
+# 扫描范围：三个后端 crate 的业务源码。
+# 测试文件不计——测试本来就该长，而且不进产品二进制。
+$oversized = @()
+foreach ($crate in @("gateway-core", "gateway-api", "gatewayd")) {
+    $srcRoot = Join-Repo ($crate + "/src")
+    if (-not (Test-Path $srcRoot)) { continue }
+    foreach ($f in Get-ChildItem -Recurse -Path $srcRoot -Filter *.rs) {
+        $rel = $crate + "/src/" + ($f.FullName.Substring($srcRoot.Length + 1) -replace '\\', '/')
+        if ($rel -match '/tests?/') { continue }
+        if ($f.Name -match '(^|_)tests?\.rs$') { continue }
+        $n = [System.IO.File]::ReadAllLines($f.FullName).Count
+        if ($n -gt $lineBudget) {
+            $oversized += [pscustomobject]@{ Rel = $rel; Lines = $n }
+        }
+    }
+}
+
+$newGiants = @($oversized | Where-Object { -not $frozen.ContainsKey($_.Rel) })
+if ($newGiants.Count -gt 0) {
+    $detail = ($newGiants | ForEach-Object { "$($_.Rel)($($_.Lines) 行)" }) -join ", "
+    Warn ("新增巨型文件 $($newGiants.Count) 个（> $lineBudget 行）：$detail —— 请拆分；确属必要的登记进 $frozenRel")
+}
+else {
+    Ok "行数预算：没有新增巨型文件"
+}
+
+# 基线核对：拆够了要提示移除，文件没了要提示失效——否则基线会腐烂成一份假账。
+$shrunk = @()
+$stale = @()
+foreach ($rel in ($frozen.Keys | Sort-Object)) {
+    $full = Join-Repo $rel
+    if (-not (Test-Path $full)) { $stale += $rel; continue }
+    $n = [System.IO.File]::ReadAllLines($full).Count
+    if ($n -le $lineBudget) { $shrunk += "$rel($n 行)" }
+}
+if ($stale.Count -gt 0) {
+    Warn ("行数预算基线条目失效 $($stale.Count) 个（文件不存在）：" + ($stale -join ", "))
+}
+if ($shrunk.Count -gt 0) {
+    Ok ("行数预算：$($shrunk.Count) 个文件已降到 $lineBudget 行以内，可从基线移除：" + ($shrunk -join ", "))
+}
+
+Write-Host ""
+Write-Host ""
+
 
 Write-Host "[deploy-lint] 通过 $passes 项，失败 $($failures.Count) 项，警告 $($warnings.Count) 项"
 if ($failures.Count -gt 0) {

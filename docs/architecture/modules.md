@@ -81,6 +81,13 @@ ProcessingPipeline (mpsc 通道，背压)
 
 **透传模式**（`PassthroughNode`）：跳过边缘聚合+队列，直接 MQTT 直发，适用于低延迟、可接受断网丢失的点位。
 
+**虚拟点位公式**（`vformula.rs`）是另一套自研递归下降引擎（多变量、可调函数、可引用其它点位），
+与 `formula.rs` 的 evalexpr 刻意不合并。它在浏览器端有一份**等价实现**
+（`gateway-web/src/utils/formulaEngine.ts`）用于表单预演与语法校验，
+两侧语义由**同一份用例契约**钉住：[shared/formula_cases.json](../../shared/formula_cases.json)。
+Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同一个文件——
+改语义只需改契约，只改单侧会在另一侧立刻转红。
+
 ### 6.5 队列层（queue/）
 
 - SQLite WAL 模式，单线程独占 Connection（mpsc 串行访问，无死锁）

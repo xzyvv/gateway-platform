@@ -41,6 +41,21 @@
 
 ### 文档
 
+- **公式引擎双实现改共享 fixture 驱动**（O-7）：`pipeline/vformula.rs`（Rust，权威语义）与
+  `gateway-web/src/utils/formulaEngine.ts`（浏览器端预演）此前各自硬编码一份「两边语义一致」
+  的用例，改一侧不会触发另一侧。现抽出仓库根 `shared/formula_cases.json`（47 条：优先级 /
+  右结合幂 / `ROUND` 半值朝 +∞ / `LOG` 自然对数 / 函数与常量大小写 / 点位引用与 `.Value` 剥离 /
+  6 位归一 / 引用提取去重 / syntax·eval·missing 三类错误），Rust 侧
+  `test_shared_cross_language_cases` 与前端 `formulaEngine.spec.ts` 读**同一个文件**——
+  只改单侧会立刻在另一侧转红（已用「把 `js_round` 改回 `f64::round`」与「改 fixture 期望值」
+  两种注入实测）。前端重复的硬编码跨语言用例已删除，只保留它特有的语法校验/求值严格性用例。
+- **行数约定 lint 化**（O-8）：前端 `eslint.config.js` 新增 `max-lines`（300 行），
+  存量 44 个超限文件登记在 `LINE_BUDGET_EXEMPT` 豁免清单（含自动生成的 `ep-icons-compact.ts`），
+  **新文件超限即 warning**；CI 用 `--max-warnings 0` 跑 lint，故对新代码等于阻断。
+  后端同规但采取「只禁新增」的棘轮：`scripts/deploy_lint.ps1` 新增 C24 段（151 → 153 项），
+  扫描 `gateway-core` / `gateway-api` / `gatewayd` 的 `src/**/*.rs`（排除测试文件），
+  基线 `scripts/line_budget_frozen.txt` 登记 107 个存量巨型文件；未登记的新巨型文件报 WARN，
+  文件拆到 300 行以内或改名/搬迁会提示更新基线，避免基线腐烂。
 - **三个 800+ 行巨型文件拆分 + 新增 C23 门禁守护**（O-6）：`engine/metrics/scoped.rs`（944 行）、
   `engine/monitor/remote_diag.rs`（999 行）、`engine/monitor/host.rs`（902 行）三个巨型文件
   按关注点拆分为模块目录，**对外 API 与行为零变化**（逐行核对原实现，函数体与调用点一致，

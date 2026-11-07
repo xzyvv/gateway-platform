@@ -271,3 +271,106 @@ fn test_case_insensitive_function_names() {
         3.0
     );
 }
+
+// ===== 跨语言用例契约（O-7）=====
+//
+// 用例集在仓库根 `shared/formula_cases.json`，前端
+// `gateway-web/src/utils/formulaEngine.spec.ts` 读的是**同一个文件**。
+// 语义要改就改这份契约：只改单侧测试，另一侧会立刻转红。
+//
+// 只放两侧都成立的行为。单侧特有的（函数元数校验、错误文本）留在各自语言的测试里。
+const SHARED_CASES: &str = include_str!("../../../../shared/formula_cases.json");
+
+#[derive(serde::Deserialize)]
+struct SharedCase {
+    name: String,
+    expr: String,
+    #[serde(default)]
+    args: HashMap<String, f64>,
+    #[serde(default)]
+    expected: Option<f64>,
+    #[serde(default)]
+    tolerance: Option<f64>,
+    #[serde(default)]
+    refs: Option<Vec<String>>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[test]
+fn test_shared_cross_language_cases() {
+    let doc: serde_json::Value =
+        serde_json::from_str(SHARED_CASES).expect("共享用例 JSON 解析失败");
+    let cases: Vec<SharedCase> =
+        serde_json::from_value(doc["cases"].clone()).expect("共享用例 cases 字段解析失败");
+    assert!(!cases.is_empty(), "共享用例集为空");
+
+    for c in &cases {
+        let label = &c.name;
+        match c.error.as_deref() {
+            Some("syntax") => {
+                assert!(
+                    matches!(
+                        apply_formula_multi(&c.expr, &c.args),
+                        Err(FormulaError::Syntax(_))
+                    ),
+                    "[{}] 期望语法错误: {}",
+                    label,
+                    c.expr
+                );
+            }
+            Some("eval") => {
+                assert!(
+                    matches!(
+                        apply_formula_multi(&c.expr, &c.args),
+                        Err(FormulaError::Eval(_))
+                    ),
+                    "[{}] 期望求值错误: {}",
+                    label,
+                    c.expr
+                );
+            }
+            Some("missing") => {
+                assert!(
+                    matches!(
+                        apply_formula_multi(&c.expr, &c.args),
+                        Err(FormulaError::MissingPoint(_))
+                    ),
+                    "[{}] 期望缺值错误: {}",
+                    label,
+                    c.expr
+                );
+            }
+            Some(other) => panic!("[{}] 未知的 error 类别: {}", label, other),
+            None => {
+                if let Some(refs) = &c.refs {
+                    let compiled =
+                        compile(&c.expr).unwrap_or_else(|e| panic!("[{}] 编译失败: {}", label, e));
+                    assert_eq!(
+                        compiled.refs(),
+                        refs.as_slice(),
+                        "[{}] 引用提取不一致: {}",
+                        label,
+                        c.expr
+                    );
+                    continue;
+                }
+                let expected = c
+                    .expected
+                    .unwrap_or_else(|| panic!("[{}] 缺少 expected 字段", label));
+                let actual = apply_formula_multi(&c.expr, &c.args)
+                    .unwrap_or_else(|e| panic!("[{}] 求值失败: {}", label, e));
+                let tol = c.tolerance.unwrap_or(1e-6);
+                assert!(
+                    (actual - expected).abs() <= tol,
+                    "[{}] 期望 {}（容差 {}），实际 {}：{}",
+                    label,
+                    expected,
+                    tol,
+                    actual,
+                    c.expr
+                );
+            }
+        }
+    }
+}

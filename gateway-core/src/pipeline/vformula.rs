@@ -15,6 +15,10 @@
 //! 只是浏览器端预演 / 语法校验，行为必须与本模块一致（`LOG` 为自然对数、
 //! `^` 右结合、`ROUND(x, n)` 保留 n 位小数、`IF` 条件按非零为真）。
 //!
+//! 两侧语义由**同一份用例契约**钉住：仓库根 `shared/formula_cases.json`。
+//! `tests.rs` 的 `test_shared_cross_language_cases` 与前端
+//! `formulaEngine.spec.ts` 读的是同一个文件——改语义请改契约，只改单侧会立刻在另一侧转红。
+//!
 //! # 与 `engine::util::formula::apply_formula` 的区别
 //!
 //! `apply_formula` 是**点位级**换算公式：单变量 `raw`、白名单只放行

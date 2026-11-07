@@ -71,6 +71,14 @@ gateway-web/src/
 组件拆分为「主组件（状态与编排）+ 子组件（渲染）」，composable 拆分为「index 组合根 +
 按职责分模块」。拆分只改结构不改行为，既有 spec 必须原地继续通过。
 
+**约定已 lint 化（O-8）**：`eslint.config.js` 的 `max-lines`（300 行）把它变成机器断言。
+存量超限文件登记在 `LINE_BUDGET_EXEMPT` 清单里豁免，**新文件超限即 warning**——
+CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。拆到 300 行以内后请把对应行从清单删掉，
+否则它会一直享受豁免。测试文件（`*.spec.ts`）与自动生成的 `ep-icons-compact.ts` 不纳入。
+后端同规但采用「只禁新增」的棘轮：`scripts/deploy_lint.ps1` 的 C24 段扫描
+`gateway-core` / `gateway-api` / `gatewayd` 的 `src/**/*.rs`，基线在
+[`scripts/line_budget_frozen.txt`](../../scripts/line_budget_frozen.txt)，未登记的新巨型文件报 WARN。
+
 ### 3.4 路由 meta 与命名约定
 
 - 命名分层：**目录 = 业务域（名词）**，**页面 = 对象 + 视图能力**（`DeviceTopology` / `PointHub` / `DataPipelineHub`），Hub 容器统一 `*Hub.vue`；
