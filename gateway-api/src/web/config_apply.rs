@@ -97,10 +97,15 @@ fn record_reload_rejected(state: &Arc<AppState>, err: &ApiError) {
     counter.fetch_add(1, Ordering::Relaxed);
 }
 
-/// v2.0 license 配额校验：点位 / 协议 / 北向通道三类用量不得超过 license 上限。
+/// v2.1 license 配额校验：**只有采集点数是硬约束**，超限即拒绝保存配置。
+///
+/// 口径变更（v2.0 → v2.1）：协议种类数与北向通道数从「拒绝保存」降级为「告警」。
+/// 这两项反映的是部署形态而非产能规模，按它们拦保存会在交付现场反复咬人
+/// （买的是高档位，配置里多挂一个协议就被拒），且四档默认表里本就是「不限」。
+/// 保留告警是为了让显式配置了上限的部署仍能看见「已超出本项目约定」。
 ///
 /// 设计依据 `docs/design/license-v2-quota.md` §5.2/§6：任何**新增/修改配置**操作
-/// （加点位 / 加协议 / 加北向）超限时须拒绝。
+/// 超出**点位**上限时须拒绝。
 /// 拒绝的错误码按**授权状态**翻译（见 [`ApiError::license_denied`]）：
 /// 授权有效但档位配额不够 → 4021；从未导入 → 7001；授权已失效 → 7003。
 /// storage_days 由队列运行时清理任务（FIFO 截断，不阻断写入）负责，此处不查。
@@ -109,26 +114,43 @@ pub(crate) fn check_config_quota(
     cfg: &GatewayConfig,
 ) -> Result<(), ApiError> {
     let license = state.platform.license.as_ref();
-    for (kind, next) in [
-        (
+
+    // 硬约束：仅采集点数
+    license
+        .check_quota(
             gateway_core::license::QuotaKind::Points,
             count_points(state, cfg),
-        ),
-        (
-            gateway_core::license::QuotaKind::Protocols,
-            count_protocols(state, cfg),
-        ),
-        (
-            gateway_core::license::QuotaKind::NorthboundChannels,
-            count_northbound_channels(cfg),
-        ),
-    ] {
-        license.check_quota(kind, next).map_err(|e| {
+        )
+        .map_err(|e| {
             // 按**授权状态**翻译错误码：失效 → 7003 / 未导入 → 7001 / 有效但档位不够 → 4021。
             // 一律 4021 会把「授权过期」误导成「配额不足」，把「没导入」误导成「升级档位」。
             ApiError::license_denied(&license.current(), e.to_string())
         })?;
+
+    // 软约束：协议种类数 / 北向通道数仅告警，不阻断保存
+    let quota = license.current().quota.clone();
+    let usage = gateway_core::license::QuotaUsage {
+        points: count_points(state, cfg),
+        protocols: count_protocols(state, cfg),
+        storage_days: 0,
+        northbound_channels: count_northbound_channels(cfg),
+    };
+    for kind in quota.warned_kinds(&usage) {
+        let limit = kind.value_in(&quota).unwrap_or_default();
+        let actual = match kind {
+            gateway_core::license::QuotaKind::Protocols => usage.protocols,
+            gateway_core::license::QuotaKind::NorthboundChannels => usage.northbound_channels,
+            gateway_core::license::QuotaKind::Points => usage.points,
+            gateway_core::license::QuotaKind::StorageDays => usage.storage_days,
+        };
+        tracing::warn!(
+            "配置超出本项目约定的{}上限（约定 {}，实际 {}）——v2.1 起该项只告警、不阻断保存",
+            kind.label_zh(),
+            limit,
+            actual
+        );
     }
+
     Ok(())
 }
 
@@ -504,6 +526,52 @@ mod tests {
         });
 
         cfg
+    }
+
+    /// B-1 回归：北向通道计数必须覆盖全部 7 类 sink
+    /// （mqtt / webhook / cellular / opcua / modbus_server /
+    /// modbus_passthrough / telemetry）。
+    ///
+    /// 旧实现只覆盖前 4 类，把启用了 opcua / modbus_server /
+    /// modbus_passthrough / telemetry 的配置错误地算成"少占"，
+    /// 配额形同虚设。v2.1 起北向通道数不再阻断保存，本测试直接断言计数函数，
+    /// 不再依赖「超限 → 4021」反推。
+    #[test]
+    fn count_northbound_channels_covers_all_sinks() {
+        let mut cfg = GatewayConfig::default();
+        // 默认全关
+        assert_eq!(count_northbound_channels(&cfg), 0);
+
+        cfg.mqtt.enabled = true;
+        assert_eq!(count_northbound_channels(&cfg), 1);
+
+        cfg.webhook = Some(WebhookConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        cfg.cellular = Some(CellularConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        cfg.opcua = Some(gateway_core::config::OpcuaConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        cfg.modbus_server = Some(gateway_core::config::ModbusServerConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        cfg.modbus_passthrough = Some(gateway_core::config::ModbusPassthroughConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        cfg.telemetry = Some(gateway_core::config::TelemetryConfig {
+            enabled: true,
+            ..Default::default()
+        });
+
+        // 7 类全部启用
+        assert_eq!(count_northbound_channels(&cfg), 7);
     }
 
     /// 样本 JSON 中所有真实凭据值（静态路径 + webhook.headers 逐键）。

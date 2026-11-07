@@ -14,8 +14,10 @@
 //!   `config` 与 `license` 共同引用同一份定义，反向依赖被消除。
 
 pub mod license;
+pub mod sku;
 
 pub use license::{Quota, QuotaAvailable, QuotaKind, QuotaUsage, Tier};
+pub use sku::Sku;
 
 /// 合法协议名白名单（配置校验与 API 校验的唯一来源）
 ///

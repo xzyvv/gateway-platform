@@ -79,37 +79,65 @@ pub struct Quota {
 }
 ```
 
-### 档位默认配额
+### 档位默认配额（v2.1 口径：配额只管点位）
 
 | tier | max_points | max_protocols | storage_days | northbound_channels |
 |---|---|---|---|---|
-| core | 500 | 3 | 30 | 1 |
-| standard | 1500 | 8 | 90 | 3 |
-| pro | 5000 | 16 | 365 | 8 |
-| ultra | None | None | None | None |
+| core | 500 | None（不限） | 30 | None（不限） |
+| standard | 1500 | None（不限） | 30 | None（不限） |
+| pro | 2500 | None（不限） | 30 | None（不限） |
+| ultra | 5000 | None（不限） | 30 | None（不限） |
 | **无 license** | 100 | 1 | 7 | 1 |
+
+#### v2.1 变更说明（2026-11）
+
+四档之间**唯一的差异是 `max_points`（采集点位数上限）**，其余三项统一：
+
+- **`max_protocols` / `northbound_channels` 改为不限（None）**。这两项反映的是
+  **部署形态**而非产能规模：协议种类数取决于现场接了哪些设备，北向通道数取决于
+  是否需要多路上行。按它们分档会产生「买了高档位却用不满」的现场反复超限——
+  而超限在 v2.0 是**直接拒绝保存配置**，直接卡住交付。
+  行业惯例同样如此：Takebishi DeviceGateway（连接数 × 点位数双维）、
+  Moxa MRC（节点数 × 并发连接数）都只对**规模类**指标分档，
+  不对「协议种类数」分档；Kepware 更是完全按驱动 à la carte 售卖。
+- **`storage_days` 四档统一 30 天**。历史保留天数在边缘侧是**运维策略**而非授权卖点：
+  现场磁盘容量有限，30 天覆盖绝大多数抄表与追溯场景；而按档位拉长到 90/365 天
+  会让低配设备被历史数据挤爆存储，且超期数据按 FIFO **直接丢弃、不可恢复**——
+  这类"付费了但数据被静默截断"的现场体验远差于少卖点位。
+- **ultra 也降到 5000 点 / 30 天**。旗舰版不再是"无限"，而是"上限最高"，
+  保持四档量级一致（500 → 1500 → 2500 → 5000），便于报价时对照。
+
+> **`Quota` 结构未删字段**：`max_protocols` / `northbound_channels` 仍保留在 payload 与
+> API 响应中，**老 .lic 文件照常解析**（wire 兼容）。但 v2.1 起：
+> - **不再作为拒绝保存配置的依据**——只有点数会阻断；
+> - 若运维显式配置了这两项的上限（如 `tier_quotas` 里手写 `max_protocols: 3`），
+>   超限**降级为告警**（`tracing::warn!` + 前端提示），不阻断交付。
+>   显式配置通常表达的是「本项目的约定」而非「授权边界」。
+>
+> 判定拆分见 `Quota::exceeded_kinds`（硬拒绝：仅 `Points`）与
+> `Quota::warned_kinds`（告警：`Protocols` / `NorthboundChannels`）。
 
 > **tier 名称以代码枚举为准**：`core` / `standard` / `pro` / `ultra`（`Tier` enum，serde 小写序列化）。
 > 配置里写 `professional` / `enterprise` / `oem` 是早期草案旧称，会反序列化失败，不要沿用。
 >
-> **这张表是「配置目标值」，不是「代码内置默认值」**：仓库没有内置 tier 查表默认值，
-> 真正生效的载体是 `config.json` 的 `license.tier_quotas`（`LicenseConfig::tier_quotas`）。
+> **这张表既是「配置目标值」，也是「代码内置默认值」**：`gateway-core/src/config/license.rs`
+> 的 `DEFAULT_TIER_QUOTAS` 内置了同样四档数值，作为 `config.json` 漏配某档时的兜底。
 > 完整四档模板见 `gateway-core/config.json.example` 的 `license` 节，可直接复制。
 > 三条生效优先级（`LicenseManager::current`）：
-> **license 自带 `quota` → 配置 `tier_quotas` 查表 → `license.absent_quota` 兜底**。
-> 因此**部署时必须显式写全 `tier_quotas` 四档**：若配置里没写、且 license 文件也没自带 quota，
-> 则任何 tier（哪怕 ultra）都会退到末行的「无 license」配额（100 点 / 1 协议 / 7 天 / 1 通道）。
+> **license 自带 `quota` → 配置 `tier_quotas` 查表 → 代码内置默认表 `DEFAULT_TIER_QUOTAS` → `license.absent_quota` 兜底**。
+> 因此**部署时仍建议显式写全 `tier_quotas` 四档**：配置缺失不会让付费档位掉到开源版配额
+> （只会落到该档应有的数值），但运维就失去了按现场调整该档配额的手段。
 >
 > **查表只在「license 有效」时发生**：无 license / 授权失效（`present = false`）一律走
-> `absent_quota` 兜底（100/1/7/1），**不查 `tier_quotas`**——否则配置写全四档后，
-> 无 license 设备会因 `tier = core` 而错误拿到 core 档的 500 点 / 3 协议 / 30 天 / 1 通道。
+> `absent_quota` 兜底（100/1/7/1），**不查 `tier_quotas` 也不查内置默认表**——否则配置写全四档后，
+> 无 license 设备会因 `tier = core` 而错误拿到 core 档的 500 点配额。
 > 「core 档配额」与「无 license 配额」是两件事，前者是 core 授权，后者是完全没有授权。
 >
-> **降级可观测**：配置漏配某档时，配额会静默降到兜底值，现场只看配额数字无法察觉。
-> 三处兜底：
+> **降级可观测**：配置漏配某档时，配额取自代码内置默认表（该档应有数值，不会退到开源版），
+> 但运维无法在 config.json 里调整该档。三处提示：
 > - 启动日志：`gatewayd` 启动时打印 `license.tier_quotas missing tiers: [...]` 的 WARN；
 > - API：`GET /api/license` 响应新增 `quota_source` 字段；
-> - 前端：授权弹窗在 `quota_source = tier_missing` 时展示黄色告警，提示补齐配置。
+> - 前端：授权弹窗在 `quota_source = tier_missing` 时展示提示，说明配额取自内置默认表。
 
 > **无 license 默认配额**意义：拿到网关即可跑最小化演示（100 点 / 1 协议 / 保留 7 天），
 > 这是「开箱可体验」的基础约定——无授权也能验证链路，不必先走采购流程。
@@ -135,7 +163,7 @@ pub enum QuotaSource {
     License,        // license 文件自带 quota
     TierConfig,     // 配置 tier_quotas 查表命中
     AbsentFallback, // 无 license / 授权失效 → absent_quota 兜底（预期行为）
-    TierMissing,    // license 有效但 tier_quotas 缺该档 → 兜底（配置缺失，需告警）
+    TierMissing,    // license 有效但 tier_quotas 缺该档 → 回落代码内置默认表（配置缺失，需提示）
 }
 ```
 
@@ -187,9 +215,11 @@ pub enum QuotaSource {
 - `storage_days` 已用量取 `data_queue.timestamp` 与 `data_queue_aggregated.window_start`
   两者的最小值——超过 24h 的原始行会被压成分钟桶搬进聚合表，只看原始表会低估历史跨度
 
-**超限提示策略**：
+**超限提示策略（v2.1）**：
 - 仪表盘/状态栏展示档位 + 配额使用进度条（无 license 不展示，只显示"未授权"）
-- 配额超限时**配置保存接口直接拒绝**（如增加点位时返回 4021 `quota_exceeded` + 提示"当前档位支持最多 5000 点，当前已 5000 点，请升级档位或减少点位"）
+- **采集点数超限时，配置保存接口直接拒绝**（如增加点位时返回 4021 `quota_exceeded` +
+  提示"当前档位支持最多 2500 点，当前已 2500 点，请升级档位或减少点位"）
+- **协议种类数 / 北向通道数超限只告警**，不阻断保存（见上文 v2.1 变更说明）
 - **不影响采集连续性**（已有数据继续运行）
 
 **导入低档位 license 的超限告警**：
@@ -206,10 +236,52 @@ pub enum QuotaSource {
 | 是否阻断导入 | **不阻断**。license 已落盘生效、配额是既定事实，阻断只会造成"导入失败"的误解 |
 | 是否告警 | **必须告警**。写 `tracing::warn!` + 审计日志 `license.quota_exceeded`（含超限项中文名） |
 | 响应 | 返回 `usage` / `available`，`available` 饱和到 0；前端据此弹红色告警 |
-| 判定范围 | 只判 `points` / `protocols` / `northbound_channels` 三项（保存配置时会被拒绝的项）。`storage_days` 由运行时 FIFO 截断保证，不拒绝配置保存，拿它报警只制造噪音 |
+| 判定范围 | 硬拒绝项只判 `points`；`protocols` / `northbound_channels` 归入告警项。`storage_days` 由运行时 FIFO 截断保证，不拒绝配置保存，拿它报警只制造噪音 |
 
 前端表现：导入成功后 `LicenseDialog` 立即显示红色告警条，列出超限项（如"采集点数"），
 提示用户升级档位或清理存量配置。
+
+### SKU × 授权档采购推荐（v2.1 新增）
+
+#### 为什么 SKU 与授权档是两条独立的售卖轴
+
+SKU 是**编译期** Cargo feature 聚合（`gateway-core/Cargo.toml` 的 `sku-*` 段），
+决定二进制里有哪些南向协议；授权档决定**能配多少点位**。两者正交：
+
+- `sku-minimal` 配 ultra 授权在技术上完全合法（只是多买了点位额度）；
+- `sku-power` 配 core 档则会因点位不够而**买小了**——这才是需要避免的组合。
+
+行业惯例同样如此：研华 / 映翰通把协议支持度做进**硬件型号**，
+把规模上限做进**软件授权**，两条轴彼此独立（参考 Cisco Smart Licensing 的
+tier × 型号对照表：Premier / Advantage / Essentials 三档决定 feature list 与吞吐，
+feature 还随 device model 变化）。
+
+因此本节给出的是**采购推荐**，**不参与任何运行时判定**。
+
+#### 推荐矩阵
+
+推荐档位只按**该行业的典型点位规模**推导——因为 v2.1 起配额只管点位，
+协议种类数在四档之间已无差异。
+
+| SKU | 覆盖协议 | 典型场景 | 推荐档位 | 推荐点位上限 |
+|---|---|---|---|---|
+| `sku-minimal` | modbus / dlt645 / cjt188 | 小规模计量（单表、单回路） | core | 500 |
+| `sku-building` | modbus / bacnet / cjt188 / opcua | 单楼宇楼控 | standard | 1500 |
+| `sku-plc` | modbus / s7comm / mc / opcua | 产线 PLC 接入 | standard | 1500 |
+| `sku-standard` | modbus / dlt645 / cjt188 / iec104 / opcua | 通用计量 + 远动 | pro | 2500 |
+| `sku-power` | modbus / dlt645 / iec104 / iec101 / opcua | 电能量采集 + 远动 | pro | 2500 |
+| 全协议（未启用任何 `sku-*`） | 全部 9 种 | 自主集成，规模不可预知 | ultra | 5000 |
+
+#### 代码位置与用法
+
+矩阵的**唯一权威来源**是 `gateway-core/src/domain/sku.rs`（`Sku` 枚举）：
+`Sku::current()` 用 `cfg!(feature = "sku-*")` 判定当前构建的 SKU，
+`Sku::recommended_tier()` / `Sku::recommended_max_points()` 给出推荐值。
+
+- `tools/license-issuer` 的 `issue` 子命令支持 `--sku`：传入后 `--tier` 与
+  `--max-points` 可省略，按推荐值自动填充，并打印推荐说明。
+  不传 `--sku` 时保持既有行为（quota 不写入 payload，由网关侧 `tier_quotas` 决定）。
+- `config.json.example` 的 `license` 节注释中给出同一张矩阵，供报价与部署参考。
 
 ## 5. 代码调整范围
 
@@ -340,12 +412,14 @@ pub enum QuotaSource {
    （档位名以代码 `Tier` 枚举为准：`core` / `standard` / `pro` / `ultra`；
    早期草案里的 professional / enterprise / oem 是旧称，serde 无法反序列化，已作废。）
    数值定义于 `tier_quotas` 配置（gateway-core LicenseConfig），后续如需调整档位数值，**改配置即可，无需改代码**。
-   ⚠️ 仓库未内置这些数值：**出厂/部署配置必须显式写全 `license.tier_quotas` 四档**
+   仓库同时在 `gateway-core/src/config/license.rs` 的 `DEFAULT_TIER_QUOTAS` 内置了同样四档数值，
+   作为 `config.json` 漏配某档时的兜底——漏配不再让付费档位掉到 `absent_quota`
+   （100 点 / 1 协议 / 7 天 / 1 通道），而是落到该档应有的数值。
+   ⚠️ 但**出厂/部署配置仍建议显式写全 `license.tier_quotas` 四档**
    （完整模板见 `gateway-core/config.json.example` 的 `license` 节，可直接复制），
-   否则 license 未自带 quota 字段时，各 tier 一律退到 `absent_quota`（100 点 / 1 协议 / 7 天 / 1 通道），
-   与本节「已落地」的预期不符。
+   否则运维无法按现场调整这几档的配额。
    该漏配不再静默：启动时打 WARN 列出缺失档位，API 的 `quota_source` 返回 `tier_missing`，
-   前端授权弹窗展示告警提示补齐配置。
+   前端授权弹窗展示提示（配额取自内置默认表，建议补齐配置）。
 
 2. **无 license 默认配额：100 点位 / 1 并发协议 / 7 天历史保留 / 1 北向通道。**
    对应 `Quota { max_points: 100, max_protocols: 1, storage_days: 7, northbound_channels: 1 }`

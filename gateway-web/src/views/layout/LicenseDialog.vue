@@ -43,7 +43,7 @@
       </el-descriptions>
       <div v-else class="lic-empty">{{ loadError || '加载中...' }}</div>
 
-      <!-- 配额降级告警：tier_quotas 漏配某档时配额被静默降到 absent 兜底，此处显式提示 -->
+      <!-- 配额来源提示：tier_quotas 未显式写该档时，配额取自代码内置默认表，此处显式提示 -->
       <el-alert
         v-if="quotaSourceHint"
         type="warning"
@@ -197,7 +197,9 @@ const expiresText = computed(() => {
   return formatDate(Number(s.expires_at) * 1000)
 })
 
-// ===== v2.0 产能配额展示（null = 不限）=====
+// ===== v2.1 产能配额展示（null = 不限）=====
+// v2.1 起配额**只管点位**：并发协议数与北向通道数默认不限，
+// 但仍展示（老 license 可能显式带上限），让运维看得见实际生效值。
 const quotaRows = computed(() => {
   const q = snapshot.value?.quota
   const fmt = (v: number | bigint | null | undefined): string =>
@@ -252,21 +254,27 @@ const quotaUsageRows = computed<QuotaUsageRow[]>(() => {
 })
 
 // 存量配置超出当前档位配额 → 显式告警。
-// 典型场景：导入低档位 license 后，原有 5000 点位配置仍在跑，但已超出新档位上限。
+// 典型场景：导入低档位 license 后，原有 2500 点位配置仍在跑，但已超出新档位上限。
+// v2.1 起只有「采集点数」会阻断保存配置；协议数 / 通道数超限只告警不阻断。
 const quotaExceededHint = computed(() => {
   const over = quotaUsageRows.value.filter((r) => r.over)
   if (!over.length) return ''
   const items = over.map((r) => `${r.label} ${r.used}/${r.limit}`).join('，')
-  return `当前配置已超出该档位配额（${items}），保存配置时会被拒绝，请升级档位或精简配置`
+  const blocking = over.filter((r) => r.label === '采集点数')
+  if (blocking.length) {
+    return `当前配置已超出该档位配额（${items}），保存配置时会被拒绝，请升级档位或精简配置`
+  }
+  return `当前配置已超出本项目约定的配额（${items}）；采集点数超限才会阻断保存，其余项仅提示`
 })
 
-// 配额来源异常提示：tier_missing = 配置缺该档位，配额已降级到无 license 默认配额。
+// 配额来源提示：tier_missing = 配置未显式写该档配额，当前生效配额来自代码内置默认表
+// （该档应有数值，不会退到开源版配额）；仍建议在 config.json 显式配置以便按现场调整。
 // absent_fallback 属预期（无 license / 授权失效），不打扰用户。
 const quotaSourceHint = computed(() => {
   const s = snapshot.value
   if (!s) return ''
   if (s.quota_source === 'tier_missing') {
-    return `配置未定义「${TIER_LABEL[s.tier]}」档位的默认配额，当前配额已降级到无授权默认配额。请在 config.json 的 license.tier_quotas 中补齐该档位。`
+    return `配置未显式定义「${TIER_LABEL[s.tier]}」档位的配额，当前生效配额取自代码内置默认表。如需调整该档位配额，请在 config.json 的 license.tier_quotas 中补齐该档位。`
   }
   return ''
 })

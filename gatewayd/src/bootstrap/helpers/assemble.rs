@@ -491,21 +491,21 @@ pub(crate) fn init_license(config: &GatewayConfig) -> LicenseInit {
             ),
         }
     }
-    // v2.0 启动告警：tier_quotas 没写全四档时，付费档位会被静默降到 absent 兜底配额
-    // （100 点 / 1 协议 / 7 天 / 1 通道）。配置缺失在启动时是唯一能提前发现它的时机，
-    // 运行时只表现为"配额偏小"，现场很难联想到是 config.json 漏配。
+    // v2.0 启动告警：tier_quotas 没写全四档时，这些档位会回落到代码内置默认表
+    // （该档应有数值，不会退到开源版 absent 兜底），但运维无法在 config.json 里
+    // 调整这几档的配额。配置缺失在启动时是唯一能提前发现它的时机。
     if let Some(lic_cfg) = config.license.as_ref() {
         let missing = lic_cfg.missing_tiers();
         if !missing.is_empty() {
             tracing::warn!(
-                "license.tier_quotas missing tiers: {:?} — devices on these tiers without a license-embedded quota will fall back to absent_quota (100 points / 1 protocol / 7 days / 1 channel); write all four tiers in config.json",
+                "license.tier_quotas missing tiers: {:?} — quotas for these tiers fall back to the built-in default table; write all four tiers in config.json to tune them per deployment",
                 missing
             );
         }
         let s = manager.current();
         if s.present && s.quota_source == gateway_core::license::QuotaSource::TierMissing {
             tracing::warn!(
-                "license tier {:?} has no tier_quotas mapping — quota degraded to absent fallback (max_points={:?}); add this tier to license.tier_quotas in config.json",
+                "license tier {:?} has no tier_quotas mapping — quota taken from the built-in default table (max_points={:?}); add this tier to license.tier_quotas in config.json to customize it",
                 s.tier,
                 s.quota.max_points
             );

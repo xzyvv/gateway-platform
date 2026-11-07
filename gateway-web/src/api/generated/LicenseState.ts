@@ -17,7 +17,8 @@ present: boolean,
  */
 tier: Tier, 
 /**
- * v2.0 有效配额（license 自带 quota 优先，否则按 tier 查 tier_quotas，缺省走 absent_quota）
+ * v2.0 有效配额（license 自带 quota 优先，否则按 tier 查 tier_quotas，
+ * 未配置该档时回落代码内置默认表）
  * LicenseManager 在 current() 时实时计算填入
  */
 quota: Quota, 

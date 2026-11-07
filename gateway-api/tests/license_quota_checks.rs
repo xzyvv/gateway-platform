@@ -1,7 +1,10 @@
-//! v2.0 Step 3 license 配额校验集成测试
+//! license 配额校验集成测试
 //!
 //! 覆盖：POST /api/config 提交超限 GatewayConfig → 4021 quota_exceeded + 中文 message
-//! 4 类配额：points / protocols / northbound channels
+//!
+//! v2.1 口径：**只有采集点数是硬约束**（超限 → 4021）；
+//! 协议种类数与北向通道数降级为**告警**（超限不阻断保存，见 `Quota::warned_kinds`）。
+//! 因此本文件中 protocols / northbound 相关的集成断言验证的是「**不再** 4021」。
 //!
 //! 测试方法：构造带 tier_quotas 的 LicenseConfig，注入 mock license manager，
 //! 然后用 axum oneshot 发 POST /api/config，断言状态码 + body message。
@@ -376,8 +379,11 @@ async fn test_post_config_points_over_quota_returns_4021() {
     );
 }
 
+/// v2.1：协议种类数超限**不再**拒绝保存配置（降级为告警）
+///
+/// 显式配置了 `max_protocols` 上限时，超限只打 WARN 日志，不阻断交付。
 #[tokio::test]
-async fn test_post_config_protocols_over_quota_returns_4021() {
+async fn test_post_config_protocols_over_quota_is_not_rejected() {
     let mgr = manager_with_quota(
         gateway_core::license::Tier::Standard,
         Quota {
@@ -396,15 +402,20 @@ async fn test_post_config_protocols_over_quota_returns_4021() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["code"], serde_json::json!(4021));
-    assert!(v["message"].as_str().unwrap().contains("并发协议数"));
+    if resp.status() == StatusCode::BAD_REQUEST {
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_ne!(
+            v["code"],
+            serde_json::json!(4021),
+            "v2.1 起协议种类数只告警、不阻断保存：body = {v}"
+        );
+    }
 }
 
+/// v2.1：北向通道数超限**不再**拒绝保存配置（降级为告警）
 #[tokio::test]
-async fn test_post_config_northbound_over_quota_returns_4021() {
+async fn test_post_config_northbound_over_quota_is_not_rejected() {
     let mgr = manager_with_quota(
         gateway_core::license::Tier::Standard,
         Quota {
@@ -423,38 +434,39 @@ async fn test_post_config_northbound_over_quota_returns_4021() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["code"], serde_json::json!(4021));
-    assert!(v["message"].as_str().unwrap().contains("北向通道数"));
+    if resp.status() == StatusCode::BAD_REQUEST {
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_ne!(
+            v["code"],
+            serde_json::json!(4021),
+            "v2.1 起北向通道数只告警、不阻断保存：body = {v}"
+        );
+    }
 }
 
 // ===== B-1 回归：覆盖全部 7 类北向通道的配额计数 =====
-
-/// B-1 修复：配额计数必须把全部 7 类通道都计入
-/// （mqtt / webhook / cellular / opcua / modbus_server /
-/// modbus_passthrough / telemetry）。
-///
-/// 回归证据：旧实现只覆盖前 4 类，把启用了 opcua / modbus_server /
-/// modbus_passthrough / telemetry 的配置错误地算成"0 类占用"，配额形同
-/// 虚设（绕过付费墙）。本测试用端到端 POST /api/config 验证：每次「多启
-/// 一类」都让 next 加 1，从而能精确定位配额是否按预期递增。
-///
-/// 由于 count_northbound_channels 私有（pub(crate)），本测试用"边界对照"
-/// 表征其正确性：在 limit=N 时启用 N+1 类必拒；启用 ≤N 类必通（同 status
-/// 不是 4021）。
-async fn post_northbound_helper(n_enabled: usize, limit: u32) -> StatusCode {
+//
+// v2.1 起北向通道数不再阻断保存（只告警），因此这里不再用「超限 → 4021」
+// 反推计数是否正确（该观测手段已随降级失效）。
+// 计数正确性改由 gateway-api 单元测试 `count_northbound_channels_covers_all_sinks`
+// 直接断言覆盖全部 7 类通道。
+//
+// 本文件保留一条端到端断言：显式配置了 northbound_channels 上限时，
+// 超限**不得**拒绝保存（降级为告警）。
+#[tokio::test]
+async fn test_post_config_northbound_explicit_limit_does_not_block_save() {
     let mgr = manager_with_quota(
         gateway_core::license::Tier::Standard,
         Quota {
-            northbound_channels: Some(limit),
+            northbound_channels: Some(2),
             ..Quota::default()
         },
     );
     let state = state_with_license(mgr);
     let app = gateway_api::web::build_router(state);
-    let cfg = config_with_n_northbound(n_enabled);
+    // 启用 7 类北向通道（含 telemetry），远超显式约定的 2
+    let cfg = config_with_n_northbound(7);
     let resp = app
         .oneshot(req_with_token(
             "POST",
@@ -463,72 +475,15 @@ async fn post_northbound_helper(n_enabled: usize, limit: u32) -> StatusCode {
         ))
         .await
         .unwrap();
-    let status = resp.status();
-    if status == StatusCode::BAD_REQUEST {
-        // 触发配额超限的 400，验证确实是 quota_exceeded
+    if resp.status() == StatusCode::BAD_REQUEST {
         let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
+        assert_ne!(
             v["code"],
             serde_json::json!(4021),
-            "n={n_enabled} limit={limit}: 400 必须是 quota_exceeded，不是其他业务错误；body = {v}"
-        );
-        assert!(
-            v["message"].as_str().unwrap().contains("北向通道数"),
-            "配额超限 message 必须含「北向通道数」；body = {v}"
+            "v2.1 起北向通道数只告警、不阻断保存：body = {v}"
         );
     }
-    status
-}
-
-#[tokio::test]
-async fn test_b1_northbound_quota_is_per_sink_not_per_legacy_4() {
-    // 旧实现下：n_enabled=5 时 count 仍为 4（漏算 opcua），limit=4 应被拒。
-    //     新实现下：count=5 > 4 → 同样应被拒。
-    // 通过断言 n=5, limit=4 → 400/4021 验证 opcua 已被计入。
-    let status = post_northbound_helper(5, 4).await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "B-1 回归：启用 5 类（mqtt+webhook+cellular+opcua+modbus_server），limit=4，\
-         必须 4021 拒。旧实现会把 opcua 漏掉算成 4 类通过 → 现已修复应拒。"
-    );
-
-    // 关键回归：n=5, limit=5 → 不应被拒（不是 4021）。
-    let status = post_northbound_helper(5, 5).await;
-    assert_ne!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "B-1 回归：limit=5 时启 5 类（含 opcua）应通过；status = {status}"
-    );
-
-    // 启用第 7 类（telemetry），limit=6 → 应被拒（关键：telemetry 也算 1 类）
-    let status = post_northbound_helper(7, 6).await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "B-1 回归：启用 7 类（含 telemetry），limit=6 必须 4021 拒；\
-         旧实现下 telemetry 漏算 → 会通过 → 这是付费墙绕过的根因。"
-    );
-
-    // 反向：仅启用 1 类（mqtt），即使 limit=1 也应通过（不是 4021）
-    let status = post_northbound_helper(1, 1).await;
-    assert_ne!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "B-1 回归：limit=1 时仅启用 mqtt（1 类）应通过；status = {status}"
-    );
-}
-
-#[tokio::test]
-async fn test_post_config_telemetry_counts_against_northbound_quota() {
-    // 直接复用上面的 helper：启用第 7 类（包含 telemetry）+ limit=6 → 必拒
-    let status = post_northbound_helper(7, 6).await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "启用 7 类北向通道（包含 telemetry）应超 limit=6 配额并返回 400/4021"
-    );
 }
 
 #[tokio::test]

@@ -49,11 +49,60 @@ fn test_quota_for_tier_uses_configured_value() {
 }
 
 #[test]
-fn test_quota_for_tier_falls_back_to_absent() {
+fn test_quota_for_tier_falls_back_to_builtin_default() {
     let cfg = LicenseConfig::default();
-    let q = cfg.quota_for_tier(Tier::Ultra);
-    // Ultra 未在 tier_quotas 中 → 降级到 absent_quota 默认
-    assert_eq!(q.max_points, Some(100));
+    // Pro 未在 tier_quotas 中 → 回落代码内置默认表（Pro=2500 点 / 协议不限 / 30 天 / 通道不限）
+    let q = cfg.quota_for_tier(Tier::Pro);
+    assert_eq!(q.max_points, Some(2500));
+    assert_eq!(q.max_protocols, None);
+    assert_eq!(q.storage_days, Some(30));
+    assert_eq!(q.northbound_channels, None);
+}
+
+#[test]
+fn test_quota_for_tier_builtin_default_covers_all_four_tiers() {
+    let cfg = LicenseConfig::default();
+    assert_eq!(cfg.quota_for_tier(Tier::Core).max_points, Some(500));
+    assert_eq!(cfg.quota_for_tier(Tier::Standard).max_points, Some(1500));
+    assert_eq!(cfg.quota_for_tier(Tier::Pro).max_points, Some(2500));
+    // Ultra 同样有 5000 点上限（v2.1 起唯一差异是 max_points）
+    assert_eq!(cfg.quota_for_tier(Tier::Ultra).max_points, Some(5000));
+}
+
+/// 内置默认表数值与 config.json.example 的 tier_quotas 一致（防止两边漂移）
+///
+/// v2.1 口径：四档唯一差异是 `max_points`；协议数与北向通道数不限，
+/// 历史保留天数统一 30 天。
+#[test]
+fn test_builtin_default_table_values() {
+    for (tier, points) in [
+        (Tier::Core, 500),
+        (Tier::Standard, 1500),
+        (Tier::Pro, 2500),
+        (Tier::Ultra, 5000),
+    ] {
+        let q = default_quota_for_tier(tier);
+        assert_eq!(q.max_points, Some(points), "{tier:?} 点位上限");
+        assert_eq!(q.max_protocols, None, "{tier:?} 协议数不限");
+        assert_eq!(q.storage_days, Some(30), "{tier:?} 历史统一 30 天");
+        assert_eq!(q.northbound_channels, None, "{tier:?} 北向通道不限");
+    }
+}
+
+/// 内置默认表不覆盖配置值：配置写了就以配置为准
+#[test]
+fn test_builtin_default_does_not_override_configured_value() {
+    let cfg = LicenseConfig {
+        tier_quotas: Some(vec![TierQuotaEntry {
+            tier: Tier::Pro,
+            quota: Quota {
+                max_points: Some(123),
+                ..Quota::default()
+            },
+        }]),
+        ..LicenseConfig::default()
+    };
+    assert_eq!(cfg.quota_for_tier(Tier::Pro).max_points, Some(123));
 }
 
 #[test]
@@ -95,7 +144,11 @@ fn test_tier_quotas_json_round_trip() {
     assert_eq!(absent.max_points, Some(100));
 }
 
-// ===== tier 缺失判定（启动告警 / 前端提示的依据）=====
+// ===== tier 显式配置判定（启动告警 / 前端提示的依据）=====
+//
+// 注意：这里判定的是「运维有没有在 config.json 里显式写这一档」，
+// 与「生效配额」解耦——未显式写的档位生效配额来自代码内置默认表，
+// 不会退到 absent 兜底。
 
 /// tier_configured：只有显式配了该 tier 才算已配置
 #[test]

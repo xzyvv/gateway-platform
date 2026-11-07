@@ -45,20 +45,36 @@ cargo run -p license-issuer --bin license-issuer -- keygen --keys ./keys
 
 ### issue
 
+按 **SKU 采购推荐**签发（推荐用法——不给 `--tier` / `--max-points`，自动按推荐档位填充）：
+
 ```bash
 cargo run -p license-issuer --bin license-issuer -- issue \
   --license-id LIC-2026-0001 \
   --customer "某某自动化" \
-  --tier pro \
-  --max-points 5000 \
-  --max-protocols 16 \
-  --storage-days 365 \
-  --northbound-channels 8 \
+  --sku sku-power \
   --machine-key <64位sha256hex> \
   --machine-parts <hash1,hash2,hash3> \
   --expires-at 2027-10-11T00:00:00Z \
   --keys ./keys \
   --out LIC-2026-0001.lic
+```
+
+手工指定各配额字段：
+
+```bash
+cargo run -p license-issuer --bin license-issuer -- issue \
+  --license-id LIC-2026-0002 \
+  --customer "某某自动化" \
+  --tier pro \
+  --max-points 2500 \
+  --max-protocols 16 \
+  --storage-days 30 \
+  --northbound-channels 8 \
+  --machine-key <64位sha256hex> \
+  --machine-parts <hash1,hash2,hash3> \
+  --expires-at 2027-10-11T00:00:00Z \
+  --keys ./keys \
+  --out LIC-2026-0002.lic
 ```
 
 参数说明：
@@ -67,11 +83,12 @@ cargo run -p license-issuer --bin license-issuer -- issue \
 |---|---|
 | `--license-id` | 唯一编号，如 `LIC-2026-0001`（必填） |
 | `--customer` | 授权对象标识（必填） |
-| `--tier` | `core` / `standard` / `pro` / `ultra`（必填，仅作展示用） |
-| `--max-points` | 最大采集点数（数字或 `none` = 无限） |
-| `--max-protocols` | 最大并发协议数（同上） |
-| `--storage-days` | 历史数据保留天数（同上） |
-| `--northbound-channels` | 北向上行通道数（同上） |
+| `--sku` | 行业 SKU：`sku-minimal` / `sku-standard` / `sku-building` / `sku-power` / `sku-plc` / `full`。传入后 `--tier` 与 `--max-points` 可省略，按**采购推荐**自动填充并打印推荐说明 |
+| `--tier` | `core` / `standard` / `pro` / `ultra`（与 `--sku` 二选一提供；均缺则报错） |
+| `--max-points` | 最大采集点数（数字或 `none` = 无限）；不给 `--sku` 时不填则不写入 payload |
+| `--max-protocols` | 最大并发协议数（同上）。v2.1 起四档默认不限 |
+| `--storage-days` | 历史数据保留天数（同上）。v2.1 起四档统一 30 天 |
+| `--northbound-channels` | 北向上行通道数（同上）。v2.1 起四档默认不限 |
 | `--machine-key` | 主键指纹哈希（sha256 hex，64 字符，必填） |
 | `--machine-raw` | 原始机器标识，签发机本地哈希（与 `--machine-key` 二选一） |
 | `--machine-parts` | 回退项单项哈希，逗号分隔 1~3 个（可选，缺项为空串） |
@@ -80,8 +97,23 @@ cargo run -p license-issuer --bin license-issuer -- issue \
 | `--out` | 输出 `.lic` 路径（默认 `<license-id>.lic`） |
 
 四个配额参数**全部不填**时，签发的 payload 不含 `quota` 字段，网关侧按
-「license 自带 quota → 配置 `tier_quotas` 查表 → `absent_quota` 兜底」优先级解析。
-详见 [docs/design/license-v2-quota.md](../../docs/design/license-v2-quota.md)。
+「license 自带 quota → 配置 `tier_quotas` 查表 → 代码内置默认表 → `absent_quota` 兜底」优先级解析。
+
+### SKU × 授权档采购推荐
+
+SKU 是**编译期** Cargo feature 聚合（决定二进制里有哪些协议），
+授权档决定**能配多少点位**——两者是两条独立的售卖轴。推荐矩阵仅供报价参考，
+**不参与运行时判定**（详见
+[docs/design/license-v2-quota.md](../../docs/design/license-v2-quota.md)「SKU × 授权档采购推荐」）：
+
+| SKU | 覆盖协议 | 典型场景 | 推荐档位 | 推荐点位上限 |
+|---|---|---|---|---|
+| `sku-minimal` | modbus / dlt645 / cjt188 | 小规模计量 | core | 500 |
+| `sku-building` | modbus / bacnet / cjt188 / opcua | 单楼宇楼控 | standard | 1500 |
+| `sku-plc` | modbus / s7comm / mc / opcua | 产线 PLC 接入 | standard | 1500 |
+| `sku-standard` | modbus / dlt645 / cjt188 / iec104 / opcua | 通用计量 + 远动 | pro | 2500 |
+| `sku-power` | modbus / dlt645 / iec104 / iec101 / opcua | 电能量采集 + 远动 | pro | 2500 |
+| `full` | 全部 9 种 | 自主集成 | ultra | 5000 |
 
 ## 私钥安全红线
 

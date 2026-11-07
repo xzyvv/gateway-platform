@@ -98,9 +98,16 @@ impl Quota {
         }
     }
 
-    /// 已超出上限的配额项（已用 > 上限）
+    /// 已超出上限的配额项（已用 > 上限）——**会拒绝保存配置**的硬约束
     ///
-    /// 只含**保存配置时会被拒绝**的三项（点数 / 协议数 / 北向通道数）。
+    /// v2.1 起只有「采集点数」是硬约束：协议种类数与北向通道数反映的是
+    /// 部署形态而非产能规模，按它们拦保存配置会在现场反复咬人
+    /// （买的是高档位，配置里多挂一个协议就被拒），且这两项从 v2.1 起
+    /// 在默认档位表里本就是 `None`（不限）。
+    ///
+    /// 显式配置了 `max_protocols` / `northbound_channels` 上限的部署，
+    /// 其超限情况改由 [`Quota::warned_kinds`] 报告（只告警，不拒绝）。
+    ///
     /// `storage_days` 不在此列：它由运行时 FIFO 截断保证，不会拒绝配置保存，
     /// 拿它报警只会制造噪音。
     ///
@@ -110,6 +117,17 @@ impl Quota {
         if self.max_points.is_some_and(|l| usage.points > l) {
             out.push(QuotaKind::Points);
         }
+        out
+    }
+
+    /// 已超出上限但**只告警不拒绝**的配额项
+    ///
+    /// v2.1 起协议种类数 / 北向通道数不再阻断配置保存：默认值本就无限，
+    /// 只有运维在 `license.tier_quotas` 或 license 文件里显式写了上限时
+    /// 才可能触发。这种显式配置通常是「本项目的约定」而非「授权边界」，
+    /// 阻断保存会直接卡住交付，改为告警 + 提示更符合现场预期。
+    pub fn warned_kinds(&self, usage: &QuotaUsage) -> Vec<QuotaKind> {
+        let mut out = Vec::new();
         if self.max_protocols.is_some_and(|l| usage.protocols > l) {
             out.push(QuotaKind::Protocols);
         }

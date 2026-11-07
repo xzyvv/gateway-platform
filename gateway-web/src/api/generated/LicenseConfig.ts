@@ -6,7 +6,7 @@ import type { TierQuotaEntry } from "./TierQuotaEntry";
  * License 校验配置（§12）
  *
  * 缺省时所有字段均为 None，按环境变量 → 默认路径查找；
- * tier_quotas 缺省时所有 tier 都按 absent_quota 兜底。
+ * tier_quotas 缺省时所有 tier 都按代码内置默认表（`DEFAULT_TIER_QUOTAS`）兜底。
  */
 export type LicenseConfig = { 
 /**
@@ -16,7 +16,7 @@ export type LicenseConfig = {
 path: string | null, 
 /**
  * v2.0 tier → 配额默认映射（运维可调，license 文件未带 quota 时按此兜底）
- * 字段缺失或 None 的 tier 走 absent_quota
+ * 未显式配置的 tier 走代码内置默认表 `DEFAULT_TIER_QUOTAS`
  */
 tier_quotas: Array<TierQuotaEntry> | null, 
 /**

@@ -9,11 +9,14 @@
 //! issue 参数：
 //! - `--license-id`   唯一编号，如 LIC-2026-0001（必填）
 //! - `--customer`     客户标识（必填）
-//! - `--tier`         core / standard / pro / ultra（必填，仅作展示用）
-//! - `--max-points`   v2.0 配额：最大采集点数（数字或 "none"=无限，可选）
-//! - `--max-protocols`  v2.0 配额：最大协议数（同上）
-//! - `--storage-days`   v2.0 配额：数据保留天数（同上）
-//! - `--northbound-channels`  v2.0 配额：北向通道数（同上）
+//! - `--sku`          行业 SKU（sku-minimal / sku-standard / sku-building / sku-power / sku-plc / full）。
+//!                    传入后 `--tier` 与 `--max-points` 可省略，按**采购推荐**自动填充
+//!                    （推荐口径见 `gateway_core::domain::sku`）。
+//! - `--tier`         core / standard / pro / ultra（与 `--sku` 二选一提供；均缺则报错）
+//! - `--max-points`   v2.0 配额：最大采集点数（数字或 "none"=无限，可选；缺省按档位推荐值）
+//! - `--max-protocols`  v2.0 配额：最大协议数（同上；v2.1 起四档默认不限）
+//! - `--storage-days`   v2.0 配额：数据保留天数（同上；v2.1 起四档统一 30 天）
+//! - `--northbound-channels`  v2.0 配额：北向通道数（同上；v2.1 起四档默认不限）
 //! - `--machine-key`  主键指纹哈希（sha256 hex，64 字符，必填）
 //! - `--machine-parts` 回退项单项哈希，逗号分隔 1~3 个（可选，缺项为空串）
 //! - `--expires-at`   RFC3339 过期时间（可选，缺省 = 永久授权）
@@ -31,6 +34,7 @@ use std::path::PathBuf;
 
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
+use gateway_core::domain::sku::Sku;
 use gateway_core::license::fingerprint::{compute_overall, hash_id_field};
 use gateway_core::license::verify::{parse_rfc3339, sign_license, LicensePayload, Quota};
 use gateway_core::license::Tier;
@@ -49,6 +53,11 @@ fn parse_quota_opt(args: &[String], key: &str) -> Option<u32> {
         Ok(n) => Some(n),
         Err(_) => die(&format!("{} 非法：'{}'（期望数字或 'none'）", key, raw)),
     }
+}
+
+/// 判断某个可选参数是否出现过（用于区分「未指定」与「显式 none」）
+fn has_opt(args: &[String], key: &str) -> bool {
+    args.iter().any(|a| a == key)
 }
 
 fn die(msg: &str) -> ! {
@@ -126,7 +135,8 @@ fn cmd_issue(args: &[String]) {
     let license_id = take_opt(args, "--license-id").unwrap_or_default();
     let customer = take_opt(args, "--customer").unwrap_or_default();
     let tier_str = take_opt(args, "--tier").unwrap_or_default();
-    let max_points = parse_quota_opt(args, "--max-points");
+    let sku_str = take_opt(args, "--sku").unwrap_or_default();
+    let mut max_points = parse_quota_opt(args, "--max-points");
     let max_protocols = parse_quota_opt(args, "--max-protocols");
     let storage_days = parse_quota_opt(args, "--storage-days");
     let northbound_channels = parse_quota_opt(args, "--northbound-channels");
@@ -142,16 +152,48 @@ fn cmd_issue(args: &[String]) {
     if customer.trim().is_empty() {
         die("缺少 --customer");
     }
+
+    // SKU → 采购推荐档位（仅作建议，不参与运行时判定；见 gateway_core::domain::sku）
+    let sku = if sku_str.trim().is_empty() {
+        None
+    } else {
+        let parsed = Sku::from_id(sku_str.trim()).unwrap_or_else(|| {
+            die(&format!(
+                "--sku 非法：{}（sku-minimal/sku-standard/sku-building/sku-power/sku-plc/full）",
+                sku_str
+            ))
+        });
+        println!(
+            "SKU 推荐：{}（{}）→ 推荐档位 {:?}，推荐最大点数 {}",
+            parsed.id(),
+            parsed.label_zh(),
+            parsed.recommended_tier(),
+            parsed.recommended_max_points()
+        );
+        Some(parsed)
+    };
+
     let tier = match tier_str.as_str() {
         "core" => Tier::Core,
         "standard" => Tier::Standard,
         "pro" => Tier::Pro,
         "ultra" => Tier::Ultra,
+        "" => match sku {
+            Some(s) => s.recommended_tier(),
+            None => die("缺少 --tier（或用 --sku 由推荐档位自动填充）"),
+        },
         other => die(&format!(
             "--tier 非法：{}（core/standard/pro/ultra）",
             other
         )),
     };
+
+    // --max-points 未显式指定时：仅当给出了 --sku（明确的采购意图）才按推荐值填充。
+    // 未给 --sku 时保持 quota=None（不写入 payload），由网关侧 tier_quotas 配置决定——
+    // 这是既有行为，也让运维仍可通过 config.json 调整各档配额。
+    if max_points.is_none() && sku.is_some() && !has_opt(args, "--max-points") {
+        max_points = Some(sku.expect("已判定为 Some").recommended_max_points());
+    }
     if expires_at.is_none() {
         println!(
             "提示：未指定 --expires-at，将签发**永久授权**（如需限期授权请显式传 --expires-at）。"

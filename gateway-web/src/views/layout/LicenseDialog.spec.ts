@@ -152,15 +152,15 @@ describe('LicenseDialog', () => {
     expect(document.body.textContent).toContain('授权状态获取失败')
   })
 
-  it('配额降级（tier_quotas 漏配该档）：显式提示而非静默显示低配额', async () => {
+  it('配额来源为 tier_missing（tier_quotas 未显式写该档）：提示取自内置默认表', async () => {
     fetchLicenseMock.mockResolvedValue({
       ...SNAPSHOT,
       quota_source: 'tier_missing',
       quota: {
-        max_points: 100,
-        max_protocols: 1,
-        storage_days: 7,
-        northbound_channels: 1,
+        max_points: 5000,
+        max_protocols: 16,
+        storage_days: 365,
+        northbound_channels: 8,
       },
     })
     await mountDialog()

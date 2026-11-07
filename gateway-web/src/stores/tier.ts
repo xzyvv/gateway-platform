@@ -24,11 +24,25 @@ export const TIER_LABEL: Record<Tier, string> = {
   ultra: '旗舰版',
 }
 
+/**
+ * 档位说明（v2.1 口径：**采集点位数上限**，不是功能清单）。
+ *
+ * v1.2 时档位用于功能解锁（抓包 / 波形 / 单步等按档位门控），文案写的是能力范围；
+ * v2.0 已删除全部 feature gate（协议扫描 / 抓包 / 单步 / 性能监控等调试能力一律免费，
+ * 任何档位都能用），档位**只**约束产能配额。
+ *
+ * v2.1 起配额**只管点位**：四档唯一差异是采集点位数上限（500 / 1500 / 2500 / 5000）；
+ * 并发协议数与北向通道数不限，历史保留天数统一 30 天。故此处只标注点位上限，
+ * 避免用户误以为升级档位才能用某些工具或某些协议。
+ *
+ * 数值与后端 `gateway-core/src/config/license.rs` 的 `DEFAULT_TIER_QUOTAS` 一致；
+ * 实际生效配额以 `GET /api/license` 返回的 `quota` 为准（license 自带 quota 优先）。
+ */
 export const TIER_DESCRIPTION: Record<Tier, string> = {
-  core: '日常监控 / 配置 / 上下载',
-  standard: '工程师调试 / 设备管理进阶',
-  pro: '高级协议分析 / 数据分析',
-  ultra: '专家级抓包 / 波形 / 单步',
+  core: '500 点',
+  standard: '1500 点',
+  pro: '2500 点',
+  ultra: '5000 点',
 }
 
 const STORAGE_KEY = 'gateway_tier'
