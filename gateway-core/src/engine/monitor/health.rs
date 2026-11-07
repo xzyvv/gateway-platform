@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::engine::error::{GatewayError, GatewayResult};
-use crate::queue::DataQueue;
+use crate::engine::ports::DiskHealthSink;
 
 /// 磁盘压力状态（替代原全局 static DOWNSAMPLE_TRIGGERED）
 ///
@@ -133,7 +133,7 @@ pub(crate) fn disk_ok_from_free_pct(free_pct: f64) -> bool {
 /// 里 `disk_ok` 默认是 `true`，于是「已满盘开机」的前 60 秒会把数据直接写进 SQLite
 /// ——正是这段保护要挡的场景。改成首轮立即检测，之后每 60 秒一次。
 pub fn spawn_disk_monitor(
-    queue: Arc<DataQueue>,
+    queue: Arc<dyn DiskHealthSink>,
     history: Arc<DiskHistoryStore>,
     disk_status: Arc<DiskStatus>,
     metrics: Arc<crate::engine::metrics::Metrics>,

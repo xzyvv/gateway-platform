@@ -1883,6 +1883,111 @@ else {
     Fail "路由表里没有 /api/history/export —— 文档与检查单承诺的导出入口不存在"
 }
 
+# ══════════════════════════════════════════════════════════
+# C22  engine 层不得反向依赖业务层（依赖倒置守护）
+#
+# 背景：engine 是基础设施层（数据模型 / 指标 / 报警判定 / 磁盘监控），
+# 北向输出(north)、数据队列(queue)、处理管道(pipeline) 都是它的**下游**。
+# 但三者都需要 engine 的核心模型，于是历史上形成了三处成环：
+#   engine ↔ north    （报警引擎直接持有 MqttClient 上报）
+#   engine ↔ queue    （磁盘监控直接持有 DataQueue 开关入队）
+#   engine ↔ pipeline （报警引擎订阅定义在 pipeline 里的 RealtimeBus）
+#
+# O-4 用依赖倒置消除这三处：契约抽到 engine::ports（AlarmPublisher /
+# DiskHealthSink）与 engine::bus（RealtimeBus），由 north / queue 实现，
+# pipeline 侧保留重导出以兼容既有调用点。改造后 engine 只允许依赖 config。
+#
+# 本段是保险丝：Rust 编译器**不会**因为依赖方向回退而报警——环会悄悄长回来。
+# 所以必须用门禁把方向钉死：任何人再把 `crate::north|queue|pipeline`
+# 写进 engine/，本段立刻转红。
+Write-Host "[C22] engine 层无反向依赖（依赖倒置守护）" -ForegroundColor Cyan
+
+$engineRoot = Join-Repo "gateway-core/src/engine"
+if (-not (Test-Path $engineRoot)) {
+    Fail "找不到 gateway-core/src/engine —— 无法核对依赖方向"
+}
+else {
+    # 去掉注释后扫描：文档里的 rustdoc 链接（如 `[crate::pipeline::vformula]`）
+    # 不是代码依赖，不该被判违规。
+    $violations = @()
+    Get-ChildItem $engineRoot -Recurse -Filter "*.rs" -File | ForEach-Object {
+        $rel = $_.FullName.Substring($repoRoot.Length + 1)
+        $code = Remove-RustComments (Get-Content $_.FullName -Raw)
+        $lineNo = 0
+        foreach ($line in ($code -split "`r?`n")) {
+            $lineNo++
+            if ($line -match 'crate::(north|queue|pipeline)\b') {
+                $violations += ("{0}:{1}: {2}" -f $rel, $lineNo, $line.Trim())
+            }
+        }
+    }
+    if ($violations.Count -eq 0) {
+        Ok "engine/ 下无 crate::north|queue|pipeline 反向依赖"
+    }
+    else {
+        Fail ("engine/ 出现反向依赖（已消除的环会重新长回来）：" + ($violations -join " ; "))
+    }
+}
+
+# 契约层必须真实存在（否则上面那条"无反向依赖"可能是因为把实现整个删了）
+$portsText = ReadText "gateway-core/src/engine/ports.rs"
+if ($null -eq $portsText) {
+    Fail "找不到 gateway-core/src/engine/ports.rs —— 依赖倒置的契约层没了"
+}
+else {
+    foreach ($tn in @("AlarmPublisher", "DiskHealthSink")) {
+        if ($portsText -match ("pub\s+trait\s+" + $tn + "\b")) {
+            Ok "engine/ports.rs 定义了 trait $tn"
+        }
+        else {
+            Fail "engine/ports.rs 缺 trait $tn —— 契约层被掏空，engine 与下游只能重新直接耦合"
+        }
+    }
+}
+
+# 契约必须有人实现（trait 存在但无人实现 = 抽象悬空）
+$queueText = ReadText "gateway-core/src/queue/mod.rs"
+if ($queueText -match 'impl\s+crate::engine::ports::DiskHealthSink\s+for\s+DataQueue\b') {
+    Ok "queue 侧实现了 DiskHealthSink（engine ↔ queue 的环被切断）"
+}
+else {
+    Fail "queue 侧没有实现 DiskHealthSink —— engine 的磁盘监控只能直接依赖 DataQueue"
+}
+
+$mqttPubText = ReadText "gateway-core/src/north/mqtt/alarm_publisher.rs"
+if ($null -eq $mqttPubText) {
+    Fail "找不到 gateway-core/src/north/mqtt/alarm_publisher.rs —— north 侧的报警上报契约实现没了"
+}
+elseif ($mqttPubText -match 'impl\s+AlarmPublisher\s+for\s+MqttClient') {
+    Ok "north/mqtt 侧实现了 AlarmPublisher（engine ↔ north 的环被切断）"
+}
+else {
+    Fail "north/mqtt 侧没有实现 AlarmPublisher —— 报警引擎只能直接依赖 MqttClient"
+}
+
+# 广播总线的归属：定义必须在 engine/bus.rs，pipeline 只保留重导出
+$busText = ReadText "gateway-core/src/engine/bus.rs"
+if ($null -eq $busText) {
+    Fail "找不到 gateway-core/src/engine/bus.rs —— RealtimeBus 的中立归属没了"
+}
+elseif ($busText -match 'pub\s+struct\s+RealtimeBus') {
+    Ok "RealtimeBus 定义在 engine/bus.rs（engine ↔ pipeline 的环被切断）"
+}
+else {
+    Fail "engine/bus.rs 里没有 RealtimeBus 定义 —— 总线归属回退到业务层"
+}
+
+$pipelineText = ReadText "gateway-core/src/pipeline/mod.rs"
+if ($null -eq $pipelineText) {
+    Fail "找不到 gateway-core/src/pipeline/mod.rs"
+}
+elseif ($pipelineText -match 'pub\s+use\s+crate::engine::bus::') {
+    Ok "pipeline 侧重导出 engine/bus 的总线契约（既有调用点保持兼容）"
+}
+else {
+    Fail "pipeline 侧没有重导出 engine/bus 的总线契约 —— RealtimeBus 的归属又回到了 pipeline"
+}
+
 Write-Host ""
 Write-Host ""
 Write-Host ""

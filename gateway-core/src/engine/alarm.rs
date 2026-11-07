@@ -21,11 +21,11 @@ use serde::Serialize;
 const ALARM_DEBOUNCE_DEFAULT_MS: u64 = 0;
 
 use crate::config::PointConfig;
+use crate::engine::bus::RealtimeBus;
 use crate::engine::metrics::Metrics;
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
-use crate::north::mqtt::MqttClient;
-use crate::pipeline::RealtimeBus;
+use crate::engine::ports::AlarmPublisher;
 
 /// 报警事件类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -64,8 +64,11 @@ pub struct AlarmEngine {
     /// 点持续超限 N 毫秒后才正式 trigger，存中间态。
     /// 正常范围时移除；trigger 成功后也移除（已转 alarm_state）。
     pending_since: Arc<Mutex<HashMap<String, Instant>>>,
-    /// MQTT 客户端（上报用），None=测试模式不上报
-    mqtt: Option<Arc<MqttClient>>,
+    /// 报警上报端口（上报用），None=测试模式不上报
+    ///
+    /// 依赖倒置：`engine` 只认 [`AlarmPublisher`] 契约，不认 MQTT 实现——
+    /// 引擎本身不应知道"发到 MQTT"这件事，将来接 Webhook / 短信时引擎不动。
+    mqtt: Option<Arc<dyn AlarmPublisher>>,
     /// MQTT topic 前缀（报警发到 <topic>/alarm）
     mqtt_topic: String,
     /// 指标采集器（统计告警触发次数），None = 测试模式不统计
@@ -83,12 +86,12 @@ impl AlarmEngine {
     /// 创建报警引擎
     ///
     /// - `points`: 所有点位配置（用于查找阈值）
-    /// - `mqtt`: MQTT 客户端
+    /// - `mqtt`: 报警上报端口（当前唯一实现是 MQTT，另接渠道时新增实现即可）
     /// - `mqtt_topic`: MQTT 数据 topic，报警发到 `<topic>/alarm`
     /// - `metrics`: 指标采集器（统计触发次数）；None = 测试模式不统计
     pub fn new(
         points: Vec<PointConfig>,
-        mqtt: Option<Arc<MqttClient>>,
+        mqtt: Option<Arc<dyn AlarmPublisher>>,
         mqtt_topic: String,
         metrics: Option<Arc<Metrics>>,
     ) -> Self {
@@ -315,17 +318,17 @@ impl AlarmEngine {
         tracing::info!("ALARM recover: {}={}", p.point_id, p.value);
     }
 
-    /// 序列化并发布到 MQTT
+    /// 序列化并发布到上报端口
     fn publish(&self, event: &AlarmEvent) {
         let mqtt = match &self.mqtt {
             Some(m) => m.clone(),
-            None => return, // 测试模式：无 MQTT，跳过上报
+            None => return, // 测试模式：无上报端口，跳过上报
         };
         let topic = format!("{}/alarm", self.mqtt_topic);
         match serde_json::to_vec(event) {
             Ok(payload) => {
                 crate::engine::supervision::spawn_catch_unwind("alarm_publish", async move {
-                    mqtt.publish_raw(&topic, payload).await;
+                    mqtt.publish_alarm(&topic, payload).await;
                 });
             }
             Err(e) => tracing::warn!("alarm event serialize failed: {}", e),

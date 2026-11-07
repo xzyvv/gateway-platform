@@ -22,7 +22,7 @@ pub use virtual_point::VirtualPointEngine;
 
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::config::PointConfig;
@@ -313,38 +313,6 @@ impl ProcessingPipeline {
     }
 }
 
-/// 实时数据广播总线
-///
-/// 处理管道把"边缘过滤+转换之后、即将入队"的点发布到这里，
-/// Web Server 的 WebSocket 端点 `subscribe()` 拿到 Receiver 后推给前端。
-/// ConversionManager 也订阅此总线，将数据 fan-out 到所有北向 connector。
-///
-/// 容量由 `WebConfig::realtime_buffer` 控制（默认 1024）。
-/// 消费慢时广播返回 Lagged，调用方应丢弃而非 panic。
-pub struct RealtimeBus {
-    tx: broadcast::Sender<Arc<Vec<DataPoint>>>,
-}
-
-impl RealtimeBus {
-    /// 创建实时广播通道
-    pub fn new(capacity: usize) -> Arc<Self> {
-        let cap = capacity.max(16);
-        let (tx, _rx) = broadcast::channel(cap);
-        Arc::new(Self { tx })
-    }
-
-    /// 发布一批点（处理管道调用）
-    pub fn publish(&self, points: Arc<Vec<DataPoint>>) {
-        let _ = self.tx.send(points);
-    }
-
-    /// 订阅（WebSocket handler 调用）
-    pub fn subscribe(&self) -> broadcast::Receiver<Arc<Vec<DataPoint>>> {
-        self.tx.subscribe()
-    }
-
-    /// 当前订阅者数
-    pub fn subscriber_count(&self) -> usize {
-        self.tx.receiver_count()
-    }
-}
+// 实时广播总线契约已下沉到 engine::bus（消除 engine ↔ pipeline 循环依赖）。
+// 这里保留重导出，gateway_core::pipeline::RealtimeBus 等既有调用点无需改动。
+pub use crate::engine::bus::RealtimeBus;

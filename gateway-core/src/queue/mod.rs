@@ -678,5 +678,22 @@ impl DataQueue {
     }
 }
 
+/// 磁盘健康端口实现：把 `engine` 的磁盘监控与 `queue` 的写入闸门解耦。
+///
+/// 依赖方向是 `engine`（定义 trait）← `queue`（实现），
+/// 改造后 `engine` 不再 `use crate::queue`，消除 `engine ↔ queue` 循环依赖。
+impl crate::engine::ports::DiskHealthSink for DataQueue {
+    fn set_disk_ok(&self, ok: bool) {
+        // 与同名固有方法同源：委托给 DataQueue 自己的实现，避免重复维护状态字段。
+        DataQueue::set_disk_ok(self, ok);
+    }
+
+    fn flush_fallback<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = GatewayResult<()>> + Send + 'a>> {
+        Box::pin(DataQueue::flush_fallback(self))
+    }
+}
+
 #[cfg(test)]
 mod tests;

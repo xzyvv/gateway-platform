@@ -337,6 +337,7 @@ pub struct MqttClient {
     convert_engine: arc_swap::ArcSwapOption<crate::pipeline::ConvertEngine>,
 }
 
+mod alarm_publisher;
 mod connection;
 mod event_loop;
 mod state;

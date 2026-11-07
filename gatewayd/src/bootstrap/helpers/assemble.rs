@@ -393,9 +393,17 @@ pub(crate) fn start_alarm_engine(
         .collect();
     let alarm_count = alarm_points.len();
     if alarm_count > 0 {
+        // 依赖倒置：报警引擎只认 AlarmPublisher 契约，MQTT 是它当前的实现方。
+        // 这里是唯一的"实现 → 契约"装配点，引擎侧不感知 MQTT。
+        let alarm_publisher: Option<
+            std::sync::Arc<dyn gateway_core::engine::ports::AlarmPublisher>,
+        > = north
+            .mqtt
+            .clone()
+            .map(|m| m as std::sync::Arc<dyn gateway_core::engine::ports::AlarmPublisher>);
         let alarm_engine = std::sync::Arc::new(AlarmEngine::new(
             alarm_points,
-            north.mqtt.clone(),
+            alarm_publisher,
             mqtt_topic.to_string(),
             Some(metrics),
         ));

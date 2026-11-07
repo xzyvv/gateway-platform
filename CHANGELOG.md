@@ -41,6 +41,15 @@
 
 ### 文档
 
+- **engine 层依赖方向倒置 + 新增 C22 门禁守护**（O-4）：`engine`（基础设施层）原先反向依赖
+  `north` / `queue` / `pipeline` 三处成环，现改为「engine 定义契约、下游实现」的依赖倒置——
+  新增 `engine/ports.rs`（`AlarmPublisher` / `DiskHealthSink`）与 `engine/bus.rs`
+  （`RealtimeBus` 从 `pipeline` 下沉），实现分别落在 `north/mqtt/alarm_publisher.rs` 与
+  `queue/mod.rs`；`engine` 现在只依赖 `config`。**对外行为零变化**（报警仍发 `<topic>/alarm`，
+  磁盘闸门语义不变），新增一条行为等价性用例守住该结论。`scripts/deploy_lint.ps1` 新增
+  C22 段（134 → 141 项）：`engine/` 下出现 `crate::north|queue|pipeline` 即判失败——
+  Rust 编译器不会因依赖方向回退而报警，环会悄悄长回来，故用门禁钉死；
+  `docs/architecture/modules.md` 补 engine 依赖方向表与契约/实现方对照表。
 - **形态边界声明落地**（O-1/O-2/O-3）：本产品形态为**单机工业边缘网关**（无云平台、无双机热备），
   以下为经权衡后的产品边界而非缺陷——现场最贵的纠纷不是 bug，是客户默认以为「系统有备份」。
   - `docs/architecture/data-flow.md` 新增 §7.3「数据留存与恢复边界」：历史数据唯一副本在本机

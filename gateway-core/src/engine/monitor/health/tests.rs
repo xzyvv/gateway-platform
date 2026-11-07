@@ -1,4 +1,36 @@
 use super::*;
+use crate::engine::ports::DiskHealthSink;
+
+/// 假磁盘端口：记录最近一次 `set_disk_ok` 的取值与 `flush_fallback` 的调用次数。
+///
+/// 依赖倒置的测试替身——engine 侧测试不应依赖 `queue`（那正是本次要消除的反向依赖）。
+struct FakeDiskSink {
+    ok: std::sync::atomic::AtomicBool,
+    flushes: std::sync::atomic::AtomicUsize,
+}
+
+impl FakeDiskSink {
+    fn new(initial_ok: bool) -> Arc<Self> {
+        Arc::new(Self {
+            ok: std::sync::atomic::AtomicBool::new(initial_ok),
+            flushes: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+}
+
+impl DiskHealthSink for FakeDiskSink {
+    fn set_disk_ok(&self, ok: bool) {
+        self.ok.store(ok, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn flush_fallback<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = GatewayResult<()>> + Send + 'a>> {
+        self.flushes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
 
 fn temp_db_path() -> String {
     let pid = std::process::id();
@@ -303,19 +335,17 @@ fn p2_disk_status_reports_only_on_state_change() {
 #[tokio::test]
 async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
     use crate::engine::metrics::Metrics;
-    use crate::queue::DataQueue;
     use std::sync::Arc;
 
-    let queue = Arc::new(DataQueue::new_memory().unwrap());
     // 故意先置为 false（模拟「开机时磁盘是满的」这一最坏状态）
-    queue.set_disk_ok(false);
+    let sink = FakeDiskSink::new(false);
 
     let path = temp_db_path();
     let history = Arc::new(DiskHistoryStore::new(10, &path).unwrap());
     let status = Arc::new(DiskStatus::new());
     let metrics = Arc::new(Metrics::new());
 
-    spawn_disk_monitor(queue.clone(), history, status.clone(), metrics);
+    spawn_disk_monitor(sink.clone(), history, status.clone(), metrics);
 
     // 首轮检测应在毫秒级完成；给 5s 冗余足够覆盖慢机
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -338,7 +368,7 @@ async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
     assert!(free > 0.0, "应读到真实剩余百分比，实际 {free}");
     let expected_ok = free >= 10.0;
     assert_eq!(
-        queue.is_disk_ok(),
+        sink.ok.load(std::sync::atomic::Ordering::SeqCst),
         expected_ok,
         "disk_ok 必须与首轮实测一致（free={free}%）"
     );

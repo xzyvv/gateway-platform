@@ -4,10 +4,12 @@
 
 pub mod alarm;
 pub mod audit;
+pub mod bus;
 pub mod error;
 pub mod logging;
 pub mod metrics;
 pub mod monitor;
+pub mod ports;
 pub mod shutdown;
 pub mod supervision;
 pub mod util;

@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine::model::Quality;
+use crate::engine::ports::AlarmPublisher;
 
 fn make_point(id: &str, value: f64) -> DataPoint {
     DataPoint {
@@ -46,6 +47,78 @@ fn empty_engine(points: HashMap<String, PointConfig>) -> AlarmEngine {
     }
 }
 
+/// 假上报端口收集到的载荷：(topic, JSON 字节)。
+type ReceivedAlarms = Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// 假上报端口：记录收到的报警载荷，供"引擎只认契约、不认 MQTT"的行为断言。
+///
+/// 依赖倒置的测试替身——引擎侧测试不应为此依赖 `north`（那正是本次要消除的反向依赖）。
+struct FakeAlarmPublisher {
+    received: ReceivedAlarms,
+}
+
+impl FakeAlarmPublisher {
+    fn new() -> (Arc<Self>, ReceivedAlarms) {
+        let received: ReceivedAlarms = Arc::new(std::sync::Mutex::new(Vec::new()));
+        (
+            Arc::new(Self {
+                received: received.clone(),
+            }),
+            received,
+        )
+    }
+}
+
+impl AlarmPublisher for FakeAlarmPublisher {
+    fn publish_alarm<'a>(
+        &'a self,
+        topic: &'a str,
+        payload: Vec<u8>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            self.received
+                .lock()
+                .unwrap()
+                .push((topic.to_string(), payload));
+        })
+    }
+}
+
+/// 依赖倒置回归：报警事件经 `AlarmPublisher` 契约发出，引擎不感知 MQTT。
+///
+/// 这是 O-4「engine 不再依赖 north」的**行为等价性证据**：改造前后引擎对外的
+/// 可观测行为（发到 `<topic>/alarm`、载荷含 trigger 事件）必须完全一致，
+/// 只是发出通道从「直接持有 MqttClient」换成「持有契约」。
+#[tokio::test]
+async fn alarm_event_published_through_port() {
+    let (publisher, received) = FakeAlarmPublisher::new();
+    let mut engine = empty_engine(HashMap::from([(
+        "t1".to_string(),
+        make_config("t1", Some(100.0), None),
+    )]));
+    engine.mqtt = Some(publisher as Arc<dyn AlarmPublisher>);
+
+    engine.evaluate(&make_point("t1", 101.0));
+
+    // publish 是 spawn 出去的独立任务，等它把载荷投进端口
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while received.lock().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "报警载荷必须在 3s 内投到上报端口"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let got = received.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "只应发出一条报警载荷，实际 {}", got.len());
+    assert_eq!(got[0].0, "test/alarm", "topic 必须是 <mqtt_topic>/alarm");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&got[0].1).expect("报警载荷必须是合法 JSON");
+    assert_eq!(payload["event"], "trigger");
+    assert_eq!(payload["point_id"], "t1");
+}
+
 // ===== r73-SD1：报警引擎纳入优雅停机 =====
 
 /// r73-SD1：`stop()` 置位 stopping，幂等。
@@ -69,7 +142,7 @@ async fn r73_alarm_stop_sets_stopping_flag_and_is_idempotent() {
 async fn r73_alarm_run_exits_after_stop() {
     use crate::engine::supervision::spawn_catch_unwind;
     // RealtimeBus::new(capacity) 自身即返回 Arc<RealtimeBus>。
-    let bus = crate::pipeline::RealtimeBus::new(16);
+    let bus = crate::engine::bus::RealtimeBus::new(16);
     let engine = Arc::new(empty_engine(HashMap::new()));
 
     let engine_for_run = engine.clone();

@@ -149,8 +149,21 @@ ProcessingPipeline (mpsc 通道，背压)
 | `logging.rs` | 日志初始化（tracing JSON + 滚动） |
 | `supervision.rs` | 任务监督（spawn_supervised，panic 自动重启+指数退避） |
 | `shutdown.rs` | 优雅停机信号 |
+| `bus.rs` | 实时广播总线契约（`RealtimeBus` / `BusConsumerKind` / `LaggedCounts`），由 `pipeline/` 重导出 |
+| `ports.rs` | 基础设施端口（Ports）契约：`AlarmPublisher`（报警上报）、`DiskHealthSink`（磁盘健康），实现分别在 `north/mqtt/` 与 `queue/` |
 | `util/` | 工具子模块：`encoding.rs`（二进制编解码）、`model.rs`（公共数据模型） |
 | `monitor/` | 监控与可观测性子模块（见下） |
+
+**依赖方向（engine 是基础设施层）**：`engine` 只依赖 `config`，**不得**反向依赖 `north` / `queue` / `pipeline`。
+这三条路径上的协作一律走「engine 定义契约、下游实现」的依赖倒置：
+
+| engine 侧需求 | engine 定义的契约 | 实现方 |
+|---|---|---|
+| 报警事件上报 | `engine/ports.rs::AlarmPublisher` | `north/mqtt/alarm_publisher.rs`（`MqttClient`） |
+| 磁盘健康回写队列 | `engine/ports.rs::DiskHealthSink` | `queue/mod.rs`（`DataQueue`） |
+| 订阅实时广播总线 | `engine/bus.rs::RealtimeBus` | `pipeline/mod.rs` 发布（侧保留 `pub use` 重导出兼容既有调用点） |
+
+该约束由 `scripts/deploy_lint.ps1` 的 C22 段守护（`engine/` 下出现 `crate::north|queue|pipeline` 即判失败）。
 
 `engine/monitor/`：
 
