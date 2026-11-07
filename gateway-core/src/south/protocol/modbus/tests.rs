@@ -752,3 +752,127 @@ async fn batch_read_retries_recoverable_exception_once() {
         "重试成功不应计入 retry_exhausted"
     );
 }
+
+// =========================================================================
+// P2-1：协议帧性质测试（确定性伪随机，无新增依赖）
+//
+// 历史缺陷 Bug 62 / 121 / 122 / 124 / C1 / C-3 全部落在 extract / parse 的
+// 长度公式与校验位上。这里用「噪声重同步 / 单比特破坏必拒 / 编解码往返」
+// 三条性质把它们钉住，避免再次静默吞帧或假接受。
+// =========================================================================
+
+use crate::south::bus::FrameBuffer;
+use crate::south::protocol::test_support::Lcg;
+
+/// 构造 FC03 响应帧：`[slave][03][byte_count][寄存器大端…][CRC]`
+fn fc03_response(slave: u8, regs: &[u16]) -> Vec<u8> {
+    let mut body = vec![slave, 0x03, (regs.len() * 2) as u8];
+    for r in regs {
+        body.extend_from_slice(&r.to_be_bytes());
+    }
+    super::frames::rtu_frame(&body)
+}
+
+/// 性质：垃圾前缀之后，提取器必须仍能重同步出后面的合法帧。
+///
+/// 只断言「不 panic」不够：现场 NoReply 的真实成因是**帧被吞掉**。
+///
+/// 噪声用 0xFF：RTU 无起始符，0xFF 在任意窗口都会被判为未知功能码而逐字节丢弃。
+/// 注意这里刻意不放「半截 FC03 帧」——残帧的 byte_count 字段会被当成后续帧的长度，
+/// 提取器按协议只能等待更多字节（由调用方超时清空事务缓冲兜底），属模态无起始符
+/// 协议的固有折衷，不作为本性质断言。
+#[test]
+fn extract_modbus_frame_resyncs_to_valid_frame_after_garbage() {
+    let good = fc03_response(0x11, &[0x1234, 0x5678]);
+
+    let mut fb = FrameBuffer::new();
+    fb.push(&[0xFFu8; 37]);
+    fb.push(&good);
+
+    let mut frames = Vec::new();
+    for _ in 0..64 {
+        match super::frames::extract_modbus_frame(&mut fb, None) {
+            Some(f) => frames.push(f),
+            None => break,
+        }
+    }
+    assert_eq!(
+        frames.last(),
+        Some(&good),
+        "噪声之后必须能重同步出合法帧，实际提取到 {} 帧",
+        frames.len()
+    );
+}
+
+/// 性质：合法响应的任意单比特翻转都必须被拒绝。
+///
+/// 覆盖从站号 / 功能码 / 字节数 / 数据区 / CRC 五个环节——任一环节漏校验
+/// 都会变成「错误数据入库」，比丢帧更难发现。
+#[test]
+fn parse_read_response_rejects_every_single_bit_flip() {
+    let frame = fc03_response(0x07, &[0x0001, 0xABCD, 0xFFFF]);
+    assert_eq!(
+        super::frames::parse_read_response(0x07, 0x03, 3, &frame).expect("对照帧必须可解析"),
+        vec![0x0001, 0xABCD, 0xFFFF]
+    );
+    for byte in 0..frame.len() {
+        for bit in 0..8 {
+            let mut f = frame.clone();
+            f[byte] ^= 1 << bit;
+            assert!(
+                super::frames::parse_read_response(0x07, 0x03, 3, &f).is_err(),
+                "字节 {byte} 第 {bit} 位翻转后仍被接受"
+            );
+        }
+    }
+}
+
+/// 性质：随机字节流不得 panic，且提取循环必须有界（缓冲不被无限增长）。
+#[test]
+fn extract_modbus_frame_random_bytes_never_panics() {
+    let mut lcg = Lcg::new(0x4D4F_4442_5553_5031);
+    for _ in 0..2000 {
+        let len = lcg.below(300);
+        let noise = lcg.bytes(len);
+        let mut fb = FrameBuffer::new();
+        fb.push(&noise);
+        for _ in 0..256 {
+            if super::frames::extract_modbus_frame(&mut fb, None).is_none() {
+                break;
+            }
+        }
+        assert!(fb.len() <= 4096, "缓冲应被硬上限约束，实际 {}", fb.len());
+    }
+}
+
+/// 性质：FC01/FC02 的「每 8 点 1 字节」与 FC03/FC04 的「每点 2 字节」
+/// 两种长度公式都必须自洽（C-3 的回归防线）。
+#[test]
+fn read_roundtrip_covers_coil_and_register_length_formulas() {
+    for n in 1u16..=64 {
+        let regs: Vec<u16> = (0..n).map(|i| 0xA000 ^ i).collect();
+        let frame = fc03_response(0x21, &regs);
+        assert_eq!(
+            super::frames::parse_read_response(0x21, 0x03, n, &frame).expect("FC03 必须可解析"),
+            regs
+        );
+
+        let byte_count = (n as usize).div_ceil(8);
+        let mut body = vec![0x21u8, 0x01, byte_count as u8];
+        body.resize(3 + byte_count, 0xFF);
+        let frame = super::frames::rtu_frame(&body);
+        let mut fb = FrameBuffer::new();
+        fb.push(&frame);
+        assert_eq!(
+            super::frames::extract_modbus_frame(&mut fb, Some(n)).as_deref(),
+            Some(frame.as_slice()),
+            "FC01 n={n} 的位计数公式必须能取出整帧"
+        );
+        assert_eq!(
+            super::frames::parse_coils_response(0x21, 0x01, n, &frame)
+                .expect("FC01 必须可解析")
+                .len(),
+            n as usize
+        );
+    }
+}

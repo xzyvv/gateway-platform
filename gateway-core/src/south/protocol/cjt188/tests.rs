@@ -444,3 +444,58 @@ async fn diag_reports_unreachable_endpoint_instead_of_fake_success() {
     );
     assert!(!msg.contains("成功"), "不可达端点不得报成功: {msg}");
 }
+
+// =========================================================================
+// P2-1：补 CJT188 缺失的正向性质（原有的 hostile 测试只证明「不 panic」，
+// 没证明「脏数据之后还能把合法帧找回来」）。
+// =========================================================================
+
+use crate::south::bus::FrameBuffer;
+use crate::south::protocol::test_support::Lcg;
+
+/// 性质：噪声 + 合法帧 → 必须重同步出该帧（不 panic 不等于不吞帧）。
+#[test]
+fn extract_cjt188_frame_resyncs_to_valid_frame_after_noise() {
+    let addr = [0x01u8, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+    let good = build_cjt188_frame(&addr, 0x91, &[0x33, 0x34]);
+    let mut lcg = Lcg::new(0x434A_5431_3838_5031);
+    for _ in 0..200 {
+        let len = lcg.below(40);
+        let noise = lcg.bytes_without_start_marker(len);
+        let mut fb = FrameBuffer::new();
+        fb.push(&noise);
+        fb.push(&good);
+        assert_eq!(
+            extract_cjt188_frame(&mut fb, None).as_deref(),
+            Some(good.as_slice()),
+            "噪声 {noise:?} 之后必须重同步出合法帧"
+        );
+    }
+}
+
+/// 性质：随机地址 / 数据区 / 控制码低 5 位都必须 build → extract → parse 往返一致。
+#[test]
+fn cjt188_build_extract_parse_roundtrip_for_random_frames() {
+    let metrics = crate::engine::metrics::Metrics::new();
+    let mut lcg = Lcg::new(0x434A_5431_3838_5032);
+    for round in 0..200 {
+        let addr: [u8; 7] = std::array::from_fn(|_| lcg.next_u8());
+        let len = lcg.below(24);
+        let data = lcg.bytes(len);
+        let ctrl = 0x81 | (lcg.next_u8() & 0x1F);
+
+        let frame = build_cjt188_frame(&addr, ctrl, &data);
+        let mut fb = FrameBuffer::new();
+        fb.push(&frame);
+        assert_eq!(
+            extract_cjt188_frame(&mut fb, None).as_deref(),
+            Some(frame.as_slice()),
+            "第 {round} 轮：提取结果必须与构造帧逐字节一致"
+        );
+
+        let parsed = parse_cjt188_response(&frame, &addr, &metrics)
+            .unwrap_or_else(|e| panic!("第 {round} 轮合法帧解析失败: {e:?}"));
+        let expected: Vec<u8> = data.iter().map(|b| b.wrapping_sub(0x33)).collect();
+        assert_eq!(parsed, expected, "第 {round} 轮数据区不一致");
+    }
+}

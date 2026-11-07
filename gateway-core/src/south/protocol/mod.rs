@@ -64,6 +64,14 @@ pub mod s7comm;
 #[cfg(test)]
 pub mod skeleton;
 
+/// 协议帧性质测试用的确定性伪随机源（仅测试构建）。
+///
+/// 只有 modbus / dlt645 / cjt188 的测试会用到；协议裁剪构建下不挂载，
+/// 避免 `-D dead_code` 因无调用方报错。
+#[cfg(test)]
+#[cfg(any(feature = "modbus", feature = "dlt645", feature = "cjt188"))]
+pub(crate) mod test_support;
+
 #[cfg(test)]
 mod tests;
 

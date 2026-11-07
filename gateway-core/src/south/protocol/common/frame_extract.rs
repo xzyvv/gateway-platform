@@ -187,6 +187,11 @@ pub(crate) fn extract_dlt645_cjt188_frame(
             let _ = fb.pop(start + 1);
             continue;
         }
-        return Some(fb.pop(start + total));
+        // 只返回帧本身：重同步跳过的前缀垃圾必须丢弃，否则 parse_68_response
+        // 会因 response[0] != 0x68 直接拒绝，等于「重同步到了却用不了」。
+        if start > 0 {
+            let _ = fb.pop(start);
+        }
+        return Some(fb.pop(total));
     }
 }

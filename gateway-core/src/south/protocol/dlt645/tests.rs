@@ -518,3 +518,109 @@ fn malformed_dlt645_response_is_rejected_without_panic() {
     other_addr[0] ^= 0xFF;
     assert!(parse_dlt645_response(&full, &other_addr, Dlt645Version::V2007).is_err());
 }
+
+// =========================================================================
+// P2-1：协议帧性质测试（确定性伪随机，口径与 Modbus 一致）
+//
+// DLT645 的校验链路更长（起始符 ×2 / 地址 / 控制码 / 长度 / CS / 结束符），
+// 任一环节漏校验都会把脏数据当有效值。这里三管齐下：噪声重同步、
+// 单比特破坏必拒、全变种编解码往返。
+// =========================================================================
+
+use crate::south::bus::FrameBuffer;
+use crate::south::protocol::test_support::Lcg;
+
+const PROP_ADDR: [u8; 6] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+const PROP_VERSIONS: [Dlt645Version; 5] = [
+    Dlt645Version::V2007,
+    Dlt645Version::V1997BePlain,
+    Dlt645Version::V1997LePlain,
+    Dlt645Version::V1997BeCipher,
+    Dlt645Version::V1997LeCipher,
+];
+
+/// 性质：噪声 + 合法帧 → 提取器必须重同步出该帧，而不是把它吞掉。
+#[test]
+fn extract_dlt645_frame_resyncs_to_valid_frame_after_noise() {
+    let good = dlt_response(&PROP_ADDR, 0x91, &[0x33; 4]);
+    let mut lcg = Lcg::new(0x444C_5436_3435_5031);
+    for _ in 0..200 {
+        let len = lcg.below(40);
+        let noise = lcg.bytes_without_start_marker(len);
+        let mut fb = FrameBuffer::new();
+        fb.push(&noise);
+        fb.push(&good);
+        assert_eq!(
+            extract_dlt645_frame(&mut fb, None).as_deref(),
+            Some(good.as_slice()),
+            "噪声 {noise:?} 之后必须重同步出合法帧"
+        );
+    }
+}
+
+/// 性质：合法响应的任意单比特翻转，在**所有变种**下都必须被拒绝。
+#[test]
+fn parse_dlt645_response_rejects_every_single_bit_flip() {
+    let data = [0x12u8, 0x34, 0x56, 0x78];
+    for version in PROP_VERSIONS {
+        let frame = build_dlt645_frame(&PROP_ADDR, 0x91, &data, version);
+        assert!(
+            parse_dlt645_response(&frame, &PROP_ADDR, version).is_ok(),
+            "{version:?} 对照帧必须可解析"
+        );
+        for byte in 0..frame.len() {
+            for bit in 0..8 {
+                let mut f = frame.clone();
+                f[byte] ^= 1 << bit;
+                assert!(
+                    parse_dlt645_response(&f, &PROP_ADDR, version).is_err(),
+                    "{version:?}: 字节 {byte} 第 {bit} 位翻转后仍被接受"
+                );
+            }
+        }
+    }
+}
+
+/// 性质：随机地址 / 数据区 / 控制码低 5 位，在**所有变种**下
+/// 都必须 build → extract → parse 往返一致（数据区按变种决定是否 -0x33）。
+#[test]
+fn dlt645_build_extract_parse_roundtrip_for_all_versions() {
+    let mut lcg = Lcg::new(0x444C_5436_3435_5032);
+    for round in 0..200 {
+        let version = PROP_VERSIONS[round % PROP_VERSIONS.len()];
+        let addr: [u8; 6] = std::array::from_fn(|_| lcg.next_u8());
+        let len = lcg.below(24);
+        let data = lcg.bytes(len);
+        let ctrl = 0x81 | (lcg.next_u8() & 0x1F);
+
+        let frame = build_dlt645_frame(&addr, ctrl, &data, version);
+        let mut fb = FrameBuffer::new();
+        fb.push(&frame);
+        assert_eq!(
+            extract_dlt645_frame(&mut fb, None).as_deref(),
+            Some(frame.as_slice()),
+            "{version:?} 第 {round} 轮：提取结果必须与构造帧逐字节一致"
+        );
+
+        let parsed = parse_dlt645_response(&frame, &addr, version)
+            .unwrap_or_else(|e| panic!("{version:?} 第 {round} 轮合法帧解析失败: {e:?}"));
+        let expected: Vec<u8> = if version.data_cipher() {
+            data.iter().map(|b| b.wrapping_sub(0x33)).collect()
+        } else {
+            data.clone()
+        };
+        assert_eq!(parsed, expected, "{version:?} 第 {round} 轮数据区不一致");
+    }
+}
+
+/// 性质：任意随机字节喂给解析器都不得 panic（错误必须走 Err）。
+#[test]
+fn parse_dlt645_response_random_bytes_never_panics() {
+    let mut lcg = Lcg::new(0x444C_5436_3435_5033);
+    for _ in 0..2000 {
+        let len = lcg.below(40);
+        let bytes = lcg.bytes(len);
+        let _ = parse_dlt645_response(&bytes, &PROP_ADDR, Dlt645Version::V2007);
+    }
+    assert!(parse_dlt645_response(&[], &PROP_ADDR, Dlt645Version::V2007).is_err());
+}
