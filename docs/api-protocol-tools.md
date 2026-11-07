@@ -40,10 +40,11 @@
 | 从站扫描 | `POST /api/protocol-tools/slave-scan` | 逐地址探测从站是否存在，请求内同步返回结果 |
 | 寄存器扫描 | `POST /api/protocol-tools/register-scan`、`GET /api/protocol-tools/register-scan`、`GET …/:id`、`DELETE …/:id`、`POST …/:id/suggestions` | 逐地址读寄存器/线圈；DELETE 内含「先中止再移除」语义 |
 | 抓包 | `GET /api/protocol-tools/packet-capture/packets`、`POST …/packet-capture/clear` | 读取/清空 frame_log 环形日志 |
-| 回放 | `GET …/packet-replay/sessions`、`GET …/sessions/:id`、`POST …/sessions`、`DELETE …/sessions/:id`、`POST …/sessions/:id/execute` | 会话 CRUD 落盘（见 §4）；预置会话仅在 `web.demo_replay_sessions=true` 时存在且不可覆盖/删除；execute 为真实逐帧重发 |
+| 回放 | `GET …/packet-replay/sessions`、`GET …/sessions/:id`、`POST …/sessions`、`DELETE …/sessions/:id`、`POST …/sessions/:id/execute` | 会话 CRUD 落盘（见 §5）；预置会话仅在 `web.demo_replay_sessions=true` 时存在且不可覆盖/删除；execute 为真实逐帧重发 |
 | 报文编辑 | `GET …/packet-editor/presets`、`POST …/packet-editor/send` | 预置帧模板 + 真实下发单帧 |
 | 协议转换 | `GET/POST …/convert/rules`、`PUT/DELETE …/convert/rules/:id`、`POST …/convert/rules/:id/toggle` | 值变换规则，落配置并热加载 |
 | 从站模拟 | `GET …/simulator/registers`、`GET …/simulator/status`、`PUT …/simulator/registers/:addr`、`POST …/simulator/start`、`POST …/simulator/stop` | **真实 Modbus TCP 从站**：启动后在网关本机监听 TCP 端口，外部主站可连接读写寄存器；寄存器为内存态（见 §3） |
+| IEC104 直读 | `POST /api/protocol-tools/iec104/ioa-read` | **未建点位也能按 IOA 读到实时值**：一次总召唤取全站快照，返回命中 IOA 与全量快照（见 §4） |
 
 已下线的能力（**不再有路由，勿按旧文档调用**）：`packet-capture/buses`（总线列表统一走
 `GET /api/config`）、`register-scan/:id/stop`（DELETE 已含中止语义）、`step-debug`
@@ -142,7 +143,58 @@
 
 ---
 
-## 4. 已落盘状态
+## 4. IEC104 按 IOA 直读（未建点位调试）
+
+`POST /api/protocol-tools/iec104/ioa-read`
+
+现场常见场景：设备刚上电、点位配置表里**还没有**那个 IOA，但要先确认「这个点到底
+有没有值、值是多少」。本端点就是这条最短路径：给一条总线 + 一组 IOA，直接返回实时值。
+
+### 4.1 请求 / 响应
+
+| 端点 | 请求体 | 响应体 |
+|---|---|---|
+| `POST /api/protocol-tools/iec104/ioa-read` | `{ "bus": "iec104_1", "ioas": [100, 101], "timeout_ms": 3000 }`；`bus` 必填，`ioas` 必填（≤ 256 个），`timeout_ms` 可选 | `{ bus, source, entries[], snapshot[] }` |
+
+- `entries`：与请求 `ioas` 一一对应、保持请求顺序；`value` 为 `null` 表示**本轮总召唤未
+  上报该 IOA**（**绝不返回 0**：0 是合法工程量，静默 0 会把「从站没这个点」误读成
+  「值为 0」）。
+- `snapshot`：本轮总召唤返回的**全量** IOA 快照（按 IOA 升序）——现场据此就能看到从站
+  到底上报了哪些点。
+- `source`：`collector` = 复用了该总线已有的采集器实例；`standalone` = 自建连接直读。
+
+### 4.2 取数来源与协议约束
+
+IEC 60870-5-104 **没有**「读单个 IOA」的请求帧，唯一取数机制是总召唤（C_IC_NA_1 /
+ASDU 100）一次返回全站快照。因此「按 IOA 直读」= 一次总召唤 → 从快照取目标 IOA。
+
+| 场景 | 取数方式 | 说明 |
+|---|---|---|
+| 该总线**已建点位**（采集器实例在跑） | 复用采集器实例 | 不新建第二条 TCP 连接（IEC104 从站通常只接受一条主站连接）。此时若总线仍在采集，返回 `bus_busy` + 提示先 `POST /api/buses/:name/pause`——直读与采集循环会争用同一链路 |
+| 该总线**未建点位**（无采集器实例） | 自建连接直读 | 读完即断开（采集器 `Drop` 中断 keepalive 并关闭 TCP 连接），不影响采集面 |
+
+- 仅支持 `protocol = iec104` 的总线，其它协议返回 `unsupported_protocol`。
+- 本端点**不占用调试租约**（不做裸帧收发），因此不受 §1「同一总线同一时刻只允许一个
+  调试会话」约束；采集占用判定由本端点自行完成。
+- 总召唤窗口：缺省取总线 `timeout_ms`（并抬到 2000ms 下限——总召唤返回全站数据，大站点
+  下 500ms 偏紧）；显式指定时按 `[100, 60000]` ms 截断。
+- 审计：每次调用写一条 `debug.frame.send`（detail 含 IOA 数量与取数来源）。
+
+### 4.3 错误码
+
+| `error` | 含义 |
+|---|---|
+| `missing_bus` | 请求缺少 `bus` |
+| `bus_not_found` | 总线不在当前配置中 |
+| `unsupported_protocol` | 该总线协议不是 iec104（或当前构建未启用 iec104） |
+| `bus_busy` | 该总线正在采集中，需先暂停采集 |
+| `timeout` / `bus_offline` | 总召唤无应答 / 链路不可用 |
+
+参数非法（`ioas` 为空、IOA 越界、单次超过 256 个）走 HTTP 400 + `code 4000`。
+
+---
+
+## 5. 已落盘状态
 
 | 文件 | 位置 | 写入方式 |
 |---|---|---|
@@ -154,7 +206,7 @@
 
 ---
 
-## 5. 页面本地态（不经过后端，勿当接口能力）
+## 6. 页面本地态（不经过后端，勿当接口能力）
 
 | 位置 | 说明 |
 |---|---|
@@ -163,7 +215,7 @@
 
 ---
 
-## 6. 已知偏差
+## 7. 已知偏差
 
 - `auto-detect` 只输出「当前总线参数下已确认的项」，**不做未知波特率/校验位扫描**：
   运行期没有改串口参数的接口（`DebugBusTrait` 按 `BusConfig` 打开时固定参数）。

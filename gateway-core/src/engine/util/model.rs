@@ -244,6 +244,39 @@ impl DataPoint {
     }
 }
 
+/// 按协议地址直读的单点结果（未建点位场景下的调试读值）
+///
+/// 与 [`DataPoint`] 的区别：`DataPoint` 是**已建点位**的采集产物（带 point_id/
+/// device_id/工程量换算），本结构是**按协议原始地址**（如 IEC104 的 IOA）直读的
+/// 调试读值，不经过点位配置、公式换算与命名。
+///
+/// 未命中语义：**`value` 为 `None` 表示该地址本轮总召唤未上报**，
+/// 绝不静默返回 0（0 是合法工程量，静默 0 会把「没这个点」误读成「值为 0」）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressReadEntry {
+    /// 协议原始地址（IEC104 为 IOA）
+    pub address: u32,
+    /// 读到的值；未命中为 None
+    pub value: Option<f64>,
+    /// 质量码；未命中为 None
+    pub quality: Option<Quality>,
+    /// 源时标（UTC 毫秒），无时标时为 0
+    #[serde(default)]
+    pub source_ts: i64,
+}
+
+/// 按地址直读结果：命中项 + 本轮全量快照
+///
+/// `snapshot` 为本轮总召唤返回的全部 IOA（未命中目标也能看到现场到底有哪些点），
+/// 按地址升序排列，保证前端渲染稳定。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressReadResult {
+    /// 与请求地址列表一一对应的命中结果（保持请求顺序）
+    pub entries: Vec<AddressReadEntry>,
+    /// 本轮全量快照（按地址升序）
+    pub snapshot: Vec<AddressReadEntry>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

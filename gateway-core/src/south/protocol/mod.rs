@@ -75,7 +75,7 @@ pub use registry::{ProtocolRegistry, VALID_PROTOCOLS};
 
 use crate::config::PointConfig;
 use crate::engine::metrics::CollectErrorCode;
-use crate::engine::model::{DataPoint, Quality};
+use crate::engine::model::{AddressReadResult, DataPoint, Quality};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -212,6 +212,30 @@ pub trait Collector: Send + Sync {
                 results.push(self.read(p).await);
             }
             results
+        })
+    }
+
+    /// 按协议原始地址直读（默认不支持，返回错误）
+    ///
+    /// 与 [`Collector::read`] 的区别：`read` 依赖**已建点位**（`PointConfig`），
+    /// 本方法只依赖协议地址本身（如 IEC104 的 IOA），用于「点位表里没有这个点，
+    /// 但现场就是想看一眼它的实时值」的调试场景。
+    ///
+    /// 语义约束（实现方必须遵守）：
+    /// - 返回结果中的 `entries` 与传入 `addresses` **等长且逐位对应**；
+    /// - 未命中地址 `value` 必须为 `None`，**不得静默返回 0**；
+    /// - `snapshot` 为本轮读取到的全量地址快照。
+    ///
+    /// 仅支持「按地址取值」的协议需要覆盖此方法；默认实现返回
+    /// [`CollectorError::Unsupported`]，使 `Arc<dyn Collector>` 路径可安全调用。
+    fn read_addresses<'a>(
+        &'a self,
+        _addresses: &'a [u32],
+    ) -> Pin<Box<dyn Future<Output = CollectorResult<AddressReadResult>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(CollectorError::Unsupported(
+                "read_addresses not supported for this protocol".into(),
+            ))
         })
     }
 

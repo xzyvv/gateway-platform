@@ -23,9 +23,9 @@ use super::{
     delete_replay_session, execute_replay, generate_register_suggestions, get_auto_detect_result,
     get_protocol_diag, get_register_scan_result, get_replay_session, get_simulator_status,
     list_convert_rules, list_packets, list_presets, list_protocols, list_register_scan_results,
-    list_replay_sessions, list_sim_registers, save_replay_session, scan_slaves, send_frame,
-    start_auto_detect, start_register_scan, start_simulator, stop_auto_detect, stop_simulator,
-    toggle_convert_rule, update_convert_rule, update_sim_register,
+    list_replay_sessions, list_sim_registers, read_iec104_ioas, save_replay_session, scan_slaves,
+    send_frame, start_auto_detect, start_register_scan, start_simulator, stop_auto_detect,
+    stop_simulator, toggle_convert_rule, update_convert_rule, update_sim_register,
 };
 use crate::web::types::{require_auth, require_auth_if_anon_disabled, AppState};
 
@@ -187,6 +187,16 @@ pub fn protocol_tools_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/protocol-tools/slave-scan", post(scan_slaves))
         .route_layer(from_fn_with_state(state.clone(), require_auth));
 
+    // ===== iec104 按 IOA 直读（v2.0 全部免费）=====
+    // 现场调试入口：点位配置表里没有该 IOA，也能直接读到该点的实时值。
+    // POST（会向现场从站发总召唤）→ 始终要求 token。
+    let iec104_ioa_read = Router::new()
+        .route(
+            "/api/protocol-tools/iec104/ioa-read",
+            post(read_iec104_ioas),
+        )
+        .route_layer(from_fn_with_state(state.clone(), require_auth));
+
     // ===== 公开 tier 列表（core 即可，列已注册协议清单）=====
     // P1：协议诊断（s7comm SZL / bacnet Who-Is / gpio 芯片信息）此前无任何生产
     // 调用方，能力位 supports_diag 下发却没入口 —— 这里与协议清单同组暴露，同样免费。
@@ -209,6 +219,7 @@ pub fn protocol_tools_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .merge(convert_write)
         .merge(slave_sim_read)
         .merge(slave_sim_write)
+        .merge(iec104_ioa_read)
         .merge(public_read)
         .route_layer(from_fn(crate::web::middleware::tag_protocol_tool))
 }

@@ -160,10 +160,12 @@ impl DebugBusTrait for BusManager {
 /// `ChecksumError` 由分帧器触发（调试直发不经过分帧器，此处保留以防底层调整）；
 /// `BusClosed` / `IoError` 属于链路/端口不可用，报 `bus_offline`，
 /// 让前端提示「检查串口是否存在 / 驱动是否加载」而不是让用户反复调超时。
-fn classify_bus_error(e: CollectorError) -> BusErrorKind {
+pub(crate) fn classify_bus_error(e: CollectorError) -> BusErrorKind {
     match e {
         CollectorError::NoReply | CollectorError::Timeout(_) => BusErrorKind::Timeout,
         CollectorError::ChecksumError => BusErrorKind::Crc,
+        // 协议未实现该能力（如某协议不支持按地址直读）
+        CollectorError::Unsupported(_) => BusErrorKind::UnsupportedProtocol,
         // 协议裁剪构建（无 modbus feature）下 core 不含该错误变体
         #[cfg(feature = "modbus")]
         CollectorError::ModbusException(_) => BusErrorKind::Exception,

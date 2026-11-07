@@ -7,12 +7,110 @@
 //! 而非 `web::traits` 的 trait 注入——trait 注入是为需要 mock 的有状态依赖
 //! （scheduler/queue/gateway/ota）设计的。
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 
 use gateway_core::config::BusConfig;
+use gateway_core::engine::model::AddressReadResult;
 use gateway_core::north::template::TemplateEngine;
+
+use crate::web::debug_bus::{classify_bus_error, BusErrorKind};
+
+/// IEC104 按 IOA 直读的取数来源
+///
+/// 现场两种场景对应两条取数路径：总线**已建点位**（采集器实例已在跑）与总线
+/// **未建点位**（没有采集器，只能自建连接）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Iec104ReadSource {
+    /// 复用该总线上已存在的采集器实例（不新建第二条 TCP 连接）
+    Collector,
+    /// 自建连接直读（总线未建点位时的唯一路径）
+    Standalone,
+}
+
+/// 直读失败：机器码 + 现场可读原因
+pub(crate) struct AddressReadFailure {
+    /// 调试面机器码（供前端分支）
+    pub kind: BusErrorKind,
+    /// 现场可读的失败原因（协议层原始错误文本）
+    pub detail: String,
+}
+
+/// 复用已有采集器实例按 IOA 直读。
+///
+/// IEC 104 协议**没有**「读单个 IOA」的请求帧，唯一取数机制是总召唤
+/// （C_IC_NA_1）一次返回全站快照，故这里的「直读」= 一次总召唤 → 从快照取目标 IOA。
+///
+/// 错误在门面内完成归类：handler 侧不感知 `south` 层的错误类型（分层规则）。
+pub(crate) async fn iec104_read_via_collector(
+    collector: &Arc<dyn Collector>,
+    addresses: &[u32],
+) -> Result<AddressReadResult, AddressReadFailure> {
+    collector.read_addresses(addresses).await.map_err(|e| {
+        let detail = e.to_string();
+        AddressReadFailure {
+            kind: classify_bus_error(e),
+            detail,
+        }
+    })
+}
+
+/// 自建连接按 IOA 直读（总线**未建点位**场景）。
+///
+/// IEC 104 从站通常只接受一条主站连接，因此本路径只在「该总线没有采集器实例」
+/// 时使用；读完即丢弃采集器（其 `Drop` 会中断 keepalive 并关闭 TCP 连接）。
+///
+/// 协议裁剪构建（未启用 `iec104` feature）下 core 不含该协议模块，此处如实返回
+/// 「不支持」而不是让整个 gateway-api 编译失败。
+#[cfg(feature = "iec104")]
+pub(crate) async fn iec104_read_standalone(
+    bus: &BusConfig,
+    addresses: &[u32],
+    timeout_ms: Option<u64>,
+) -> Result<AddressReadResult, AddressReadFailure> {
+    // 总召唤窗口与采集路径同源（bus.timeout_ms），允许现场按需放大以取全站快照
+    let io_timeout_ms = timeout_ms.unwrap_or(bus.timeout_ms);
+    let addr = bus
+        .tcp_addr
+        .clone()
+        .unwrap_or_else(|| "localhost:2404".to_string());
+    let collector = gateway_core::south::protocol::iec104::Iec104Collector::new(
+        addr,
+        bus.port_name.clone(),
+        Duration::from_millis(io_timeout_ms),
+        bus.asdu_addr_len.unwrap_or(2),
+    );
+    // 整个操作（含 TCP 建链）设总预算：建链 3s + 总召唤窗口
+    let budget = Duration::from_millis(io_timeout_ms.saturating_add(3000));
+    match tokio::time::timeout(budget, Collector::read_addresses(&collector, addresses)).await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(e)) => {
+            let detail = e.to_string();
+            Err(AddressReadFailure {
+                kind: classify_bus_error(e),
+                detail,
+            })
+        }
+        Err(_) => Err(AddressReadFailure {
+            kind: BusErrorKind::Timeout,
+            detail: format!("总召唤超时（预算 {} ms）", budget.as_millis()),
+        }),
+    }
+}
+
+#[cfg(not(feature = "iec104"))]
+pub(crate) async fn iec104_read_standalone(
+    _bus: &BusConfig,
+    _addresses: &[u32],
+    _timeout_ms: Option<u64>,
+) -> Result<AddressReadResult, AddressReadFailure> {
+    Err(AddressReadFailure {
+        kind: BusErrorKind::UnsupportedProtocol,
+        detail: "当前构建未启用 iec104 协议，无法按 IOA 直读".to_string(),
+    })
+}
 
 /// 模板变量表（handler 构造渲染参数用）
 pub(crate) use gateway_core::north::template::{ExtraValue, TemplateVars};

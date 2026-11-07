@@ -9,7 +9,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use crate::config::PointConfig;
-use crate::engine::model::{DataPoint, Quality};
+use crate::engine::model::{AddressReadEntry, AddressReadResult, DataPoint, Quality};
 use crate::south::protocol::{Collector, CollectorError, CollectorResult};
 
 use super::frames::{build_uframe, encode_command_object, read_frame, STARTDT_ACT};
@@ -112,6 +112,69 @@ impl Iec104Collector {
             results.push(r);
         }
         results
+    }
+
+    /// 按 IOA 直读（不依赖点位表）
+    ///
+    /// IEC 104 协议**没有**「读单个 IOA」的请求帧，唯一取数机制是总召唤
+    /// （C_IC_NA_1 / ASDU 100）一次返回全站快照。故「按 IOA 直读」= 一次总召唤
+    /// → 从本轮快照取目标 IOA。
+    ///
+    /// 未命中语义：目标 IOA 不在本轮快照里 → `value = None`，
+    /// **不返回 0**（0 是合法工程量，静默 0 会把「从站没这个点」误读成「值为 0」）。
+    pub(super) async fn read_addresses_by_ioa(
+        &self,
+        addresses: &[u32],
+    ) -> CollectorResult<AddressReadResult> {
+        if addresses.is_empty() {
+            return Ok(AddressReadResult {
+                entries: Vec::new(),
+                snapshot: Vec::new(),
+            });
+        }
+
+        // 惰性建链（与 read_point 同口径）：首连入口 + keepalive 判定断连后的重建入口。
+        if !self.is_connected() {
+            self.connect().await?;
+        }
+
+        // 一次总召唤刷新整站快照（失败时如实返回错误，不返回空快照冒充成功）
+        self.interrogate().await?;
+
+        let cache = self.data.lock().await;
+
+        // 命中项：与请求地址一一对应，保持请求顺序
+        let entries: Vec<AddressReadEntry> = addresses
+            .iter()
+            .map(|ioa| match cache.get(ioa) {
+                Some((val, q, ts)) => AddressReadEntry {
+                    address: *ioa,
+                    value: Some(*val),
+                    quality: Some(*q),
+                    source_ts: *ts as i64,
+                },
+                None => AddressReadEntry {
+                    address: *ioa,
+                    value: None,
+                    quality: None,
+                    source_ts: 0,
+                },
+            })
+            .collect();
+
+        // 全量快照：按 IOA 升序，保证前端渲染稳定
+        let mut snapshot: Vec<AddressReadEntry> = cache
+            .iter()
+            .map(|(ioa, (val, q, ts))| AddressReadEntry {
+                address: *ioa,
+                value: Some(*val),
+                quality: Some(*q),
+                source_ts: *ts as i64,
+            })
+            .collect();
+        snapshot.sort_by_key(|e| e.address);
+
+        Ok(AddressReadResult { entries, snapshot })
     }
 
     /// 决策表 #18：写入 = 下发控制方向命令
@@ -262,6 +325,15 @@ impl Collector for Iec104Collector {
         Box<dyn std::future::Future<Output = Vec<CollectorResult<DataPoint>>> + Send + 'a>,
     > {
         Box::pin(self.read_batch_points(points))
+    }
+
+    fn read_addresses<'a>(
+        &'a self,
+        addresses: &'a [u32],
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = CollectorResult<AddressReadResult>> + Send + 'a>,
+    > {
+        Box::pin(self.read_addresses_by_ioa(addresses))
     }
 
     fn write<'a>(

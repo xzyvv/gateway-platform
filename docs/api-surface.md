@@ -6,7 +6,7 @@
 
 **数据来源**：`gateway-api/src/web/mod.rs`（health 探针）+ `gateway-api/src/web/api/*/routes.rs`（各业务子域）。
 
-**统计**：18 个路由组 / 141 条唯一路径 / 169 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
+**统计**：18 个路由组 / 142 条唯一路径 / 170 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
 
 **鉴权说明**：`token` = 始终需要 `Authorization: Bearer <token>`；`token（allow_anon_read=true 时可匿名）` = 匿名只读开关打开时可不带 token；
 `admin / exec scope` = 需要管理员或 `exec` scope 的 API 密钥；`无` = 公开端点。
@@ -191,7 +191,7 @@
 
 ## `protocol_tools` — 协议工具
 
-入口函数：`protocol_tools_routes`；端点数：30
+入口函数：`protocol_tools_routes`；端点数：31
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
@@ -223,6 +223,7 @@
 | POST | `/api/protocol-tools/simulator/start` | token | `start_simulator` |
 | POST | `/api/protocol-tools/simulator/stop` | token | `stop_simulator` |
 | POST | `/api/protocol-tools/slave-scan` | token | `scan_slaves` |
+| POST | `/api/protocol-tools/iec104/ioa-read` | token | `read_iec104_ioas` |
 | GET | `/api/protocols` | token（`allow_anon_read=true` 时可匿名） | `list_protocols` |
 | GET | `/api/protocols/:name/diag` | token（`allow_anon_read=true` 时可匿名） | `get_protocol_diag` |
 

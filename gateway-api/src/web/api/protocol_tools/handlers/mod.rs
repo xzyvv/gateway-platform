@@ -2,6 +2,7 @@
 //! 路由见 `routes.rs` 各能力分组
 
 pub mod auto_detect;
+pub mod iec104_ioa_read;
 pub mod packet_capture;
 pub mod packet_editor;
 pub mod packet_replay;
@@ -13,6 +14,7 @@ pub mod slave_scan;
 pub mod slave_simulator;
 
 pub(crate) use auto_detect::*;
+pub(crate) use iec104_ioa_read::*;
 pub(crate) use packet_capture::*;
 pub(crate) use packet_editor::*;
 pub(crate) use packet_replay::*;
