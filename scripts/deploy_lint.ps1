@@ -1454,6 +1454,118 @@ if ($null -ne $buildSh) {
 else {
     Warn "找不到 deploy/build-release.sh（跳过 chmod 断言）"
 }
+
+# ══════════════════════════════════════════════════════════
+# C18  工作流 shell 里的变量名笔误
+#
+# 真实发生过：heavy 的 release-package 报
+#   `line 48: PROTOCOLS: unbound variable`
+# 根因是同一个脚本块里赋值用 `PROTOS=`，引用却写成 `$PROTOCOLS`。
+# 在 `set -u` 下这类笔误不是「取到空值」，而是整步直接崩 ——
+# 而崩掉的位置往往是**断言已经跑完之后**（包已经构建好了、协议名也对了），
+# 于是失败信息完全指不到真正的问题：日志里只剩一句 unbound variable。
+#
+# 检查法：把脚本块里「被赋值的变量名」与「被引用的变量名」各自收集，
+# 若某个引用名与某个赋值名只差极少的字符（编辑距离 ≤ 2），就判定为笔误。
+# 这样只报「长得极像、极可能是手滑」的情形，不会把正常的
+# `$OUT` / `$f` / `$1` 之类报成错。
+Write-Host "[C18] 工作流 shell 变量名笔误（赋值名与引用名形近）" -ForegroundColor Cyan
+
+function Get-Levenshtein([string]$a, [string]$b) {
+    if ($a -eq $b) { return 0 }
+    $la = $a.Length; $lb = $b.Length
+    if ($la -eq 0) { return $lb }
+    if ($lb -eq 0) { return $la }
+    $prev = New-Object int[] ($lb + 1)
+    $cur = New-Object int[] ($lb + 1)
+    for ($j = 0; $j -le $lb; $j++) { $prev[$j] = $j }
+    for ($i = 1; $i -le $la; $i++) {
+        $cur[0] = $i
+        for ($j = 1; $j -le $lb; $j++) {
+            $cost = if ($a[$i - 1] -eq $b[$j - 1]) { 0 } else { 1 }
+            $m = $prev[$j] + 1
+            $n = $cur[$j - 1] + 1
+            $o = $prev[$j - 1] + $cost
+            $cur[$j] = [Math]::Min([Math]::Min($m, $n), $o)
+        }
+        $tmp = $prev; $prev = $cur; $cur = $tmp
+    }
+    return [int]$prev[$lb]
+}
+
+# GitHub 提供的上下文变量与 shell 内建：不是本脚本块定义的，不参与比对
+$ctxVars = @(
+    "PATH", "HOME", "USER", "PWD", "OLDPWD", "SHELL", "TMPDIR", "RANDOM", "SECONDS", "LINENO", "IFS",
+    "CI", "GITHUB_WORKSPACE", "GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_PATH",
+    "GITHUB_RUN_ID", "GITHUB_RUN_NUMBER", "GITHUB_SHA", "GITHUB_REF", "GITHUB_REPOSITORY",
+    "GITHUB_WORKFLOW", "GITHUB_HEAD_REF", "GITHUB_BASE_REF", "GITHUB_TOKEN", "GITHUB_ACTOR",
+    "GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_API_URL", "GITHUB_SERVER_URL",
+    "RUNNER_OS", "RUNNER_ARCH", "RUNNER_TEMP", "RUNNER_TOOL_CACHE", "RUNNER_DEBUG",
+    "CARGO_HOME", "CARGO_TERM_COLOR", "CARGO_INCREMENTAL", "RUSTFLAGS", "RUSTUP_HOME",
+    "NODE_OPTIONS", "NPM_CONFIG_PREFIX", "http_proxy", "https_proxy", "no_proxy",
+    "DEBIAN_FRONTEND", "BASH_ENV", "SHLVL", "PIPESTATUS", "REPLY", "UID", "EUID", "GROUPS"
+)
+
+# 只看这些作业的 run 块：交付链路的重作业（交付包 + 交付冒烟）
+$watchJobs = @(
+    @{ Wf = "ci.yml"; Text = $ciText; Job = "deploy-smoke" },
+    @{ Wf = "heavy.yml"; Text = $heavyText; Job = "release-package" }
+)
+
+foreach ($wj in $watchJobs) {
+    if ($null -eq $wj.Text) {
+        Warn "找不到 .github/workflows/$($wj.Wf)（跳过 $($wj.Job) 的变量断言）"
+        continue
+    }
+    $block = Get-JobBlock $wj.Text $wj.Job
+    if ($null -eq $block) {
+        Warn "$($wj.Wf) 里找不到 $($wj.Job) 作业（跳过变量断言）"
+        continue
+    }
+    # 去掉注释行：注释里出现 $VAR 是正常的说明文字
+    $code = (($block -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+
+    # 赋值：VAR= / VAR = / export VAR=
+    $assigned = @{}
+    foreach ($am in [regex]::Matches($code, '(?m)(?:^|\s|;)(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=')) {
+        $assigned[$am.Groups[1].Value] = $true
+    }
+    # 引用：$VAR 或 ${VAR}
+    $referenced = @{}
+    foreach ($rm in [regex]::Matches($code, '\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?')) {
+        $referenced[$rm.Groups[1].Value] = $true
+    }
+
+    $hit = $false
+    foreach ($r in $referenced.Keys) {
+        if ($assigned.ContainsKey($r)) { continue }
+        if ($ctxVars -contains $r) { continue }
+        if ($r -match '^(BASH_|^[0-9])') { continue }
+        # 找形近的赋值名：
+        #   ① 编辑距离 ≤ 2（改错一两个字母）
+        #   ② 纯增删关系：编辑距离恰等于长度差（多打了几个字母）
+        # 第②条是本次真实缺陷的形态，编辑距离为 3，单靠①抓不到。
+        foreach ($a in $assigned.Keys) {
+            if ($a.Length -lt 5) { continue }
+            if ($r.Length -lt 5) { continue }
+            $d = Get-Levenshtein $r $a
+            # 「纯增删」判据：编辑距离恰好等于两名字长度差 → 说明较长的那个
+            # 只是被多打了几个字符（PROTOS → PROTOCOLS 多打了 COLS）。
+            # 这是本次真实缺陷的形态；编辑距离为 3，靠「≤2」抓不到。
+            $lenDiff = [Math]::Abs($r.Length - $a.Length)
+            $isInsertionOnly = ($lenDiff -ge 1 -and $d -eq $lenDiff)
+            if (($d -ge 1 -and $d -le 2) -or $isInsertionOnly) {
+                $why = if ($isInsertionOnly) { "较长者只是多打了 $lenDiff 个字符" } else { "相差 $d 个字符" }
+                Fail "$($wj.Wf) 的 $($wj.Job) 作业里引用了 '" + '$' + $r + "'，但本块内只赋值为 '$a'（$why）—— 疑似变量名笔误。set -u 下这类错误会在断言跑完之后才崩，失败信息指不到真正的问题"
+                $hit = $true
+                break
+            }
+        }
+    }
+    if (-not $hit) {
+        Ok "$($wj.Wf) 的 $($wj.Job) 作业里没有形近的变量名笔误（赋值 $($assigned.Count) 个 / 引用 $($referenced.Count) 个）"
+    }
+}
 Write-Host ""
 Write-Host ""
 

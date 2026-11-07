@@ -898,7 +898,7 @@ jobs:
           cat "$PKG/BUILD-INFO.txt"
 
           # sku-standard 的南向协议注册名（不是 cargo feature 名：opcua-client → opcua）
-          PROTOS="$(grep -E '^protocols=' "$PKG/BUILD-INFO.txt" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+          PROTOCOLS="$(grep -E '^protocols=' "$PKG/BUILD-INFO.txt" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
           EXPECT="cjt188,dlt645,iec104,modbus,opcua"
           if [ "$PROTOCOLS" != "$EXPECT" ]; then
             echo "✗ protocols 期望 '$EXPECT'，实际 '$PROTOCOLS'" >&2
