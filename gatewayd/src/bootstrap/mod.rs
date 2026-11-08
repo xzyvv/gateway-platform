@@ -139,6 +139,23 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
             .await?;
 
     // ===== 后台监控任务 =====
+    // API Key 调用统计批量化落盘：鉴权热路径只做内存自增，这里每 5s 单事务
+    // 批量写回 SQLite。任务随 runtime 退出；正常停机路径在 graceful_shutdown
+    // 中还会强制 flush 一次，确保最后一个周期的增量不丢。
+    {
+        let api_keys = app_state.platform.api_keys.clone();
+        gateway_core::engine::supervision::spawn_catch_unwind("api_key_usage_flush", async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                if let Err(e) = api_keys.flush() {
+                    tracing::warn!("api key usage flush failed: {}", e);
+                }
+            }
+        });
+    }
+
     // spawn_disk_monitor 内部使用 spawn_supervised（self-recovery），
     // 不返回 JoinHandle，因此 health_handles 始终为空；graceful_shutdown 中
     // 的 abort() 在空 Vec 上是 no-op。

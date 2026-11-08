@@ -393,7 +393,7 @@ pub(crate) fn start_alarm_engine(
         .collect();
     let alarm_count = alarm_points.len();
     if alarm_count > 0 {
-        // 依赖倒置：报警引擎只认 AlarmPublisher 契约，MQTT 是它当前的实现方。
+        // 依赖倒置：报警引擎只认 `AlarmPublisher` 契约，MQTT 是它当前的实现方。
         // 这里是唯一的"实现 → 契约"装配点，引擎侧不感知 MQTT。
         let alarm_publisher: Option<
             std::sync::Arc<dyn gateway_core::engine::ports::AlarmPublisher>,
@@ -605,7 +605,7 @@ pub(crate) fn spawn_license_storage_retention_watch(
 /// 不可用不应让网关起不来，用户仍可在配置页手动保存生成版本。
 fn seed_baseline_config_version(state: &AppState) {
     let store = state.config.version_store.as_ref();
-    let cfg = state.config.load_full().as_ref().clone();
+    let cfg = state.config.load_full();
     seed_baseline_version_if_empty(store, &cfg);
 }
 
@@ -875,8 +875,8 @@ mod baseline_version_tests {
     /// `GET /api/config/versions` 永远是空列表（"回滚到出厂配置"无从谈起）。
     #[test]
     fn seeds_baseline_only_when_history_is_empty() {
-        // 注意不能用 ":memory:"：ConfigVersionStore 每次操作新开连接，
-        // 内存库在连接关闭即消失（建表与查询会落在两个不同的库）。
+        // 用文件库而非 ":memory:"：与其他 Store 一样走长驻连接，
+        // 内存库在 Store drop 后即消失，不利于断言落盘结果。
         let db_path =
             std::env::temp_dir().join(format!("gw-version-baseline-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&db_path);

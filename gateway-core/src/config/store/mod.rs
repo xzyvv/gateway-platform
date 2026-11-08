@@ -7,6 +7,7 @@
 //! 路径 `gateway_core::config::ConfigVersionStore` 等保持不变。
 
 mod api_keys;
+mod conn;
 mod quality_rules;
 mod rate_rules;
 mod scheduled_tasks;

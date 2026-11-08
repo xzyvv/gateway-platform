@@ -20,7 +20,7 @@ fn temp_db() -> String {
 fn test_conn_sets_busy_timeout() {
     let path = temp_db();
     let store = UplinkTestHistoryStore::new(&path).expect("should succeed");
-    let conn = store.conn().expect("should succeed");
+    let conn = store.conn();
     let timeout: i64 = conn
         .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
         .expect("should succeed");

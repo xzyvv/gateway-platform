@@ -4,13 +4,13 @@
 //! 版本存储在 SQLite 中（复用 data_queue 所在数据库，或独立文件），
 //! 每条记录包含：版本号、时间戳、配置 JSON、备注。
 
-use std::path::PathBuf;
-
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::config::GatewayConfig;
 use crate::engine::error::GatewayResult;
+
+use super::conn::SharedConn;
 
 /// 配置版本记录
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -30,41 +30,38 @@ pub struct ConfigVersion {
 
 /// 配置版本管理器
 pub struct ConfigVersionStore {
-    db_path: PathBuf,
+    /// 长驻连接：本库文件由 config_versions / uplink_test_history / disk_history
+    /// 三处共享，各自持有独立连接并发写；WAL 下写者互斥，故连接上必须常设
+    /// busy_timeout（见 [`SharedConn::open`]），不存在「new() 设过、后续新连接
+    /// 忘了设」的问题。
+    conn: SharedConn,
 }
 
 impl ConfigVersionStore {
     /// 创建版本管理器并初始化表
     pub fn new(db_path: &str) -> GatewayResult<Self> {
-        let conn = Connection::open(db_path).map_err(|e| {
-            crate::engine::error::GatewayError::Queue(format!("open version db failed: {}", e))
-        })?;
-        // r39-VER1：本库文件（default_version_db）由 config_versions / uplink_test_history /
-        // disk_history 三处共享，各自持有独立连接并发写。WAL 下写者互斥，未设置 busy_timeout
-        // 时遇 SQLITE_BUSY 会立即失败（默认 0ms）——表现为版本快照偶发丢失。
-        // 与 outbox（C18）/ 队列主库统一为 5s 退避排队。
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-            .map_err(|e| {
-                crate::engine::error::GatewayError::Queue(format!("set WAL failed: {}", e))
-            })?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS config_versions (
+        let conn = SharedConn::open(std::path::Path::new(db_path), "open version db")?;
+        // r39-VER1：本库文件（default_version_db）由 config_versions /
+        // uplink_test_history / disk_history 三处共享，各自持有独立连接并发写。
+        // WAL + busy_timeout 由 SharedConn::open 统一设置（5s 退避排队，
+        // 与 outbox（C18）/ 队列主库保持一致）。
+        conn.get()
+            .execute(
+                "CREATE TABLE IF NOT EXISTS config_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp INTEGER NOT NULL,
                 config_json TEXT NOT NULL,
                 note TEXT NOT NULL DEFAULT ''
             )",
-            [],
-        )
-        .map_err(|e| {
-            crate::engine::error::GatewayError::Queue(format!(
-                "create versions table failed: {}",
-                e
-            ))
-        })?;
-        Ok(Self {
-            db_path: PathBuf::from(db_path),
-        })
+                [],
+            )
+            .map_err(|e| {
+                crate::engine::error::GatewayError::Queue(format!(
+                    "create versions table failed: {}",
+                    e
+                ))
+            })?;
+        Ok(Self { conn })
     }
 
     /// 保存一个配置版本快照
@@ -83,7 +80,7 @@ impl ConfigVersionStore {
             crate::engine::error::GatewayError::Queue(format!("serialize config failed: {}", e))
         })?;
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let conn = self.conn()?;
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO config_versions (timestamp, config_json, note) VALUES (?1, ?2, ?3)",
             params![timestamp, config_json, note],
@@ -107,7 +104,7 @@ impl ConfigVersionStore {
 
     /// 列出所有版本（按 id 降序，最新在前）
     pub fn list_versions(&self) -> GatewayResult<Vec<ConfigVersion>> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, timestamp, config_json, note FROM config_versions ORDER BY id DESC",
@@ -138,7 +135,7 @@ impl ConfigVersionStore {
 
     /// 获取指定版本的配置
     pub fn get_version(&self, id: i64) -> GatewayResult<Option<ConfigVersion>> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let result = conn.query_row(
             "SELECT id, timestamp, config_json, note FROM config_versions WHERE id = ?1",
             params![id],
@@ -185,17 +182,8 @@ impl ConfigVersionStore {
         }
     }
 
-    fn conn(&self) -> GatewayResult<Connection> {
-        let conn = Connection::open(&self.db_path).map_err(|e| {
-            crate::engine::error::GatewayError::Queue(format!("open db failed: {}", e))
-        })?;
-        // r39-VER1：busy_timeout 是 per-connection 设置，new() 里设过的不会继承到
-        // 后续按需新开的连接，故每次 open 都必须重设，否则并发写仍会立即 SQLITE_BUSY。
-        conn.busy_timeout(std::time::Duration::from_millis(5000))
-            .map_err(|e| {
-                crate::engine::error::GatewayError::Queue(format!("set busy_timeout failed: {}", e))
-            })?;
-        Ok(conn)
+    fn conn(&self) -> parking_lot::MutexGuard<'_, Connection> {
+        self.conn.get()
     }
 }
 
@@ -219,7 +207,7 @@ mod tests {
         let db = dir.join("versions.db");
 
         let store = ConfigVersionStore::new(db.to_str().expect("utf8")).expect("should succeed");
-        let conn = store.conn().expect("should succeed");
+        let conn = store.conn();
         let timeout: i64 = conn
             .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
             .expect("should succeed");

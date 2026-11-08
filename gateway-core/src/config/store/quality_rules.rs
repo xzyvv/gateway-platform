@@ -10,13 +10,14 @@
 //! - `stale` 规则**不在管道执行**：超时未更新由调度器的连续失败/超时机制
 //!   （`Scheduler` 的 stale 计数与退避）负责，避免两套口径互相覆盖。
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::error::GatewayResult;
+
+use super::conn::SharedConn;
 
 /// 质量规则
 ///
@@ -63,14 +64,16 @@ fn new_id() -> String {
 
 /// 数据质量规则存储
 pub struct QualityRuleStore {
-    db_path: PathBuf,
+    /// 长驻连接：规则读取在采集管道热路径上，避免每次调用重开库
+    conn: SharedConn,
 }
 
 impl QualityRuleStore {
     pub fn new(db_path: &str) -> GatewayResult<Self> {
-        let conn = open_conn(std::path::Path::new(db_path))?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS quality_rules (
+        let conn = SharedConn::open(std::path::Path::new(db_path), "open quality rule db")?;
+        conn.get()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS quality_rules (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 condition TEXT NOT NULL,
@@ -83,25 +86,23 @@ impl QualityRuleStore {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );",
-        )
-        .map_err(|e| {
-            crate::engine::error::GatewayError::Queue(format!(
-                "create quality rule table failed: {}",
-                e
-            ))
-        })?;
-        Ok(Self {
-            db_path: PathBuf::from(db_path),
-        })
+            )
+            .map_err(|e| {
+                crate::engine::error::GatewayError::Queue(format!(
+                    "create quality rule table failed: {}",
+                    e
+                ))
+            })?;
+        Ok(Self { conn })
     }
 
-    fn conn(&self) -> GatewayResult<Connection> {
-        open_conn(&self.db_path)
+    fn conn(&self) -> parking_lot::MutexGuard<'_, Connection> {
+        self.conn.get()
     }
 
     /// 列出全部规则（创建时间升序，先建的在前）
     pub fn list_rules(&self) -> GatewayResult<Vec<QualityRule>> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, condition, min, max, max_rate, stale_seconds,
@@ -151,7 +152,7 @@ impl QualityRuleStore {
         rule.id = new_id();
         rule.created_at = now;
         rule.updated_at = now;
-        let conn = self.conn()?;
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO quality_rules
                 (id, name, condition, min, max, max_rate, stale_seconds,
@@ -177,9 +178,10 @@ impl QualityRuleStore {
 
     /// 更新规则；返回 None 表示规则不存在
     pub fn update_rule(&self, id: &str, rule: &QualityRule) -> GatewayResult<Option<QualityRule>> {
-        let conn = self.conn()?;
-        let n = conn
-            .execute(
+        // 连接锁不可重入：delegation 回查前必须先释放，否则自死锁
+        let n = {
+            let conn = self.conn();
+            conn.execute(
                 "UPDATE quality_rules SET name=?2, condition=?3, min=?4, max=?5,
                  max_rate=?6, stale_seconds=?7, result_quality=?8, enabled=?9,
                  updated_at=?10 WHERE id=?1",
@@ -196,7 +198,8 @@ impl QualityRuleStore {
                     now_ms(),
                 ],
             )
-            .map_err(|e| db_err("update quality rule", e))?;
+            .map_err(|e| db_err("update quality rule", e))?
+        };
         if n == 0 {
             return Ok(None);
         }
@@ -205,7 +208,7 @@ impl QualityRuleStore {
 
     /// 删除规则；返回是否删除了行
     pub fn delete_rule(&self, id: &str) -> GatewayResult<bool> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let n = conn
             .execute("DELETE FROM quality_rules WHERE id=?1", params![id])
             .map_err(|e| db_err("delete quality rule", e))?;
@@ -217,19 +220,10 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
     crate::engine::error::GatewayError::Queue(format!("{} failed: {}", ctx, e))
 }
 
-/// 打开连接并设置 busy_timeout（per-connection，每次 open 都必须重设）
-fn open_conn(path: &std::path::Path) -> GatewayResult<Connection> {
-    let conn = Connection::open(path).map_err(|e| {
-        crate::engine::error::GatewayError::Queue(format!("open quality rule db failed: {}", e))
-    })?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-        .map_err(|e| db_err("set pragmas", e))?;
-    Ok(conn)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 

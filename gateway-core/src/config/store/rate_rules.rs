@@ -8,13 +8,14 @@
 //! - `api_access_logs`：记录每个 /api/* 请求的状态码/延迟/来源 IP/是否被限流，
 //!   供「限流配置」页的访问日志与统计接口读取。保留最近 5000 行，防止膨胀。
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::error::GatewayResult;
+
+use super::conn::SharedConn;
 
 /// 访问日志保留行数上限：超出后裁掉最旧的一批。
 /// 网关 API 流量有限，5000 行足够覆盖现场排障所需的「最近发生了什么」。
@@ -80,14 +81,16 @@ fn new_id(prefix: &str) -> String {
 
 /// 限流规则 + 访问日志存储
 pub struct RateRuleStore {
-    db_path: PathBuf,
+    /// 长驻连接：限流判定在请求热路径上，避免每次调用重开库
+    conn: SharedConn,
 }
 
 impl RateRuleStore {
     pub fn new(db_path: &str) -> GatewayResult<Self> {
-        let conn = open_conn(std::path::Path::new(db_path))?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS rate_limit_rules (
+        let conn = SharedConn::open(std::path::Path::new(db_path), "open rate rule db")?;
+        conn.get()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS rate_limit_rules (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 path TEXT NOT NULL,
@@ -110,25 +113,23 @@ impl RateRuleStore {
                 limited INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_api_access_logs_ts ON api_access_logs(ts);",
-        )
-        .map_err(|e| {
-            crate::engine::error::GatewayError::Queue(format!(
-                "create rate rule tables failed: {}",
-                e
-            ))
-        })?;
-        Ok(Self {
-            db_path: PathBuf::from(db_path),
-        })
+            )
+            .map_err(|e| {
+                crate::engine::error::GatewayError::Queue(format!(
+                    "create rate rule tables failed: {}",
+                    e
+                ))
+            })?;
+        Ok(Self { conn })
     }
 
-    fn conn(&self) -> GatewayResult<Connection> {
-        open_conn(&self.db_path)
+    fn conn(&self) -> parking_lot::MutexGuard<'_, Connection> {
+        self.conn.get()
     }
 
     /// 列出全部规则（创建时间升序，先建的在前）
     pub fn list_rules(&self) -> GatewayResult<Vec<RateRule>> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, path, method, limit_per_minute, limit_per_hour, burst, enabled, created_at, updated_at
@@ -172,7 +173,7 @@ impl RateRuleStore {
         rule.id = new_id("rr");
         rule.created_at = now;
         rule.updated_at = now;
-        let conn = self.conn()?;
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO rate_limit_rules (id, name, path, method, limit_per_minute, limit_per_hour, burst, enabled, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -195,9 +196,10 @@ impl RateRuleStore {
 
     /// 更新规则；返回 None 表示规则不存在
     pub fn update_rule(&self, id: &str, rule: &RateRule) -> GatewayResult<Option<RateRule>> {
-        let conn = self.conn()?;
-        let n = conn
-            .execute(
+        // 连接锁不可重入：delegation 回查前必须先释放，否则自死锁
+        let n = {
+            let conn = self.conn();
+            conn.execute(
                 "UPDATE rate_limit_rules SET name=?2, path=?3, method=?4, limit_per_minute=?5,
                  limit_per_hour=?6, burst=?7, enabled=?8, updated_at=?9 WHERE id=?1",
                 params![
@@ -212,7 +214,8 @@ impl RateRuleStore {
                     now_ms(),
                 ],
             )
-            .map_err(|e| db_err("update rule", e))?;
+            .map_err(|e| db_err("update rule", e))?
+        };
         if n == 0 {
             return Ok(None);
         }
@@ -225,7 +228,7 @@ impl RateRuleStore {
 
     /// 删除规则；返回是否删除了行
     pub fn delete_rule(&self, id: &str) -> GatewayResult<bool> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let n = conn
             .execute("DELETE FROM rate_limit_rules WHERE id=?1", params![id])
             .map_err(|e| db_err("delete rule", e))?;
@@ -236,7 +239,7 @@ impl RateRuleStore {
     /// - 每行只一条 INSERT（WAL 下毫秒级）；
     /// - 每 ACCESS_LOG_PRUNE_BATCH 行才做一次保留裁剪。
     pub fn append_access_log(&self, entry: &ApiAccessLog) -> GatewayResult<()> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO api_access_logs (ts, method, path, status, latency_ms, client_ip, limited)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -266,7 +269,7 @@ impl RateRuleStore {
 
     /// 最近访问日志（最新在前）
     pub fn recent_access_logs(&self, limit: usize) -> GatewayResult<Vec<ApiAccessLog>> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, ts, method, path, status, latency_ms, client_ip, limited
@@ -296,7 +299,7 @@ impl RateRuleStore {
 
     /// 聚合统计（基于保留窗口内的访问日志）
     pub fn stats(&self) -> GatewayResult<RateLimitStats> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         // avg 只统计未被限流的请求：429 不过 handler、延迟≈0，混入会把均值拉低——
         // 限流越狠面板显得「越快」，与运维直觉相反。total/limited 口径不变（limited 是 total 子集）。
         let (total, limited, avg): (i64, i64, f64) = conn
@@ -320,19 +323,10 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
     crate::engine::error::GatewayError::Queue(format!("{} failed: {}", ctx, e))
 }
 
-/// 打开连接并设置 busy_timeout（per-connection，每次 open 都必须重设，见 r39-VER1）
-fn open_conn(path: &std::path::Path) -> GatewayResult<Connection> {
-    let conn = Connection::open(path).map_err(|e| {
-        crate::engine::error::GatewayError::Queue(format!("open rate rule db failed: {}", e))
-    })?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-        .map_err(|e| db_err("set pragmas", e))?;
-    Ok(conn)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

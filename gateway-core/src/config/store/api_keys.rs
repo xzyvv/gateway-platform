@@ -7,13 +7,15 @@
 //! - Key 由 ring SystemRandom 生成（160 bit 熵），格式 `gwk_<40 hex>`；
 //! - 鉴权比对走「哈希后查表」，等价于恒定时间比较（攻击者无法按字节逐位探测）。
 
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::error::GatewayResult;
+
+use super::conn::SharedConn;
 
 /// API 密钥记录（list 接口返回此结构，不含完整 Key）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,16 +73,31 @@ pub fn hash_api_key(key: &str) -> String {
     s
 }
 
+/// 单密钥的未落盘调用统计（内存累加，周期性批量落盘）
+#[derive(Debug, Clone, Copy, Default)]
+struct UsageStat {
+    calls: u64,
+    last_used_at: i64,
+}
+
 /// API 密钥存储
 pub struct ApiKeyStore {
-    db_path: PathBuf,
+    /// 长驻连接：鉴权走请求热路径，避免每次调用重开库
+    conn: SharedConn,
+    /// 调用统计内存累加区。
+    ///
+    /// 鉴权热路径只做内存自增（见 `authenticate`），由后台任务周期性调用
+    /// `flush()` 单事务批量落盘。统计语义是「可观测的调用次数」，不是计费
+    /// 口径：进程异常退出最多丢失一个刷新周期的增量，正常停机强制 flush。
+    stats: parking_lot::Mutex<HashMap<String, UsageStat>>,
 }
 
 impl ApiKeyStore {
     pub fn new(db_path: &str) -> GatewayResult<Self> {
-        let conn = open_conn(std::path::Path::new(db_path))?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS api_keys (
+        let conn = SharedConn::open(std::path::Path::new(db_path), "open api key db")?;
+        conn.get()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS api_keys (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 key_hash TEXT NOT NULL UNIQUE,
@@ -92,15 +109,16 @@ impl ApiKeyStore {
                 last_used_at INTEGER,
                 call_count INTEGER NOT NULL DEFAULT 0
             );",
-        )
-        .map_err(|e| db_err("create api_keys table", e))?;
+            )
+            .map_err(|e| db_err("create api_keys table", e))?;
         Ok(Self {
-            db_path: PathBuf::from(db_path),
+            conn,
+            stats: parking_lot::Mutex::new(HashMap::new()),
         })
     }
 
-    fn conn(&self) -> GatewayResult<Connection> {
-        open_conn(&self.db_path)
+    fn conn(&self) -> parking_lot::MutexGuard<'_, Connection> {
+        self.conn.get()
     }
 
     /// 创建密钥，返回 (记录, 完整 Key)。完整 Key 只在此处出现一次，不落库。
@@ -127,7 +145,7 @@ impl ApiKeyStore {
             last_used_at: None,
             call_count: 0,
         };
-        let conn = self.conn()?;
+        let conn = self.conn();
         let scopes_json = serde_json::to_string(&record.scopes).map_err(|e| {
             crate::engine::error::GatewayError::Queue(format!("serialize scopes failed: {}", e))
         })?;
@@ -149,7 +167,7 @@ impl ApiKeyStore {
     }
 
     pub fn list(&self) -> GatewayResult<Vec<ApiKeyRecord>> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, key_preview, scopes, enabled, expires_at, created_at, last_used_at, call_count
@@ -197,11 +215,24 @@ impl ApiKeyStore {
                 call_count: call_count as u64,
             });
         }
+        // 叠加尚未落盘的内存增量，保证界面读到的统计是「最新」而非「上次 flush 时」。
+        {
+            let stats = self.stats.lock();
+            for rec in &mut out {
+                if let Some(s) = stats.get(&rec.id) {
+                    rec.call_count = rec.call_count.saturating_add(s.calls);
+                    rec.last_used_at = Some(match rec.last_used_at {
+                        Some(prev) => prev.max(s.last_used_at),
+                        None => s.last_used_at,
+                    });
+                }
+            }
+        }
         Ok(out)
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> GatewayResult<bool> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let n = conn
             .execute(
                 "UPDATE api_keys SET enabled=?2 WHERE id=?1",
@@ -212,11 +243,69 @@ impl ApiKeyStore {
     }
 
     pub fn delete(&self, id: &str) -> GatewayResult<bool> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let n = conn
             .execute("DELETE FROM api_keys WHERE id=?1", params![id])
             .map_err(|e| db_err("delete", e))?;
+        if n > 0 {
+            // 记录已删：清掉未落盘增量，避免 flush 继续为一个不存在的 id 累加。
+            self.stats.lock().remove(id);
+        }
         Ok(n > 0)
+    }
+
+    /// 把内存累加的调用统计批量落盘（单事务）。
+    ///
+    /// 由后台任务周期性调用（默认 5s），正常停机路径再强制调用一次。
+    /// 落盘失败时把增量并回内存等待下个周期重试，不会静默丢失。
+    pub fn flush(&self) -> GatewayResult<()> {
+        let pending: Vec<(String, UsageStat)> = {
+            let mut stats = self.stats.lock();
+            if stats.is_empty() {
+                return Ok(());
+            }
+            stats.drain().collect()
+        };
+        // 注意：先释放 stats 锁再取连接，锁序与 authenticate（连接 → stats）
+        // 不构成环，避免 parking_lot 不可重入导致的死锁。
+        if let Err(e) = self.flush_pending(&pending) {
+            self.requeue(&pending);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn flush_pending(&self, pending: &[(String, UsageStat)]) -> GatewayResult<()> {
+        let mut conn = self.conn();
+        let tx = conn
+            .transaction()
+            .map_err(|e| db_err("begin usage flush", e))?;
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "UPDATE api_keys SET last_used_at=?2, call_count=call_count+?3 WHERE id=?1",
+                )
+                .map_err(|e| db_err("prepare usage flush", e))?;
+            for (id, stat) in pending {
+                stmt.execute(params![
+                    id,
+                    stat.last_used_at,
+                    stat.calls.min(i64::MAX as u64) as i64
+                ])
+                .map_err(|e| db_err("update usage", e))?;
+            }
+        }
+        tx.commit().map_err(|e| db_err("commit usage flush", e))
+    }
+
+    /// flush 失败时把增量并回内存（累加 calls、取 last_used_at 较大者）。
+    fn requeue(&self, pending: &[(String, UsageStat)]) {
+        let mut stats = self.stats.lock();
+        for (id, stat) in pending {
+            let entry = stats.entry(id.clone()).or_default();
+            entry.calls = entry.calls.saturating_add(stat.calls);
+            entry.last_used_at = entry.last_used_at.max(stat.last_used_at);
+        }
     }
 
     /// 按明文 Key 鉴权：哈希后查表，命中且启用且未过期则返回记录并累计调用统计。
@@ -227,7 +316,7 @@ impl ApiKeyStore {
             return Ok(None);
         }
         let hash = hash_api_key(presented_key);
-        let conn = self.conn()?;
+        let conn = self.conn();
         let row = conn.query_row(
             "SELECT id, name, key_preview, scopes, enabled, expires_at, created_at, last_used_at, call_count
              FROM api_keys WHERE key_hash=?1",
@@ -254,7 +343,8 @@ impl ApiKeyStore {
             enabled,
             expires_at,
             created_at,
-            last_used_at,
+            // 库中旧的 last_used_at 不需要——返回值用本次调用的时间戳。
+            _persisted_last_used_at,
             call_count,
         ) = match row {
             Ok(r) => r,
@@ -269,13 +359,17 @@ impl ApiKeyStore {
                 return Ok(None);
             }
         }
-        // 累计调用统计。失败仅告警——鉴权通过不因统计写失败而拒绝请求。
-        if let Err(e) = conn.execute(
-            "UPDATE api_keys SET last_used_at=?2, call_count=call_count+1 WHERE id=?1",
-            params![id, now_ms()],
-        ) {
-            tracing::warn!("api key usage update failed: {}", e);
-        }
+        // 调用统计：热路径只做内存自增，由后台任务周期性批量落盘。
+        // 旧实现每次鉴权都执行一次 UPDATE——同一请求可能经过中间件 + handler
+        // 两三层鉴权，单请求就会写库多次；批量化后请求热路径零 SQL 写。
+        let now = now_ms();
+        let pending_calls = {
+            let mut stats = self.stats.lock();
+            let entry = stats.entry(id.clone()).or_default();
+            entry.calls = entry.calls.saturating_add(1);
+            entry.last_used_at = now;
+            entry.calls
+        };
         let scopes: Vec<String> = serde_json::from_str(&scopes_json).unwrap_or_default();
         Ok(Some(ApiKeyRecord {
             id,
@@ -285,8 +379,9 @@ impl ApiKeyStore {
             enabled: true,
             expires_at,
             created_at,
-            last_used_at,
-            call_count: call_count as u64,
+            // 返回值叠加未落盘增量，调用方看到的是「包含本次调用」的累计值。
+            last_used_at: Some(now),
+            call_count: (call_count as u64).saturating_add(pending_calls),
         }))
     }
 }
@@ -305,18 +400,10 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
     crate::engine::error::GatewayError::Queue(format!("{} failed: {}", ctx, e))
 }
 
-fn open_conn(path: &std::path::Path) -> GatewayResult<Connection> {
-    let conn = Connection::open(path).map_err(|e| {
-        crate::engine::error::GatewayError::Queue(format!("open api key db failed: {}", e))
-    })?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-        .map_err(|e| db_err("set pragmas", e))?;
-    Ok(conn)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -376,6 +463,36 @@ mod tests {
         assert!(rec.expires_at.is_some());
         // 未过期可用
         assert!(store.authenticate(&full_key).expect("x").is_some());
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// 批量化统计契约：鉴权只做内存累加，flush 后落盘且不重复计数；
+    /// list 在 flush 前后都能读到包含未落盘增量在内的累计值。
+    #[test]
+    fn usage_stats_batched_and_flushed_once() {
+        let (store, db) = temp_store();
+        let (rec, full_key) = store.create("批量统计", &[], None).expect("create");
+
+        store.authenticate(&full_key).expect("auth1");
+        store.authenticate(&full_key).expect("auth2");
+        // flush 前：list 合并内存增量
+        let listed = store.list().expect("list before flush");
+        assert_eq!(listed[0].call_count, 2);
+        assert_eq!(listed[0].id, rec.id);
+
+        store.flush().expect("flush");
+        // flush 后：增量已清零，list 读的是已落盘值，不能重复累加
+        let listed = store.list().expect("list after flush");
+        assert_eq!(listed[0].call_count, 2);
+        // 空增量重复 flush 是 no-op
+        store.flush().expect("flush again");
+
+        store.authenticate(&full_key).expect("auth3");
+        store.flush().expect("flush third");
+        assert_eq!(
+            store.list().expect("list").first().map(|r| r.call_count),
+            Some(3)
+        );
         let _ = std::fs::remove_file(&db);
     }
 }

@@ -9,13 +9,14 @@
 //!   gateway-api 的调度执行器在每次执行后回写；
 //! - 任务的增删改立即重算 next_run_at，执行器只需轮询「next_run_at <= now」。
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::error::GatewayResult;
+
+use super::conn::SharedConn;
 
 /// 任务类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,14 +105,16 @@ fn now_ms() -> i64 {
 
 /// 计划任务存储
 pub struct ScheduledTaskStore {
-    db_path: PathBuf,
+    /// 长驻连接：避免每次调度/CRUD 调用重开库
+    conn: SharedConn,
 }
 
 impl ScheduledTaskStore {
     pub fn new(db_path: &str) -> GatewayResult<Self> {
-        let conn = open_conn(std::path::Path::new(db_path))?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        let conn = SharedConn::open(std::path::Path::new(db_path), "open scheduled task db")?;
+        conn.get()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS scheduled_tasks (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 task_type TEXT NOT NULL,
@@ -125,19 +128,17 @@ impl ScheduledTaskStore {
                 last_error TEXT,
                 created_at INTEGER NOT NULL
             );",
-        )
-        .map_err(|e| db_err("create scheduled_tasks table", e))?;
-        Ok(Self {
-            db_path: PathBuf::from(db_path),
-        })
+            )
+            .map_err(|e| db_err("create scheduled_tasks table", e))?;
+        Ok(Self { conn })
     }
 
-    fn conn(&self) -> GatewayResult<Connection> {
-        open_conn(&self.db_path)
+    fn conn(&self) -> parking_lot::MutexGuard<'_, Connection> {
+        self.conn.get()
     }
 
     pub fn list(&self) -> GatewayResult<Vec<ScheduledTask>> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, task_type, target, cron, enabled, last_run_at, next_run_at,
@@ -172,7 +173,7 @@ impl ScheduledTaskStore {
         task.run_count = 0;
         task.last_status = None;
         task.last_error = None;
-        let conn = self.conn()?;
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO scheduled_tasks (id, name, task_type, target, cron, enabled, last_run_at, next_run_at, run_count, last_status, last_error, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, 0, NULL, NULL, ?8)",
@@ -208,18 +209,21 @@ impl ScheduledTaskStore {
         if self.get(id)?.is_none() {
             return Ok(None);
         }
-        let conn = self.conn()?;
-        conn.execute(
-            "UPDATE scheduled_tasks SET name=?2, task_type=?3, target=?4, cron=?5, enabled=?6, next_run_at=?7
+        // 连接锁不可重入：回查前必须先释放，否则自死锁
+        {
+            let conn = self.conn();
+            conn.execute(
+                "UPDATE scheduled_tasks SET name=?2, task_type=?3, target=?4, cron=?5, enabled=?6, next_run_at=?7
              WHERE id=?1",
-            params![id, name, task_type.as_str(), target, cron, enabled as i64, next_run_at],
-        )
-        .map_err(|e| db_err("update task", e))?;
+                params![id, name, task_type.as_str(), target, cron, enabled as i64, next_run_at],
+            )
+            .map_err(|e| db_err("update task", e))?;
+        }
         self.get(id)
     }
 
     pub fn delete(&self, id: &str) -> GatewayResult<bool> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         let n = conn
             .execute("DELETE FROM scheduled_tasks WHERE id=?1", params![id])
             .map_err(|e| db_err("delete task", e))?;
@@ -234,7 +238,7 @@ impl ScheduledTaskStore {
         error: Option<&str>,
         next_run_at: Option<i64>,
     ) -> GatewayResult<()> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         conn.execute(
             "UPDATE scheduled_tasks SET last_run_at=?2, run_count=run_count+1, last_status=?3, last_error=?4, next_run_at=?5
              WHERE id=?1",
@@ -249,7 +253,7 @@ impl ScheduledTaskStore {
     /// 供调度器在时钟被大幅校正/恢复可信后重新锚定：漏掉的窗口直接跳过，
     /// 避免一批任务在错误时刻集中补跑。
     pub fn set_next_run_at(&self, id: &str, next_run_at: Option<i64>) -> GatewayResult<()> {
-        let conn = self.conn()?;
+        let conn = self.conn();
         conn.execute(
             "UPDATE scheduled_tasks SET next_run_at=?2 WHERE id=?1",
             params![id, next_run_at],
@@ -295,18 +299,10 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
     crate::engine::error::GatewayError::Queue(format!("{} failed: {}", ctx, e))
 }
 
-fn open_conn(path: &std::path::Path) -> GatewayResult<Connection> {
-    let conn = Connection::open(path).map_err(|e| {
-        crate::engine::error::GatewayError::Queue(format!("open scheduled task db failed: {}", e))
-    })?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-        .map_err(|e| db_err("set pragmas", e))?;
-    Ok(conn)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 

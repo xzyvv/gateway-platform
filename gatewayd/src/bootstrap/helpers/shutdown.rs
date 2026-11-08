@@ -230,7 +230,7 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
         conversion_mgr,
         mqtt,
         queue,
-        state: _state,
+        state,
         cellular,
         health_handles,
         north_servers,
@@ -263,6 +263,13 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
         await_join_with_log("web server", h, RUN_EXIT_TIMEOUT).await;
     }
 
+    // API Key 调用统计最终落盘：Web 已停机，鉴权热路径不再产生新增量，
+    // 此处把最后一个刷新周期（最多 5s）的增量强制写回 SQLite。
+    match state.platform.api_keys.flush() {
+        Ok(()) => tracing::info!("graceful_shutdown: api key usage flushed"),
+        Err(e) => tracing::warn!("graceful_shutdown: api key usage flush failed: {}", e),
+    }
+
     // 自愈执行器优先停机：先 cancel 再 await，确保在飞动作完成后再拆解运行时。
     // r68-SD1：统一 await_join_with_log，35s 仍保留——自愈动作如配置重载可能
     // 涉及大量 IO，比北向 run 循环长）。
@@ -277,6 +284,7 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
     pipeline.shutdown();
     tokio::time::sleep(Duration::from_millis(500)).await;
     tracing::info!("graceful_shutdown: pipeline flushed");
+
 
     // 停北向 fan-out（ConversionManager 与所有 sink/connector 共享同一关闭信号）。
     // 必须在 drain queue 之前触发：确保 pipeline 最后一批数据已 fan-out 到
