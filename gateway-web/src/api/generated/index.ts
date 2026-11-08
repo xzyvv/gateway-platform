@@ -8,6 +8,7 @@ export type { BusConfig } from './BusConfig';
 export type { CellularConfig } from './CellularConfig';
 export type { ConfigVersion } from './ConfigVersion';
 export type { DeviceConfig } from './DeviceConfig';
+export type { DeviceStatus } from './DeviceStatus';
 export type { GatewayConfig } from './GatewayConfig';
 export type { ModbusPassthroughConfig } from './ModbusPassthroughConfig';
 export type { ModbusServerConfig } from './ModbusServerConfig';

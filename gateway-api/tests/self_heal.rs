@@ -14,6 +14,7 @@ use std::time::Duration;
 use gateway_api::web::heal::{HealAction, SelfHealSettings};
 use gateway_core::config::{BusConfig, CellularConfig};
 use gateway_core::platform::cellular::CellularManager;
+use gateway_core::south::scheduler::DeviceStatus;
 
 /// 坏状态 + enabled=true → 执行器应执行 ResetNetwork 并落库一条 success 事件。
 #[tokio::test]
@@ -81,14 +82,15 @@ async fn disabled_executor_is_inert() {
 }
 
 /// 构造一条处于退避状态（连续失败 ≥ 阈值）的设备运行态。
-fn failing_device(point_id: &str, bus: &str, failures: u64) -> serde_json::Value {
-    serde_json::json!({
-        "point_id": point_id,
-        "bus": bus,
-        "device_id": point_id,
-        "consecutive_failures": failures,
-        "quality": "stale",
-    })
+fn failing_device(point_id: &str, bus: &str, failures: u32) -> DeviceStatus {
+    DeviceStatus {
+        point_id: point_id.to_string(),
+        bus: bus.to_string(),
+        device_id: point_id.to_string(),
+        consecutive_failures: failures,
+        quality: "stale".to_string(),
+        ..Default::default()
+    }
 }
 
 /// r45-HEAL1 回归（核心）：串口总线异常时，执行器只**定向重建目标总线**。

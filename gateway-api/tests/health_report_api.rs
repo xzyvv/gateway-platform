@@ -18,6 +18,7 @@ use common::mock_state::mock_app_state;
 use gateway_api::web::AppState;
 use gateway_core::config::{BusConfig, DeviceConfig, PointConfig};
 use gateway_core::engine::metrics::CollectErrorCode;
+use gateway_core::south::scheduler::DeviceStatus;
 use tower::ServiceExt;
 
 const TOKEN: &str = "test-token-0123456789abcdef";
@@ -256,13 +257,14 @@ async fn log_download_returns_plain_text_not_json_envelope() {
 /// 取自调度器运行态（`consecutive_failures == 0` 视为在线），与统计报表的
 /// 「采集窗口内成功过的设备数」口径不同，故此处需注入设备状态。
 fn state_with_runtime_devices() -> Arc<AppState> {
-    let devices = vec![serde_json::json!({
-        "point_id": "dev1_t1",
-        "bus": "COM_HEALTH",
-        "device_id": "dev1",
-        "consecutive_failures": 0,
-        "quality": "good",
-    })];
+    let devices = vec![DeviceStatus {
+        point_id: "dev1_t1".to_string(),
+        bus: "COM_HEALTH".to_string(),
+        device_id: "dev1".to_string(),
+        consecutive_failures: 0,
+        quality: "good".to_string(),
+        ..Default::default()
+    }];
     let (state, _gw) = common::mock_state::mock_app_state_for_self_heal(Vec::new(), devices);
     let mut cfg = state.config.load_full().as_ref().clone();
     cfg.devices = Some(vec![device("dev1", "COM_HEALTH")]);

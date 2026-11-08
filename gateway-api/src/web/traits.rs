@@ -18,7 +18,7 @@ use gateway_core::north::mqtt::MqttClient;
 use gateway_core::platform::ota::OtaManager;
 use gateway_core::queue::DataQueue;
 use gateway_core::south::protocol::Collector;
-use gateway_core::south::scheduler::{ScheduleTimeline, Scheduler};
+use gateway_core::south::scheduler::{DeviceStatus, ScheduleTimeline, Scheduler};
 use gateway_core::support::app::Gateway;
 
 /// Scheduler trait（仅包含 web handler 实际调用的方法）
@@ -26,7 +26,7 @@ pub trait SchedulerTrait: Send + Sync {
     /// 返回所有 collector（按 bus_name 索引），供点位实时读取定位 collector
     fn collectors(&self) -> HashMap<String, Arc<dyn Collector>>;
     /// 返回所有设备的运行状态（用于 /api/status 等只读端点）
-    fn device_status(&self) -> Vec<serde_json::Value>;
+    fn device_status(&self) -> Vec<DeviceStatus>;
 
     /// F-11：采集调度真实时序快照（每组真实执行窗口 + 同总线真实重叠）。
     ///
@@ -261,7 +261,7 @@ impl SchedulerTrait for Scheduler {
     fn collectors(&self) -> HashMap<String, Arc<dyn Collector>> {
         Scheduler::collectors(self)
     }
-    fn device_status(&self) -> Vec<serde_json::Value> {
+    fn device_status(&self) -> Vec<DeviceStatus> {
         Scheduler::device_status(self)
     }
     fn schedule_timeline(&self, window_ms: u64) -> ScheduleTimeline {

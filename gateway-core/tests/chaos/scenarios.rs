@@ -1193,8 +1193,8 @@ async fn scenario_scheduler_reload_retains_active_device_states() {
 
     let ids: Vec<String> = scheduler
         .device_status()
-        .iter()
-        .filter_map(|v| v.get("point_id").and_then(|p| p.as_str()).map(String::from))
+        .into_iter()
+        .map(|v| v.point_id)
         .collect();
     assert!(
         ids.contains(&"keep_0".to_string()) && ids.contains(&"keep_1".to_string()),

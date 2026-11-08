@@ -32,6 +32,7 @@ use gateway_core::north::sim_consumer::SimConsumer;
 use gateway_core::pipeline::RealtimeBus;
 use gateway_core::platform::{GpioController, NtpManager};
 use gateway_core::south::protocol::{Collector, CollectorError, CollectorResult};
+use gateway_core::south::scheduler::DeviceStatus;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -45,7 +46,7 @@ impl SchedulerTrait for MockScheduler {
     fn collectors(&self) -> HashMap<String, Arc<dyn Collector>> {
         HashMap::new()
     }
-    fn device_status(&self) -> Vec<serde_json::Value> {
+    fn device_status(&self) -> Vec<DeviceStatus> {
         Vec::new()
     }
 }
@@ -56,12 +57,12 @@ impl SchedulerTrait for MockScheduler {
 /// `quality`，缺了它执行器永远看不到「串口设备持续失败」这一信号。
 #[allow(dead_code)]
 pub struct MockSchedulerWithDevices {
-    devices: Vec<serde_json::Value>,
+    devices: Vec<DeviceStatus>,
 }
 
 #[allow(dead_code)]
 impl MockSchedulerWithDevices {
-    pub fn new(devices: Vec<serde_json::Value>) -> Self {
+    pub fn new(devices: Vec<DeviceStatus>) -> Self {
         Self { devices }
     }
 }
@@ -70,7 +71,7 @@ impl SchedulerTrait for MockSchedulerWithDevices {
     fn collectors(&self) -> HashMap<String, Arc<dyn Collector>> {
         HashMap::new()
     }
-    fn device_status(&self) -> Vec<serde_json::Value> {
+    fn device_status(&self) -> Vec<DeviceStatus> {
         self.devices.clone()
     }
 }
@@ -144,7 +145,7 @@ impl SchedulerTrait for MockSchedulerWithCollectors {
     fn collectors(&self) -> HashMap<String, Arc<dyn Collector>> {
         self.collectors.clone()
     }
-    fn device_status(&self) -> Vec<serde_json::Value> {
+    fn device_status(&self) -> Vec<DeviceStatus> {
         Vec::new()
     }
 }
@@ -473,7 +474,7 @@ pub fn mock_app_state_with_debug_bus_and_collectors(
 #[allow(dead_code)]
 pub fn mock_app_state_for_self_heal(
     buses: Vec<BusConfig>,
-    devices: Vec<serde_json::Value>,
+    devices: Vec<DeviceStatus>,
 ) -> (Arc<AppState>, Arc<MockGateway>) {
     let gateway = Arc::new(MockGateway::new());
     let state = build_mock_state_with_devices(
@@ -501,7 +502,7 @@ fn build_mock_state_with_devices(
     buses: Vec<BusConfig>,
     gateway: Arc<dyn GatewayTrait>,
     collectors: HashMap<String, Arc<dyn Collector>>,
-    devices: Vec<serde_json::Value>,
+    devices: Vec<DeviceStatus>,
 ) -> Arc<AppState> {
     let instance = MOCK_INSTANCE.fetch_add(1, Ordering::SeqCst);
     let db_path = std::env::temp_dir().join(format!("gateway_mock_state_{}.sqlite", instance));

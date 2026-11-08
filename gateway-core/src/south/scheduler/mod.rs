@@ -61,12 +61,14 @@ use crate::pipeline::ProcessingPipeline;
 use crate::south::protocol::Collector;
 
 pub use device_state::DeviceState;
+pub use status::DeviceStatus;
 pub use timeline::{ScheduleTimeline, Timeline, TimelineGroup, TimelineOverlap, TimelineSample};
 
 mod device_state;
 mod reload;
 mod results;
 mod spawning;
+mod status;
 mod task;
 mod timeline;
 
@@ -280,7 +282,7 @@ impl Scheduler {
         self.collectors.lock()
     }
 
-    pub fn device_status(&self) -> Vec<serde_json::Value> {
+    pub fn device_status(&self) -> Vec<DeviceStatus> {
         // 点位 id -> (所属总线名, 所属设备 ID)：
         // - 总线名用于自愈 ResetSerial 定位设备所在总线；
         // - 设备 ID 供 Web API 反查点位归属。注意**不能**用配置快照 cfg.points 查：
@@ -304,25 +306,25 @@ impl Scheduler {
             .iter()
             .map(|(id, s)| {
                 let (bus, device_id) = meta_by_id.get(id).cloned().unwrap_or_default();
-                serde_json::json!({
-                    "point_id": id,
-                    "bus": bus,
+                DeviceStatus {
+                    point_id: id.clone(),
+                    bus,
                     // 追加式字段：点位所属设备 ID（模板展开点位也能正确归属）
-                    "device_id": device_id,
-                    "consecutive_failures": s.consecutive_failures,
-                    "current_interval_ms": s.current_interval.as_millis(),
+                    device_id,
+                    consecutive_failures: s.consecutive_failures,
+                    current_interval_ms: s.current_interval.as_millis() as u64,
                     // 退避可视化：基础间隔 / 连续重发次数 / 上次成功时间戳（新增字段为追加式，旧消费方忽略）
-                    "base_interval_ms": s.base_interval.as_millis(),
-                    "stale_count": s.stale_count,
-                    "offline_episodes": s.offline_episodes,
+                    base_interval_ms: s.base_interval.as_millis() as u64,
+                    stale_count: s.stale_count,
+                    offline_episodes: s.offline_episodes,
                     // MTBF 统计（since-boot 真实值）：离线段起点 / 已结束离线累计 / 统计窗口起点
-                    "offline_since_ts": s.offline_since_ts,
-                    "total_downtime_ms": s.total_downtime_ms,
-                    "tracking_since_ts": s.tracking_since_ts,
-                    "last_good_ts": s.last_good_ts,
-                    "last_good_value": s.last_good_value,
-                    "quality": s.current_quality().as_str(),
-                })
+                    offline_since_ts: s.offline_since_ts,
+                    total_downtime_ms: s.total_downtime_ms,
+                    tracking_since_ts: s.tracking_since_ts,
+                    last_good_ts: s.last_good_ts,
+                    last_good_value: s.last_good_value,
+                    quality: s.current_quality().as_str().to_string(),
+                }
             })
             .collect()
     }

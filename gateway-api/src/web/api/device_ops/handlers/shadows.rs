@@ -13,7 +13,7 @@ use ts_rs::TS;
 
 use gateway_core::config::DeviceConfig;
 
-use crate::web::types::{ApiError, ApiResponse, AppState};
+use crate::web::types::{ApiError, ApiResponse, AppState, DeviceStatus};
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
@@ -37,28 +37,24 @@ pub struct ShadowPoint {
 }
 
 /// 快照质量码 → 影子三值（前端 mapQuality 只认 good/uncertain，其余归 bad）
-fn map_snapshot_quality(s: &serde_json::Value) -> &'static str {
-    match s["quality"].as_str().unwrap_or("") {
+fn map_snapshot_quality(s: &DeviceStatus) -> &'static str {
+    match s.quality.as_str() {
         "good" => "good",
         "stale" => "uncertain",
         _ => "bad",
     }
 }
 
-fn build_shadow(dev: &DeviceConfig, statuses: &[serde_json::Value]) -> DeviceShadow {
+fn build_shadow(dev: &DeviceConfig, statuses: &[DeviceStatus]) -> DeviceShadow {
     let interval_ms = dev.interval.unwrap_or(5) as i64 * 1000;
     // 该设备的点位快照：优先 device_id 匹配；模板展开点位不在 cfg.points，
     // 按 "{设备名}_" 前缀兜底（与 topology / health 同口径）
     let prefix = format!("{}_", dev.name);
-    let dev_points: Vec<&serde_json::Value> = statuses
+    let dev_points: Vec<&DeviceStatus> = statuses
         .iter()
         .filter(|s| {
-            let by_id = !dev.id.is_empty() && s["device_id"].as_str() == Some(dev.id.as_str());
-            let by_prefix = !dev.name.is_empty()
-                && s["point_id"]
-                    .as_str()
-                    .map(|p| p.starts_with(&prefix))
-                    .unwrap_or(false);
+            let by_id = !dev.id.is_empty() && s.device_id == dev.id;
+            let by_prefix = !dev.name.is_empty() && s.point_id.starts_with(&prefix);
             by_id || by_prefix
         })
         .collect();
@@ -66,9 +62,9 @@ fn build_shadow(dev: &DeviceConfig, statuses: &[serde_json::Value]) -> DeviceSha
     let points: Vec<ShadowPoint> = dev_points
         .iter()
         .map(|s| ShadowPoint {
-            point_id: s["point_id"].as_str().unwrap_or("").to_string(),
+            point_id: s.point_id.clone(),
             quality: map_snapshot_quality(s).to_string(),
-            last_value: s["last_good_value"].as_f64().map(|v| v.to_string()),
+            last_value: s.last_good_value.map(|v| v.to_string()),
         })
         .collect();
 
@@ -79,10 +75,10 @@ fn build_shadow(dev: &DeviceConfig, statuses: &[serde_json::Value]) -> DeviceSha
     let mut latest_val: Option<String> = None;
     let mut worst = "good";
     for s in &dev_points {
-        let ts = s["last_good_ts"].as_i64().unwrap_or(0);
+        let ts = s.last_good_ts;
         if ts > latest_ts {
             latest_ts = ts;
-            latest_val = s["last_good_value"].as_f64().map(|v| v.to_string());
+            latest_val = s.last_good_value.map(|v| v.to_string());
         }
         worst = match (worst, map_snapshot_quality(s)) {
             ("bad", _) | (_, "bad") => "bad",

@@ -8,7 +8,9 @@ use axum::{
     response::{IntoResponse, Json},
 };
 
-use crate::web::types::{ApiError, ApiResponse, AppState, RunStatus, VersionInfo};
+use crate::web::types::{
+    ApiError, ApiResponse, AppState, DeviceStatus, LaggedCounts, RunStatus, VersionInfo,
+};
 use gateway_core::config::GatewayConfig;
 
 pub(crate) mod handlers;
@@ -41,8 +43,10 @@ pub(crate) struct NorthStatusParams {
     pub wh_failure: u64,
     pub queue_len: usize,
     pub mqtt_success: u64,
-    /// N-7：RealtimeBus 广播溢出（背压）累计丢弃批次数
+    /// N-7：RealtimeBus 广播溢出（背压）累计丢弃批次数（north 类别，兼容旧字段）
     pub lagged_dropped_batches: u64,
+    /// RealtimeBus 按消费端类别拆分的累计丢批次（north / websocket / alarm）
+    pub lagged_by_consumer: LaggedCounts,
     /// 北向 Server 存活列表（原独立端点 `/api/north/servers` 的内容，
     /// 第 1 期冗余收口并入本响应）
     pub servers: Vec<NorthServerInfo>,
@@ -118,7 +122,14 @@ pub(crate) fn build_north_status_json(
         "pending_messages": p.queue_len,
         "total_messages_sent": total_sent,
         // N-7：背压丢帧累计（RealtimeBus Lagged）。持续增长 = 实时推送存在数据缺口。
+        // lagged_by_consumer 按消费端拆分：north=上行 fan-out、websocket=看板、
+        // alarm=报警引擎，便于定位是哪个下游拖慢了广播。
         "lagged_dropped_batches": p.lagged_dropped_batches,
+        "lagged_by_consumer": {
+            "north": p.lagged_by_consumer.north,
+            "websocket": p.lagged_by_consumer.websocket,
+            "alarm": p.lagged_by_consumer.alarm,
+        },
     });
 
     // ===== sink 指标（async fan-out 相关）=====
@@ -172,7 +183,7 @@ pub(crate) use routes::system_routes;
 
 #[cfg(test)]
 mod north_tests {
-    use super::{build_north_status_json, NorthServerInfo, NorthStatusParams};
+    use super::{build_north_status_json, LaggedCounts, NorthServerInfo, NorthStatusParams};
 
     fn default_args() -> NorthStatusParams {
         NorthStatusParams {
@@ -190,6 +201,7 @@ mod north_tests {
             queue_len: 5,
             mqtt_success: 100,
             lagged_dropped_batches: 0,
+            lagged_by_consumer: LaggedCounts::default(),
             servers: vec![NorthServerInfo {
                 name: "opcua".into(),
                 running: true,
@@ -298,11 +310,21 @@ mod north_tests {
     fn test_lagged_dropped_batches_exposed() {
         let mut p = default_args();
         p.lagged_dropped_batches = 7;
+        p.lagged_by_consumer = LaggedCounts {
+            north: 7,
+            websocket: 3,
+            alarm: 1,
+        };
         let v = build_north_status_json(&p, &gateway_core::engine::metrics::Metrics::new());
         assert_eq!(
             v["aggregated"]["lagged_dropped_batches"].as_u64().unwrap(),
             7
         );
+        // 按消费端拆分后，运维可区分是北向 / WS / 报警哪一侧掉队。
+        let by = &v["aggregated"]["lagged_by_consumer"];
+        assert_eq!(by["north"].as_u64().unwrap(), 7);
+        assert_eq!(by["websocket"].as_u64().unwrap(), 3);
+        assert_eq!(by["alarm"].as_u64().unwrap(), 1);
     }
 
     #[test]
@@ -323,6 +345,7 @@ mod north_tests {
                 queue_len: 0,
                 mqtt_success: 0,
                 lagged_dropped_batches: 0,
+                lagged_by_consumer: LaggedCounts::default(),
                 servers: Vec::new(),
             },
             &gateway_core::engine::metrics::Metrics::new(),
@@ -348,6 +371,7 @@ mod north_tests {
                 queue_len: 0,
                 mqtt_success: 50,
                 lagged_dropped_batches: 0,
+                lagged_by_consumer: LaggedCounts::default(),
                 servers: Vec::new(),
             },
             &gateway_core::engine::metrics::Metrics::new(),
@@ -376,6 +400,7 @@ mod north_tests {
                 queue_len: 0,
                 mqtt_success: 0,
                 lagged_dropped_batches: 0,
+                lagged_by_consumer: LaggedCounts::default(),
                 servers: Vec::new(),
             },
             &gateway_core::engine::metrics::Metrics::new(),

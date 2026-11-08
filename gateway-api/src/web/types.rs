@@ -32,6 +32,12 @@ pub(crate) use super::middleware::{
 // 白名单模块（见 `gateway-api/tests/arch_deps.rs`），故在 web 契约层统一透出，
 // handler 不必直引 `gateway_core::south`。
 pub(crate) use gateway_core::south::scheduler::ScheduleTimeline;
+// 点位运行态快照（强类型）同 F-11 处理：定义在 core 采集层，此处统一透出，
+// `web/api` handler 层不必直引 `gateway_core::south`。
+pub(crate) use gateway_core::south::scheduler::DeviceStatus;
+// RealtimeBus 的消费端类别与 Lagged 快照定义在 core 编排层（`engine::bus`），
+// `web/api` handler 层允许直引 `gateway_core::engine`，此处统一透出契约类型。
+pub(crate) use gateway_core::engine::bus::{BusConsumerKind, LaggedCounts};
 
 /// 配置相关依赖聚合：动态配置、加载器、reload 锁、版本库、模板、上行测试历史
 ///
@@ -224,8 +230,7 @@ pub(crate) struct RunStatus {
     /// 设备级在线数请看 `online_devices` / `total_devices`（已按 device_id 去重）。
     /// 字段名从 `devices` 更名而来：旧名让消费方误以为是设备粒度
     /// （实测 4 行 / `total_devices`=1）。
-    #[ts(type = "unknown[]")]
-    pub(crate) point_rows: Vec<serde_json::Value>,
+    pub(crate) point_rows: Vec<DeviceStatus>,
 }
 
 /// IO 控制请求

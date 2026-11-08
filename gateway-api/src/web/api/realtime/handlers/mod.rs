@@ -1,8 +1,59 @@
 //! 实时 API 处理函数（WebSocket / 诊断）
 
 use super::*;
+use crate::web::types::BusConsumerKind;
 #[cfg(feature = "remote-shell")]
 use axum::response::IntoResponse;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// 第 4 层：实时 WS 并发连接上限（进程级）。
+///
+/// 每个连接都会独立序列化广播批次，慢连接还会占用有界发送缓冲；无上限时
+/// 页面多开 / 恶意连接可把 CPU 与内存打满。超限在升级前直接 503，
+/// 避免"先接受再断开"造成客户端重连风暴。
+/// 后续可抽成 `web.realtime_max_subscribers` 配置项。
+const WS_MAX_CONNECTIONS: usize = 64;
+
+/// 当前在线实时 WS 连接数（仅供上限判定，与 `RealtimeBus::subscriber_count`
+/// 不同——后者还包含北向、报警等内部订阅者）。
+static WS_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// 实时 WS 连接槽位；Drop 时归还名额。
+struct WsSlot;
+
+impl WsSlot {
+    fn try_acquire() -> Option<Self> {
+        let mut cur = WS_CONNECTION_COUNT.load(Ordering::Acquire);
+        loop {
+            if cur >= WS_MAX_CONNECTIONS {
+                return None;
+            }
+            match WS_CONNECTION_COUNT.compare_exchange_weak(
+                cur,
+                cur + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self),
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+}
+
+impl Drop for WsSlot {
+    fn drop(&mut self) {
+        WS_CONNECTION_COUNT.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// 第 2 层：单连接发送缓冲上限（批）。满载时丢弃当前批（最新值优先），
+/// 避免慢客户端把内存无限撑大。
+const WS_OUT_BUFFER: usize = 32;
+
+/// 第 2 层：单条 WebSocket 发送超时。客户端长期不读（TCP 窗口为 0）时
+/// 断开连接，避免 writer 任务无限挂起。
+const WS_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) async fn diagnostics_logs_ws(
     State(state): State<Arc<AppState>>,
@@ -168,7 +219,6 @@ pub(crate) async fn realtime_ws(
     };
     use axum::extract::ws::Message;
     use axum::response::IntoResponse;
-    use futures::StreamExt;
 
     // A6: WebSocket 升级前校验 token，避免未授权客户端订阅实时数据流。
     // 实时数据可能含敏感计量读数，必须鉴权。
@@ -220,7 +270,47 @@ pub(crate) async fn realtime_ws(
 
     let realtime_bus = state.south.realtime_bus.clone();
 
-    ws.on_upgrade(move |mut socket| async move {
+    // 第 4 层：升级前预占连接名额；超限直接 503，不进入 upgrade 流程。
+    let ws_slot = match WsSlot::try_acquire() {
+        Some(slot) => slot,
+        None => {
+            tracing::warn!(
+                "realtime ws rejected: connection limit {} reached",
+                WS_MAX_CONNECTIONS
+            );
+            return ApiError {
+                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                code: 8101,
+                message: "too many realtime websocket connections".to_string(),
+            }
+            .into_response();
+        }
+    };
+
+    ws.on_upgrade(move |socket| async move {
+        // 连接期间持槽位，任务结束（Drop）自动归还。
+        let _slot = ws_slot;
+
+        // 第 2 层：读写分离。writer 任务独占 sink，读循环只往有界队列投递，
+        // 不再 `socket.send().await`——单个慢客户端不会阻塞广播订阅与心跳处理。
+        use futures::{SinkExt, StreamExt};
+        let (mut sink, mut stream) = socket.split();
+        let (out_tx, mut out_rx) =
+            tokio::sync::mpsc::channel::<Message>(WS_OUT_BUFFER);
+        let writer = tokio::spawn(async move {
+            while let Some(msg) = out_rx.recv().await {
+                let is_close = matches!(msg, Message::Close(_));
+                // 发送超时即判定客户端不可服务，断开让其重连。
+                match tokio::time::timeout(WS_SEND_TIMEOUT, sink.send(msg)).await {
+                    Ok(Ok(())) => {}
+                    _ => break,
+                }
+                if is_close {
+                    break;
+                }
+            }
+        });
+
         // #9: 一次性长订阅。旧实现每轮 select! 都调用 realtime_bus.latest()
         // （内部 subscribe + 等 1ms + 丢弃），会导致 (1) socket.send 期间发布的批次
         // 丢失；(2) 每个连接约 1000 次/秒地创建/销毁订阅者，空转消耗嵌入式网关 CPU。
@@ -228,6 +318,12 @@ pub(crate) async fn realtime_ws(
         let mut rx = realtime_bus.subscribe();
         let mut subscribed: Option<std::collections::HashSet<String>> = None;
         let mut last_pong = tokio::time::Instant::now();
+        // Lagged 告警节流：广播溢出期间每批都会 Lagged，逐批 warn 会造成日志风暴。
+        // 改为每连接每 10s 最多一条 warn，其余降为 debug，累计值仍由总线统计暴露。
+        let mut last_lag_warn: Option<tokio::time::Instant> = None;
+        // 发送队列满导致的丢批（客户端慢于 writer 消费），与广播 Lagged 区分计数。
+        let mut send_dropped: u64 = 0;
+        let mut last_drop_warn: Option<tokio::time::Instant> = None;
         let mut ping_ticker = tokio::time::interval(WS_PING_INTERVAL);
         ping_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut idle_ticker = tokio::time::interval(WS_IDLE_TIMEOUT);
@@ -238,42 +334,95 @@ pub(crate) async fn realtime_ws(
                 data = rx.recv() => {
                     match data {
                         Ok(points) => {
-                            let filtered: Vec<_> = match &subscribed {
-                                Some(set) => points.iter().filter(|d| set.contains(&d.point_id)).cloned().collect(),
-                                None => points.as_ref().clone(),
+                            // 过滤订阅：只序列化命中的点位；
+                            // 全量订阅：直接借用广播载荷序列化（零额外分配）。
+                            let text = match &subscribed {
+                                Some(set) => {
+                                    let filtered: Vec<_> = points
+                                        .iter()
+                                        .filter(|d| set.contains(&d.point_id))
+                                        .cloned()
+                                        .collect();
+                                    if filtered.is_empty() {
+                                        continue;
+                                    }
+                                    serde_json::to_string(&filtered)
+                                }
+                                None => {
+                                    if points.is_empty() {
+                                        continue;
+                                    }
+                                    serde_json::to_string(&*points)
+                                }
                             };
-                            if !filtered.is_empty() {
-                                if let Ok(text) = serde_json::to_string(&filtered) {
-                                    if socket.send(Message::Text(text)).await.is_err() {
-                                        break;
+                            let Ok(text) = text else { continue };
+                            match out_tx.try_send(Message::Text(text)) {
+                                Ok(()) => {}
+                                // 队列满 = 客户端消费不过来：丢弃当前批（最新值优先），
+                                // 内存上界固定为 WS_OUT_BUFFER 批。
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    send_dropped = send_dropped.saturating_add(1);
+                                    let now = tokio::time::Instant::now();
+                                    let should_warn = last_drop_warn
+                                        .map(|t| now.duration_since(t) >= Duration::from_secs(10))
+                                        .unwrap_or(true);
+                                    if should_warn {
+                                        last_drop_warn = Some(now);
+                                        tracing::warn!(
+                                            "realtime ws send queue full, dropped {} batches \
+                                             (client is slower than writer)",
+                                            send_dropped
+                                        );
+                                    } else {
+                                        tracing::debug!(
+                                            "realtime ws send queue full, dropped {} batches",
+                                            send_dropped
+                                        );
                                     }
                                 }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
                             }
                         }
-                        // #9: 消费慢于生产导致广播溢出——跳过丢失的批次并告警，
-                        // 与"静默少点"区分开。
+                        // #9: 消费慢于生产导致广播溢出——跳过丢失的批次并计数。
+                        // 计数统一记到 RealtimeBus 的 WebSocket 类别（状态接口可见）。
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!("realtime ws lagged, dropped {} batches", n);
+                            let total = realtime_bus.note_lagged(BusConsumerKind::WebSocket, n);
+                            let now = tokio::time::Instant::now();
+                            let should_warn = last_lag_warn
+                                .map(|t| now.duration_since(t) >= Duration::from_secs(10))
+                                .unwrap_or(true);
+                            if should_warn {
+                                last_lag_warn = Some(now);
+                                tracing::warn!(
+                                    "realtime ws lagged, dropped {} batches (cumulative by ws consumers {}); \
+                                     client is slower than publish rate",
+                                    n,
+                                    total
+                                );
+                            } else {
+                                tracing::debug!("realtime ws lagged, dropped {} batches", n);
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
                 _ = ping_ticker.tick() => {
-                    if socket.send(Message::Ping(Vec::new())).await.is_err() {
+                    // ping 走同一队列；队列满说明客户端已严重滞后，直接断开。
+                    if out_tx.try_send(Message::Ping(Vec::new())).is_err() {
                         break;
                     }
                 }
                 _ = idle_ticker.tick() => {
                     if last_pong.elapsed() >= WS_IDLE_TIMEOUT {
                         tracing::debug!("realtime ws idle timeout (no pong for {:?}), closing", WS_IDLE_TIMEOUT);
-                        let _ = socket.send(Message::Close(None)).await;
+                        let _ = out_tx.try_send(Message::Close(None));
                         break;
                     }
                 }
-                msg = socket.next() => {
+                msg = stream.next() => {
                     match msg {
                         Some(Ok(Message::Ping(payload))) => {
-                            if socket.send(Message::Pong(payload)).await.is_err() {
+                            if out_tx.try_send(Message::Pong(payload)).is_err() {
                                 break;
                             }
                         }
@@ -315,5 +464,30 @@ pub(crate) async fn realtime_ws(
                 }
             }
         }
+
+        // 关闭投递端，让 writer 排空剩余消息后退出；等待有界（单条最多 5s）。
+        drop(out_tx);
+        let _ = writer.await;
     }).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ws_slot_enforces_limit_and_releases_on_drop() {
+        let slots: Vec<WsSlot> = (0..WS_MAX_CONNECTIONS)
+            .map(|_| WsSlot::try_acquire().expect("slot within limit"))
+            .collect();
+        assert!(WsSlot::try_acquire().is_none(), "limit must reject extra");
+        assert_eq!(
+            WS_CONNECTION_COUNT.load(Ordering::Acquire),
+            WS_MAX_CONNECTIONS
+        );
+
+        drop(slots);
+        assert_eq!(WS_CONNECTION_COUNT.load(Ordering::Acquire), 0);
+        assert!(WsSlot::try_acquire().is_some(), "slot reusable after drop");
+    }
 }

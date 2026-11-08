@@ -176,17 +176,18 @@ fn mem_usage_pct() -> f32 {
 /// 直接 `count()` 会把「1 台设备 4 个点位」算成「4 台在线设备」。
 /// 在线设备 = 名下任一点位最近一次采集成功的设备数（与 /api/health/report 同口径）；
 /// 旧配置的点位可能没标 device_id，此时退化为「一点位 = 一设备」保持原语义。
-fn summarize_devices(rows: &[serde_json::Value]) -> (usize, usize) {
+fn summarize_devices(rows: &[DeviceStatus]) -> (usize, usize) {
     use std::collections::HashSet;
     let mut all: HashSet<String> = HashSet::new();
     let mut online: HashSet<String> = HashSet::new();
     for row in rows {
-        let key = match row["device_id"].as_str().filter(|s| !s.is_empty()) {
-            Some(dev) => dev.to_string(),
-            None => format!("point:{}", row["point_id"].as_str().unwrap_or_default()),
+        let key = if row.device_id.is_empty() {
+            format!("point:{}", row.point_id)
+        } else {
+            row.device_id.clone()
         };
         all.insert(key.clone());
-        if row["consecutive_failures"].as_u64().unwrap_or(1) == 0 {
+        if row.consecutive_failures == 0 {
             online.insert(key);
         }
     }
@@ -350,6 +351,10 @@ pub(crate) async fn north_status(State(state): State<Arc<AppState>>) -> impl Int
         None => (None, None),
     };
 
+    // RealtimeBus 按消费端类别统计的 Lagged 丢批（north / websocket / alarm）。
+    // 同一份快照同时供旧字段（north）与按类别展开的新字段使用，避免口径漂移。
+    let lagged = state.south.realtime_bus.lagged_counts();
+
     let metrics = &state.platform.metrics;
     let wh_success = metrics
         .webhook
@@ -380,7 +385,8 @@ pub(crate) async fn north_status(State(state): State<Arc<AppState>>) -> impl Int
             queue_len,
             mqtt_success,
             // N-7：把实时广播丢帧接入状态响应，Ops 可在页面/接口直接看到背压缺口。
-            lagged_dropped_batches: state.north.conversion.lagged_dropped_batches(),
+            lagged_dropped_batches: lagged.north,
+            lagged_by_consumer: lagged,
             // 第 1 期冗余收口：原独立端点 `/api/north/servers` 并入本响应。
             servers: state
                 .north
@@ -631,15 +637,15 @@ pub(crate) async fn get_health_report(State(state): State<Arc<AppState>>) -> imp
     let mut device_bus: HashMap<String, String> = HashMap::new();
     let mut device_online: HashSet<String> = HashSet::new();
     for row in &point_rows {
-        let bus = row["bus"].as_str().unwrap_or_default();
-        let dev = row["device_id"].as_str().unwrap_or_default();
+        let bus = row.bus.as_str();
+        let dev = row.device_id.as_str();
         if bus.is_empty() || dev.is_empty() {
             continue;
         }
         device_bus
             .entry(dev.to_string())
             .or_insert_with(|| bus.to_string());
-        if row["consecutive_failures"].as_u64().unwrap_or(1) == 0 {
+        if row.consecutive_failures == 0 {
             device_online.insert(dev.to_string());
         }
     }

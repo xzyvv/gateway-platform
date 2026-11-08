@@ -21,7 +21,7 @@ use serde::Serialize;
 const ALARM_DEBOUNCE_DEFAULT_MS: u64 = 0;
 
 use crate::config::PointConfig;
-use crate::engine::bus::RealtimeBus;
+use crate::engine::bus::{BusConsumerKind, RealtimeBus};
 use crate::engine::metrics::Metrics;
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
@@ -144,6 +144,8 @@ impl AlarmEngine {
                 r = rx.recv() => match r {
                     Ok(points) => points,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        // 按消费者类别累计，状态接口可区分「报警引擎掉队」与其他消费端。
+                        bus.note_lagged(BusConsumerKind::Alarm, n);
                         tracing::warn!("alarm engine lagged {} messages", n);
                         continue;
                     }

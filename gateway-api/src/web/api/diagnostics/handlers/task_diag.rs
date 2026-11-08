@@ -15,7 +15,7 @@ use ts_rs::TS;
 
 use gateway_core::config::GatewayConfig;
 
-use crate::web::types::{ApiError, ApiResponse, AppState};
+use crate::web::types::{ApiError, ApiResponse, AppState, DeviceStatus};
 
 /// 诊断步骤状态
 #[derive(Debug, Clone, Serialize, TS)]
@@ -67,32 +67,24 @@ fn step(name: &str, status: &str, message: String, detail: Option<String>) -> Di
 fn diagnose_steps(
     point_id: &str,
     cfg: &GatewayConfig,
-    snap: Option<&serde_json::Value>,
+    snap: Option<&DeviceStatus>,
     collector_running: bool,
     now: i64,
 ) -> (Vec<DiagStep>, String, String) {
     let point_cfg = cfg.points.iter().find(|p| p.id == point_id);
     let bus_name = snap
-        .and_then(|s| s["bus"].as_str())
+        .map(|s| s.bus.as_str())
         .filter(|v| !v.is_empty())
         .map(str::to_string)
         .or_else(|| point_cfg.map(|p| p.bus.clone()))
         .unwrap_or_default();
     let bus_cfg = cfg.buses.iter().find(|b| b.port_name == bus_name);
 
-    let cf = snap
-        .map(|s| s["consecutive_failures"].as_u64().unwrap_or(0))
-        .unwrap_or(0);
-    let last_good_ts = snap
-        .map(|s| s["last_good_ts"].as_i64().unwrap_or(0))
-        .unwrap_or(0);
-    let last_good_value = snap.and_then(|s| s["last_good_value"].as_f64());
-    let stale_count = snap
-        .map(|s| s["stale_count"].as_u64().unwrap_or(0))
-        .unwrap_or(0);
-    let current_interval_ms = snap
-        .map(|s| s["current_interval_ms"].as_u64().unwrap_or(0))
-        .unwrap_or(0);
+    let cf = snap.map(|s| s.consecutive_failures as u64).unwrap_or(0);
+    let last_good_ts = snap.map(|s| s.last_good_ts).unwrap_or(0);
+    let last_good_value = snap.and_then(|s| s.last_good_value);
+    let stale_count = snap.map(|s| s.stale_count as u64).unwrap_or(0);
+    let current_interval_ms = snap.map(|s| s.current_interval_ms).unwrap_or(0);
     let ever_ok = last_good_ts > 0;
     let elapsed_s = if ever_ok {
         (now - last_good_ts) / 1000
@@ -344,11 +336,9 @@ pub(crate) async fn diagnose_point(
     // 快照按 point_id 直查（含模板展开点位——device_status 以展开后点位为键）；
     // collector 运行态按点位所属总线判定（快照优先，回退点位配置）
     let statuses = state.south.scheduler.device_status();
-    let snap = statuses
-        .iter()
-        .find(|s| s["point_id"].as_str() == Some(point_id.as_str()));
+    let snap = statuses.iter().find(|s| s.point_id == point_id);
     let bus_name = snap
-        .and_then(|s| s["bus"].as_str())
+        .map(|s| s.bus.as_str())
         .filter(|v| !v.is_empty())
         .map(str::to_string)
         .or_else(|| {

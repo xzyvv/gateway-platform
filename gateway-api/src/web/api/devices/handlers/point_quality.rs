@@ -5,10 +5,13 @@
 //! - GET /api/devices/point-quality/stats  -> point_quality_stats
 //! - GET /api/devices/backoff             -> list_point_backoff
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::Json;
+
+use gateway_core::config::{DeviceConfig, PointConfig};
 
 use crate::web::api::device_ops::{acc_quality, quality_code, QualityBreakdown};
 use crate::web::types::{ApiError, ApiResponse, AppState};
@@ -20,41 +23,65 @@ fn map_quality(q: &str, failures: u32) -> String {
     quality_code(q, failures).to_string()
 }
 
+/// 点位 / 设备 id 索引：替代原先循环内的 `iter().find(..)` 线性查找（O(N²)）
+///
+/// 快照行数 = 点位数（可达数千），每次请求都线性扫描配置会明显拖慢接口。
+fn build_index<'a>(
+    points: &'a [PointConfig],
+    devices: Option<&'a [DeviceConfig]>,
+) -> (
+    HashMap<&'a str, &'a PointConfig>,
+    HashMap<&'a str, &'a DeviceConfig>,
+) {
+    let point_by_id = points
+        .iter()
+        .map(|p| (p.id.as_str(), p))
+        .collect::<HashMap<_, _>>();
+    let device_by_id = devices
+        .unwrap_or(&[])
+        .iter()
+        .map(|d| (d.id.as_str(), d))
+        .collect::<HashMap<_, _>>();
+    (point_by_id, device_by_id)
+}
+
 /// GET /api/devices/point-quality — 点位质量列表
 pub(crate) async fn list_point_quality(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<PointQuality>>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
+    let cfg = state.config.load_full();
     let statuses = state.south.scheduler.device_status();
     let now = chrono::Utc::now().timestamp_millis();
+    let (point_by_id, device_by_id) = build_index(&cfg.points, cfg.devices.as_deref());
 
-    let mut result: Vec<PointQuality> = Vec::new();
+    let mut result: Vec<PointQuality> = Vec::with_capacity(statuses.len());
     for s in &statuses {
-        let pid = s["point_id"].as_str().unwrap_or("");
-        let cf = s["consecutive_failures"].as_u64().unwrap_or(0) as u32;
-        let quality_raw = s["quality"].as_str().unwrap_or("bad");
-        let last_good = s["last_good_value"].as_f64();
+        let pid = s.point_id.as_str();
+        let cf = s.consecutive_failures;
+        let quality_raw = s.quality.as_str();
+        let last_good = s.last_good_value;
         // 最后成功采集时刻用 scheduler 快照的真实 last_good_ts（0 = 从未成功，
         // 回退 now 避免前端把时间渲染成 1970）；此前恒为 now 属桩行为。
-        let last_good_ts = s["last_good_ts"].as_i64().filter(|t| *t > 0).unwrap_or(now);
+        let last_good_ts = if s.last_good_ts > 0 {
+            s.last_good_ts
+        } else {
+            now
+        };
 
-        let point = cfg.points.iter().find(|p| p.id == pid);
+        let point = point_by_id.get(pid).copied();
         let point_name = point
             .and_then(|p| p.name.clone())
             .unwrap_or_else(|| pid.to_string());
         // device_id 优先取 scheduler 快照（真值源）：模板化配置下点位由设备模板
         // 展开生成，不在 cfg.points 里，用配置反查会得到空串 → 前端按设备聚合
         // 「最后成功采集」时全部落空。cfg.points 仅作无快照时的兜底。
-        let device_id = s["device_id"]
-            .as_str()
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-            .or_else(|| point.and_then(|p| p.device_id.clone()))
-            .unwrap_or_default();
-        let device_name = cfg
-            .devices
-            .as_ref()
-            .and_then(|d| d.iter().find(|x| x.id == device_id))
+        let device_id = if !s.device_id.is_empty() {
+            s.device_id.clone()
+        } else {
+            point.and_then(|p| p.device_id.clone()).unwrap_or_default()
+        };
+        let device_name = device_by_id
+            .get(device_id.as_str())
             .map(|d| d.name.clone())
             .unwrap_or_else(|| device_id.clone());
 
@@ -80,44 +107,41 @@ pub(crate) async fn list_point_quality(
 pub(crate) async fn list_point_backoff(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<PointBackoff>>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
+    let cfg = state.config.load_full();
     let statuses = state.south.scheduler.device_status();
+    let (point_by_id, device_by_id) = build_index(&cfg.points, cfg.devices.as_deref());
 
-    let mut result: Vec<PointBackoff> = Vec::new();
+    let mut result: Vec<PointBackoff> = Vec::with_capacity(statuses.len());
     for s in &statuses {
-        let pid = s["point_id"].as_str().unwrap_or("");
-        let cf = s["consecutive_failures"].as_u64().unwrap_or(0) as u32;
-        let current_ms = s["current_interval_ms"].as_u64().unwrap_or(0);
-        let base_ms = s["base_interval_ms"].as_u64().unwrap_or(0);
-        let stale_count = s["stale_count"].as_u64().unwrap_or(0) as u32;
-        let last_good = s["last_good_value"].as_f64();
-        let last_good_ts = s["last_good_ts"].as_i64().unwrap_or(0);
-        let quality_raw = s["quality"].as_str().unwrap_or("bad");
+        let pid = s.point_id.as_str();
+        let cf = s.consecutive_failures;
+        let current_ms = s.current_interval_ms;
+        let base_ms = s.base_interval_ms;
+        let stale_count = s.stale_count;
+        let last_good = s.last_good_value;
+        let last_good_ts = s.last_good_ts;
+        let quality_raw = s.quality.as_str();
 
-        let point = cfg.points.iter().find(|p| p.id == pid);
+        let point = point_by_id.get(pid).copied();
         let point_name = point
             .and_then(|p| p.name.clone())
             .unwrap_or_else(|| pid.to_string());
         // 同 list_point_quality：device_id / bus 优先用 scheduler 快照，
         // 模板展开点位不在 cfg.points 中，配置反查只能拿到空值。
-        let device_id = s["device_id"]
-            .as_str()
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-            .or_else(|| point.and_then(|p| p.device_id.clone()))
-            .unwrap_or_default();
-        let device_name = cfg
-            .devices
-            .as_ref()
-            .and_then(|d| d.iter().find(|x| x.id == device_id))
+        let device_id = if !s.device_id.is_empty() {
+            s.device_id.clone()
+        } else {
+            point.and_then(|p| p.device_id.clone()).unwrap_or_default()
+        };
+        let device_name = device_by_id
+            .get(device_id.as_str())
             .map(|d| d.name.clone())
             .unwrap_or_else(|| device_id.clone());
-        let bus = s["bus"]
-            .as_str()
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-            .or_else(|| point.map(|p| p.bus.clone()))
-            .unwrap_or_default();
+        let bus = if !s.bus.is_empty() {
+            s.bus.clone()
+        } else {
+            point.map(|p| p.bus.clone()).unwrap_or_default()
+        };
 
         result.push(PointBackoff {
             point_id: pid.to_string(),
