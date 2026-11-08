@@ -77,6 +77,8 @@ jobs:
       #     事务数从 ~8000 降到 ~64。4 vCPU 上 Python 模拟从站撑不住 8000 事务/秒，
       #     合并后压的是网关「解码 + 入队」而不是模拟从站自身的吞吐；
       #   · 2000 点 / 60 min：长稳，判 RSS 斜率（见 perf_compare.py）。
+      #     soak 必须加 --drain（内置模拟消费者做「出队 → ack」）：MQTT 关闭时队列
+      #     只进不出，RSS 会随积压单调上涨，量到的是历史库容量而不是稳态内存。
       # 每档独立 --json：对比脚本按「场景名=JSON 路径」读取，不解析文本报告。
       - name: Run perf scenarios
         run: |
@@ -97,7 +99,7 @@ jobs:
           run s800   --points 800  --slaves 20 --buses 4  --mock-procs 2 --tcp-concurrent 8 --duration-min 3
           run s2000  --points 2000 --slaves 50 --buses 8  --mock-procs 2 --tcp-concurrent 8 --duration-min 5
           run s8000  --points 8000 --slaves 1  --buses 8  --mock-procs 2 --tcp-concurrent 8 --duration-min 3
-          run soak2000 --points 2000 --slaves 50 --buses 8 --mock-procs 2 --tcp-concurrent 8 --duration-min 60
+          run soak2000 --points 2000 --slaves 50 --buses 8 --mock-procs 2 --tcp-concurrent 8 --duration-min 60 --drain
 
       # 采样失效（Linux 上 /proc 读不到、Web 未起来）会让 CPU / RSS / 吞吐变成 null，
       # 而对比脚本对 null 只能给 NOTE —— 那样这道门禁会静默退化成空跑。

@@ -176,7 +176,7 @@ def point_template(idx: int, bus: str, interval_sec: int, slave_id: int, addr: i
 
 def build_config(points: int, interval_sec: int, web_addr: str, token: str,
                  slaves: int = 1, tcp_concurrent: int = 8,
-                 bus_addrs: list[str] | None = None) -> dict:
+                 bus_addrs: list[str] | None = None, drain: bool = False) -> dict:
     # 关键：point.bus 必须等于 bus.port_name（采集器表按 port_name 索引，
     # 不匹配则调度器找不到 collector，采集量为 0）。
     #
@@ -207,7 +207,7 @@ def build_config(points: int, interval_sec: int, web_addr: str, token: str,
             "channel_capacity": 1024,
             "reconnect_backoff": {"seconds": [1, 2, 5, 10, 30], "jitter_ratio": 0.0},
         })
-    return {
+    cfg = {
         "schema_version": 1,
         "buses": bus_objs,
         # --slaves N：点位轮转分配到 N 个 Modbus 从站号（1..N）。
@@ -247,6 +247,18 @@ def build_config(points: int, interval_sec: int, web_addr: str, token: str,
         "license": None,
         "self_heal": None,
     }
+    if drain:
+        # 长稳场景必须让队列走完「出队 → ack」：MQTT 关闭时队列只进不出，
+        # RSS 会随本地历史库单调上涨（实测 60 min 涨到 226 MB，拟合 144 MB/h），
+        # 那时量到的是「未消费积压的存储占用」而不是网关稳态内存。
+        # 模拟消费者不外发数据，只做 dequeue + ack，正好用来让队列稳态。
+        cfg["sim_consumer"] = {
+            "enabled": True,
+            "batch_size": 500,
+            "interval_ms": 100,
+            "log_every": 0,
+        }
+    return cfg
 
 
 # ============================================================================
@@ -508,6 +520,9 @@ def main() -> int:
                    help="Cargo target 目录")
     p.add_argument("--features", default=None, help="附加 cargo feature（如 tracing-otlp）")
     p.add_argument("--no-build", action="store_true", help="跳过构建")
+    p.add_argument("--drain", action="store_true",
+                   help="启用内置模拟消费者（出队→ack）：长稳场景必须开，"
+                        "否则 MQTT 关闭时队列只进不出、RSS 随积压单调上涨")
     p.add_argument("--output", default=os.path.join("docs", "perf-baseline.md"), help="Markdown 报告路径")
     p.add_argument("--json", dest="json_out", default=None, help="可选 JSON 结果路径")
     args = p.parse_args()
@@ -562,7 +577,8 @@ def main() -> int:
         interval_sec = max(1, args.interval_ms // 1000)
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(build_config(args.points, interval_sec, args.web_addr, args.token,
-                                   args.slaves, args.tcp_concurrent, bus_addrs), f, indent=2)
+                                   args.slaves, args.tcp_concurrent, bus_addrs,
+                                   drain=args.drain), f, indent=2)
 
     # ---- Step 3: 内置从站（可选；每个 mock 一个独立子进程，绕开 GIL） ----
     mock_procs: list[subprocess.Popen] = []
