@@ -505,13 +505,22 @@ fn build_mock_state_with_devices(
     devices: Vec<DeviceStatus>,
 ) -> Arc<AppState> {
     let instance = MOCK_INSTANCE.fetch_add(1, Ordering::SeqCst);
-    let db_path = std::env::temp_dir().join(format!("gateway_mock_state_{}.sqlite", instance));
-    let _ = std::fs::remove_file(&db_path); // 清掉旧库，保证干净
+    // 每个实例一个独立临时目录：tempfile 生成的名字跨进程唯一。原实现用 `instance`
+    // 拼接，而 `instance` 只在本测试二进制内自增，多个测试二进制并行时首个实例
+    // 都叫 0，会互相踩同一个 SQLite 库。
+    // 目录不交给 TempDir 托管删除：AppState 里的 SQLite 连接与日志句柄存活到进程
+    // 结束，Windows 下删不掉这些文件，残留交给系统临时目录清理。
+    let tmp_dir = tempfile::Builder::new()
+        .prefix("gateway_mock_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep();
+    let db_path = tmp_dir.join("state.sqlite");
 
     // 测试模板库：create_device 自 S1 起会校验模板存在性，而原本指向不存在的目录，
     // 模板库恒为空，任何「通过 API 建设备」的测试都会拿到 400。这里落地一个最小模板
     // （协议 modbus），供设备创建类测试使用。
-    let tpl_dir = std::env::temp_dir().join(format!("gateway_mock_templates_{}", instance));
+    let tpl_dir = tmp_dir.join("templates");
     let _ = std::fs::create_dir_all(&tpl_dir);
     let _ = std::fs::write(
         tpl_dir.join("t1.json"),
@@ -576,10 +585,10 @@ fn build_mock_state_with_devices(
             .expect("ScheduledTaskStore::new"),
     );
 
-    let audit_log_path = std::env::temp_dir().join(format!("gateway_mock_audit_{}.log", instance));
+    let audit_log_path = tmp_dir.join("audit.log");
     // N-14：配置落盘路径改为按实例隔离的临时文件。原实现固定 `dummy_config.json`，
     // 用户/密码类写接口会在测试进程 CWD 留下仓库垃圾文件，且并行测试互相覆盖。
-    let config_path = std::env::temp_dir().join(format!("gateway_mock_config_{}.json", instance));
+    let config_path = tmp_dir.join("config.json");
 
     use gateway_api::web::types::{ConfigRefs, NorthRefs, PlatformRefs, SouthRefs};
     Arc::new(AppState {
@@ -636,12 +645,7 @@ fn build_mock_state_with_devices(
             gpio: Arc::new(Mutex::new(GpioController::new())),
             ntp: Arc::new(NtpManager::new(NtpConfig::default())),
             cellular,
-            diagnostics: Diagnostics::new(
-                std::env::temp_dir()
-                    .join(format!("gateway_mock_diag_{}.log", instance))
-                    .to_str()
-                    .expect("utf8 path"),
-            ),
+            diagnostics: Diagnostics::new(tmp_dir.join("diag.log").to_str().expect("utf8 path")),
             metrics: Arc::new(Metrics::new()),
             disk_history,
             heal_events: Arc::new(gateway_api::web::heal::HealEventStore::new()),
@@ -659,11 +663,13 @@ fn build_mock_state_with_devices(
 
 /// 构造一个空白 LicenseManager（present=false, tier=core, status=Ok）
 pub fn mock_license_manager(instance: u64) -> LicenseManager {
-    LicenseManager::new(
-        std::env::temp_dir()
-            .join(format!("gateway_mock_license_clock_{}.db", instance))
-            .as_path(),
-    )
+    // 独立临时目录承载 clock 库，理由同 `build_mock_state_with_devices`。
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("gateway_mock_license_{instance}_"))
+        .tempdir()
+        .expect("create temp dir")
+        .keep();
+    LicenseManager::new(dir.join("clock.db").as_path())
 }
 
 /// 构造一个带预设 license 状态的 AppState（替换 platform.license 而非尝试写内部）

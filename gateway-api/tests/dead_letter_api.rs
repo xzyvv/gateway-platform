@@ -63,9 +63,8 @@ async fn unavailable_store_returns_503_not_empty_list() {
 /// 真实 outbox 库：查询 → 重投 → 清理全链路。
 #[tokio::test]
 async fn real_store_list_replay_purge() {
-    let dir = std::env::temp_dir().join(format!("gw_dl_api_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let db = dir.join("outbox.db");
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let db = dir.path().join("outbox.db");
 
     // 造两条死信（模拟两条 4xx 永久失败批次）
     {
@@ -173,16 +172,13 @@ async fn real_store_list_replay_purge() {
     let (status, body) = call(&app, "GET", "/api/north/dead-letters?protocol=http").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["total"], 0);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 重投不存在的死信必须报冲突，而不是假装成功。
 #[tokio::test]
 async fn replay_unknown_id_is_conflict() {
-    let dir = std::env::temp_dir().join(format!("gw_dl_api_unknown_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let db = dir.join("outbox.db");
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let db = dir.path().join("outbox.db");
     drop(OutboxStore::open(&db).expect("create db"));
 
     let mut state = common::mock_state::mock_app_state();
@@ -212,16 +208,13 @@ async fn replay_unknown_id_is_conflict() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 分页参数夹紧：limit 超上限时不报错，按上限返回。
 #[tokio::test]
 async fn limit_is_clamped_by_server() {
-    let dir = std::env::temp_dir().join(format!("gw_dl_api_limit_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let db = dir.join("outbox.db");
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let db = dir.path().join("outbox.db");
     drop(OutboxStore::open(&db).expect("create db"));
 
     let mut state = common::mock_state::mock_app_state();
@@ -237,6 +230,4 @@ async fn limit_is_clamped_by_server() {
     assert_eq!(body["code"], 0);
     assert_eq!(body["data"]["total"], 0);
     assert!(body["data"]["items"].as_array().unwrap().is_empty());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
