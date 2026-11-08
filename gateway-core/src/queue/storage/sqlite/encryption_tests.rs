@@ -6,7 +6,7 @@
 //! 本模块验证的是**可观察的加密语义**，而不是「能编译」：
 //! 1. 落盘文件里看不到明文 SQLite 头与表名；
 //! 2. 同一把 keyfile 重新打开能读回数据（密钥持久化正确）；
-//! 3. 换掉 keyfile 后打不开旧库（密钥确实是解密前提）。
+//! 3. 换掉 keyfile 后旧数据读不出来（密钥确实是解密前提）。
 
 #![cfg(feature = "encryption")]
 
@@ -125,9 +125,14 @@ fn reopen_with_same_keyfile_reads_back_data() {
     );
 }
 
-/// 换掉 keyfile 后必须打不开旧库：证明数据确实由密钥保护。
+/// 换掉 keyfile 后旧数据读不出来：证明数据确实由密钥保护。
+///
+/// 生产语义（见 `db_init::init_queue_db`）：integrity_check 失败先尝试备份恢复，
+/// 没有可用备份就删库重建 —— 所以错误密钥下 `new()` 可能返回 Ok，但那是一份空库。
+/// 本条钉的是「旧行绝不能解密成功」，而不是「必须报错」：将来若改成直接返回 Err，
+/// 本用例同样成立。
 #[test]
-fn wrong_keyfile_cannot_open_existing_database() {
+fn wrong_keyfile_cannot_read_old_data() {
     let fx = Fixture::new();
     {
         let storage = fx.open();
@@ -139,6 +144,13 @@ fn wrong_keyfile_cannot_open_existing_database() {
     // 覆盖成另一把合法的 32 字节密钥（长度合法，内容错误）。
     std::fs::write(fx.keyfile(), [0x5A_u8; 32]).expect("write wrong keyfile");
 
-    let result = SqliteStorage::new(fx.db_path_str(), Arc::new(Metrics::new()));
-    assert!(result.is_err(), "错误密钥必须打不开加密库，实际却成功打开");
+    // 打开失败、或重建出空库，都算「旧库打不开」；只有读出旧行才是泄漏。
+    let leaked = match SqliteStorage::new(fx.db_path_str(), Arc::new(Metrics::new())) {
+        Ok(storage) => match storage.history_query("p1", 0, i64::MAX, 10) {
+            Ok(items) => items.len(),
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    };
+    assert_eq!(leaked, 0, "错误密钥下不得读出旧数据，实际读到 {leaked} 行");
 }

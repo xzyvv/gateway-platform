@@ -305,10 +305,11 @@ if [ "$PACKAGE_ONLY" -eq 1 ]; then
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert (d.get("web") or {}).get("listen_addr")
-for k in ("web", "south", "north", "queue"):
+# 出厂模板的顶层节：总线 / 点位 / 北向 / 前端。缺任何一节都说明打包时取错了文件。
+for k in ("web", "buses", "points", "mqtt"):
     assert k in d, k
 ' "$PKG/config.factory.json" 2>/dev/null; then
-        ok "可解析，且 web.listen_addr / south / north / queue 齐全"
+        ok "可解析，且 web.listen_addr / buses / points / mqtt 齐全"
       else
         fail "不可解析或缺关键节"
       fi
