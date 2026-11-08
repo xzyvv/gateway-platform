@@ -1932,7 +1932,7 @@ pub fn mstp_frame(
     frame
 }
 
-/// 构造 MS/TP 从站读取响应帧（DataNotExpectingReply=0x04，负载 NPDU + ComplexACK REAL）。
+/// 构造 MS/TP 从站读取响应帧（DataNotExpectingReply=0x06，负载 NPDU + ComplexACK REAL）。
 pub fn mstp_read_property_ack(
     value: f32,
     master_addr: u8,
@@ -1941,7 +1941,7 @@ pub fn mstp_read_property_ack(
 ) -> Vec<u8> {
     let mut data = vec![0x01u8, 0x00]; // NPDU
     data.extend_from_slice(&bacnet_complex_ack_real(value, 1));
-    mstp_frame(0x04, master_addr, slave_addr, &data, corrupt_crc)
+    mstp_frame(0x06, master_addr, slave_addr, &data, corrupt_crc)
 }
 
 // ============================================================
@@ -2159,7 +2159,7 @@ impl MockBehavior for MstpEchoSlave {
         let mut data = vec![0x01u8, 0x00]; // NPDU
         data.extend_from_slice(&bacnet_complex_ack_real(self.value, invoke_id));
         MockReply::whole(mstp_frame(
-            0x04,
+            0x06,
             dest,
             src,
             &data,

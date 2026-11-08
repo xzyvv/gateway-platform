@@ -2111,7 +2111,7 @@ async fn scenario_bacnet_mstp_end_to_end_roundtrip() {
         .cloned()
         .expect("必须写出请求帧");
     assert_eq!(&req[0..2], &[0x55, 0xFF], "MS/TP 前导错");
-    assert_eq!(req[2], 0x03, "应为 DataExpectingReply(0x03)");
+    assert_eq!(req[2], 0x05, "应为 Data Expecting Reply(0x05)");
     assert_eq!(req[3], slave, "DADDR 应为从站地址");
     assert_eq!(req[4], master, "SADDR 应为主站地址");
 

@@ -32,18 +32,20 @@ use frames::*;
 /// MS/TP 前导码（仅测试通过 `super::*` 引用，生产帧编解码在 frames.rs）
 #[cfg(test)]
 const PREAMBLE: [u8; 2] = [0x55, 0xFF];
-/// MS/TP DataNotExpectingReply 帧类型（仅测试引用）
+/// MS/TP Token 帧类型（仅测试引用；生产侧收到即视为控制帧）
 #[cfg(test)]
-const FRAME_DATA_NOT_EXPECTING_REPLY: u8 = 0x01;
+const FRAME_TOKEN: u8 = 0x00;
 
 // ===== MS/TP 帧类型（ASHRAE 135 表 9-1，不可随意改）=====
-// 这几个值曾写成 0x00 / 0x03 / 0x04 / 0x06：Token 被写成 0x00（标准是 0x08），
-// DataExpectingReply 被写成 0x03（标准是 0x00，而 0x03 实际是 ReplyPostponed）。
-// 后果是网关发出的「请求数据」帧被从站当成 ReplyPostponed 忽略，永远收不到
-// 应答——现场表现就是「总线通、一帧数据都没有」。
-const FRAME_TOKEN: u8 = 0x08;
-const FRAME_DATA_EXPECTING_REPLY: u8 = 0x00;
-const FRAME_TEST_REQUEST: u8 = 0x09;
+// 表 9-1 全表：0x00 Token / 0x01 Poll For Master / 0x02 Reply To Poll For
+// Master / 0x03 Test Request / 0x04 Test Response / 0x05 Data Expecting
+// Reply / 0x06 Data Not Expecting Reply / 0x07 Reply Postponed。
+// 曾把 DataExpectingReply 写成 0x00（实为 Token）、DataNotExpectingReply 写成
+// 0x01（实为 Poll For Master）：网关发出的「请求数据」成了 Token 帧，从站不会
+// 应答，现场表现就是「总线通、一帧数据都没有」。
+const FRAME_DATA_EXPECTING_REPLY: u8 = 0x05;
+const FRAME_DATA_NOT_EXPECTING_REPLY: u8 = 0x06;
+const FRAME_REPLY_POSTPONED: u8 = 0x07;
 
 /// 最大数据长度
 const MAX_DATA_LEN: usize = 512;
@@ -232,8 +234,13 @@ impl Collector for BacnetMstpCollector {
             let (resp_type, _resp_dest, _resp_src, resp_data) =
                 parse_mstp_frame(&response, &self.metrics)?;
 
-            // 接受任何数据帧类型（0x03/0x04/0x05）
-            if resp_type == FRAME_TOKEN || resp_type == FRAME_TEST_REQUEST {
+            // 只接受数据帧：Data Expecting Reply / Data Not Expecting Reply /
+            // Reply Postponed。Token / Poll For Master / Test Request /
+            // Test Response 都是链路层控制帧，说明从站没给出数据，按无应答处理。
+            if !matches!(
+                resp_type,
+                FRAME_DATA_EXPECTING_REPLY | FRAME_DATA_NOT_EXPECTING_REPLY | FRAME_REPLY_POSTPONED
+            ) {
                 return Err(CollectorError::NoReply);
             }
 
