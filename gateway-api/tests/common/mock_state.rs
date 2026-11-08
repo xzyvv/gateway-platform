@@ -189,6 +189,11 @@ pub struct MockGateway {
     /// 「点不存在」等价于「不在规则集里」。mock 在 `reload_config` 时按新配置
     /// 同步该集合，使 `recalc_virtual_point` 的 404 语义与真实实现一致。
     virtual_point_ids: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// 下一次 `reload_config` 的失败注入（取走即清空，只生效一次）。
+    ///
+    /// 配置热更新的原子性测试需要「core 侧拒绝热重载」这条真实失败路径：
+    /// 真实实现会在重建总线/采集器时返回 `GatewayError`，此处用一次性注入模拟。
+    reload_error: Arc<Mutex<Option<String>>>,
 }
 
 /// 一次 `reset_serial_buses` 调用的入参快照。
@@ -215,7 +220,16 @@ impl MockGateway {
             virtual_point_states: Arc::new(Mutex::new(HashMap::new())),
             reload_scopes: Arc::new(Mutex::new(Vec::new())),
             virtual_point_ids: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            reload_error: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 让下一次 [`GatewayTrait::reload_config`] 返回 `GatewayError::Config(msg)`。
+    ///
+    /// 一次性：失败被取走后自动清除，后续热重载恢复正常，便于同一用例内
+    /// 「先失败 → 再成功」地验证状态没有被污染。
+    pub fn fail_next_reload(&self, msg: &str) {
+        *self.reload_error.lock() = Some(msg.to_string());
     }
 
     /// 注入虚拟点位的求值状态（模拟 core 引擎的真实求值结果）。
@@ -257,6 +271,12 @@ impl GatewayTrait for MockGateway {
                 + 'a,
         >,
     > {
+        // 失败注入优先：真实实现在重建总线/采集器失败时同样不会应用任何分节
+        if let Some(msg) = self.reload_error.lock().take() {
+            return Box::pin(
+                async move { Err(gateway_core::engine::error::GatewayError::Config(msg)) },
+            );
+        }
         // 记录本次热重载的分节范围，供测试断言「写路径确实触发了在线热重载」
         let scope = gateway_core::config::reload_scope(old, new);
         self.reload_scopes.lock().push(scope);

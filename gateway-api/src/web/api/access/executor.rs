@@ -36,7 +36,10 @@ const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 ///
 /// 用于时钟恢复可信或检测到大幅跳变之后：既避免后跳导致的静默停摆，也避免
 /// 前跳导致一批任务在开机/校时瞬间集中执行。停用任务（next_run_at 为 NULL）不动。
-fn reanchor_all(state: &AppState, now_ms: i64) {
+///
+/// 公开可见性：调度循环与集成测试（`tests/sched_clock_jump.rs`）共用同一实现，
+/// 时钟回拨/前跳的语义必须只有一份，不能在测试里另写一套近似逻辑。
+pub fn reanchor_all(state: &AppState, now_ms: i64) {
     let tasks = match state.platform.sched_tasks.list() {
         Ok(t) => t,
         Err(e) => {
