@@ -33,8 +33,41 @@ impl ConfigLoader {
         &self.path
     }
 
+    /// 清理配置目录中历史残留的临时文件（`<file>.tmp.<pid>.<nanos>.<seq>`）。
+    ///
+    /// 只在 [`Self::load`] 启动路径调用：正常写入要么 rename 成正式文件，
+    /// 要么在失败分支删除 tmp；只有进程被 kill/断电才会留下残骸。
+    /// 按固定前缀匹配，不清扫目录里的其它文件。
+    fn cleanup_stale_tmp_files(&self) {
+        let (Some(parent), Some(file_name)) = (
+            self.path.parent(),
+            self.path.file_name().and_then(|n| n.to_str()),
+        ) else {
+            return;
+        };
+        let prefix = format!("{}.tmp.", file_name);
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with(&prefix) {
+                continue;
+            }
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => tracing::warn!("清理残留临时配置 {}（上次异常退出）", name),
+                Err(e) => tracing::warn!("清理残留临时配置 {} 失败: {}", name, e),
+            }
+        }
+    }
+
     /// 加载配置（含 校验流程）
     pub fn load(&self) -> GatewayResult<GatewayConfig> {
+        // 启动加载时清扫上次异常退出（写 tmp 后、rename 前被 kill/断电）
+        // 留下的 `<file>.tmp.*`。此刻本进程尚未开始写入，删除是安全的；
+        // 正常写入路径在 rename / 失败分支里已自行清理，无需周期扫描。
+        self.cleanup_stale_tmp_files();
         match self.try_load() {
             Ok(cfg) => Ok(cfg),
             Err(e) => {

@@ -223,6 +223,94 @@ impl CertManager {
         Ok(pair)
     }
 
+    /// 安装外部提供的证书对（证书上传接口使用）。
+    ///
+    /// 与 [`Self::generate`] 的区别是密钥不是自己生成的，但落盘保护必须一致：
+    /// 1. **先校验再动盘**：两段 PEM 都必须能解析（非法内容不覆盖旧文件）；
+    /// 2. 私钥走 `write_private_key`（0600 / Windows ACL）。原上传接口直接用
+    ///    `fs::write`，在 Unix 上会落成 0644，同机其它用户可读走私钥；
+    /// 3. **先 key 后 cert**，任一写入失败都用内存备份回滚，避免留下
+    ///    「新 cert + 旧 key」这种必然导致 TLS 握手失败的半成品状态。
+    ///
+    /// 配对一致性：二者都是 ECDSA P-256 时做强校验（与启动检查同一套逻辑）；
+    /// 其它算法（RSA/Ed25519）没有通用的公钥派生路径，只做 PEM 结构校验，
+    /// 失配会在首次 TLS 握手时暴露——这里不为了覆盖 RSA 而引入额外的密钥解析依赖。
+    pub fn install_pair(&self, cert_pem: &str, key_pem: &str) -> GatewayResult<()> {
+        // 1. 结构校验（不动盘）：必须是标签正确的 PEM 块。
+        //    这里不做 DER 深度解析——RSA/EC/Ed25519 各格式都合法，深度解析会误伤
+        //    合法上传；真正的算法级校验在下面按 ECDSA 尽力执行。
+        let cert_block = pem::parse(cert_pem)
+            .map_err(|e| GatewayError::Config(format!("证书不是合法 PEM: {}", e)))?;
+        if cert_block.tag() != "CERTIFICATE" {
+            return Err(GatewayError::Config(format!(
+                "证书 PEM 标签必须是 CERTIFICATE，实际: {}",
+                cert_block.tag()
+            )));
+        }
+        let key_block = pem::parse(key_pem)
+            .map_err(|e| GatewayError::Config(format!("私钥不是合法 PEM: {}", e)))?;
+        if !key_block.tag().ends_with("PRIVATE KEY") {
+            return Err(GatewayError::Config(format!(
+                "私钥 PEM 标签必须是 *PRIVATE KEY，实际: {}",
+                key_block.tag()
+            )));
+        }
+
+        if let Some(parent) = self.cert_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| GatewayError::Io(format!("create cert dir failed: {}", e)))?;
+        }
+
+        // 2. 备份旧内容（可能不存在）：写入失败时原样回滚。
+        let old_cert = std::fs::read(&self.cert_path).ok();
+        let old_key = std::fs::read(&self.key_path).ok();
+
+        // 3. 先写最敏感的私钥（0600/ACL），失败则旧 cert 完全没被动过。
+        write_private_key(&self.key_path, key_pem, self.metrics.as_ref())?;
+
+        // 4. 再写证书，失败回滚私钥。
+        if let Err(e) = std::fs::write(&self.cert_path, cert_pem) {
+            rollback_file(&self.key_path, old_key.as_deref());
+            return Err(GatewayError::Io(format!(
+                "write cert {} failed: {}; rolled back key",
+                self.cert_path.display(),
+                e
+            )));
+        }
+
+        // 5. ECDSA 强校验（尽力）：能解析成 ECDSA P-256 才比对公钥，
+        //    RSA/Ed25519 或格式不受支持时只告警，不阻断上传。
+        match pem_to_cert_pair(cert_pem, key_pem) {
+            Ok(pair) => match verify_cert_key_match(&pair) {
+                Ok(()) => {}
+                Err(GatewayError::Config(msg)) => {
+                    rollback_file(&self.cert_path, old_cert.as_deref());
+                    rollback_file(&self.key_path, old_key.as_deref());
+                    return Err(GatewayError::Config(format!(
+                        "证书与私钥不匹配，已回滚原文件: {}",
+                        msg
+                    )));
+                }
+                Err(e) => {
+                    tracing::warn!("证书对未做强一致性校验: {}", e.message());
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "跳过证书配对强校验（非 ECDSA P-256 或格式不受支持）: {}",
+                    e.message()
+                );
+            }
+        }
+
+        tracing::info!(
+            "installed external cert: cert={:?} key={:?}",
+            self.cert_path,
+            self.key_path
+        );
+        Ok(())
+    }
+
     /// 证书文件路径
     pub fn cert_path(&self) -> &Path {
         &self.cert_path
@@ -364,6 +452,24 @@ fn verify_cert_key_match(pair: &CertPair) -> GatewayResult<()> {
     }
 
     Ok(())
+}
+
+/// 回滚文件内容：有备份则写回，原本不存在则删除。
+fn rollback_file(path: &Path, previous: Option<&[u8]>) {
+    match previous {
+        Some(bytes) => {
+            if let Err(e) = std::fs::write(path, bytes) {
+                tracing::error!("回滚 {} 失败: {}", path.display(), e);
+            }
+        }
+        None => {
+            if let Err(e) = std::fs::remove_file(path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::error!("回滚（删除）{} 失败: {}", path.display(), e);
+                }
+            }
+        }
+    }
 }
 
 /// 写入私钥文件，Unix 下设置 0600 权限

@@ -655,3 +655,24 @@ fn reload_returns_updated_content_for_valid_file() {
         "reload 必须返回改后的 publish_interval"
     );
 }
+
+/// 启动加载要清扫上次异常退出留下的 tmp，且不得误删同目录其它文件。
+#[test]
+fn load_cleans_stale_tmp_files_only() {
+    let dir = tempdir().expect("should succeed");
+    let path = dir.path().join("config.json");
+    let loader = ConfigLoader::new(&path);
+    loader
+        .save(&GatewayConfig::default())
+        .expect("save should succeed");
+
+    let stale = dir.path().join("config.json.tmp.999.1.1");
+    std::fs::write(&stale, b"{}").expect("write stale tmp");
+    let unrelated = dir.path().join("notes.txt");
+    std::fs::write(&unrelated, b"keep").expect("write unrelated");
+
+    loader.load().expect("load should succeed");
+
+    assert!(!stale.exists(), "残留临时配置必须被清理");
+    assert!(unrelated.exists(), "不得误删同目录其它文件");
+}

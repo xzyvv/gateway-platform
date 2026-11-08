@@ -305,3 +305,96 @@ fn p2_incomplete_pair_refuses_generation_and_keeps_existing_file() {
         "拒绝时不得生成新 cert（会与既有 key 失配）"
     );
 }
+
+/// 上传路径必须沿用 generate() 的落盘保护：私钥 0600、内容与入参一致。
+#[test]
+fn install_pair_writes_files_with_protected_key() {
+    let dir = std::env::temp_dir().join(format!("gw-install-pair-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
+    let pair =
+        generate_self_signed("gw", &["localhost".to_string()], 2024, 2035).expect("generate pair");
+
+    mgr.install_pair(&pair.cert_pem, &pair.key_pem)
+        .expect("install pair");
+
+    assert_eq!(
+        std::fs::read(mgr.cert_path()).expect("read cert"),
+        pair.cert_pem.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(mgr.key_path()).expect("read key"),
+        pair.key_pem.as_bytes()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(mgr.key_path())
+            .expect("stat key")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "私钥必须是 0600，实际: {:o}", mode);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ECDSA 配对失配：必须拒绝并回滚到旧内容（不能留下新 cert + 旧 key）。
+#[test]
+fn install_pair_rejects_mismatch_and_rolls_back() {
+    let dir = std::env::temp_dir().join(format!("gw-install-mismatch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
+
+    let first =
+        generate_self_signed("gw-a", &["a.local".to_string()], 2024, 2035).expect("generate first");
+    mgr.install_pair(&first.cert_pem, &first.key_pem)
+        .expect("install first");
+
+    let second = generate_self_signed("gw-b", &["b.local".to_string()], 2024, 2035)
+        .expect("generate second");
+    let err = mgr
+        .install_pair(&second.cert_pem, &first.key_pem)
+        .expect_err("cert 与 key 来自不同密钥对时必须拒绝");
+    assert!(
+        matches!(err, GatewayError::Config(_)),
+        "失配必须归类为配置错误，实际: {:?}",
+        err
+    );
+
+    assert_eq!(
+        std::fs::read(mgr.cert_path()).expect("read cert"),
+        first.cert_pem.as_bytes(),
+        "失配后必须回滚旧证书"
+    );
+    assert_eq!(
+        std::fs::read(mgr.key_path()).expect("read key"),
+        first.key_pem.as_bytes(),
+        "失配后必须回滚旧私钥"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 非法 PEM：在动盘之前就拒绝，旧文件保持原样。
+#[test]
+fn install_pair_rejects_garbage_without_touching_files() {
+    let dir = std::env::temp_dir().join(format!("gw-install-garbage-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
+    let pair =
+        generate_self_signed("gw", &["localhost".to_string()], 2024, 2035).expect("generate pair");
+    mgr.install_pair(&pair.cert_pem, &pair.key_pem)
+        .expect("install first");
+
+    mgr.install_pair("not a pem", "not a pem")
+        .expect_err("非法 PEM 必须拒绝");
+    assert_eq!(
+        std::fs::read(mgr.cert_path()).expect("read cert"),
+        pair.cert_pem.as_bytes(),
+        "拒绝非法输入时不得改动旧证书"
+    );
+    assert_eq!(
+        std::fs::read(mgr.key_path()).expect("read key"),
+        pair.key_pem.as_bytes()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

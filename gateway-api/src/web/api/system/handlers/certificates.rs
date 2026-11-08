@@ -122,15 +122,10 @@ pub(crate) async fn upload_certificate(
     Json(req): Json<UploadCertRequest>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
     let mgr = &state.north.cert_manager;
-    // 写入证书和私钥文件
-    let cert_path = mgr.cert_path().to_path_buf();
-    let key_path = mgr.key_path().to_path_buf();
-    tokio::fs::write(&cert_path, &req.cert_pem)
-        .await
-        .map_err(|e| ApiError::internal(format!("write cert failed: {}", e)))?;
-    tokio::fs::write(&key_path, &req.key_pem)
-        .await
-        .map_err(|e| ApiError::internal(format!("write key failed: {}", e)))?;
+    // 走证书管理器的安全写入（先校验 → 私钥 0600/ACL → 先 key 后 cert → 失配回滚）。
+    // 直接 fs::write 会留下 0644 的私钥，且中途失败会得到「新 cert + 旧 key」。
+    mgr.install_pair(&req.cert_pem, &req.key_pem)
+        .map_err(|e| ApiError::bad_request(format!("安装证书失败: {}", e.message())))?;
 
     state.platform.audit.log(
         "cert.update",
