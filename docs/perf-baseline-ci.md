@@ -1,0 +1,87 @@
+# CI 性能基线（GitHub Actions / Linux）
+
+> 本文件描述**CI 基线**的产生方式与判定口径。
+> 与 [perf-baseline.md](perf-baseline.md) 的关系：后者是开发机（24 核 Windows）
+> 的历史数据，**两者不可互相比较**——点数、帧形态相同也不同尺度，
+> 4 vCPU runner 上的绝对吞吐必然低于 24 核开发机。
+
+## 1. 为什么有这份基线
+
+真机尚未到位，交付形态又是 Linux（Buildroot / Debian）。开发机采样有三个问题：
+数字依赖当天的机器负载、依赖采样人、依赖操作系统。把压测放进 CI 后，
+**规格固定（ubuntu-latest，4 vCPU / 16 GB）、时间固定（每日 UTC 19:00）、参数固定**，
+同一份代码在同一套参数下跑出来的差异，才能归因到代码而不是环境。
+
+## 2. 场景与参数
+
+工作流：[`perf-baseline.yml`](../.github/workflows/perf-baseline.yml)
+压测脚本：[`gateway-core/scripts/perf_baseline.py`](../gateway-core/scripts/perf_baseline.py)
+对比脚本：[`gateway-core/scripts/perf_compare.py`](../gateway-core/scripts/perf_compare.py)
+
+| 场景名 | 点位 | 从站 | 总线 | 周期 | 时长 | 用途 |
+|---|---|---|---|---|---|---|
+| `s800` | 800 | 20 | 4 | 1 s | 3 min | 小规模多点位：看尾延迟与稳定性 |
+| `s2000` | 2 000 | 50 | 8 | 1 s | 5 min | 中等规模：吞吐基准 |
+| `s8000` | 8 000 | 1 | 8 | 1 s | 3 min | 大规模：地址连续合并成 125 寄存器帧，压解码 + 入队 |
+| `soak2000` | 2 000 | 50 | 8 | 1 s | 60 min | 长稳：判 RSS 斜率 |
+
+从站由脚本内置的 Modbus TCP 模拟器提供（每档 2 个 mock 进程，绕开 Python GIL），
+不依赖任何外部设备；`mqtt` 在生成配置里关闭，北向不参与本次测量。
+
+`s8000` 用单从站而非 200 从站的取舍：4 vCPU 上模拟从站自身撑不住 ~8000 事务/秒，
+不合并时量到的是测试端上限而非网关上限；合并后事务数降到 ~64/轮，
+测的是网关「帧解码 + 点位入队」这条路径——这正是大规模点位最先退化的地方。
+
+## 3. 门禁口径
+
+对比脚本对每档独立判定，任一项不满足即整次 FAIL：
+
+| 判定项 | 阈值 | 说明 |
+|---|---|---|
+| 采集失败 / 协议解码错误 | = 0（绝对值） | 与基线无关，出现即为缺陷 |
+| 吞吐 | ≥ 基线 × 0.80 | 周期封顶场景同样按此判 |
+| p99 采集延迟 | ≤ 基线 × 1.50 | 只比 p99：p50 会被采集周期掩盖 |
+| RSS 拟合斜率 | ≤ 1.0 MB/h（仅 `soak2000`） | 最小二乘拟合，与 soak 判定器（`gateway-core/tests/soak/verdict.rs`）同源 |
+
+两种**不判失败**的情况（避免假红）：
+
+- **BASELINE-MISSING**：`docs/perf-baseline-ci.json` 不存在，或缺少某个场景。
+  输出提示并以 0 退出，等首次数据被采纳为基线。
+- **SKIP**：本次 `cpu_count` 与基线不同（runner 规格换了）。数字不在同一尺度上，
+  必须重建基线后再启用门禁。
+
+## 4. 建立 / 更新基线
+
+1. 打开 Actions → **perf-baseline** → Run workflow，勾选 `update_baseline`；
+2. 运行成功后下载产物 `perf-baseline-candidate`（内含 `perf-baseline-ci.json`）；
+3. 人工核对：四档的吞吐 / p99 / RSS 斜率与本文件 §2 的预期量级是否一致，
+   `failures` / `decode_errors` 是否为 0，`cpu_count` 是否为 4；
+4. 覆盖 `docs/perf-baseline-ci.json` 并提交。
+
+**不要由 CI 直接改写基线**：基线下调会把回退阈值一起放宽，
+一次异常的夜间运行就能让后续真实退化不再报警。更新基线属于评审动作。
+
+## 5. 本地复现
+
+```bash
+# Windows / Linux 通用；Linux 上可执行名自动取 gatewayd，Windows 取 gatewayd.exe
+cargo build --release -p gatewayd
+python3 gateway-core/scripts/perf_baseline.py --no-build \
+  --points 2000 --slaves 50 --buses 8 --mock-procs 2 --duration-min 5 \
+  --json /tmp/run.json --output /tmp/run.md
+
+# 与 CI 基线对比（本机 4 核以上的绝对数字不可比，仅用于流程验证）
+python3 gateway-core/scripts/perf_compare.py \
+  --baseline docs/perf-baseline-ci.json --current local=/tmp/run.json
+```
+
+资源采样在 Linux 上不依赖 psutil：直接读 `/proc/<pid>/stat`、`/proc/<pid>/status`
+与 `/proc/stat`（CI runner 默认没有 psutil，缺了这条 CPU / RSS 会全是 null）。
+
+## 6. 已知局限
+
+- runner 是共享虚拟机，单次日更数据有 ±5~10% 抖动；判定阈值（0.80 / 1.50）
+  按这个抖动留了余量。要更精细的趋势，看连续几天的产物而不是单次。
+- 模拟从站与网关抢同一台 4 vCPU 机器，`sys_cpu_pct` 接近 100% 时说明瓶颈
+  可能在测试端——此时吞吐数字只能当**下限**看，不能当网关容量。
+- 串口（RTU）路径不覆盖：runner 无串口设备，本基线只覆盖 Modbus TCP。

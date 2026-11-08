@@ -41,6 +41,11 @@ import urllib.request
 # 脚本位于 <root>/gateway-core/scripts/perf_baseline.py
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CPU_COUNT = os.cpu_count() or 1
+# 产物名随平台变：Windows 是 gatewayd.exe，Linux/macOS 是 gatewayd。
+# 此前写死 "gatewayd.exe"，导致脚本在 GitHub Actions 的 ubuntu runner 上
+# 构建完却报「gatewayd 不存在」——CI 里跑性能基线必须先修这一条。
+EXE_NAME = "gatewayd.exe" if sys.platform == "win32" else "gatewayd"
+IS_LINUX = sys.platform.startswith("linux")
 
 
 # ============================================================================
@@ -245,8 +250,33 @@ def build_config(points: int, interval_sec: int, web_addr: str, token: str,
 
 
 # ============================================================================
-# 进程资源采样（psutil 优先，缺失时回退 PowerShell）
+# 进程资源采样（psutil 优先；缺失时 Linux 读 /proc、Windows 回退 PowerShell）
 # ============================================================================
+def _read_cpu_rss_proc(pid: int) -> tuple[float, int] | None:
+    """Linux：直接读 /proc/<pid>，不依赖 psutil。
+
+    GitHub Actions 的 ubuntu runner 没有预装 psutil，而 CPU / RSS 正是
+    CI 性能基线最核心的两项——缺了它们，作业只能证明「跑完了」。
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as f:
+            stat = f.read()
+        # 第 2 列 comm 允许含空格和括号（如 "(tokio-runtime-w)"），
+        # 必须从**最后一个** ')' 之后切分，否则所有列号错位。
+        rest = stat[stat.rindex(")") + 2:].split()
+        utime, stime = int(rest[11]), int(rest[12])  # 第 14/15 列
+        ticks = os.sysconf("SC_CLK_TCK")
+        rss_kb = 0
+        with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+                    break
+        return ((utime + stime) / ticks, rss_kb * 1024)
+    except Exception:
+        return None
+
+
 def read_cpu_rss(pid: int) -> tuple[float, int] | None:
     """返回 (累计 CPU 秒, RSS 字节)；失败返回 None。"""
     try:
@@ -260,6 +290,9 @@ def read_cpu_rss(pid: int) -> tuple[float, int] | None:
     except Exception:
         return None
 
+    if IS_LINUX:
+        return _read_cpu_rss_proc(pid)
+
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
@@ -270,6 +303,31 @@ def read_cpu_rss(pid: int) -> tuple[float, int] | None:
         return (float(cpu_s), int(rss))
     except Exception:
         return None
+
+
+# 上一次 /proc/stat 读数（total, idle），用于差分求整机 CPU 占用。
+_prev_sys_stat: tuple[int, int] | None = None
+
+
+def _system_cpu_proc() -> float | None:
+    """Linux：/proc/stat 两次读数差分。首次只记基线，返回 None。"""
+    global _prev_sys_stat
+    try:
+        with open("/proc/stat", encoding="utf-8") as f:
+            # 只取前 8 列（user..steal）：guest / guest_nice 已计入 user / nice，
+            # 一并求和会重复计数。
+            vals = [int(x) for x in f.readline().split()[1:]][:8]
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)  # idle + iowait
+        total = sum(vals)
+    except Exception:
+        return None
+    prev, _prev_sys_stat = _prev_sys_stat, (total, idle)
+    if prev is None:
+        return None
+    dt = total - prev[0]
+    if dt <= 0:
+        return None
+    return (dt - (idle - prev[1])) / dt * 100.0
 
 
 def system_cpu(interval: float | None) -> float | None:
@@ -283,7 +341,35 @@ def system_cpu(interval: float | None) -> float | None:
 
         return psutil.cpu_percent(interval=interval)
     except Exception:
+        pass
+
+    if IS_LINUX:
+        # 采样循环本身按 sample-sec 周期调用，这里不需要再按 interval 阻塞。
+        return _system_cpu_proc()
+    return None
+
+
+def rss_slope_mb_per_hour(snapshots: list[dict]) -> float | None:
+    """RSS 小时斜率（MB/h），最小二乘拟合。
+
+    与 soak 判定器（gateway-core/tests/soak/verdict.rs 的 rss_slope_per_hour）
+    同口径：RSS 是锯齿曲线，首尾两点差会被噪声主导（同一份数据两点差值可能
+    是拟合值的数倍），长稳泄漏判据必须用拟合值。
+    丢掉开头 5% 的样本，避开启动期一次性分配（连接池 / 索引页 / 预分配缓冲）——
+    那一段的增长不属于泄漏，摊进斜率会把正常进程判成泄漏。
+    """
+    pts = [(s["t"], s["rss_mb"]) for s in snapshots if s["rss_mb"] is not None]
+    if len(pts) < 4:
         return None
+    pts = pts[len(pts) // 20:]
+    n = len(pts)
+    mx = sum(t for t, _ in pts) / n
+    my = sum(v for _, v in pts) / n
+    den = sum((t - mx) ** 2 for t, _ in pts)
+    if den <= 0:
+        return None
+    num = sum((t - mx) * (v - my) for t, v in pts)
+    return num / den * 3600.0  # 秒 → 小时
 
 
 # ============================================================================
@@ -416,7 +502,8 @@ def main() -> int:
     p.add_argument("--token", default="perf-baseline-token-00000001",
                    help="Web API Token（必须 >=16 字符，否则 gatewayd 拒绝启动 Web 服务）")
     p.add_argument("--config", default=None, help="使用已有配置（默认自动生成）")
-    p.add_argument("--bin", default=None, help="gatewayd 可执行文件路径（默认 <target>/release/gatewayd.exe）")
+    p.add_argument("--bin", default=None,
+                   help=f"gatewayd 可执行文件路径（默认 <target>/release/{EXE_NAME}）")
     p.add_argument("--target", default=os.environ.get("CARGO_TARGET_DIR") or os.path.join(REPO_ROOT, "target"),
                    help="Cargo target 目录")
     p.add_argument("--features", default=None, help="附加 cargo feature（如 tracing-otlp）")
@@ -448,7 +535,7 @@ def main() -> int:
     os.makedirs(run_dir, exist_ok=True)
 
     # ---- Step 1: 构建 ----
-    exe = args.bin or os.path.join(args.target, "release", "gatewayd.exe")
+    exe = args.bin or os.path.join(args.target, "release", EXE_NAME)
     if not args.no_build:
         cmd = ["cargo", "build", "--release", "-p", "gatewayd"]
         if args.features:
@@ -613,6 +700,8 @@ def main() -> int:
     sys_vals = [s["sys_cpu_pct"] for s in snapshots if s.get("sys_cpu_pct") is not None]
     rss_vals = [s["rss_mb"] for s in snapshots if s["rss_mb"] is not None]
     queue_peak = max([s["queue_depth"] or 0 for s in snapshots] or [0])
+    rss_growth = (rss_vals[-1] - rss_vals[0]) if len(rss_vals) >= 2 else None
+    rss_slope = rss_slope_mb_per_hour(snapshots)
 
     # 各采样点瞬时速率（相邻差分）
     rates = []
@@ -678,7 +767,7 @@ def main() -> int:
     lines.append(f"| CPU（相对核数）均值 / 峰值 | {fmt(sum(cpu_vals)/len(cpu_vals) if cpu_vals else None,1)} / {fmt(max(cpu_vals) if cpu_vals else None,1)} % |")
     lines.append(f"| 整机 CPU 均值 / 峰值 | {fmt(sum(sys_vals)/len(sys_vals) if sys_vals else None,1)} / {fmt(max(sys_vals) if sys_vals else None,1)} % |")
     lines.append(f"| RSS 均值 / 峰值 | {fmt(sum(rss_vals)/len(rss_vals) if rss_vals else None,1)} / {fmt(max(rss_vals) if rss_vals else None,1)} MB |")
-    lines.append(f"| RSS 增长（首→末） | {fmt((rss_vals[-1]-rss_vals[0]) if len(rss_vals)>=2 else None,1)} MB |\n")
+    lines.append(f"| RSS 增长（首→末） | {fmt(rss_growth,1)} MB（拟合斜率 {fmt(rss_slope,1)} MB/h） |\n")
 
     lines.append("## 采样时间线\n")
     lines.append("| t(s) | 点/秒 | 队列深度 | CPU% | RSS(MB) | p99(ms) |")
@@ -708,6 +797,11 @@ def main() -> int:
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:
             json.dump({
+                # 机型信息随结果落盘：CI runner（4 vCPU）与本机（24 核）的
+                # 数字不可互相比较，没有这两个字段的基线 JSON 无法判定可比性。
+                "cpu_count": CPU_COUNT,
+                "platform": sys.platform,
+                "samples": len(snapshots),
                 "points": args.points,
                 "slaves": max(1, min(args.slaves, 247)),
                 "buses": n_buses,
@@ -728,6 +822,9 @@ def main() -> int:
                                 "peak": max(sys_vals) if sys_vals else None},
                 "rss_mb": {"avg": (sum(rss_vals) / len(rss_vals)) if rss_vals else None,
                            "peak": max(rss_vals) if rss_vals else None},
+                # 长稳判据用的两项：首末差给「涨了多少」，拟合斜率给「是否持续上涨」。
+                "rss_growth_mb": rss_growth,
+                "rss_mb_per_hour": rss_slope,
                 "warnings": warnings,
             }, f, indent=2)
 
@@ -745,7 +842,7 @@ def run_sweep(args) -> int:
     out_dir = os.path.join(args.target, "perf-sweep")
     os.makedirs(out_dir, exist_ok=True)
     script = os.path.abspath(__file__)
-    exe = args.bin or os.path.join(args.target, "release", "gatewayd.exe")
+    exe = args.bin or os.path.join(args.target, "release", EXE_NAME)
 
     # 先统一构建一次，后续子档全部 --no-build，避免每档重复编译。
     if not args.no_build:

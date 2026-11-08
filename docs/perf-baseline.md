@@ -10,6 +10,9 @@
 > 阅读顺序：先看 [perf-rss-explanation.md](perf-rss-explanation.md)（RSS 增长归因，
 > 避免把 page cache 误判为泄漏）与 [perf-knee.md](perf-knee.md)（150 000 点拐点分析），
 > 再看本文档的场景数据。
+>
+> CI 侧另有独立基线（ubuntu-latest，4 vCPU），见 [perf-baseline-ci.md](perf-baseline-ci.md)。
+> 两套数字的机器规格不同，**不可互相比较**，也都不构成对方的门禁。
 
 ## 1. 汇总总表
 

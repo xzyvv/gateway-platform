@@ -1,0 +1,179 @@
+name: perf-baseline
+
+# 夜间性能基线 / 长稳回归（Linux）。
+#
+# 背景：此前性能数据全部来自开发机（24 核，见 docs/perf-baseline.md）：
+#   · 不同人 / 不同时间的数字不在同一尺度上，无法比较；
+#   · 团队真正的交付形态是 Linux（buildroot / Debian），而基线是在 Windows 上采的；
+#   · 真机尚未到位，"能不能扛住 N 点" 只能靠一台规格固定的机器给出可复现的答案。
+# 于是把压测搬到 GitHub Actions 的 ubuntu runner 上：规格固定（4 vCPU / 16 GB）、
+# 时间固定（每日凌晨）、参数固定（四档场景），产出的数字才构成"基线"。
+#
+# 本工作流做三件事：
+#   1. 构建一次 release gatewayd（四档场景复用，避免重复编译）；
+#   2. 用内置 Modbus 模拟从站跑 800 / 2000 / 8000 点三档短场景 + 2000 点长稳；
+#   3. 逐档与 docs/perf-baseline-ci.json 比较，回退即失败（不阻塞 PR，只在夜间跑）。
+#
+# 定时：UTC 19:00 = 北京时间 03:00，与 nightly-load（UTC 18:00）错开，
+# 避免两个重作业在同一个 runner 池里抢资源、互相污染 CPU / 延迟数据。
+on:
+  schedule:
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      update_baseline:
+        description: '把本次结果作为新基线（产物需人工提交到 docs/perf-baseline-ci.json）'
+        type: boolean
+        default: false
+
+# 同一条基线不能被两次运行同时改写：定时跑与手动跑重叠时排队，不取消。
+concurrency:
+  group: perf-baseline
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: ""
+  PERF_OUT: perf-out
+
+jobs:
+  perf:
+    name: perf baseline (4 vCPU / 16 GB)
+    runs-on: ubuntu-latest
+    # 构建 + 3 档短场景（3+5+3 min）+ 60 min 长稳 + 对比，留足余量。
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          # 移除仓库里的 rsproxy 镜像配置，CI 直接使用 crates.io
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # 独立 key（-cargo-perf-）：release 产物与其它作业的 debug 产物互不干扰
+          key: ${{ runner.os }}-cargo-perf-${{ hashFiles('**/Cargo.lock') }}
+
+      # 只构建一次：perf_baseline.py 默认每条场景各构建一次，四档跑下来
+      # 就是四遍增量编译，白白吃掉十几分钟。
+      - name: Build release gatewayd
+        run: cargo build --release -p gatewayd --locked
+
+      # 四档场景。参数选择依据（与 docs/perf-baseline.md 的 24 核数据对照）：
+      #   · 800 点 / 20 从站：小规模、多点位分散，看尾延迟（p99）与稳定性；
+      #   · 2000 点 / 50 从站：中等规模，长稳也用这档，便于与短场景横向比较；
+      #   · 8000 点 / 1 从站：地址连续 → 同 (slave, fc) 合并成 125 寄存器的帧，
+      #     事务数从 ~8000 降到 ~64。4 vCPU 上 Python 模拟从站撑不住 8000 事务/秒，
+      #     合并后压的是网关「解码 + 入队」而不是模拟从站自身的吞吐；
+      #   · 2000 点 / 60 min：长稳，判 RSS 斜率（见 perf_compare.py）。
+      # 每档独立 --json：对比脚本按「场景名=JSON 路径」读取，不解析文本报告。
+      - name: Run perf scenarios
+        run: |
+          set -euo pipefail
+          mkdir -p "$PERF_OUT"
+          run() {
+            local name="$1"; shift
+            echo "::group::perf $name"
+            python3 gateway-core/scripts/perf_baseline.py \
+              --no-build \
+              --json "$PERF_OUT/$name.json" \
+              --output "$PERF_OUT/$name.md" \
+              --web-addr 127.0.0.1:18080 \
+              --sample-sec 5 \
+              "$@"
+            echo "::endgroup::"
+          }
+          run s800   --points 800  --slaves 20 --buses 4  --mock-procs 2 --tcp-concurrent 8 --duration-min 3
+          run s2000  --points 2000 --slaves 50 --buses 8  --mock-procs 2 --tcp-concurrent 8 --duration-min 5
+          run s8000  --points 8000 --slaves 1  --buses 8  --mock-procs 2 --tcp-concurrent 8 --duration-min 3
+          run soak2000 --points 2000 --slaves 50 --buses 8 --mock-procs 2 --tcp-concurrent 8 --duration-min 60
+
+      # 采样失效（Linux 上 /proc 读不到、Web 未起来）会让 CPU / RSS / 吞吐变成 null，
+      # 而对比脚本对 null 只能给 NOTE —— 那样这道门禁会静默退化成空跑。
+      # 与 heavy.yml 的 soak 作业同样思路：先断言数据真的采到了，再谈判定。
+      - name: Assert resource metrics captured
+        run: |
+          set -euo pipefail
+          for s in s800 s2000 s8000 soak2000; do
+            python3 -c '
+          import json, sys
+          d = json.load(open(sys.argv[1], encoding="utf-8"))
+          missing = [k for k, v in (("throughput", d.get("throughput_pts_per_sec")),
+                                    ("cpu", (d.get("cpu_pct") or {}).get("avg")),
+                                    ("rss", (d.get("rss_mb") or {}).get("avg")),
+                                    ("samples", d.get("samples"))) if not v]
+          if missing:
+              sys.exit("[断言失败] %s 缺少指标: %s" % (sys.argv[1], ",".join(missing)))
+          print("[断言通过] %s" % sys.argv[1])
+          ' "$PERF_OUT/$s.json"
+          done
+
+      # 门禁：与仓库里的 CI 基线比较。缺基线 / 机型变化时不判失败（见脚本内说明），
+      # 但摘要里会明确写出 BASELINE-MISSING / SKIP，不会静默通过。
+      - name: Compare against baseline
+        run: |
+          set +e
+          args=()
+          for s in s800 s2000 s8000 soak2000; do
+            args+=(--current "$s=$PERF_OUT/$s.json")
+          done
+          python3 gateway-core/scripts/perf_compare.py \
+            --baseline docs/perf-baseline-ci.json \
+            "${args[@]}" \
+            --out "$PERF_OUT/compare.md"
+          rc=$?
+          # 摘要先落盘再退出：对比失败正是最需要看到错误明细的时刻。
+          if [ -f "$PERF_OUT/compare.md" ]; then
+            cat "$PERF_OUT/compare.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $rc
+
+      # 基线更新走「产物 + 人工提交」而不是 CI 直接改仓库：
+      # 基线只应在确认硬件规格与数据合理后更新，否则一次异常的夜间运行
+      # 就能把回退阈值永久放宽（基线低了，后续退化也判不出来）。
+      - name: Assemble candidate baseline
+        if: github.event_name == 'workflow_dispatch' && inputs.update_baseline
+        run: |
+          set -euo pipefail
+          args=()
+          for s in s800 s2000 s8000 soak2000; do
+            args+=(--current "$s=$PERF_OUT/$s.json")
+          done
+          python3 gateway-core/scripts/perf_compare.py \
+            "${args[@]}" --assemble "$PERF_OUT/perf-baseline-ci.json"
+          {
+            echo "### 候选基线已生成"
+            echo
+            echo "下载 \`perf-baseline-candidate\` 产物，人工核对后覆盖 docs/perf-baseline-ci.json 并提交。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload baseline candidate
+        if: github.event_name == 'workflow_dispatch' && inputs.update_baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-baseline-candidate
+          path: ${{ env.PERF_OUT }}/perf-baseline-ci.json
+          retention-days: 30
+          if-no-files-found: error
+
+      # 原始数据一律留存：基线更新、趋势分析、以及"这次为什么红了"的复盘
+      # 都依赖逐场景 JSON 与 Markdown，光看作业日志不够。
+      - name: Upload perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-baseline-out
+          path: ${{ env.PERF_OUT }}/
+          retention-days: 30
+          if-no-files-found: warn
