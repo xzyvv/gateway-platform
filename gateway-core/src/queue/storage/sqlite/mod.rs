@@ -18,5 +18,8 @@ mod consistency_tests;
 /// 默认构建下为空模块）。
 #[cfg(test)]
 mod encryption_tests;
+/// 磁盘满 / WAL 写入失败的恢复语义（用 `PRAGMA max_page_count` 造 SQLITE_FULL）。
+#[cfg(test)]
+mod wal_full_tests;
 
 pub use sqlite_storage::SqliteStorage;

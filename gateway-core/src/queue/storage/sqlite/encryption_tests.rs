@@ -125,14 +125,12 @@ fn reopen_with_same_keyfile_reads_back_data() {
     );
 }
 
-/// 换掉 keyfile 后旧数据读不出来：证明数据确实由密钥保护。
+/// 换掉 keyfile 后必须**拒绝启动**：不删库、不覆盖、不返回空库。
 ///
-/// 生产语义（见 `db_init::init_queue_db`）：integrity_check 失败先尝试备份恢复，
-/// 没有可用备份就删库重建 —— 所以错误密钥下 `new()` 可能返回 Ok，但那是一份空库。
-/// 本条钉的是「旧行绝不能解密成功」，而不是「必须报错」：将来若改成直接返回 Err，
-/// 本用例同样成立。
+/// 旧行为是 integrity_check 失败后删库重建，现场表现为「数据静默清零」。
+/// 现语义见 `db_init::refuse_unusable_db`：默认报错退出，由运维确认后再开自愈。
 #[test]
-fn wrong_keyfile_cannot_read_old_data() {
+fn wrong_keyfile_refuses_to_start_and_keeps_files() {
     let fx = Fixture::new();
     {
         let storage = fx.open();
@@ -143,14 +141,54 @@ fn wrong_keyfile_cannot_read_old_data() {
 
     // 覆盖成另一把合法的 32 字节密钥（长度合法，内容错误）。
     std::fs::write(fx.keyfile(), [0x5A_u8; 32]).expect("write wrong keyfile");
+    let db_before = std::fs::read(&fx.db_path).expect("read db before");
 
-    // 打开失败、或重建出空库，都算「旧库打不开」；只有读出旧行才是泄漏。
-    let leaked = match SqliteStorage::new(fx.db_path_str(), Arc::new(Metrics::new())) {
-        Ok(storage) => match storage.history_query("p1", 0, i64::MAX, 10) {
-            Ok(items) => items.len(),
-            Err(_) => 0,
-        },
-        Err(_) => 0,
+    // `SqliteStorage` 没有实现 Debug，不能用 `expect_err`，这里手工匹配。
+    let err = match SqliteStorage::new(fx.db_path_str(), Arc::new(Metrics::new())) {
+        Ok(_) => panic!("keyfile 与库不匹配时必须拒绝启动"),
+        Err(e) => e,
     };
-    assert_eq!(leaked, 0, "错误密钥下不得读出旧数据，实际读到 {leaked} 行");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("GATEWAY_QUEUE_REBUILD_ON_CORRUPTION"),
+        "错误信息必须给出处置开关，实际: {msg}"
+    );
+
+    // 关键断言：拒绝启动的过程不得动文件——否则「保护数据」只是句口号。
+    let db_after = std::fs::read(&fx.db_path).expect("read db after");
+    assert_eq!(db_before, db_after, "拒绝启动时不得改写或删除数据库文件");
+    assert_eq!(
+        std::fs::metadata(fx.keyfile()).expect("keyfile").len(),
+        32,
+        "拒绝启动时不得改写 keyfile"
+    );
+}
+
+/// 显式打开逃生门后恢复旧自愈行为：能启动（空库），旧数据仍不可读。
+///
+/// 现场确认「库确实不可用」时才会这么用，因此这里同时钉住「仍然不会解密出旧行」。
+#[test]
+fn rebuild_env_restores_self_heal_without_leaking_old_rows() {
+    let fx = Fixture::new();
+    {
+        let storage = fx.open();
+        storage
+            .enqueue_batch(&[make_point("p1", 1.0)])
+            .expect("enqueue");
+    }
+    std::fs::write(fx.keyfile(), [0x5A_u8; 32]).expect("write wrong keyfile");
+    // 首次打开会自动生成 `<db>.db.bak`，而备份同样是用旧密钥加密的：
+    // 保留它会让「恢复备份」路径必然再次失败，测不到「无备份 → 重建空库」这条分支。
+    let _ = std::fs::remove_file(fx.db_path.with_extension("db.bak"));
+
+    std::env::set_var("GATEWAY_QUEUE_REBUILD_ON_CORRUPTION", "1");
+    let opened = SqliteStorage::new(fx.db_path_str(), Arc::new(Metrics::new()));
+    std::env::remove_var("GATEWAY_QUEUE_REBUILD_ON_CORRUPTION");
+
+    let storage = opened.expect("开启逃生门后应允许重建并启动");
+    let leaked = storage
+        .history_query("p1", 0, i64::MAX, 10)
+        .map(|items| items.len())
+        .unwrap_or(0);
+    assert_eq!(leaked, 0, "重建出的空库里不得出现旧数据");
 }
