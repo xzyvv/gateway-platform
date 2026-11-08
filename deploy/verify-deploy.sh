@@ -12,7 +12,7 @@ set -euo pipefail
 #
 # 在目标 Linux 上跑完 install.sh 后执行。
 # 覆盖：systemd 服务（含开机自启）/ 环境变量 / 配置可解析性 / 时区 / 二进制兼容性 /
-#       端口 / 健康检查 / API 契约 / 运行态配置 / 授权 / 前端静态 / 硬件能力
+#       端口 / 健康检查 / API 契约 / 运行态配置 / 授权 / 前端静态 / 硬件能力 / 资源与性能
 # 输出：彩色 PASS/FAIL 清单 + 最终总分 + Markdown 交付检查单（默认 deploy/out/）
 # ────────────────────────────────────────────────────────────
 
@@ -1357,10 +1357,147 @@ else
   warn "未找到 $SVC_UNIT（跳过 unit 级日志限流核对）"
 fi
 
-# ── 7. 资源占用 ──
-echo "${BOLD}[7/7] 资源占用${RESET}"
-RSS=$(ps -o rss= -p "$(systemctl show -p MainPID --value gateway 2>/dev/null)" 2>/dev/null | awk '{printf "%.0f MB", $1/1024}' || echo "?")
-info "gatewayd RSS: $RSS"
+# ── 7. 资源与性能判据 ──
+# 「服务活着」不等于「性能可用」：RSS 失控、队列积压触顶、采集停摆、磁盘水位告急
+# 在现场都表现为「页面能开、数据却不对」。因此本段不再只打印 RSS/磁盘，而是给出
+# 可验收的判据（依据文档实测：RSS 收敛约 150MB；queue.max_rows 默认 100 万行）。
+echo "${BOLD}[7/7] 资源与性能判据${RESET}"
+
+RSS_WARN_MB=256          # 收敛值约 150MB，留一倍余量
+RSS_FAIL_MB=512
+QUEUE_WARN_PCT=50        # 积压到上限一半：北向消费已明显落后
+QUEUE_FAIL_PCT=90        # 逼近 max_rows：FIFO 即将淘汰最旧历史
+API_WARN_MS=200          # 本机回环调用，200ms 已很宽松
+API_FAIL_MS=1000
+COLLECT_WINDOW_SECS=3
+
+# 从 Prometheus 文本取指标：$1 = 指标名（可带 {label="v"} 作精确选择）
+metric_val() {
+  awk -v n="$1" '
+    $1 == n || substr($1, 1, length(n) + 1) == (n "{") { print $NF; exit }
+  ' <<<"${METRICS_TXT:-}"
+}
+
+# 同名多标签序列求和（如 gateway_collect_failures{by_reason="..."} 按原因拆分）
+metric_sum() {
+  awk -v n="$1" '
+    $1 == n || substr($1, 1, length(n) + 1) == (n "{") { s += $NF; found = 1 }
+    END { if (found) print s }
+  ' <<<"${METRICS_TXT:-}"
+}
+
+# /api/metrics 需要鉴权；无 token 时降级为进程/磁盘观测，不制造假 FAIL
+fetch_metrics() {
+  curl -fsS --max-time 5 "${AUTH_HEADER[@]}" "$API/api/metrics" 2>/dev/null || true
+}
+
+METRICS_TXT=$(fetch_metrics)
+if [ -z "$METRICS_TXT" ]; then
+  warn "未取到 /api/metrics（需要 api_token：--token 或 web.api_token）——性能判据降级为进程/磁盘观测"
+fi
+
+# 判据 1：常驻内存
+RSS_BYTES=$(metric_val gateway_process_rss_bytes)
+RSS_BYTES=${RSS_BYTES%%.*}
+if [ -n "$RSS_BYTES" ] && [ "$RSS_BYTES" -gt 0 ] 2>/dev/null; then
+  RSS_MB=$((RSS_BYTES / 1048576))
+  if [ "$RSS_MB" -gt "$RSS_FAIL_MB" ]; then
+    fail "gatewayd RSS ${RSS_MB}MB（>${RSS_FAIL_MB}MB）：先看队列积压，积压稳定仍上涨即疑似泄漏"
+  elif [ "$RSS_MB" -gt "$RSS_WARN_MB" ]; then
+    warn "gatewayd RSS ${RSS_MB}MB（>${RSS_WARN_MB}MB）：正常收敛约 150MB，持续上涨需排查"
+  else
+    ok "gatewayd RSS ${RSS_MB}MB（≤${RSS_WARN_MB}MB）"
+  fi
+else
+  PID=$(systemctl show -p MainPID --value gateway 2>/dev/null || true)
+  RSS_MB=$(ps -o rss= -p "$PID" 2>/dev/null | awk '{printf "%d", $1 / 1024}' || true)
+  info "gatewayd RSS: ${RSS_MB:-?}MB（未取到进程指标，仅观测不判定）"
+fi
+
+# 判据 2：队列积压 vs 容量上限（北向消费跟不上采集时会持续上涨）
+QUEUE_DEPTH=$(metric_val gateway_queue_depth)
+QUEUE_DEPTH=${QUEUE_DEPTH%%.*}
+MAX_ROWS=1000000
+if [ -f "$CFG_PATH" ]; then
+  CFG_MAX=$(python3 -c "import json;print(json.load(open('$CFG_PATH')).get('queue',{}).get('max_rows',1000000))" 2>/dev/null || true)
+  case "$CFG_MAX" in
+    ''|*[!0-9]*) : ;;
+    *) MAX_ROWS=$CFG_MAX ;;
+  esac
+fi
+if [ -n "$QUEUE_DEPTH" ] && [ "$MAX_ROWS" -gt 0 ]; then
+  QUEUE_PCT=$((QUEUE_DEPTH * 100 / MAX_ROWS))
+  if [ "$QUEUE_PCT" -ge "$QUEUE_FAIL_PCT" ]; then
+    fail "队列积压 ${QUEUE_DEPTH}/${MAX_ROWS}（${QUEUE_PCT}%）：逼近容量上限，即将淘汰最旧历史"
+  elif [ "$QUEUE_PCT" -ge "$QUEUE_WARN_PCT" ]; then
+    warn "队列积压 ${QUEUE_DEPTH}/${MAX_ROWS}（${QUEUE_PCT}%）：北向消费落后于采集，检查 broker/网络/outbox"
+  else
+    ok "队列积压 ${QUEUE_DEPTH}/${MAX_ROWS}（${QUEUE_PCT}%）"
+  fi
+fi
+
+# 判据 3：磁盘水位（入库被阻塞时表现为「数据停采」而非报错）
+DISK_LEVEL=$(metric_val gateway_disk_level)
+DISK_LEVEL=${DISK_LEVEL%%.*}
+DISK_PRESSURE=$(metric_val gateway_disk_pressure)
+DISK_PRESSURE=${DISK_PRESSURE%%.*}
+if [ "$DISK_PRESSURE" = "1" ]; then
+  fail "磁盘压力已触发（gateway_disk_pressure=1）：队列入库被阻塞，现场会表现为数据停采"
+elif [ "$DISK_LEVEL" = "0" ]; then
+  ok "磁盘水位正常（level=0）"
+elif [ "$DISK_LEVEL" = "1" ]; then
+  warn "磁盘水位预警（level=1）：尽快清理或扩容数据分区"
+elif [ -n "$DISK_LEVEL" ]; then
+  fail "磁盘水位 ${DISK_LEVEL}（critical/blocking）：入库即将或已被阻塞"
+fi
+
+# 判据 4：采集是否在推进（两次采样，窗口内计数必须增长）
+COLLECT_0=$(metric_val gateway_collect_total)
+COLLECT_0=${COLLECT_0%%.*}
+if [ -n "$METRICS_TXT" ] && [ -n "$COLLECT_0" ]; then
+  FAIL_0=$(metric_sum gateway_collect_failures)
+  FAIL_0=${FAIL_0%%.*}
+  sleep "$COLLECT_WINDOW_SECS"
+  METRICS_TXT=$(fetch_metrics)
+  COLLECT_1=$(metric_val gateway_collect_total)
+  COLLECT_1=${COLLECT_1%%.*}
+  FAIL_1=$(metric_sum gateway_collect_failures)
+  FAIL_1=${FAIL_1%%.*}
+  if [ -n "$COLLECT_1" ]; then
+    COLLECT_DELTA=$((COLLECT_1 - COLLECT_0))
+    FAIL_DELTA=$(( ${FAIL_1:-0} - ${FAIL_0:-0} ))
+    if [ "$COLLECT_DELTA" -le 0 ]; then
+      warn "采集计数 ${COLLECT_WINDOW_SECS}s 内无增长：无点位配置 / 总线未连通 / 采集停摆，检查 journalctl -u gateway"
+    else
+      ok "采集在推进：${COLLECT_WINDOW_SECS}s 内 ${COLLECT_DELTA} 点（约 $((COLLECT_DELTA / COLLECT_WINDOW_SECS)) 点/s）"
+      if [ "$FAIL_DELTA" -gt 0 ]; then
+        FAIL_PCT=$((FAIL_DELTA * 100 / COLLECT_DELTA))
+        if [ "$FAIL_PCT" -ge 30 ]; then
+          fail "采集失败率 ${FAIL_PCT}%（${FAIL_DELTA}/${COLLECT_DELTA}）：总线/从站大概率不可用"
+        else
+          warn "采集失败率 ${FAIL_PCT}%（${FAIL_DELTA}/${COLLECT_DELTA}）：稳态应为 0，检查从站与超时配置"
+        fi
+      fi
+    fi
+  fi
+fi
+
+# 判据 5：本机 API 响应延迟（取 5 次采样的最大值）
+API_LAT_MAX=0
+for _ in 1 2 3 4 5; do
+  T=$(curl -s -o /dev/null -w '%{time_total}' --max-time 2 "$API/health/live" 2>/dev/null || true)
+  [ -n "$T" ] || T=0
+  MS=$(awk -v t="$T" 'BEGIN { printf "%d", t * 1000 }')
+  if [ "$MS" -gt "$API_LAT_MAX" ]; then API_LAT_MAX=$MS; fi
+done
+if [ "$API_LAT_MAX" -gt "$API_FAIL_MS" ]; then
+  fail "本机 API 响应最大 ${API_LAT_MAX}ms（>${API_FAIL_MS}ms）：接口阻塞，检查 CPU 饱和与 SQLite 锁竞争"
+elif [ "$API_LAT_MAX" -gt "$API_WARN_MS" ]; then
+  warn "本机 API 响应最大 ${API_LAT_MAX}ms（>${API_WARN_MS}ms）：高负载或磁盘抖动"
+else
+  ok "本机 API 响应最大 ${API_LAT_MAX}ms（≤${API_WARN_MS}ms）"
+fi
+
 DISK_CFG=$(df -h /etc/gateway 2>/dev/null | tail -1 | awk '{print "config partition "$5" used"}' || echo "?")
 DISK_DATA=$(df -h /var/lib/gateway 2>/dev/null | tail -1 | awk '{print "data partition "$5" used"}' || echo "?")
 info "磁盘: $DISK_CFG, $DISK_DATA"
