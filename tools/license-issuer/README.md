@@ -19,7 +19,7 @@
 | 场景 | 做法 |
 |---|---|
 | 想跑通完整功能（不受默认 100 点配额限制） | 自建钥对 → 用自己的公钥替换 `gateway-core/src/license/mod.rs` 的 `PUBLIC_KEYS` → 自行签发 `.lic` 导入设备 |
-| 只想体验最小演示 | 无需任何操作，无授权即按默认配额运行（100 点 / 1 协议 / 7 天 / 1 通道） |
+| 只想体验最小演示 | 无需任何操作，无授权即按默认配额运行（100 点 / 1 协议 / 1 通道；历史保留固定 30 天，与授权无关） |
 | 想在 dev 构建里临时换公钥 | 设置环境变量 `GATEWAY_LICENSE_PUBKEY_HEX`（仅 debug 构建生效，release 构建会忽略并告警——运行时注入公钥会让自签授权绕过校验） |
 
 ## 用法
@@ -87,7 +87,7 @@ cargo run -p license-issuer --bin license-issuer -- issue \
 | `--tier` | `core` / `standard` / `pro` / `ultra`（与 `--sku` 二选一提供；均缺则报错） |
 | `--max-points` | 最大采集点数（数字或 `none` = 无限）；不给 `--sku` 时不填则不写入 payload |
 | `--max-protocols` | 最大并发协议数（同上）。v2.1 起四档默认不限 |
-| `--storage-days` | 历史数据保留天数（同上）。v2.1 起四档统一 30 天 |
+| `--storage-days` | 仅为 .lic 格式兼容保留（默认 30）。网关运行时历史保留固定 30 天，**不随此值变化** |
 | `--northbound-channels` | 北向上行通道数（同上）。v2.1 起四档默认不限 |
 | `--machine-key` | 主键指纹哈希（sha256 hex，64 字符，必填） |
 | `--machine-raw` | 原始机器标识，签发机本地哈希（与 `--machine-key` 二选一） |

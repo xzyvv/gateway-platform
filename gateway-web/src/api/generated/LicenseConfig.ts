@@ -21,6 +21,6 @@ path: string | null,
 tier_quotas: Array<TierQuotaEntry> | null, 
 /**
  * v2.0 无 license / 失效 / 缺失时回退到的默认配额（开源版体验）
- * 缺省走代码内 DEFAULT_ABSENT_QUOTA（100 点 / 1 协议 / 7 天 / 1 通道）
+ * 缺省走代码内 DEFAULT_ABSENT_QUOTA（100 点 / 1 协议 / 1 通道；保留天数不属授权）
  */
 absent_quota: Quota | null, };

@@ -47,20 +47,21 @@ pub struct LicenseConfig {
     pub tier_quotas: Option<Vec<TierQuotaEntry>>,
 
     /// v2.0 无 license / 失效 / 缺失时回退到的默认配额（开源版体验）
-    /// 缺省走代码内 DEFAULT_ABSENT_QUOTA（100 点 / 1 协议 / 7 天 / 1 通道）
+    /// 缺省走代码内 DEFAULT_ABSENT_QUOTA（100 点 / 1 协议 / 1 通道；保留天数不属授权）
     #[serde(default)]
     pub absent_quota: Option<Quota>,
 }
 
 /// 代码内默认无 license 配额（与 docs/design/license-v2-quota §3 表格末行一致）
 ///
-/// 选用保守值（100 点 / 1 协议 / 7 天 / 1 通道）——
+/// 选用保守值（100 点 / 1 协议 / 1 通道）——
 /// 开源用户能跑最小演示，付费用户有动力升级。
+/// `storage_days` 仅为 .lic 格式兼容保留，v2.1 起与授权无关（历史保留固定 30 天）。
 /// 运维若需调整，可直接在 config.json 的 license.absent_quota 覆盖。
 pub const DEFAULT_ABSENT_QUOTA: Quota = Quota {
     max_points: Some(100),
     max_protocols: Some(1),
-    storage_days: Some(7),
+    storage_days: Some(30),
     northbound_channels: Some(1),
 };
 
@@ -84,6 +85,7 @@ pub const DEFAULT_ABSENT_QUOTA: Quota = Quota {
 ///   历史保留天数在边缘侧是**运维策略**而非授权卖点：现场磁盘容量有限，
 ///   30 天足够覆盖绝大多数抄表与追溯场景；按档位拉长到 90/365 天会让
 ///   低配设备被历史数据挤爆存储，且超期数据按 FIFO 直接丢弃、不可恢复。
+///   v2.1 起运行时不再读取该字段（队列启动即固定 30 天），此处仅为 .lic 格式兼容。
 ///
 /// 注：`max_protocols` / `northbound_channels` 字段本身保留在 `Quota` 结构里
 /// （license 文件格式兼容，老 .lic 照常解析），但**不再作为拒绝保存配置的依据**，

@@ -1,10 +1,10 @@
 //! 队列 retention 清理：删除超过保留期的聚合历史记录
 //!
-//! v2.0 Step 5：保留天数由 license 配额 `storage_days` 驱动（bootstrap 的
-//! 配额对账任务周期推送），不再硬编码。`None` = 不限，跳过时间维清理。
+//! 保留天数固定 30 天（v2.1 起与 license 无关，属运维策略），
+//! 运维/测试可通过存储后端槽位调整。`None` = 不限，跳过时间维清理。
 //!
 //! 聚合表是「时间界 + 行数界 + 磁盘水位」三重约束：
-//! - 时间界：`window_start < now - storage_days`（配额驱动）；
+//! - 时间界：`window_start < now - 保留天数`（固定 30 天）；
 //! - 行数界：超过按设备容量自适应的上限后，按 `window_start` 从旧到新淘汰
 //!   （点位很多时分钟桶仍可能把库撑大，时间界内也可能超量）；
 //! - 水位联动：磁盘预警（Warn）时保留天数收紧到 14 天、上限减半；
@@ -44,12 +44,12 @@ const MIN_AGGREGATED_ROWS: i64 = 200_000;
 /// 容量探测失败时的保守上限（比固定 500 万行更保守）。
 const FALLBACK_AGGREGATED_ROWS: i64 = 1_000_000;
 
-/// 磁盘预警时聚合历史的保留天数上限（覆盖更长的 license 配额）。
+/// 磁盘预警时聚合历史的保留天数上限（覆盖更长的保留配置）。
 const WARN_AGGREGATED_DAYS: u32 = 14;
 
 /// S-4: retention 清理——删除超过保留期的聚合历史记录 + 行数界 + 水位联动
 ///
-/// - `storage_days`：license 配额中的历史保留天数（`None` = 不限）；
+/// - `storage_days`：历史保留天数（固定 30 天；`None` = 不限）；
 /// - `disk_level`：当前磁盘水位档位（[`DiskLevel`]，由指标层解码后传入）；
 /// - `disk_total_bytes`：库所在分区总容量（0 表示探测失败，用保守上限）。
 pub(crate) fn run_retention_cleanup(

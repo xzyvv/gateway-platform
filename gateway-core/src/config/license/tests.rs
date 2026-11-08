@@ -5,7 +5,7 @@ fn test_default_absent_quota_values() {
     let q = DEFAULT_ABSENT_QUOTA;
     assert_eq!(q.max_points, Some(100));
     assert_eq!(q.max_protocols, Some(1));
-    assert_eq!(q.storage_days, Some(7));
+    assert_eq!(q.storage_days, Some(30));
     assert_eq!(q.northbound_channels, Some(1));
 }
 
@@ -133,7 +133,7 @@ fn test_tier_quotas_json_round_trip() {
             { "tier": "pro", "quota": { "max_points": 5000, "max_protocols": 16, "storage_days": 365, "northbound_channels": 8 } },
             { "tier": "core", "quota": { "max_points": 500, "max_protocols": 3, "storage_days": 30, "northbound_channels": 1 } }
         ],
-        "absent_quota": { "max_points": 100, "max_protocols": 1, "storage_days": 7, "northbound_channels": 1 }
+        "absent_quota": { "max_points": 100, "max_protocols": 1, "storage_days": 30, "northbound_channels": 1 }
     }"#;
     let cfg: LicenseConfig = serde_json::from_str(json).unwrap();
     let pro = cfg.quota_for_tier(Tier::Pro);

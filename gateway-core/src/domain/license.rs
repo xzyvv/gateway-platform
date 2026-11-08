@@ -67,7 +67,8 @@ pub struct Quota {
     pub max_points: Option<u32>,
     /// 最大并发协议数（None = 无限）
     pub max_protocols: Option<u32>,
-    /// 历史数据保留天数（None = 无限；超限按 FIFO 清理）
+    /// 历史数据保留天数。v2.1 起不再生效，仅为 .lic 格式兼容保留；
+    /// 历史保留固定 30 天，属运维策略，与授权无关。
     pub storage_days: Option<u32>,
     /// 北向上行并发通道数（None = 无限）
     pub northbound_channels: Option<u32>,
@@ -146,7 +147,7 @@ impl Quota {
 /// 与 `Quota` 的 4 个上限一一对应：
 /// - `points`：展开后的采集点数（模板展开口径，与配额校验同源）
 /// - `protocols`：已配置协议种类数
-/// - `storage_days`：实际保留的历史数据跨度（天）
+/// - `storage_days`：实际保留的历史数据跨度（天，仅供观测，v2.1 起不属授权）
 /// - `northbound_channels`：已启用的北向通道数
 #[derive(
     Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS, schemars::JsonSchema,

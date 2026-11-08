@@ -6,7 +6,7 @@
  * 与 `Quota` 的 4 个上限一一对应：
  * - `points`：展开后的采集点数（模板展开口径，与配额校验同源）
  * - `protocols`：已配置协议种类数
- * - `storage_days`：实际保留的历史数据跨度（天）
+ * - `storage_days`：实际保留的历史数据跨度（天，仅供观测，v2.1 起不属授权）
  * - `northbound_channels`：已启用的北向通道数
  */
 export type QuotaUsage = { 

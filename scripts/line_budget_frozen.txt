@@ -50,5 +50,5 @@ gateway-core/src/south/protocol/opcua/mod.rs	894
 gateway-core/src/south/scheduler/mod.rs	542
 gateway-core/src/support/app.rs	654
 gateway-core/src/support/cron.rs	717
-gatewayd/src/bootstrap/helpers/assemble.rs	951
+gatewayd/src/bootstrap/helpers/assemble.rs	910
 gatewayd/src/bootstrap/helpers/shutdown.rs	539

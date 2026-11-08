@@ -3,7 +3,7 @@
   "license": {
     "_comment": "授权与配额配置节。tier_quotas 是 tier → 配额默认映射，license 文件自带 quota 时优先使用 license 自带的；license 未自带 quota（老 payload / 签发遗漏）时按 tier 查本表。",
     "_comment_tier_quotas": "建议显式写全四档（core / standard / pro / ultra）。缺任何一档时，该档配额回落到代码内置的默认表（数值与下表一致），不会退到开源版配额；但运维就无法在 config.json 里按现场调整该档。启动日志会打出 WARN 提示缺哪几档。字段值为 null = 该项不限。",
-    "_comment_v21": "v2.1 口径：配额**只管点位**。四档唯一差异是 max_points；max_protocols 与 northbound_channels 恒为 null（不限），storage_days 四档统一 30 天。协议种类数与北向通道数反映部署形态而非产能规模，按它们分档会让「买高档位却用不满」的现场反复超限；保留天数是运维策略（超期按 FIFO 截断且不可恢复），30 天覆盖绝大多数抄表与追溯场景。",
+    "_comment_v21": "v2.1 口径：配额**只管点位**。四档唯一差异是 max_points；max_protocols 与 northbound_channels 恒为 null（不限），storage_days 仅为 .lic 格式兼容统一写 30，运行时固定按 30 天保留、**不随授权变化**。协议种类数与北向通道数反映部署形态而非产能规模，按它们分档会让「买高档位却用不满」的现场反复超限；保留天数是运维策略（超期按 FIFO 截断且不可恢复），30 天覆盖绝大多数抄表与追溯场景。",
     "_comment_sku": "行业 SKU（编译期 feature，如 sku-power）与授权档是**两条独立的售卖轴**：SKU 决定二进制里有哪些协议，授权档决定能配多少点位。采购推荐组合见 docs/design/license-v2-quota.md「SKU × 授权档采购推荐」章节：sku-minimal→core、sku-building/sku-plc→standard、sku-standard/sku-power→pro、full→ultra。",
     "tier_quotas": [
       {
@@ -24,8 +24,8 @@
         "quota": { "max_points": 5000, "max_protocols": null, "storage_days": 30, "northbound_channels": null }
       }
     ],
-    "_comment_absent_quota": "无 license / 授权失效时回退到的配额（开源版体验）。缺省为 100 点 / 1 协议 / 7 天 / 1 通道。",
-    "absent_quota": { "max_points": 100, "max_protocols": 1, "storage_days": 7, "northbound_channels": 1 }
+    "_comment_absent_quota": "无 license / 授权失效时回退到的配额（开源版体验）。缺省为 100 点 / 1 协议 / 1 通道；storage_days 仅为格式兼容，运行时历史保留与授权无关（固定 30 天）。",
+    "absent_quota": { "max_points": 100, "max_protocols": 1, "storage_days": 30, "northbound_channels": 1 }
   },
   "sim_consumer": {
     "_comment": "内置模拟消费者：无北向 MQTT 时用于本地演练 / 消除「队列积压 has_consumer=false」告警歧义。开启后队列数据会走完「出队 → 处理 → ack」链路，但不会被上报到任何外部通道。与 mqtt.enabled 互斥（同时开会分流同一批数据导致静默丢数），MQTT 已启用时本开关会被忽略。",

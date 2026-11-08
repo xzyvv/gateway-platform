@@ -48,8 +48,8 @@ pub struct SqliteStorage {
     wal_path: PathBuf,
     /// 维护 tick 计数器（每次 maintenance() 自增）
     maintenance_tick: AtomicU32,
-    /// v2.0 Step 5: 历史数据保留天数（license storage_days 配额；None = 不限）。
-    /// 启动默认 30 天（对齐旧硬编码行为），bootstrap 配额对账任务启动后立即覆盖。
+    /// 历史数据保留天数（None = 不限）。v2.1 起与 license 无关，启动即固定 30 天；
+    /// 实际 FIFO 截断由 maintenance 周期按该值执行。
     storage_retention_days: Arc<parking_lot::Mutex<Option<u32>>>,
     /// 1.2: 注入的指标实例（替代全局 metrics::get()）
     metrics: Arc<Metrics>,
@@ -402,7 +402,7 @@ impl QueueStorage for SqliteStorage {
         }
 
         // 4. 每 120 ticks (1 小时): retention cleanup
-        //    - 保留天数由 license storage_days 配额驱动；
+        //    - 保留天数固定 30 天（v2.1 起与 license 无关）；
         //    - 磁盘水位联动：Warn 收紧天数/上限，Critical 起清空聚合历史；
         //    - 行数上界按库所在分区容量自适应（小 eMMC 不再套用固定 500 万行）。
         if new_tick.is_multiple_of(120) {
@@ -449,7 +449,7 @@ impl QueueStorage for SqliteStorage {
             }
         }
 
-        // 6. 每次：cleanup_old_records（storage_days 配额换算小时）+ WAL 大小监控
+        // 6. 每次：cleanup_old_records（保留天数换算小时）+ WAL 大小监控
         let mut guard = self.conn.lock();
         let max_age_hours = self.storage_retention_days.lock().map(|d| d as u64 * 24);
         Self::cleanup_old_records(&mut guard, max_age_hours, &self.depth);
@@ -511,11 +511,7 @@ impl QueueStorage for SqliteStorage {
         let prev = *self.storage_retention_days.lock();
         if prev != days {
             *self.storage_retention_days.lock() = days;
-            tracing::info!(
-                "storage retention days updated: {:?} -> {:?} (license storage_days quota)",
-                prev,
-                days
-            );
+            tracing::info!("storage retention days updated: {:?} -> {:?}", prev, days);
         }
     }
 

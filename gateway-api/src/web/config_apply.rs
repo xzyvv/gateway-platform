@@ -108,7 +108,8 @@ fn record_reload_rejected(state: &Arc<AppState>, err: &ApiError) {
 /// 超出**点位**上限时须拒绝。
 /// 拒绝的错误码按**授权状态**翻译（见 [`ApiError::license_denied`]）：
 /// 授权有效但档位配额不够 → 4021；从未导入 → 7001；授权已失效 → 7003。
-/// storage_days 由队列运行时清理任务（FIFO 截断，不阻断写入）负责，此处不查。
+/// storage_days 不属授权（v2.1）：历史保留固定 30 天，由队列 maintenance 按 FIFO
+/// 截断执行，与配置保存无关，此处不查。
 pub(crate) fn check_config_quota(
     state: &Arc<AppState>,
     cfg: &GatewayConfig,

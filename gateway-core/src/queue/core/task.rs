@@ -52,9 +52,9 @@ pub(crate) enum QueueCommand {
         bucket_secs: Option<u32>,
         reply: oneshot::Sender<GatewayResult<HistoryQueryResult>>,
     },
-    /// v2.0 Step 5: 设置历史数据保留天数（license storage_days 配额；None = 不限）
+    /// 设置历史数据保留天数（v2.1 起与 license 无关，固定 30 天；None = 不限）
     SetStorageRetention(Option<u32>),
-    /// v2.0: 查询最旧一条持久化数据的时间戳（unix 毫秒），用于配额用量统计。
+    /// v2.0: 查询最旧一条持久化数据的时间戳（unix 毫秒），用于历史保留跨度统计。
     /// None = 无历史数据。
     OldestTs(oneshot::Sender<Option<i64>>),
 }
@@ -478,8 +478,8 @@ pub(crate) async fn queue_task(
                                     let _ = reply.send(result);
                                 }
                                 QueueCommand::SetStorageRetention(days) => {
-        // 仅更新内存槽位（锁内赋值，无 IO），无需 spawn_blocking；
-        // 实际截断由 maintenance 周期按新配额执行
+                                    // 仅更新内存槽位（锁内赋值，无 IO），无需 spawn_blocking；
+                                    // 实际截断由 maintenance 周期按新的保留天数执行
                                     storage.set_storage_retention_days(days);
                                 }
                                 QueueCommand::OldestTs(reply) => {

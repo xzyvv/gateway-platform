@@ -329,11 +329,12 @@ impl DataQueue {
         Self::with_storage(storage)
     }
 
-    /// v2.0 Step 5: 设置历史数据保留天数（license `storage_days` 配额；None = 不限）。    
+    /// 设置历史数据保留天数（None = 不限）。v2.1 起不由 license 驱动：
+    /// 启动固定 30 天，此接口仅保留给运维/测试调整。
     ///
-    /// 由 bootstrap 的配额对账任务周期调用；发送命令给队列 actor 更新存储后端
-    /// 的保留天数槽位，实际 FIFO 截断由 maintenance 周期执行。内存后端为 no-op。    
-    /// 配额同步是尽力而为（advisory）：队列任务已退出时静默忽略。
+    /// 发送命令给队列 actor 更新存储后端的保留天数槽位，实际 FIFO 截断由
+    /// maintenance 周期执行。内存后端为 no-op。
+    /// 同步是尽力而为的：队列任务已退出时静默忽略。
     pub async fn set_storage_retention_days(&self, days: Option<u32>) {
         let _ = self.tx.send(QueueCommand::SetStorageRetention(days)).await;
     }
@@ -663,7 +664,7 @@ impl DataQueue {
                             len, BACKLOG_WARN_ROWS
                         ),
                         QueueHealth::Backlog => format!(
-                            "队列存量 {} 条（≥ {} 预警阈值）：未配置北向消费者，队列作为本地历史库按 storage_days 保留",
+                            "队列存量 {} 条（≥ {} 预警阈值）：未配置北向消费者，队列作为本地历史库按 30 天保留",
                             len, BACKLOG_WARN_ROWS
                         ),
                         QueueHealth::Backpressure => format!(
@@ -737,8 +738,8 @@ impl DataQueue {
 
     /// 最旧一条持久化数据的时间戳（unix 毫秒）；None = 队列无历史数据。
     ///
-    /// v2.0：用于 license 配额用量统计——实际历史保留跨度
-    /// = now - oldest_ts，即 `storage_days` 配额的已用量口径。
+    /// 用于历史保留跨度统计——实际跨度 = now - oldest_ts，
+    /// 仅供观测/展示（v2.1 起不再作为 license 配额用量）。
     pub async fn oldest_data_timestamp(&self) -> Option<i64> {
         let (reply, rx) = oneshot::channel();
         if self.tx.send(QueueCommand::OldestTs(reply)).await.is_err() {

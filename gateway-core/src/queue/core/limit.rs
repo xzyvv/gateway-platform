@@ -70,7 +70,7 @@ pub fn max_rows_errors(max_rows: i64) -> Vec<String> {
 
 /// 降采样聚合表（`data_queue_aggregated`）行数上限。
 ///
-/// 时间维（license `storage_days`）之外的第二重保护：点位很多时分钟桶仍是
+/// 时间维（固定保留 30 天）之外的第二重保护：点位很多时分钟桶仍是
 /// 库里最大的表，且「保留 30 天」在 10k 点位量级下可以是数亿行。超过此上限后
 /// 由 retention 按 `window_start` 从旧到新分批淘汰，避免磁盘被历史桶写满。
 pub const MAX_AGGREGATED_ROWS: i64 = 5_000_000;

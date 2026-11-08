@@ -316,7 +316,7 @@ async fn test_memory_disk_full_buffers_in_fallback() {
     assert_eq!(queue.len().await, 2);
 }
 
-// ===== v2.0 Step 5: storage_days 配额驱动 FIFO 截断 =====
+// ===== 保留期（固定 30 天）驱动的 FIFO 截断 =====
 
 /// 构造指定时间戳的数据点（毫秒）
 fn make_point_at(id: &str, value: f64, timestamp_ms: i64) -> DataPoint {

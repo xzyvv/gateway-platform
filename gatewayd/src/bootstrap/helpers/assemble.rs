@@ -597,28 +597,6 @@ pub(crate) fn spawn_license_ntp_resync_watch(
     });
 }
 
-/// 启动 storage_days 配额对账任务（v2.0 §5：历史保留天数由 license 配额驱动）。
-///
-/// 首轮立即同步，此后每小时对账（与 maintenance 截断周期对齐）；
-/// license 导入 / 每日重校验 / 档位变化后最迟 1h 内生效，
-/// 实际 FIFO 截断由队列 maintenance 周期按新配额执行（不阻断写入）。
-pub(crate) fn spawn_license_storage_retention_watch(
-    license: Arc<gateway_core::license::LicenseManager>,
-    queue: Arc<gateway_core::queue::DataQueue>,
-) {
-    spawn_supervised("license_storage_retention", move || {
-        let license = license.clone();
-        let queue = queue.clone();
-        async move {
-            loop {
-                let days = license.current().quota.storage_days;
-                queue.set_storage_retention_days(days).await;
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            }
-        }
-    });
-}
-
 // ============================================================================
 // 阶段函数：Step 12-13（组装并启动服务）
 // ============================================================================
@@ -804,8 +782,8 @@ pub(crate) async fn assemble_and_start_services(
     spawn_license_refresh_loop(license.manager.clone());
     // 启动 NTP 校时 → 时钟基准对账任务（§9：断电恢复场景自动洗白，无需重启）
     spawn_license_ntp_resync_watch(license.manager.clone(), chain.ntp.clone());
-    // 启动 storage_days 配额对账任务（v2.0 §5：历史保留天数由 license 配额驱动）
-    spawn_license_storage_retention_watch(license.manager.clone(), north.queue.clone());
+    // 历史保留天数与 license 无关（v2.1：配额只管采集点数），队列启动即固定 30 天，
+    // 由 maintenance 周期按 FIFO 截断执行；如需调整走运维配置，不再随 license 变化。
 
     // ===== Step 13i: 计划任务调度执行器 =====
     // 轮询 scheduled_tasks 表的到期任务并执行（读点位/备份配置/NTP 校时）。

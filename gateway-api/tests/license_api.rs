@@ -62,12 +62,13 @@ async fn test_get_license_returns_absent_when_no_file() {
     assert_eq!(v["quota_source"], serde_json::json!("absent_fallback"));
     // v2.0 Step 2：GET 响应包含 quota 字段。
     // 无 license 时 `LicenseManager::current()` 走安全兜底（Bug T7）：
-    // license 自带 quota 全空 → 回退 `DEFAULT_ABSENT_QUOTA`（100 点 / 1 协议 / 7 天 / 1 通道），
+    // license 自带 quota 全空 → 回退 `DEFAULT_ABSENT_QUOTA`（100 点 / 1 协议 / 1 通道；
+    // v2.1 起 storage_days 不属授权，仅为 .lic 格式兼容保留统一值 30），
     // 而非全 null——全 null 语义为"无限配额"，会让无授权版形同虚设。
     assert!(v["quota"].is_object());
     assert_eq!(v["quota"]["max_points"], serde_json::json!(100));
     assert_eq!(v["quota"]["max_protocols"], serde_json::json!(1));
-    assert_eq!(v["quota"]["storage_days"], serde_json::json!(7));
+    assert_eq!(v["quota"]["storage_days"], serde_json::json!(30));
     assert_eq!(v["quota"]["northbound_channels"], serde_json::json!(1));
 }
 

@@ -121,7 +121,7 @@
     "absent_quota": {
       "max_points": 100,
       "max_protocols": 1,
-      "storage_days": 7,
+      "storage_days": 30,
       "northbound_channels": 1
     }
   }

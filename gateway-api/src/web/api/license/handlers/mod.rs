@@ -79,9 +79,8 @@ async fn build_usage(state: &Arc<AppState>) -> QuotaUsage {
     }
 }
 
-/// `storage_days` 配额的已用量：队列中实际保留的历史数据跨度（天）。
-///
-/// 口径 = now - 最旧一条持久化数据的时间戳，向上取整到天。
+/// 历史保留跨度（天），仅供观测/展示：v2.1 起 `storage_days` 不属授权配额，
+/// 运行时固定 30 天。口径 = now - 最旧一条持久化数据的时间戳，向上取整到天。
 /// 队列无历史数据时为 0。查询失败时按 0 计（统计失败不该阻断授权查询）。
 async fn storage_days_usage(state: &Arc<AppState>) -> u32 {
     let Some(oldest) = state.south.queue.oldest_data_timestamp().await else {

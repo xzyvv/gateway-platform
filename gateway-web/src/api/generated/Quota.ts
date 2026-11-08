@@ -23,7 +23,8 @@ max_points: number | null,
  */
 max_protocols: number | null, 
 /**
- * 历史数据保留天数（None = 无限；超限按 FIFO 清理）
+ * 历史数据保留天数。v2.1 起不再生效，仅为 .lic 格式兼容保留；
+ * 历史保留固定 30 天，属运维策略，与授权无关。
  */
 storage_days: number | null, 
 /**
