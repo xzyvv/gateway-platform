@@ -1296,3 +1296,42 @@ async fn p2_fallback_retry_budget_resets_after_successful_write() {
     );
     assert_eq!(queue.fallback_len(), 1, "新失败的点应进入缓冲而非被丢弃");
 }
+
+/// 回归：批量 INSERT 的占位符串按行数预拼接（`insert_sql_for_rows`），
+/// 必须覆盖跨 chunk 边界的各种行数组合——满块 50 行、余块、以及 50/50/23
+/// 这种多块混合。若某行数的预拼接串与实际绑定参数个数不一致，
+/// `tx.execute` 会失败并静默回退逐行插入（吞吐塌陷）或直接丢行。
+#[test]
+fn test_bulk_insert_covers_chunk_boundary_row_counts() {
+    use crate::engine::metrics::Metrics;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("queue.db");
+    let storage = SqliteStorage::new(db_path.to_str().unwrap(), Arc::new(Metrics::new())).unwrap();
+
+    // 行数覆盖：1 / 满块 50 / 满块+1 / 跨三块 123
+    for rows in [1usize, 50, 51, 123] {
+        let points: Vec<DataPoint> = (0..rows)
+            .map(|i| make_point(&format!("p-{}-{}", rows, i), i as f64))
+            .collect();
+
+        let inserted = storage.enqueue_batch(&points).unwrap();
+        assert_eq!(
+            inserted, rows,
+            "rows={} 时全部行都应插入成功（预拼接占位符数必须与绑定参数数一致）",
+            rows
+        );
+    }
+
+    // 总行数校验：1 + 50 + 51 + 123
+    assert_eq!(storage.len(), 225, "四批合计应落库 225 行");
+
+    // 值回读校验（抽查首尾，确认列序未错位）
+    let items = storage.history_query("p-123-0", 0, i64::MAX, 10).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].value, 0.0);
+    let items = storage.history_query("p-123-122", 0, i64::MAX, 10).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].value, 122.0);
+}

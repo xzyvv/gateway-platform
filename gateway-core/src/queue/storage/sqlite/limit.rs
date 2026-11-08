@@ -8,6 +8,7 @@
 //! 均为 `SqliteStorage` 的关联函数（以 `conn` 作为参数，加锁由调用方负责）。
 
 use std::sync::atomic::AtomicI64;
+use std::sync::OnceLock;
 
 use rusqlite::{params, Connection};
 
@@ -22,6 +23,40 @@ const INSERT_CHUNK_SIZE: usize = 50;
 /// 批次 C：`data_queue` 批量 INSERT 每行的列数。
 /// 末尾一列为 `value_text`（枚举文本标签，可空 → NULL）。
 const INSERT_COLS_PER_ROW: usize = 11;
+
+/// 单行占位符（11 列，与 INSERT_COLS_PER_ROW 对应）。
+const ROW_PLACEHOLDERS: &str = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+/// 预拼接的 INSERT 语句：下标 n（1..=INSERT_CHUNK_SIZE）对应一次插入 n 行的完整语句。
+///
+/// 原实现每个 chunk 现场生成 `INSERT_CHUNK_SIZE` 个占位符 `String` 再 `join` +
+/// `format!`，稳态下每 chunk 产生 50+ 次小分配 + 2 次大字符串拼装。这里按行数
+/// 一次性预拼接好，运行时只做一次下标取值，**稳态零分配**（首次使用时构建，
+/// 常驻约 50KB，相对 SQLite 自身占用可忽略）。
+static INSERT_SQL_CACHE: OnceLock<Vec<Box<str>>> = OnceLock::new();
+
+/// 取「一次插入 n 行」的预拼接 INSERT 语句。
+///
+/// `rows` 由 `points.chunks(INSERT_CHUNK_SIZE)` 保证落在 1..=INSERT_CHUNK_SIZE；
+/// 越界时收敛到合法区间，避免 panic（防御性，正常路径不会触发）。
+fn insert_sql_for_rows(rows: usize) -> &'static str {
+    let cache = INSERT_SQL_CACHE.get_or_init(|| {
+        const PREFIX: &str = "INSERT INTO data_queue (point_id, device_id, value, raw_value, raw_type, quality, quality_reason, timestamp, source_ts, stale_count, value_text) VALUES ";
+        let mut cache: Vec<Box<str>> = Vec::with_capacity(INSERT_CHUNK_SIZE + 1);
+        // 下标 0 表示 0 行，不会被使用
+        cache.push(Box::from(""));
+        let mut values = String::new();
+        for n in 1..=INSERT_CHUNK_SIZE {
+            if n > 1 {
+                values.push(',');
+            }
+            values.push_str(ROW_PLACEHOLDERS);
+            cache.push(format!("{PREFIX}{values}").into_boxed_str());
+        }
+        cache
+    });
+    &cache[rows.clamp(1, INSERT_CHUNK_SIZE)]
+}
 
 /// #20-2026：未送达行占总队列比重的告警阈值。`enforce_queue_limit` 在
 /// 已尽力删除 delivered=1 行后，若未送达行仍超过此比例 → 触发 unsent_overflow
@@ -236,37 +271,36 @@ impl SqliteStorage {
             // `(?1..?10)`，多行时所有行复用同一组编号，SQLite 只认 10 个参数 → 参数数
             // 不符，`tx.execute` 恒失败并回退逐行插入，队列吞吐大幅下降。
             // 批次 C：列数由 10 增至 11（末尾追加 value_text，枚举文本标签）。
-            let placeholders: Vec<String> = chunk
-                .iter()
-                .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string())
-                .collect();
-            let sql = format!(
-                "INSERT INTO data_queue (point_id, device_id, value, raw_value, raw_type, quality, quality_reason, timestamp, source_ts, stale_count, value_text)
-                 VALUES {}",
-                placeholders.join(",")
-            );
+            // 占位符串按行数预拼接（见 insert_sql_for_rows），此处不再逐行生成字符串。
+            let sql = insert_sql_for_rows(chunk.len());
 
-            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            // 批次 C 优化：参数改为**借用**点对象（`&dyn ToSql`），不再为每行每个
+            // 字段 `Box::new(clone)`。原实现每点产生 11 次 Box 分配 + 5 次 String
+            // 缓冲分配，与 pipeline 的批次拷贝同一量级；借用后这部分分配全部消失，
+            // 绑定值直接指向 `points`（rusqlite 在 execute 期间只做只读转换）。
+            // quality 的 `as_str()` 返回 `&'static str` 值，而 `&dyn ToSql` 的
+            // 参照物必须是 Sized 类型，无法直接把 `&str` 塞进去。先把整块的文本
+            // 视图落到一个小 Vec（每 chunk 仅 1 次分配、每点 16B），再由它借用。
+            let quality_texts: Vec<&'static str> =
+                chunk.iter().map(|p| p.quality.as_str()).collect();
+            let mut param_values: Vec<&dyn rusqlite::types::ToSql> =
                 Vec::with_capacity(chunk.len() * INSERT_COLS_PER_ROW);
-            for p in chunk {
-                param_values.push(Box::new(p.point_id.clone()));
-                param_values.push(Box::new(p.device_id.clone()));
-                param_values.push(Box::new(p.value));
-                param_values.push(Box::new(p.raw_value));
-                param_values.push(Box::new(p.raw_type.clone()));
-                param_values.push(Box::new(p.quality.as_str().to_string()));
-                param_values.push(Box::new(p.quality_reason.clone()));
-                param_values.push(Box::new(p.timestamp));
-                param_values.push(Box::new(p.source_ts));
-                param_values.push(Box::new(p.stale_count));
+            for (i, p) in chunk.iter().enumerate() {
+                param_values.push(&p.point_id);
+                param_values.push(&p.device_id);
+                param_values.push(&p.value);
+                param_values.push(&p.raw_value);
+                param_values.push(&p.raw_type);
+                param_values.push(&quality_texts[i]);
+                param_values.push(&p.quality_reason);
+                param_values.push(&p.timestamp);
+                param_values.push(&p.source_ts);
+                param_values.push(&p.stale_count);
                 // 批次 C：枚举文本标签（None → NULL，表示该点无枚举标签）
-                param_values.push(Box::new(p.value_text.clone()));
+                param_values.push(&p.value_text);
             }
 
-            let refs: Vec<&dyn rusqlite::types::ToSql> =
-                param_values.iter().map(|v| v.as_ref()).collect();
-
-            if tx.execute(&sql, refs.as_slice()).is_err() {
+            if tx.execute(sql, param_values.as_slice()).is_err() {
                 // r30b-QL3: 旧 fallback 每行重新 `params![...]` 宏 → 每次 10 个参数
                 // 全 ToSql 转换（marshal）。改用 prepare_cached + 复用 param_values 切片：
                 // 一次 prepare，循环里只取每行对应的 10 个 slot 喂给 rusqlite，
@@ -277,10 +311,9 @@ impl SqliteStorage {
                 )?;
                 for (i, p) in chunk.iter().enumerate() {
                     let row_start = i * INSERT_COLS_PER_ROW;
-                    let row_params: Vec<&dyn rusqlite::types::ToSql> = (0..INSERT_COLS_PER_ROW)
-                        .map(|j| param_values[row_start + j].as_ref())
-                        .collect();
-                    if let Err(e) = stmt.execute(row_params.as_slice()) {
+                    // 元素本身是 Copy 的 `&dyn ToSql`，直接切片拷贝，无需再 as_ref
+                    let row_params = &param_values[row_start..row_start + INSERT_COLS_PER_ROW];
+                    if let Err(e) = stmt.execute(row_params) {
                         failed += 1;
                         tracing::warn!(
                             "enqueue point failed, skipped: point_id={} err={}",
@@ -543,6 +576,27 @@ impl SqliteStorage {
 #[cfg(test)]
 mod limit_tests {
     use super::*;
+
+    /// 预拼接的 INSERT 语句必须严格含 `rows * INSERT_COLS_PER_ROW` 个匿名占位符：
+    /// 少一个 → `tx.execute` 失败并**静默**退化为逐行插入（吞吐塌陷，难以察觉）；
+    /// 多一个 → 参数个数不匹配直接报错丢批。
+    #[test]
+    fn insert_sql_placeholder_count_matches_row_count() {
+        for rows in 1..=INSERT_CHUNK_SIZE {
+            let sql = insert_sql_for_rows(rows);
+            assert_eq!(
+                sql.matches('?').count(),
+                rows * INSERT_COLS_PER_ROW,
+                "rows={} 的预拼接 SQL 占位符数必须与绑定参数数一致",
+                rows
+            );
+            assert!(
+                sql.starts_with("INSERT INTO data_queue"),
+                "rows={} 的预拼接 SQL 必须指向 data_queue 表",
+                rows
+            );
+        }
+    }
 
     /// 建一张与生产同构的 `data_queue` 表（列定义对齐 `db_init::init_queue_db`）。
     fn setup_conn() -> Connection {

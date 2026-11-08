@@ -171,8 +171,25 @@ fn set_file_permissions(_path: &Path) {}
 mod tests {
     use super::*;
 
+    /// 每个用例独占一个临时目录（进程号 + 进程内自增序号）。
+    ///
+    /// 旧实现按用例名固定路径（`%TEMP%\gw-key-test-{name}`），并在取用前
+    /// `remove_dir_all` 重建目录。两个测试二进制并发时（例如同机并行跑多个
+    /// crate 的测试，或同一 crate 起了两个 cargo test）会互相删除 / 抢占
+    /// keyfile，报 `create db keyfile failed: 文件存在 (os error 80)`，
+    /// 表现为与被测逻辑无关的偶发失败。加入进程号与序号后，跨进程、跨用例
+    /// 都不会撞路径。
     fn tmp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gw-key-test-{}", name));
+        use std::sync::atomic::AtomicU32;
+        use std::sync::atomic::Ordering;
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "gw-key-test-{}-{}-{}",
+            name,
+            std::process::id(),
+            seq
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir

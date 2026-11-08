@@ -44,9 +44,15 @@ impl Drop for EnvVarGuard {
     }
 }
 
+/// 每个用例独占一个临时目录（进程号 + 进程内自增序号）。
+///
+/// 旧实现只带进程内计数器（`gw-cert-test-{n}`），跨进程仍会撞路径：两个测试
+/// 二进制并发时（例如同机并行跑多个 crate 的测试）会用同一个目录，且开头
+/// `remove_dir_all` 会互删对方的证书/私钥，表现为与被测逻辑无关的偶发失败。
+/// 加入进程号后跨进程也不冲突。
 fn temp_dir() -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("gw-cert-test-{}", n));
+    let dir = std::env::temp_dir().join(format!("gw-cert-test-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
