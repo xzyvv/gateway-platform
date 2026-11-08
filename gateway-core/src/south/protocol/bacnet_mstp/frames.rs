@@ -4,7 +4,7 @@ use crate::south::bus::FrameBuffer;
 use crate::south::protocol::{CollectorError, CollectorResult};
 
 const PREAMBLE: [u8; 2] = [0x55, 0xFF];
-const MAX_DATA_LEN: usize = 512;
+pub(crate) const MAX_DATA_LEN: usize = 512;
 
 pub fn crc8_header(data: &[u8]) -> u8 {
     let mut crc: u8 = 0xFF;

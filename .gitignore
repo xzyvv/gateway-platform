@@ -6,6 +6,9 @@ target/
 # 覆盖率产物（cargo-llvm-cov，见 gateway-core/scripts/coverage.*）
 lcov.info
 *.lcov
+# 变异测试报告（cargo-mutants，见 .cargo/mutants.toml）
+mutants.out/
+mutants.out.old/
 
 # === Node ===
 node_modules/

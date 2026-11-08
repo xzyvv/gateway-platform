@@ -1,0 +1,52 @@
+# cargo-mutants 配置（变异测试）
+#
+# 目的：验证「测试真的能抓到错」而不是只验证「代码能跑」。
+# 变异体（如把 `+` 改成 `-`、把 `<=` 改成 `<`、把常量改错）若被测试杀死（killed），
+# 说明该行为已被断言锁住；存活（survived）则说明断言缺失。
+#
+# 范围收敛：只跑 queue / formula / 解码模块，避免全仓变异导致 CI 时长失控。
+# 本地：cargo install cargo-mutants && cargo mutants -p gateway-core
+# CI：.github/workflows/fuzz-mutation.yml 的 mutation job（定时/手动触发）
+examine_globs = [
+  # 队列：SQLite 存储、深度/容量、淘汰、WAL 与错误分类
+  "gateway-core/src/queue/**",
+  # 公式引擎：安全表达式求值
+  "gateway-core/src/engine/util/formula.rs",
+  "gateway-core/src/pipeline/vformula.rs",
+  # 解码模块
+  "gateway-core/src/south/protocol/common/decode.rs",
+  "gateway-core/src/south/protocol/common/frame_extract.rs",
+  "gateway-core/src/south/protocol/modbus/frames.rs",
+  "gateway-core/src/south/protocol/dlt645/frames.rs",
+  "gateway-core/src/south/protocol/bacnet_mstp/frames.rs",
+]
+
+# 测试代码本身不参与变异（mutants 也会跳过 #[cfg(test)]，这里显式排除目录级测试）
+exclude_globs = [
+  "gateway-core/src/**/tests.rs",
+  "gateway-core/src/**/tests/**",
+]
+
+# 每个变异体只跑「能覆盖这些模块」的测试目标：
+#   --lib                                 队列/公式/解码的单元测试都在这里
+#   --test power_loss                     队列断电一致性（崩溃恢复路径）
+#   --test virtual_point_pipeline         虚拟点公式链路
+#   --features bacnet-mstp                MSTP 不在默认 all-protocols 集合里，
+#                                          不开这个 feature 时 bacnet_mstp 根本不编译，
+#                                          该文件的变异体会全部「假存活」
+# 刻意不跑 chaos / load / soak / north_*：逐变异体执行会把 CI 时长拉爆，
+# 且它们覆盖的代码不在本配置的变异范围内。
+additional_cargo_test_args = [
+  "-p",
+  "gateway-core",
+  "--lib",
+  "--test",
+  "power_loss",
+  "--test",
+  "virtual_point_pipeline",
+  "--features",
+  "bacnet-mstp",
+]
+timeout_multiplier = 3.0
+# 单位：秒（此字段要求数值，不接受 "60s" 这类字符串）
+minimum_test_timeout = 60.0

@@ -22,7 +22,7 @@ pub mod transaction;
 mod batch;
 mod collector;
 mod exception;
-mod frames;
+pub(crate) mod frames;
 mod merge;
 mod trait_impl;
 

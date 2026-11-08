@@ -95,6 +95,9 @@ remote-shell = []
 ## 改为 feature gate 后，生产构建（gatewayd / gateway-desktop）不再包含它，
 ## panic 面彻底移出运行二进制。gateway-api 的 dev-dependencies 会自动启用。
 test-support = []
+## fuzz harness 转发层：仅 `fuzz/` crate（cargo-fuzz）启用，生产构建不编译。
+## 把 pub(crate) 的解码器暴露给仓库外的 fuzz crate，不复制协议逻辑。
+fuzz = []
 
 ## ===== 协议插件化 feature gate（编译期可选协议）=====
 ## 默认启用标准发行集（default = ["all-protocols"]），不破坏现有 cargo build 行为。

@@ -1,0 +1,42 @@
+[package]
+name = "gateway-core-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# 与生产同一份解码代码：只开 fuzz 所需的三个协议 + 转发层 feature。
+# 不加 default-features，避免拉入 opcua 等重依赖。
+[dependencies.gateway-core]
+path = "../gateway-core"
+default-features = false
+features = ["modbus", "dlt645", "bacnet-mstp", "fuzz"]
+
+[[bin]]
+name = "modbus_decode"
+path = "fuzz_targets/modbus_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dlt645_decode"
+path = "fuzz_targets/dlt645_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bacnet_mstp_decode"
+path = "fuzz_targets/bacnet_mstp_decode.rs"
+test = false
+doc = false
+bench = false
+
+# 独立 workspace：不并入根 workspace（cargo-fuzz 的常规约定）。
+[workspace]

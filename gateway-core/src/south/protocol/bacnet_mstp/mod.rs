@@ -53,7 +53,7 @@ const MAX_DATA_LEN: usize = 512;
 // ===== CRC 函数 =====
 
 /// MS/TP 头 CRC-8（多项式 0x99，初始值 0xFF）
-mod frames;
+pub(crate) mod frames;
 pub use frames::*;
 
 pub struct BacnetMstpCollector {

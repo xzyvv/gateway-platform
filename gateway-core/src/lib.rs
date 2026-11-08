@@ -21,6 +21,9 @@ pub mod config;
 pub mod crypto;
 pub mod domain;
 pub mod engine;
+/// fuzz harness 专用转发层（`--features fuzz`，生产构建不编译）。
+#[cfg(feature = "fuzz")]
+pub mod fuzz_api;
 pub mod license;
 pub mod north;
 pub mod pipeline;

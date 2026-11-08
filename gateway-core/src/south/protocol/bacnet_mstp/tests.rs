@@ -488,3 +488,20 @@ fn golden_mstp_who_is_data_frame() {
     assert_eq!((ftype, dest, src), (FRAME_DATA_EXPECTING_REPLY, 0xFF, 0));
     assert_eq!(data, payload, "数据负载必须逐字节还原（数据 CRC 校验通过）");
 }
+
+/// 契约：帧类型常量必须与 ASHRAE 135 表 9-1 的 **wire 值**一致。
+///
+/// 断言刻意用字面量而不是「常量互比」：曾把 DataExpectingReply 写成 0x00
+/// （Token）、DataNotExpectingReply 写成 0x01（Poll For Master），现场表现是
+/// 「总线通、一帧数据都没有」。这类错误构造出的帧仍然合法，fuzz 抓不到；
+/// 若测试只引用常量符号，变异测试也杀不掉——必须在字面值上钉死。
+#[test]
+fn mstp_frame_type_constants_match_ashrae_135_table_9_1() {
+    assert_eq!(FRAME_TOKEN, 0x00, "Token");
+    assert_eq!(FRAME_DATA_EXPECTING_REPLY, 0x05, "Data Expecting Reply");
+    assert_eq!(
+        FRAME_DATA_NOT_EXPECTING_REPLY, 0x06,
+        "Data Not Expecting Reply"
+    );
+    assert_eq!(FRAME_REPLY_POSTPONED, 0x07, "Reply Postponed");
+}

@@ -1,6 +1,8 @@
 [workspace]
 members = ["gateway-core", "gateway-api", "gatewayd", "gateway-desktop/src-tauri", "tools/license-issuer"]
 resolver = "2"
+# cargo-fuzz 工程自带 [workspace]，不并入主工作区（避免 nightly/libFuzzer 依赖污染常规构建）
+exclude = ["fuzz"]
 
 # 默认成员不含 gateway-desktop（2026-11 起桌面端已冻结，不再构建/打包/发布）。
 # 原因：Tauri 在 Linux 上编译需要 libwebkit2gtk / libgtk-3 等系统开发包，

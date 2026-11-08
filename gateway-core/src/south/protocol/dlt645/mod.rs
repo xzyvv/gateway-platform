@@ -21,7 +21,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-mod frames;
+pub(crate) mod frames;
 use crate::south::protocol::common::util::encode_bcd_value;
 use frames::{
     build_dlt645_frame, build_dlt645_write_address_data, build_dlt645_write_password_data,

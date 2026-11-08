@@ -1,0 +1,118 @@
+name: fuzz-mutation
+
+# ── 变异测试 + 模糊测试（重作业，不阻塞常规 CI）──
+# 这两类测试的共同点是「时长不可控」：
+#   · cargo-mutants：每个变异体都要完整跑一遍 gateway-core 测试；
+#   · libFuzzer：按时间预算跑，时间越长覆盖越深。
+# 因此单独成流，只由「定时 + 手动」触发，不挂到 ci.yml / release-gate 上。
+#
+# 本地等价命令：
+#   cargo install cargo-mutants && cargo mutants -p gateway-core
+#   cargo +nightly install cargo-fuzz && cargo +nightly fuzz run modbus_decode
+#
+# 分工说明：
+#   · 变异测试回答「测试能不能抓到错」（运算符反转、边界 `<`/`<=`、分支删除等）；
+#     注意：cargo-mutants 不生成 const 变异体，「帧类型常量写错」这类问题要靠
+#     golden 报文与字面量断言（bacnet_mstp/tests.rs）兜底；
+#   · fuzz 回答「畸形输入会不会 panic / 越界 / 死循环」，抓不到语义错误。
+
+on:
+  schedule:
+    # 每周一 02:00（Asia/Shanghai，UTC 周日 18:00）
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutation:
+    name: mutation (queue/formula/decode) shard ${{ matrix.shard }}/8
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@cargo-mutants
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-mutants-
+
+      - name: cargo mutants
+        # 变异范围由仓库根的 mutants.toml 收敛到 queue / formula / 解码模块。
+        # --in-place：直接在工作树内变异，省掉每个变异体复制整个 workspace 的开销；
+        # CI 是一次性环境，不存在污染工作区的风险。
+        # --shard 4 路并行；有存活变异体时命令以非零码退出，作为质量信号。
+        run: cargo mutants -p gateway-core --in-place --shard ${{ matrix.shard }}/4
+        env:
+          RUSTFLAGS: ""
+          CARGO_INCREMENTAL: "0"
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out-shard-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore
+
+  fuzz:
+    name: fuzz ${{ matrix.target }} (60s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [modbus_decode, dlt645_decode, bacnet_mstp_decode]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@cargo-fuzz
+
+      - name: Fuzz ${{ matrix.target }}
+        # 单目标 60s 冒烟预算；crash / OOM / 超时都会以非零码退出。
+        # 想跑得更深：本地去掉 -max_total_time 或调大该值。
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -rss_limit_mb=2048
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
