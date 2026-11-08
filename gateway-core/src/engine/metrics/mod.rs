@@ -127,6 +127,13 @@ pub struct Metrics {
     /// P9：磁盘压力标志（1 = 剩余空间低于阈值，入队被阻断；0 = 正常）。
     /// Prom 命名：`gateway_disk_pressure`。
     pub disk_pressure: AtomicI64,
+    /// 磁盘水位档位（0 = ok / 1 = warn / 2 = critical / 3 = blocking）。
+    /// Prom 命名：`gateway_disk_level`。
+    ///
+    /// 与 `disk_pressure` 并存而不替代后者：`disk_pressure` 是二值的历史契约
+    /// （"是否正在阻断"），改名会破坏既有 dashboard / 告警规则；
+    /// 新增分级 gauge 让"还有多少余量"可被 Prometheus 直接观测。
+    pub disk_level: AtomicI64,
     /// OTA 升级进度（0-100）。注：写入仅来自 `ota` 模块，但语义属于"对外状态"
     /// 而非横切 lifecyle，故留在顶层。
     pub ota_progress: AtomicI64,

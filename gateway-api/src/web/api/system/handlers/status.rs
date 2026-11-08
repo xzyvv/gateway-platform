@@ -3,6 +3,9 @@ use super::*;
 use crate::web::services::{
     capacity_pressure_rows, queue_health, QueueHealth, BACKLOG_WARN_ROWS, BACKPRESSURE_ROWS,
 };
+use gateway_core::engine::monitor::health::{
+    DiskLevel, DISK_BLOCKING_THRESHOLD_PCT, DISK_CRITICAL_THRESHOLD_PCT, DISK_WARN_THRESHOLD_PCT,
+};
 use gateway_core::engine::monitor::host;
 use std::sync::atomic::Ordering;
 
@@ -38,6 +41,10 @@ pub(crate) struct ComponentSnapshot {
     /// 前者回答「队列里的数据有没有人会取走」——模拟消费者运行期启停，
     /// 但它同样会 dequeue → ack，队列存量因此是「积压」而非「本地历史存量」。
     pub has_north_consumer: bool,
+    /// 磁盘水位档位（分级告警的唯一真源，见 `engine::monitor::health::DiskStatus`）。
+    pub disk_level: DiskLevel,
+    /// 最近一次检测到的磁盘剩余百分比（未检测过时为 None）。
+    pub disk_free_pct: Option<f64>,
 }
 
 pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapshot {
@@ -87,9 +94,17 @@ pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapsh
     // `gateway-web/src/composables/layout/useLayoutClock.spec.ts`），后端补齐。
     //
     // 语义：磁盘压力 → "degraded"（可服务但不健康）；正常 → "ok"。
+    //
+    // **分级只在 `blocking` 档才把 storage 标为 degraded**：`warn` / `critical`
+    // 两档磁盘仍能正常写入，若此时让 `/health/ready` 返回 503，会让 k8s /
+    // 进程守护在"磁盘还没满"时重启网关——重启不会腾出空间，反而丢数据。
+    // 分级信息通过 `disk_level` / `problems` 传达，不劫持就绪语义。
+    let disk_status = state.north.gateway.disk_status();
+    let disk_level = disk_status.level();
+    let disk_free_pct = disk_status.free_pct();
     components.insert(
         "storage",
-        if state.north.gateway.disk_status().is_pressure() {
+        if disk_status.is_pressure() || disk_level == DiskLevel::Blocking {
             "degraded"
         } else {
             "ok"
@@ -103,6 +118,8 @@ pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapsh
         mqtt_configured,
         mqtt_connected,
         has_north_consumer,
+        disk_level,
+        disk_free_pct,
     }
 }
 
@@ -425,6 +442,10 @@ pub(crate) struct HealthProblemInput<'a> {
     pub queue_len: usize,
     pub ota_state: &'a str,
     pub buses: &'a [BusHealth],
+    /// 磁盘水位档位（分级告警的唯一真源）。
+    pub disk_level: DiskLevel,
+    /// 最近一次检测到的磁盘剩余百分比（未检测过时为 None）。
+    pub disk_free_pct: Option<f64>,
 }
 
 fn health_problem(level: &str, code: &str, message: String, hint: &str) -> serde_json::Value {
@@ -546,6 +567,39 @@ pub(crate) fn build_health_problems(input: &HealthProblemInput<'_>) -> Vec<serde
         }
     }
 
+    // 磁盘水位分级（25% / 15% / 10%）。此前磁盘只有"已阻断"一档信号，
+    // 现场看不到"还剩多少余量"，只能等写满后从丢点反推。这里把档位带进
+    // problems：`warn` 起就是可处置的预警，`critical` 逼近阻断线。
+    //
+    // `blocking` 档不再重复报一条独立 problem——此时 `storage` 组件已经是
+    // degraded，且队列侧已有"数据被丢弃"的可见后果，此处再报一条只会稀释
+    // 现场对高危项的注意力。
+    match input.disk_level {
+        DiskLevel::Ok => {}
+        DiskLevel::Warn => problems.push(health_problem(
+            "warning",
+            "DISK_SPACE_LOW",
+            format!(
+                "磁盘剩余空间 {:.1}%：低于 {}% 预警线",
+                input.disk_free_pct.unwrap_or(0.0),
+                DISK_WARN_THRESHOLD_PCT
+            ),
+            "尽快归档或清理历史数据，避免继续下降到阻断线后开始丢点",
+        )),
+        DiskLevel::Critical => problems.push(health_problem(
+            "critical",
+            "DISK_SPACE_CRITICAL",
+            format!(
+                "磁盘剩余空间 {:.1}%：低于 {}% 严重线，低于 {}% 后网关将拒绝入队",
+                input.disk_free_pct.unwrap_or(0.0),
+                DISK_CRITICAL_THRESHOLD_PCT,
+                DISK_BLOCKING_THRESHOLD_PCT
+            ),
+            "立即清理磁盘（历史数据归档 / 删除过期文件），否则即将开始丢弃低优先级采集点",
+        )),
+        DiskLevel::Blocking => {}
+    }
+
     if input.ota_state != "Idle" {
         problems.push(health_problem(
             "info",
@@ -638,6 +692,8 @@ pub(crate) async fn get_health_report(State(state): State<Arc<AppState>>) -> imp
         queue_len: snap.queue_len,
         ota_state: &snap.ota_state,
         buses: &buses,
+        disk_level: snap.disk_level,
+        disk_free_pct: snap.disk_free_pct,
     });
 
     // 综合状态：critical > degraded > ok。组件非 ok 也算 degraded，
@@ -697,6 +753,15 @@ pub(crate) async fn get_health_report(State(state): State<Arc<AppState>>) -> imp
             "queue_len": snap.queue_len,
             "total_reads": total_reads,
             "success_rate": success_rate,
+            // 磁盘水位分级（ok / warn / critical / blocking）+ 实际余量。
+            // 给出阈值让前端能自己渲染"还剩多少就告警"，不必在前端硬编码一份。
+            "disk_level": snap.disk_level.as_str(),
+            "disk_free_pct": snap.disk_free_pct,
+            "disk_thresholds": {
+                "warn": DISK_WARN_THRESHOLD_PCT,
+                "critical": DISK_CRITICAL_THRESHOLD_PCT,
+                "blocking": DISK_BLOCKING_THRESHOLD_PCT,
+            },
         },
         "buses": buses_json,
         "problems": problems,
@@ -740,6 +805,8 @@ mod health_report_tests {
             queue_len: 10,
             ota_state: "Idle",
             buses: &buses,
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         assert!(codes(&input).is_empty());
     }
@@ -753,6 +820,8 @@ mod health_report_tests {
             queue_len: 0,
             ota_state: "Idle",
             buses: &[],
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         assert!(codes(&input).contains(&"MQTT_DISCONNECTED".to_string()));
     }
@@ -767,6 +836,8 @@ mod health_report_tests {
             queue_len: 0,
             ota_state: "Idle",
             buses: &buses,
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         assert!(codes(&input).contains(&"BUS_ALL_OFFLINE".to_string()));
     }
@@ -781,6 +852,8 @@ mod health_report_tests {
             queue_len: 0,
             ota_state: "Idle",
             buses: &buses,
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         let got = codes(&input);
         assert!(got.contains(&"BUS_PARTIAL_OFFLINE".to_string()));
@@ -799,6 +872,8 @@ mod health_report_tests {
             queue_len: 0,
             ota_state: "Idle",
             buses: &buses,
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         assert!(!codes(&input).contains(&"BUS_ALL_OFFLINE".to_string()));
     }
@@ -816,6 +891,8 @@ mod health_report_tests {
             queue_len: 149_668,
             ota_state: "Idle",
             buses: &[],
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         let got = codes(&no_consumer);
         assert!(got.contains(&"QUEUE_LOCAL_HISTORY".to_string()));
@@ -829,6 +906,8 @@ mod health_report_tests {
             queue_len: 149_668,
             ota_state: "Idle",
             buses: &[],
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         let got = codes(&with_consumer);
         assert!(got.contains(&"QUEUE_BACKPRESSURE".to_string()));
@@ -847,6 +926,8 @@ mod health_report_tests {
             queue_len: 149_668,
             ota_state: "Idle",
             buses: &[],
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         let got = codes(&input);
         assert!(
@@ -874,6 +955,8 @@ mod health_report_tests {
             queue_len: 149_668,
             ota_state: "Idle",
             buses: &[],
+            disk_level: DiskLevel::Ok,
+            disk_free_pct: Some(50.0),
         };
         let got = codes(&input);
         assert!(got.contains(&"QUEUE_LOCAL_HISTORY".to_string()));

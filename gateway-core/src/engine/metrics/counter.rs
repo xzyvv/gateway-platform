@@ -216,6 +216,17 @@ impl Metrics {
         self.daily_alerts.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// 记录一次磁盘水位告警触发（档位恶化时由磁盘监控循环调用）。
+    ///
+    /// 与点级 `inc_alarm_trigger` 分开计数：磁盘是系统级事件，
+    /// 混进点级计数器会让"测点越限"与"网关快写满盘"无法区分。
+    /// 不累加 `daily_alerts`（那是"今日点级告警"展示口径）。
+    pub fn inc_disk_alarm_trigger(&self) {
+        self.alarm
+            .disk_triggers_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// 记录内置模拟消费者成功消费的条数（`SimConsumer` 记账时调用）。
     pub fn inc_sim_consumer_consumed(&self, n: u64) {
         self.sim_consumer

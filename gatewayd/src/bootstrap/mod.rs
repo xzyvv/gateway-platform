@@ -142,11 +142,29 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     // spawn_disk_monitor 内部使用 spawn_supervised（self-recovery），
     // 不返回 JoinHandle，因此 health_handles 始终为空；graceful_shutdown 中
     // 的 abort() 在空 Vec 上是 no-op。
+    //
+    // 分级告警（25%/15%/10%）：档位变化时主动外呼一条系统级告警到
+    // `<mqtt_topic>/system/alarm`，把"磁盘快满了"从写满后的静默丢数据
+    // 提前到写满前几天可见。未配置 MQTT 时 notifier 为 None —— 档位仍会
+    // 记录并暴露到 /api/metrics 与 /health/report，只是没有外呼通道。
+    let disk_alarm_publisher: Option<
+        std::sync::Arc<dyn gateway_core::engine::ports::AlarmPublisher>,
+    > = north
+        .mqtt
+        .clone()
+        .map(|m| m as std::sync::Arc<dyn gateway_core::engine::ports::AlarmPublisher>);
+    let disk_alarm = std::sync::Arc::new(
+        gateway_core::engine::monitor::health::DiskAlarmNotifier::new(
+            disk_alarm_publisher,
+            &config.mqtt.topic,
+        ),
+    );
     gateway_core::engine::monitor::health::spawn_disk_monitor(
         north.queue.clone(),
         app_state.platform.disk_history.clone(),
         app_state.north.gateway.disk_status().clone(),
         metrics.clone(),
+        Some(disk_alarm),
     );
 
     // r52-MEM1：进程 RSS 自监控。补齐 health.rs 模块文档承诺的"内存 RSS 监控"。

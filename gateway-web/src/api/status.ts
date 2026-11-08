@@ -119,6 +119,21 @@ export interface HealthReport {
     queue_len: number
     total_reads: number
     success_rate: number | null
+    /**
+     * 磁盘水位档位：ok / warn / critical / blocking。
+     *
+     * 分级的意义在于「写满前几天就能看见」：warn = 还能写但该清理了，
+     * critical = 接近阻断线，blocking = 入队已被拒绝、正在丢点。
+     */
+    disk_level: 'ok' | 'warn' | 'critical' | 'blocking'
+    /** 最近一次检测到的磁盘剩余百分比；从未检测过时为 null */
+    disk_free_pct: number | null
+    /** 各档阈值（百分比），前端据此渲染「还差多少」 */
+    disk_thresholds: {
+      warn: number
+      critical: number
+      blocking: number
+    }
   }
   buses: HealthBusRow[]
   problems: HealthProblem[]

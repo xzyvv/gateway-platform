@@ -149,6 +149,75 @@ async fn health_ready_exposes_storage_component_reflecting_disk_pressure() {
     assert_eq!(body["status"], "degraded");
 }
 
+/// 磁盘水位分级必须在 `/api/health/report` 里可见（现场要能提前知道"快满了"）。
+///
+/// 背景：此前磁盘只有"已阻断"一档信号，等发现时已经在丢点。分级后
+/// `warn`（<25%）/ `critical`（<15%）都应产生对应的问题码，
+/// 而 `blocking`（<10%）由 `storage` 组件 degraded 表达。
+#[tokio::test]
+async fn health_report_exposes_disk_watermark_level() {
+    let (state, gateway) = common::mock_state::mock_app_state_with_gateway();
+
+    // 正常态：level = ok，不报磁盘问题
+    gateway.disk_status().record(80.0, false);
+    let (status, _headers, bytes) = get_raw(state.clone(), "/api/health/report").await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("health report is json");
+    let body = &body["data"];
+    assert_eq!(body["summary"]["disk_level"], "ok");
+    assert_eq!(body["summary"]["disk_free_pct"], 80.0);
+    assert_eq!(body["summary"]["disk_thresholds"]["warn"], 25.0);
+    assert_eq!(body["summary"]["disk_thresholds"]["critical"], 15.0);
+    assert_eq!(body["summary"]["disk_thresholds"]["blocking"], 10.0);
+    assert!(
+        !body["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["code"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("DISK_SPACE")),
+        "正常磁盘不应报磁盘问题"
+    );
+
+    // warn 档（20%）：报 DISK_SPACE_LOW，但 /health/ready 仍应 200
+    // （磁盘还能正常写入，此时重启网关反而丢数据）
+    gateway.disk_status().record(20.0, false);
+    let (status, _headers, bytes) = get_raw(state.clone(), "/api/health/report").await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("health report is json");
+    let body = &body["data"];
+    assert_eq!(body["summary"]["disk_level"], "warn");
+    let probs = body["problems"].as_array().unwrap();
+    let low = probs
+        .iter()
+        .find(|p| p["code"] == "DISK_SPACE_LOW")
+        .expect("应有 DISK_SPACE_LOW");
+    assert_eq!(low["level"], "warning");
+
+    let (status, _headers, _bytes) = get_raw(state.clone(), "/health/ready").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "warn 档磁盘仍能写入，不应判定为不可就绪"
+    );
+
+    // critical 档（12%）：报 DISK_SPACE_CRITICAL，等级为 critical
+    gateway.disk_status().record(12.0, false);
+    let (status, _headers, bytes) = get_raw(state, "/api/health/report").await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("health report is json");
+    let body = &body["data"];
+    assert_eq!(body["summary"]["disk_level"], "critical");
+    let probs = body["problems"].as_array().unwrap();
+    let crit = probs
+        .iter()
+        .find(|p| p["code"] == "DISK_SPACE_CRITICAL")
+        .expect("应有 DISK_SPACE_CRITICAL");
+    assert_eq!(crit["level"], "critical");
+}
+
 /// 把响应字节转成可读文本（断言失败时便于排查）
 fn body_as_str(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).to_string()

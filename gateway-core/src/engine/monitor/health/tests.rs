@@ -345,7 +345,7 @@ async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
     let status = Arc::new(DiskStatus::new());
     let metrics = Arc::new(Metrics::new());
 
-    spawn_disk_monitor(sink.clone(), history, status.clone(), metrics);
+    spawn_disk_monitor(sink.clone(), history, status.clone(), metrics, None);
 
     // 首轮检测应在毫秒级完成；给 5s 冗余足够覆盖慢机
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

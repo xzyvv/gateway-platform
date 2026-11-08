@@ -87,6 +87,18 @@ impl Metrics {
             self.disk_pressure.load(Ordering::Relaxed)
         ));
 
+        // 磁盘水位分级（0=ok / 1=warn / 2=critical / 3=blocking）。
+        // 二值的 disk_pressure 只在"已阻断"那一刻给信号，分级 gauge 让
+        // Prometheus 能对 warn / critical 档直接配告警规则（提前 3 天预警）。
+        out.push_str(
+            "# HELP gateway_disk_level Disk watermark level (0=ok, 1=warn, 2=critical, 3=blocking)\n",
+        );
+        out.push_str("# TYPE gateway_disk_level gauge\n");
+        out.push_str(&format!(
+            "gateway_disk_level {}\n",
+            self.disk_level.load(Ordering::Relaxed)
+        ));
+
         out.push_str(
             "# HELP gateway_mqtt_in_flight MQTT in-flight records (dequeued, not acked)\n",
         );

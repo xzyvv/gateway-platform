@@ -57,8 +57,16 @@
               <div class="summary-label">采样点数</div>
             </div>
             <div class="summary-item">
-              <div class="summary-value" style="color: var(--text-warning)">{{ DANGER_THRESHOLD }}%</div>
-              <div class="summary-label">危险阈值</div>
+              <div class="summary-value" :style="{ color: levelColor }">{{ levelLabel }}</div>
+              <div class="summary-label">水位档位</div>
+            </div>
+            <div class="summary-item">
+              <div class="summary-value" style="color: var(--text-warning)">{{ WARN_THRESHOLD }}%</div>
+              <div class="summary-label">预警阈值</div>
+            </div>
+            <div class="summary-item">
+              <div class="summary-value" style="color: var(--text-danger)">{{ DANGER_THRESHOLD }}%</div>
+              <div class="summary-label">阻断阈值</div>
             </div>
           </div>
         </el-card>
@@ -84,10 +92,15 @@ const { showToast } = useErrorDisplay()
 import {Refresh} from '@element-plus/icons-vue'
 import echarts, { initChart, disposeChart } from '@/utils/echarts-extra'
 import { defaultGrid, valueAxisStyle, categoryAxisStyle, axisNameStyle } from '@/utils/chartStyle'
-import { CHART_PRIMARY, CHART_DANGER } from '@/utils/chartTheme'
+import { CHART_PRIMARY, CHART_DANGER, CHART_WARNING } from '@/utils/chartTheme'
 import { getDiskHistory, type DiskHistory } from '@/api/status'
 import { logError } from '@/utils/logger'
 
+// 磁盘水位分级阈值，与后端 `gateway_core::engine::monitor::health::disk_alarm` 保持一致。
+// 前端硬编码一份是因为图表要在采样历史上画线（后端只给当前档位），但语义必须同源——
+// 两边数值漂移会让"图上看着还没到线、后端却已告警"这种自相矛盾出现在现场。
+const WARN_THRESHOLD = 25
+const CRITICAL_THRESHOLD = 15
 const DANGER_THRESHOLD = 10
 const REFRESH_INTERVAL = 30000
 
@@ -104,13 +117,40 @@ const currentFreePct = computed(() => {
   return Math.round(samples[samples.length - 1]!.free_pct)
 })
 
+/** 当前水位档位（与后端 DiskLevel 同名同义） */
+const level = computed(() => {
+  const p = currentFreePct.value
+  if (p < DANGER_THRESHOLD) return 'blocking'
+  if (p < CRITICAL_THRESHOLD) return 'critical'
+  if (p < WARN_THRESHOLD) return 'warn'
+  return 'ok'
+})
+
+const LEVEL_LABEL: Record<string, string> = {
+  ok: '正常',
+  warn: '预警',
+  critical: '严重',
+  blocking: '阻断',
+}
+
+const levelLabel = computed(() => LEVEL_LABEL[level.value] ?? '正常')
+
 // 摘要数值是文字色：用 --text-* 变体（原色在白底仅 2.04~2.90:1，不达 WCAG AA）
 const currentColor = computed(() => {
   return currentFreePct.value <= DANGER_THRESHOLD
     ? 'var(--text-danger)'
-    : currentFreePct.value <= 30
-      ? 'var(--text-warning)'
-      : 'var(--text-success)'
+    : currentFreePct.value <= CRITICAL_THRESHOLD
+      ? 'var(--text-danger)'
+      : currentFreePct.value <= WARN_THRESHOLD
+        ? 'var(--text-warning)'
+        : 'var(--text-success)'
+})
+
+const levelColor = computed(() => {
+  if (level.value === 'blocking') return 'var(--text-danger)'
+  if (level.value === 'critical') return 'var(--text-danger)'
+  if (level.value === 'warn') return 'var(--text-warning)'
+  return 'var(--text-success)'
 })
 
 function formatTime(ts: number): string {
@@ -170,14 +210,26 @@ function render() {
         markLine: {
           silent: true,
           symbol: 'none',
-          lineStyle: { color: CHART_DANGER, type: 'dashed', width: 1.5 },
-          label: {
-            formatter: `危险阈值 ${DANGER_THRESHOLD}%`,
-            color: CHART_DANGER,
-            fontSize: 11,
-            position: 'insideEndTop',
-          },
-          data: [{ yAxis: DANGER_THRESHOLD }],
+          // 三条阈值线：预警 / 严重 / 阻断，与后端 disk_alarm 的三档一一对应
+          lineStyle: { type: 'dashed', width: 1.5 },
+          label: { fontSize: 11, position: 'insideEndTop' },
+          data: [
+            {
+              yAxis: WARN_THRESHOLD,
+              lineStyle: { color: CHART_WARNING, type: 'dashed', width: 1.5 },
+              label: { formatter: `预警 ${WARN_THRESHOLD}%`, color: CHART_WARNING, fontSize: 11 },
+            },
+            {
+              yAxis: CRITICAL_THRESHOLD,
+              lineStyle: { color: CHART_DANGER, type: 'dashed', width: 1.5 },
+              label: { formatter: `严重 ${CRITICAL_THRESHOLD}%`, color: CHART_DANGER, fontSize: 11 },
+            },
+            {
+              yAxis: DANGER_THRESHOLD,
+              lineStyle: { color: CHART_DANGER, type: 'dashed', width: 2 },
+              label: { formatter: `阻断 ${DANGER_THRESHOLD}%`, color: CHART_DANGER, fontSize: 11 },
+            },
+          ],
         },
       },
     ],

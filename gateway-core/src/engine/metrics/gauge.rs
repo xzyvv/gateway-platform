@@ -43,4 +43,13 @@ impl Metrics {
     pub fn set_disk_pressure(&self, pressure: i64) {
         self.disk_pressure.store(pressure, Ordering::Relaxed);
     }
+
+    /// 设置磁盘水位档位（0 = ok / 1 = warn / 2 = critical / 3 = blocking）。
+    ///
+    /// 二值的 `gateway_disk_pressure` 只能在"已阻断"那一刻给出信号，
+    /// 现场无法提前判断"离写满还有多远"；分级 gauge 让 Prometheus 能对
+    /// `warn` / `critical` 档直接配告警规则。
+    pub fn set_disk_level(&self, level: i64) {
+        self.disk_level.store(level, Ordering::Relaxed);
+    }
 }

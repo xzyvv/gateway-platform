@@ -1,11 +1,18 @@
 //! 健康监控：磁盘空间、内存 RSS 监控
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::ports::DiskHealthSink;
+
+pub mod disk_alarm;
+
+pub use disk_alarm::{
+    disk_level_from_free_pct, DiskAlarmEvent, DiskAlarmNotifier, DiskLevel,
+    DISK_BLOCKING_THRESHOLD_PCT, DISK_CRITICAL_THRESHOLD_PCT, DISK_WARN_THRESHOLD_PCT,
+};
 
 /// 磁盘压力状态（替代原全局 static DOWNSAMPLE_TRIGGERED）
 ///
@@ -34,6 +41,11 @@ pub struct DiskStatus {
     free_pct: std::sync::atomic::AtomicU64,
     /// free_pct 的有效性标志（区分"0%"与"未检测"）。
     free_pct_valid: AtomicBool,
+    /// 当前水位档位（`DiskLevel` 的 `u8` 编码）。
+    ///
+    /// 档位的**唯一存放点**：API 读取与告警外呼都从这里取，避免两处各存一份
+    /// 导致"页面显示正常但刚发过告警"这类自相矛盾的信号。
+    level: AtomicU8,
 }
 
 impl DiskStatus {
@@ -42,6 +54,7 @@ impl DiskStatus {
             pressure: AtomicBool::new(false),
             free_pct: std::sync::atomic::AtomicU64::new(0),
             free_pct_valid: AtomicBool::new(false),
+            level: AtomicU8::new(DiskLevel::Ok as u8),
         }
     }
 
@@ -61,12 +74,26 @@ impl DiskStatus {
         Some(f64::from_bits(bits))
     }
 
+    /// 当前水位档位（分级告警的唯一真源）。
+    ///
+    /// 从未检测过时返回 `Ok`（初始态），与"未检测"在 `free_pct()` 上返回
+    /// `None` 的约定不同：档位有明确的"正常"默认值，API 可直接展示。
+    pub fn level(&self) -> DiskLevel {
+        DiskLevel::from_u8(self.level.load(Ordering::Relaxed))
+    }
+
     /// 记录一次磁盘检测结果（剩余百分比 + 是否处于压力状态）。
     ///
-    /// 返回**状态是否发生变化**，供调用方决定是否打日志（避免每 60s 重复刷同一条）。
+    /// 同时按剩余百分比推导并保存水位档位（`warn` / `critical` / `blocking`），
+    /// 供 API 展示与告警边沿判定共用同一份状态。
+    ///
+    /// 返回**阻断状态是否发生变化**，供调用方决定是否打日志
+    /// （避免每 60s 重复刷同一条）。
     pub fn record(&self, free_pct: f64, pressure: bool) -> bool {
         self.free_pct.store(free_pct.to_bits(), Ordering::Relaxed);
         self.free_pct_valid.store(true, Ordering::Relaxed);
+        self.level
+            .store(disk_level_from_free_pct(free_pct) as u8, Ordering::Relaxed);
         self.pressure.swap(pressure, Ordering::Relaxed) != pressure
     }
 }
@@ -132,11 +159,16 @@ pub(crate) fn disk_ok_from_free_pct(free_pct: f64) -> bool {
 /// **先检测、再 sleep**：原实现 `sleep` 在循环最前面，而 `DataQueue::with_storage`
 /// 里 `disk_ok` 默认是 `true`，于是「已满盘开机」的前 60 秒会把数据直接写进 SQLite
 /// ——正是这段保护要挡的场景。改成首轮立即检测，之后每 60 秒一次。
+///
+/// **分级告警**：每次采样后由 [`disk_alarm::tick`] 判定水位档位（25%/15%/10%），
+/// 档位**发生变化**时才外呼一条系统级告警（`warn` / `critical` / `blocking`），
+/// 把"磁盘几天后写满"从"写满后静默丢数据"变成可提前处置的信号。
 pub fn spawn_disk_monitor(
     queue: Arc<dyn DiskHealthSink>,
     history: Arc<DiskHistoryStore>,
     disk_status: Arc<DiskStatus>,
     metrics: Arc<crate::engine::metrics::Metrics>,
+    alarm: Option<Arc<disk_alarm::DiskAlarmNotifier>>,
 ) {
     let check_path = disk_check_path();
     crate::engine::supervision::spawn_supervised("disk_monitor", move || {
@@ -144,17 +176,20 @@ pub fn spawn_disk_monitor(
         let history = history.clone();
         let disk_status = disk_status.clone();
         let metrics = metrics.clone();
+        let alarm = alarm.clone();
         let check_path = check_path.clone();
         async move {
             loop {
                 match check_disk_space(&check_path) {
                     Ok(free_pct) => {
-                        let ok = disk_ok_from_free_pct(free_pct);
-                        queue.set_disk_ok(ok);
+                        queue.set_disk_ok(disk_ok_from_free_pct(free_pct));
                         history.push(free_pct);
-                        // 状态变化时才打日志（否则每 60s 重复刷同一条）
-                        if disk_status.record(free_pct, !ok) {
-                            if ok {
+                        // 判定档位 + 记录状态 + 变化时外呼告警
+                        let tick =
+                            disk_alarm::tick(alarm.as_deref(), &disk_status, free_pct, &metrics);
+                        // 阻断状态变化时才打日志（否则每 60s 重复刷同一条）
+                        if tick.pressure_changed {
+                            if tick.ok {
                                 tracing::info!(
                                     "disk space recovered: {:.1}% free, enqueue unblocked",
                                     free_pct
@@ -166,8 +201,8 @@ pub fn spawn_disk_monitor(
                                 );
                             }
                         }
-                        metrics.set_disk_pressure(if ok { 0 } else { 1 });
-                        if ok {
+                        metrics.set_disk_pressure(if tick.ok { 0 } else { 1 });
+                        if tick.ok {
                             // S2: 磁盘恢复时刷新 fallback 缓冲到 SQLite
                             if let Err(e) = queue.flush_fallback().await {
                                 tracing::warn!("flush fallback on disk recovery failed: {}", e);

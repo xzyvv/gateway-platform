@@ -73,6 +73,15 @@ const PROBLEM_ACTION: Record<string, { action: string; to: HealthSignal['to'] }>
   BUS_ALL_OFFLINE: { action: '查看设备管理', to: { path: '/devices' } },
   BUS_PARTIAL_OFFLINE: { action: '查看设备管理', to: { path: '/devices' } },
   BUS_LOW_SUCCESS_RATE: { action: '查看设备管理', to: { path: '/devices' } },
+  // 磁盘水位分级：处置入口统一指向「磁盘健康」页签（剩余空间趋势 + 阈值线）
+  DISK_SPACE_LOW: {
+    action: '查看磁盘健康',
+    to: { path: '/ops', query: { tab: 'disk-health' } },
+  },
+  DISK_SPACE_CRITICAL: {
+    action: '查看磁盘健康',
+    to: { path: '/ops', query: { tab: 'disk-health' } },
+  },
   OTA_IN_PROGRESS: {
     action: '查看固件升级',
     to: { path: '/system', query: { tab: 'ota' } },

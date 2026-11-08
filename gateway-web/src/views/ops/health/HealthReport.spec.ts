@@ -48,6 +48,9 @@ function report(over: Record<string, unknown> = {}) {
       queue_len: 12,
       total_reads: 100,
       success_rate: 98.5,
+      disk_level: 'ok',
+      disk_free_pct: 72.5,
+      disk_thresholds: { warn: 25, critical: 15, blocking: 10 },
     },
     components: { mqtt: 'ok', modbus: 'degraded', iec104: 'down' },
     buses: [
@@ -93,6 +96,9 @@ describe('HealthReport 健康结论页', () => {
         queue_len: 0,
         total_reads: 0,
         success_rate: null,
+        disk_level: 'ok',
+        disk_free_pct: null,
+        disk_thresholds: { warn: 25, critical: 15, blocking: 10 },
       },
     })
     const wrapper = mount(HealthReport)
@@ -112,6 +118,9 @@ describe('HealthReport 健康结论页', () => {
         queue_len: 10000,
         total_reads: 100,
         success_rate: 98.5,
+        disk_level: 'ok',
+        disk_free_pct: 72.5,
+        disk_thresholds: { warn: 25, critical: 15, blocking: 10 },
       },
     })
     const wrapper = mount(HealthReport)

@@ -36,6 +36,20 @@
       </el-col>
     </el-row>
 
+    <!-- 磁盘水位：分级告警的可见落点。剩余空间掉到 25%/15%/10% 会依次进入
+         预警/严重/阻断档；此处把档位与实际余量摆在一行，让现场不用去翻曲线图
+         就能判断"还有多少天要动手"。 -->
+    <el-card shadow="never" class="section-card">
+      <template #header><strong>磁盘水位</strong></template>
+      <div class="disk-row">
+        <el-tag :type="diskTagType" effect="dark" size="small">{{ diskLevelLabel }}</el-tag>
+        <span class="disk-pct">{{ summary.disk_free_pct === null ? '—' : `${summary.disk_free_pct.toFixed(1)}%` }}</span>
+        <span class="disk-hint">
+          剩余空间；预警 {{ summary.disk_thresholds.warn }}% / 严重 {{ summary.disk_thresholds.critical }}% / 阻断 {{ summary.disk_thresholds.blocking }}%
+        </span>
+      </div>
+    </el-card>
+
     <el-card shadow="never" class="section-card">
       <template #header><strong>组件状态</strong></template>
       <div class="chips">
@@ -86,6 +100,9 @@ const summary = computed(
       queue_len: 0,
       total_reads: 0,
       success_rate: null as number | null,
+      disk_level: 'ok' as const,
+      disk_free_pct: null as number | null,
+      disk_thresholds: { warn: 25, critical: 15, blocking: 10 },
     },
 )
 const components = computed(() => report.value?.components ?? {})
@@ -104,6 +121,31 @@ const queueBad = computed(() => summary.value.queue_len >= QUEUE_BACKLOG_WARN)
 
 const componentType = (v: string) =>
   v === 'ok' ? ('success' as const) : v === 'down' ? ('danger' as const) : ('warning' as const)
+
+/** 磁盘水位档位文案（与后端 DiskLevel 同名同义） */
+const DISK_LEVEL_LABEL: Record<string, string> = {
+  ok: '正常',
+  warn: '预警',
+  critical: '严重',
+  blocking: '阻断',
+}
+
+const diskLevelLabel = computed(
+  () => DISK_LEVEL_LABEL[summary.value.disk_level] ?? '正常',
+)
+
+const diskTagType = computed(() => {
+  switch (summary.value.disk_level) {
+    case 'blocking':
+      return 'danger' as const
+    case 'critical':
+      return 'danger' as const
+    case 'warn':
+      return 'warning' as const
+    default:
+      return 'success' as const
+  }
+})
 
 const fmtPct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v}%`)
 
@@ -165,4 +207,7 @@ onMounted(() => {
 .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .generated { margin-left: auto; color: var(--text-placeholder); font-size: 0.78rem; }
 .bad { color: var(--text-danger); }
+.disk-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.disk-pct { font-size: 1.35rem; font-weight: 600; }
+.disk-hint { color: var(--text-secondary); font-size: 0.8rem; }
 </style>
