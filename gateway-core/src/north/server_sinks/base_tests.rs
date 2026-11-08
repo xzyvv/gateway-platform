@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::engine::metrics::Metrics;
+use crate::engine::metrics::{Metrics, SinkId};
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
 
@@ -54,7 +54,7 @@ async fn sink_core_apply_always_failing_drops_batch() {
     let fc = failure_calls.clone();
 
     let core = SinkCore::new(
-        "sink_exhausted",
+        SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
         move |_| {
@@ -69,9 +69,9 @@ async fn sink_core_apply_always_failing_drops_batch() {
     core.send(vec![point()]);
 
     assert!(
-        wait_until(|| metrics.sink_dropped_total("sink_exhausted") == 1).await,
+        wait_until(|| metrics.sink_dropped_total(SinkId::OpcUa) == 1).await,
         "apply 二次失败后本批必须计入 dropped（实际 dropped={}）",
-        metrics.sink_dropped_total("sink_exhausted")
+        metrics.sink_dropped_total(SinkId::OpcUa)
     );
     assert_eq!(
         apply_calls.load(Ordering::Relaxed),
@@ -112,7 +112,7 @@ async fn sink_core_dropped_batch_resets_channel_depth_gauge() {
     let first = Arc::new(AtomicBool::new(true));
     let f = first.clone();
     let core = SinkCore::new(
-        "sink_depth_gauge",
+        SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
         move |_| {
@@ -126,17 +126,17 @@ async fn sink_core_dropped_batch_resets_channel_depth_gauge() {
 
     core.send(vec![point()]);
     assert!(
-        wait_until(|| metrics.sink_dropped_total("sink_depth_gauge") == 1).await,
+        wait_until(|| metrics.sink_dropped_total(SinkId::OpcUa) == 1).await,
         "批次未被丢弃"
     );
     assert!(
         wait_for(
-            || metrics.sink_channel_depth("sink_depth_gauge") == 0,
+            || metrics.sink_channel_depth(SinkId::OpcUa) == 0,
             Duration::from_secs(2)
         )
         .await,
         "丢弃后通道深度 gauge 必须回到 0（实际 {}）",
-        metrics.sink_channel_depth("sink_depth_gauge")
+        metrics.sink_channel_depth(SinkId::OpcUa)
     );
 }
 
@@ -152,7 +152,7 @@ async fn sink_core_apply_recovers_after_on_failure_is_not_dropped() {
     let fc = failure_calls.clone();
 
     let core = SinkCore::new(
-        "sink_recovered",
+        SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
         move |_| {
@@ -181,7 +181,7 @@ async fn sink_core_apply_recovers_after_on_failure_is_not_dropped() {
     // 留出时间确认没有后续丢弃
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(
-        metrics.sink_dropped_total("sink_recovered"),
+        metrics.sink_dropped_total(SinkId::OpcUa),
         0,
         "重试成功后本批不得被丢弃"
     );
@@ -207,7 +207,7 @@ async fn sink_core_channel_full_drops_excess_batches() {
 
     // apply 阻塞住，直到测试释放 —— 模拟下游卡死
     let core = SinkCore::new(
-        "sink_full",
+        SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
         move |_| {
@@ -224,9 +224,9 @@ async fn sink_core_channel_full_drops_excess_batches() {
     }
 
     assert!(
-        wait_until(|| metrics.sink_dropped_total("sink_full") > 0).await,
+        wait_until(|| metrics.sink_dropped_total(SinkId::OpcUa) > 0).await,
         "通道塞满后超出容量的批次必须被丢弃（实际 dropped={}）",
-        metrics.sink_dropped_total("sink_full")
+        metrics.sink_dropped_total(SinkId::OpcUa)
     );
     release.store(true, Ordering::Relaxed);
 }
@@ -249,7 +249,7 @@ async fn sink_core_in_flight_never_underflows_under_concurrent_send() {
     let c = consumed.clone();
 
     let core = SinkCore::new(
-        "sink_race",
+        SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
         move |_| {
@@ -267,13 +267,13 @@ async fn sink_core_in_flight_never_underflows_under_concurrent_send() {
     // 每批都必须有交代：被消费 或 被丢弃（通道满）
     assert!(
         wait_for(
-            || consumed.load(Ordering::Relaxed) + metrics.sink_dropped_total("sink_race") == N,
+            || consumed.load(Ordering::Relaxed) + metrics.sink_dropped_total(SinkId::OpcUa) == N,
             Duration::from_secs(10)
         )
         .await,
         "批次去向不明：consumed={} dropped={} 应合计 {N}",
         consumed.load(Ordering::Relaxed),
-        metrics.sink_dropped_total("sink_race")
+        metrics.sink_dropped_total(SinkId::OpcUa)
     );
 
     // sink task 必须还活着：再发一批，必须能被消费掉。

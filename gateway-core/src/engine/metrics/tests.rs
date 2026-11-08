@@ -111,153 +111,137 @@ fn test_errors_total_is_sum() {
 #[test]
 fn test_sink_send_total_increments() {
     let m = Metrics::new();
-    m.inc_sink_send("opcua");
-    m.inc_sink_send("opcua");
-    m.inc_sink_send("modbus");
-    assert_eq!(m.sink_send_total("opcua"), 2);
-    assert_eq!(m.sink_send_total("modbus"), 1);
-    assert_eq!(m.sink_send_total("unknown"), 0);
+    m.inc_sink_send(SinkId::OpcUa);
+    m.inc_sink_send(SinkId::OpcUa);
+    m.inc_sink_send(SinkId::Modbus);
+    assert_eq!(m.sink_send_total(SinkId::OpcUa), 2);
+    assert_eq!(m.sink_send_total(SinkId::Modbus), 1);
+    // 独立槽位：写 OpcUa 不得影响 Modbus 的 dropped
+    assert_eq!(m.sink_dropped_total(SinkId::Modbus), 0);
 }
 
 #[test]
 fn test_sink_dropped_total_increments() {
     let m = Metrics::new();
-    m.inc_sink_dropped("opcua");
-    m.inc_sink_dropped("opcua");
-    m.inc_sink_dropped("opcua");
-    assert_eq!(m.sink_dropped_total("opcua"), 3);
+    m.inc_sink_dropped(SinkId::OpcUa);
+    m.inc_sink_dropped(SinkId::OpcUa);
+    m.inc_sink_dropped(SinkId::OpcUa);
+    assert_eq!(m.sink_dropped_total(SinkId::OpcUa), 3);
 }
 
 #[test]
 fn test_sink_channel_depth_set() {
     let m = Metrics::new();
-    m.set_sink_channel_depth("modbus", 42);
-    assert_eq!(m.sink_channel_depth("modbus"), 42);
+    m.set_sink_channel_depth(SinkId::Modbus, 42);
+    assert_eq!(m.sink_channel_depth(SinkId::Modbus), 42);
     // 负值被 clamp 到 0
-    m.set_sink_channel_depth("modbus", -5);
-    assert_eq!(m.sink_channel_depth("modbus"), 0);
+    m.set_sink_channel_depth(SinkId::Modbus, -5);
+    assert_eq!(m.sink_channel_depth(SinkId::Modbus), 0);
 }
 
+/// P2-2：`SinkId` 是编译期穷举表，槽位与名字必须一一对应、互不重复。
 #[test]
-fn test_sink_names_lists_sorted() {
-    let m = Metrics::new();
-    m.inc_sink_send("modbus");
-    m.inc_sink_send("opcua");
-    let names = m.sink_names();
-    assert_eq!(names, vec!["modbus", "opcua"]);
+fn test_sink_id_slots_are_unique_and_named() {
+    assert_eq!(SinkId::ALL.len(), SinkId::COUNT);
+    let mut names: Vec<&str> = SinkId::ALL.iter().map(|s| s.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(
+        names.len(),
+        SinkId::COUNT,
+        "SinkId::ALL 中不得有重复的标签值"
+    );
+    assert!(names.contains(&"opcua"));
+    assert!(names.contains(&"modbus"));
 }
 
 #[test]
 fn test_prometheus_export_includes_sink_metrics() {
     let m = Metrics::new();
-    m.inc_sink_send("opcua");
-    m.inc_sink_send("opcua");
-    m.inc_sink_dropped("opcua");
-    m.set_sink_channel_depth("opcua", 7);
+    m.inc_sink_send(SinkId::OpcUa);
+    m.inc_sink_send(SinkId::OpcUa);
+    m.inc_sink_dropped(SinkId::OpcUa);
+    m.set_sink_channel_depth(SinkId::OpcUa, 7);
     let out = m.prometheus_export();
     assert!(out.contains("gateway_sink_send_total"));
     assert!(out.contains("sink_dropped_total"));
     assert!(out.contains("sink_channel_depth"));
-    // 也验证实际数值（避免硬编码 "opcua" 转义）
     assert!(out.contains("opcua"));
 }
 
-/// r31-PM1 (回归)：prometheus_export 的 sink 段输出顺序按 sink 名字典序，
-/// 且三个 map（send/dropped/channel_depth）的 key 合并后都被输出。
-/// 旧实现用 `Vec + sort()`，新实现用 `BTreeSet`（天然排序）。验证 BTreeSet 行为。
+/// P2-2 验收：**零活动**下也必须输出全部内置 sink（预注册，面板无空洞）。
+///
+/// 旧实现按「已出现过的 HashMap key」输出，从未上报过的 sink 完全不出现在
+/// 导出里，Prometheus 面板与告警规则会因缺序列而静默失效。
 #[test]
-fn test_prometheus_export_sink_names_sorted_and_unioned() {
+fn test_prometheus_export_pre_registers_all_sinks_without_activity() {
     let m = Metrics::new();
-    // 故意按非字典序插入（modbus > opcua > bacnet）
-    m.inc_sink_send("modbus");
-    m.inc_sink_send("opcua");
-    m.inc_sink_send("bacnet");
-    m.inc_sink_dropped("opcua");
-    m.set_sink_channel_depth("bacnet", 1);
-    m.set_sink_channel_depth("modbus", 2);
-    // 故意让"send"和"channel_depth"都有"opcua"，确保 union 后只出现一次
     let out = m.prometheus_export();
 
-    // 三个 sink 名都应出现在 dropped 段和 channel_depth 段
-    for name in &["bacnet", "opcua", "modbus"] {
-        assert!(
-            out.contains(&format!("gateway_sink_dropped_total{{sink=\"{}\"}}", name)),
-            "dropped 段缺 {}：\n{}",
-            name,
-            out
-        );
-        assert!(
-            out.contains(&format!("gateway_sink_channel_depth{{sink=\"{}\"}}", name)),
-            "depth 段缺 {}：\n{}",
-            name,
-            out
-        );
+    for sink in SinkId::ALL {
+        for metric in [
+            "gateway_sink_send_total",
+            "gateway_sink_dropped_total",
+            "gateway_sink_channel_depth",
+        ] {
+            assert!(
+                out.contains(&format!("{}{{sink=\"{}\"}} 0", metric, sink.as_str())),
+                "{} 段缺 {} 的零值序列：\n{}",
+                metric,
+                sink.as_str(),
+                out
+            );
+        }
     }
-    // 字典序：bacnet < modbus < opcua
-    let pos_b = out.find("bacnet").expect("bacnet");
-    let pos_m = out.find("modbus").expect("modbus");
-    let pos_o = out.find("opcua").expect("opcua");
-    assert!(pos_b < pos_m, "bacnet 应在 modbus 之前");
-    assert!(pos_m < pos_o, "modbus 应在 opcua 之前");
 }
 
-/// r32-PM2 (回归)：prometheus_export 走本地 HashMap snapshot 后，输出值与
-/// 直接调 sink_*_total() 的返回值一致。验证 snapshot 不会丢数据。
+/// P2-2 回归：导出值与直接读槽位一致，且三个 section 互相独立
+/// （某 sink 只在 send 有值、在 dropped / depth 段仍须输出 0）。
 #[test]
-fn test_prometheus_export_sink_snapshots_match_direct_reads() {
+fn test_prometheus_export_sink_slots_match_direct_reads() {
     let m = Metrics::new();
-    // 三个 map 分别灌不同 sink 名 + 数值，确保 union 完整
-    m.inc_sink_send("modbus");
-    m.inc_sink_send("modbus");
-    m.inc_sink_send("opcua");
-    m.inc_sink_dropped("opcua");
-    m.inc_sink_dropped("opcua");
-    m.inc_sink_dropped("opcua");
-    m.set_sink_channel_depth("modbus", 42);
-    m.set_sink_channel_depth("bacnet", 7); // i64 路径
+    m.inc_sink_send(SinkId::Modbus);
+    m.inc_sink_send(SinkId::Modbus);
+    m.inc_sink_send(SinkId::OpcUa);
+    m.inc_sink_dropped(SinkId::OpcUa);
+    m.inc_sink_dropped(SinkId::OpcUa);
+    m.inc_sink_dropped(SinkId::OpcUa);
+    m.set_sink_channel_depth(SinkId::Modbus, 42);
+    m.set_sink_channel_depth(SinkId::OpcUa, 7);
 
     let out = m.prometheus_export();
 
-    // 直接调方法拿值（这些是测试白盒接口，不走 snapshot 路径）
-    assert_eq!(m.sink_send_total("modbus"), 2);
-    assert_eq!(m.sink_send_total("opcua"), 1);
-    assert_eq!(m.sink_dropped_total("modbus"), 0); // send 段有，dropped 段无 → 应输出 0
-    assert_eq!(m.sink_dropped_total("opcua"), 3);
-    assert_eq!(m.sink_channel_depth("modbus"), 42);
-    assert_eq!(m.sink_channel_depth("bacnet"), 7);
+    assert_eq!(m.sink_send_total(SinkId::Modbus), 2);
+    assert_eq!(m.sink_send_total(SinkId::OpcUa), 1);
+    assert_eq!(m.sink_dropped_total(SinkId::Modbus), 0);
+    assert_eq!(m.sink_dropped_total(SinkId::OpcUa), 3);
+    assert_eq!(m.sink_channel_depth(SinkId::Modbus), 42);
+    assert_eq!(m.sink_channel_depth(SinkId::OpcUa), 7);
 
-    // 验证 prometheus_export 输出值与上面一致
     assert!(
         out.contains("gateway_sink_send_total{sink=\"modbus\"} 2"),
-        "send modbus=2：\n{}",
-        out
+        "send modbus=2：\n{out}"
     );
     assert!(
         out.contains("gateway_sink_send_total{sink=\"opcua\"} 1"),
-        "send opcua=1：\n{}",
-        out
+        "send opcua=1：\n{out}"
     );
-    // dropped 段：modbus 不在 dropped map 但在 send → 仍应输出 0
+    // dropped 段：modbus 未丢过 → 仍输出 0
     assert!(
         out.contains("gateway_sink_dropped_total{sink=\"modbus\"} 0"),
-        "dropped modbus 应为 0：\n{}",
-        out
+        "dropped modbus 应为 0：\n{out}"
     );
     assert!(
         out.contains("gateway_sink_dropped_total{sink=\"opcua\"} 3"),
-        "dropped opcua=3：\n{}",
-        out
-    );
-    // depth 段：bacnet 在 depth 但不在 send → 应输出 7
-    assert!(
-        out.contains("gateway_sink_channel_depth{sink=\"bacnet\"} 7"),
-        "depth bacnet=7：\n{}",
-        out
+        "dropped opcua=3：\n{out}"
     );
     assert!(
         out.contains("gateway_sink_channel_depth{sink=\"modbus\"} 42"),
-        "depth modbus=42：\n{}",
-        out
+        "depth modbus=42：\n{out}"
+    );
+    assert!(
+        out.contains("gateway_sink_channel_depth{sink=\"opcua\"} 7"),
+        "depth opcua=7：\n{out}"
     );
 }
 

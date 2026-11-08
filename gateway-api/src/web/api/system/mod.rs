@@ -12,6 +12,7 @@ use crate::web::types::{
     ApiError, ApiResponse, AppState, DeviceStatus, LaggedCounts, RunStatus, VersionInfo,
 };
 use gateway_core::config::GatewayConfig;
+use gateway_core::engine::metrics::SinkId;
 
 pub(crate) mod handlers;
 mod routes;
@@ -134,26 +135,16 @@ pub(crate) fn build_north_status_json(
 
     // ===== sink 指标（async fan-out 相关）=====
     // 从全局 metrics 读取每个 sink 的 send_total / dropped_total / channel_depth
-    // metrics 由参数传入（1.2 注入化）
-    let mut sink_names: Vec<String> = metrics.sink_names();
-    // 合并 dropped map 中出现但 send_total 没有的 sink name
-    {
-        let dropped_keys: Vec<String> = metrics.sink_dropped_total_keys();
-        for n in dropped_keys {
-            if !sink_names.contains(&n) {
-                sink_names.push(n);
-            }
-        }
-    }
-    sink_names.sort();
-    let sinks: Vec<serde_json::Value> = sink_names
+    // P2-2：槽位由 `SinkId` 枚举固定，直接遍历 `SinkId::ALL`——恒输出全部内置
+    // sink（含 0 值），不再需要「合并 send/dropped 两个 map 的 key」。
+    let sinks: Vec<serde_json::Value> = SinkId::ALL
         .iter()
-        .map(|name| {
+        .map(|sink| {
             serde_json::json!({
-                "name": name,
-                "send_total": metrics.sink_send_total(name),
-                "dropped_total": metrics.sink_dropped_total(name),
-                "channel_depth": metrics.sink_channel_depth(name),
+                "name": sink.as_str(),
+                "send_total": metrics.sink_send_total(*sink),
+                "dropped_total": metrics.sink_dropped_total(*sink),
+                "channel_depth": metrics.sink_channel_depth(*sink),
             })
         })
         .collect();

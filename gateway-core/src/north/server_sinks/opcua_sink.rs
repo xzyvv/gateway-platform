@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::engine::metrics::SinkId;
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
 use crate::north::server::Server;
@@ -45,7 +46,7 @@ impl OpcUaSink {
         let server_for_apply = server.clone();
         let server_for_recovery = server.clone();
         let core = SinkCore::new(
-            "opcua",
+            SinkId::OpcUa,
             shutdown,
             metrics,
             move |points| {

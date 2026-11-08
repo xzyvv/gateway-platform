@@ -40,6 +40,12 @@ pub struct SqliteStorage {
     read_pool: Arc<ReadPool>,
     /// 队列深度计数器（内存缓存，避免每次 COUNT(*)）
     depth: Arc<AtomicI64>,
+    /// 队列表**全表行数**（含 delivered=1 的待回收历史行）。
+    ///
+    /// P1-2：容量上限判定（`total > max_rows`）与淘汰报告只用这个内存计数器，
+    /// 入队热路径不再执行 `SELECT COUNT(*)`。所有增删都在 `conn` 锁内完成，
+    /// 因此与表内真实行数严格一致。
+    rows_total: Arc<AtomicI64>,
     /// in_flight 计数器
     in_flight: Arc<AtomicI64>,
     /// 数据库文件路径（备份用）
@@ -88,7 +94,15 @@ impl SqliteStorage {
 
         let key_hex = ensure_key(&db_path)?;
         let depth = Arc::new(AtomicI64::new(0));
-        let conn = init_queue_db(&db_path, &backup_path, &depth, &key_hex, &metrics)?;
+        let rows_total = Arc::new(AtomicI64::new(0));
+        let conn = init_queue_db(
+            &db_path,
+            &backup_path,
+            &depth,
+            &rows_total,
+            &key_hex,
+            &metrics,
+        )?;
         let read_pool = Arc::new(ReadPool::new(4, &db_path, &key_hex));
         // r42-Q2: 用字符串后缀派生（"<db>-wal"）以严格匹配 SQLite 的 WAL 命名，
         // 而非 with_extension（对非 ".db" 结尾的 GATEWAY_DB_PATH 会算错）。
@@ -100,6 +114,7 @@ impl SqliteStorage {
             conn: Arc::new(parking_lot::Mutex::new(conn)),
             read_pool,
             depth,
+            rows_total,
             in_flight,
             db_path,
             wal_path,
@@ -163,6 +178,73 @@ impl SqliteStorage {
         }
         counter.fetch_add(n, Ordering::Relaxed);
     }
+
+    /// 「未送达且非在途」行数的 O(1) 估算（P1-2）。
+    ///
+    /// `depth` = delivered=0 行数（含在途），`in_flight` = 在途行数。
+    /// `ack_batch` 的两条 UPDATE 之间存在极短窗口，可能让在途行短暂处于
+    /// `delivered=1`，此时估算值**略小于**真实未送达数——偏向「不触发
+    /// unsent_overflow」（保守方向），且该值只用于诊断比例，不参与淘汰目标
+    /// 行数的计算，因此不影响容量上限的准确性。
+    fn unsent_estimate(&self) -> i64 {
+        let depth = self.depth.load(Ordering::Relaxed);
+        let in_flight = self.in_flight.load(Ordering::Relaxed);
+        (depth - in_flight).max(0)
+    }
+
+    /// 用 O(1) 计数器刷新 `unsent_overflow` 诊断标志（P1-3）。
+    ///
+    /// 纯内存操作，可在每次入队时调用；只有状态**翻转**时才打日志，
+    /// 避免链路长期不通时刷屏。
+    fn refresh_unsent_overflow(&self, total: i64, unsent: i64) {
+        let ratio = if total > 0 {
+            unsent as f64 / total as f64
+        } else {
+            0.0
+        };
+        let overflow = total > 0 && ratio >= super::limit::UNSENT_OVERFLOW_RATIO;
+        let prev = self.unsent_overflow.swap(overflow, Ordering::Relaxed);
+        if overflow && !prev {
+            tracing::error!(
+                "unsent overflow: total={} unsent={} ratio={:.2} >= {:.2} threshold; DataQueue enqueue will route to fallback",
+                total,
+                unsent,
+                ratio,
+                super::limit::UNSENT_OVERFLOW_RATIO
+            );
+        } else if !overflow && prev {
+            tracing::info!(
+                "unsent overflow recovered: total={} unsent={} ratio={:.2}",
+                total,
+                unsent,
+                ratio
+            );
+        }
+    }
+}
+
+/// 测试专用：制造 / 解除「磁盘满」。
+///
+/// 真实 ENOSPC 需要 root 挂 tmpfs 才能稳定复现；这里用 `PRAGMA max_page_count`
+/// 把库尺寸钉死，SQLite 在需要扩展页时同样返回 SQLITE_FULL
+/// （"database or disk is full"），错误码与磁盘满完全一致，且跨平台可跑。
+#[cfg(test)]
+impl SqliteStorage {
+    /// 设置数据库页数上限（当前页数即可视为"磁盘已满"）。
+    pub(crate) fn set_max_page_count(&self, pages: i64) -> GatewayResult<()> {
+        self.conn
+            .lock()
+            .pragma_update(None, "max_page_count", pages)
+            .map_err(|e| GatewayError::Queue(format!("set max_page_count failed: {e}")))
+    }
+
+    /// 当前数据库占用的页数（每页默认 4KB）。
+    pub(crate) fn page_count(&self) -> GatewayResult<i64> {
+        self.conn
+            .lock()
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .map_err(|e| GatewayError::Queue(format!("query page_count failed: {e}")))
+    }
 }
 
 impl QueueStorage for SqliteStorage {
@@ -170,58 +252,61 @@ impl QueueStorage for SqliteStorage {
         if points.is_empty() {
             return Ok(0);
         }
-        // Bug 81 入队前清理 stale in_flight（1 小时超时，与原实现一致）
-        let cutoff = DataPoint::now() - 3600 * 1000;
+        // Bug 81 入队前清理 stale in_flight。
+        //
+        // P1-4：阈值统一为 `INFLIGHT_TIMEOUT_MS`（5 分钟）。旧实现在这里用 1 小时、
+        // maintenance / 反压路径用 5 分钟——同一语义两个常量，导致「同一行到底
+        // 何时才会被放开」取决于哪条路径先跑到，行为不可预测。5 分钟同时也与
+        // 反压阈值（`MAX_IN_FLIGHT` 超限后的回收）对齐。
+        let cutoff = DataPoint::now() - INFLIGHT_TIMEOUT_MS;
         let mut guard = self.conn.lock();
         let conn = &mut *guard;
         self.cleanup_stale_in_flight_locked(conn, cutoff);
-        // C4: 按实际插入行数累加 depth，避免坏点被跳过后计数虚高
-        //（depth 现仅用于队列深度指标与 len()；超限淘汰已改用表内真实总行数判定）
+        // C4: 按实际插入行数累加 depth，避免坏点/重复点被跳过后计数虚高
         let inserted = Self::enqueue_batch(conn, points)?;
         if inserted > 0 {
             self.depth.fetch_add(inserted as i64, Ordering::Relaxed);
+            self.rows_total
+                .fetch_add(inserted as i64, Ordering::Relaxed);
         }
-        let report = Self::enforce_queue_limit(conn, self.max_rows);
-        // P0-2：overflow 现在也会淘汰**未送达**（delivered=0）行，这些行仍计入
-        // depth，必须同步扣减；已送达行在 ack 路径已各自扣过，不再重复扣。
-        if report.undelivered_deleted > 0 {
-            Self::saturating_dec(&self.depth, report.undelivered_deleted);
-        }
-        if report.deleted > 0 {
-            // 淘汰计数用于审计"丢了多少最旧数据"；warn 级细节已在 enforce_queue_limit 内输出
-            tracing::debug!(
-                "queue limit: trimmed {} rows ({} undelivered, total now {})",
-                report.deleted,
-                report.undelivered_deleted,
-                report.total
-            );
-            // 单机网关无异地副本：这些行是**物理删除且不可恢复**的。
-            // 只打 debug 日志（默认不输出）等于静默丢数据，因此必须同时
-            // ① 累加进程内单调计数 → 供告警取增量、供前端展示累计值；
-            // ② 累加 Prometheus 计数器 → 供运维配告警规则。
-            Self::saturating_add(&self.evicted_total, report.deleted);
-            Self::saturating_add(&self.evicted_undelivered_total, report.undelivered_deleted);
-            self.metrics
-                .add_queue_evicted(report.deleted, report.undelivered_deleted);
-        }
-        // #20-2026：把 OverflowReport 翻译为 unsent_overflow AtomicBool。
-        // 这里只更新"硬超限"信号，DataQueue::enqueue 入口的 fallback 决策
-        // 由 unsent_overflow() trait 方法在每次 enqueue 时实时读取。
-        let prev = self
-            .unsent_overflow
-            .swap(report.unsent_overflow, Ordering::Relaxed);
-        if report.unsent_overflow && !prev {
-            tracing::error!(
-                "unsent overflow: total={} unsent={} ratio={:.2} >= {:.2} threshold; DataQueue enqueue will route to fallback",
-                report.total, report.unsent, report.ratio, super::limit::UNSENT_OVERFLOW_RATIO
-            );
-        } else if !report.unsent_overflow && prev {
-            tracing::info!(
-                "unsent overflow recovered: total={} unsent={} ratio={:.2}",
-                report.total,
-                report.unsent,
-                report.ratio
-            );
+
+        // P1-3：把「诊断判定」与「淘汰动作」彻底分开。
+        //
+        // - 诊断（未送达占比）用 O(1) 内存计数器计算，**每次入队都做**，代价是
+        //   两次原子读 + 一次布尔写——没有 DB 往返，不需要降频，也就不存在
+        //   「标志滞后几批」的问题。
+        // - 淘汰是唯一需要写库的动作，**只在真的超限时**才开事务。
+        //   旧实现每次入队都 `BEGIN → COUNT(*) → COUNT(*) → COMMIT`，
+        //   队列 10^6 行时单次入队扫两遍全表；现在未超限时零 DB 开销。
+        let rows_total = self.rows_total.load(Ordering::Relaxed);
+        let unsent = self.unsent_estimate();
+        self.refresh_unsent_overflow(rows_total, unsent);
+
+        if rows_total > self.max_rows {
+            let report = Self::enforce_queue_limit(conn, self.max_rows, rows_total, unsent);
+            // P0-2：overflow 现在也会淘汰**未送达**（delivered=0）行，这些行仍计入
+            // depth，必须同步扣减；已送达行在 ack 路径已各自扣过，不再重复扣。
+            if report.undelivered_deleted > 0 {
+                Self::saturating_dec(&self.depth, report.undelivered_deleted);
+            }
+            if report.deleted > 0 {
+                Self::saturating_dec(&self.rows_total, report.deleted);
+                // 淘汰计数用于审计"丢了多少最旧数据"；warn 级细节已在 enforce_queue_limit 内输出
+                tracing::debug!(
+                    "queue limit: trimmed {} rows ({} undelivered, total now {})",
+                    report.deleted,
+                    report.undelivered_deleted,
+                    report.total
+                );
+                // 单机网关无异地副本：这些行是**物理删除且不可恢复**的。
+                // 只打 debug 日志（默认不输出）等于静默丢数据，因此必须同时
+                // ① 累加进程内单调计数 → 供告警取增量、供前端展示累计值；
+                // ② 累加 Prometheus 计数器 → 供运维配告警规则。
+                Self::saturating_add(&self.evicted_total, report.deleted);
+                Self::saturating_add(&self.evicted_undelivered_total, report.undelivered_deleted);
+                self.metrics
+                    .add_queue_evicted(report.deleted, report.undelivered_deleted);
+            }
         }
         update_queue_depth_metric(&self.depth, &self.metrics);
         Ok(inserted)
@@ -452,7 +537,7 @@ impl QueueStorage for SqliteStorage {
         // 6. 每次：cleanup_old_records（保留天数换算小时）+ WAL 大小监控
         let mut guard = self.conn.lock();
         let max_age_hours = self.storage_retention_days.lock().map(|d| d as u64 * 24);
-        Self::cleanup_old_records(&mut guard, max_age_hours, &self.depth);
+        Self::cleanup_old_records(&mut guard, max_age_hours, &self.depth, &self.rows_total);
         // Bug 184 (N05): 注入 metrics，让 WAL 监控能累计 `wal_size_warn_total` 指标
         // （50MB 早期预警 + 100MB 硬告警都使用同一计数器）。
         check_wal_size(&mut guard, &self.wal_path, Some(&self.metrics));
@@ -476,11 +561,21 @@ impl QueueStorage for SqliteStorage {
         // 对同名变量只是「遮蔽」——被遮蔽的绑定不会提前 drop（仍存活至函数作用域
         // 结束），于是二次加锁必然自锁死。表现为调用 `maintenance()` 的单测永久挂起。
         {
-            let report = Self::enforce_queue_limit(&mut guard, self.max_rows);
+            // P1-2：维护路径同样改用内存计数器（O(1)），不再 `SELECT COUNT(*)`。
+            let rows_total = self.rows_total.load(Ordering::Relaxed);
+            let unsent = self.unsent_estimate();
+            let report = Self::enforce_queue_limit(&mut guard, self.max_rows, rows_total, unsent);
             // P0-2：overflow 淘汰的未送达行需同步扣 depth（已送达行 ack 时已扣）。
             if report.undelivered_deleted > 0 {
                 Self::saturating_dec(&self.depth, report.undelivered_deleted);
                 update_queue_depth_metric(&self.depth, &self.metrics);
+            }
+            if report.deleted > 0 {
+                Self::saturating_dec(&self.rows_total, report.deleted);
+                Self::saturating_add(&self.evicted_total, report.deleted);
+                Self::saturating_add(&self.evicted_undelivered_total, report.undelivered_deleted);
+                self.metrics
+                    .add_queue_evicted(report.deleted, report.undelivered_deleted);
             }
             let prev = self
                 .unsent_overflow

@@ -3,15 +3,14 @@
 //! 每个领域子结构自带 `render(&mut String)`，本文件只负责：
 //! 1. 按固定顺序调用各子结构 render；
 //! 2. 渲染留在 `Metrics` 顶层的 Gauge / 当日滚动计数器；
-//! 3. 渲染 sink fan-out 三个标签化 map；
+//! 3. 渲染 sink fan-out 三个固定槽位指标（`SinkId` 枚举全量输出）；
 //! 4. 渲染前端兼容别名（uplink/queue_length/devices_online/errors_total）。
 //!
 //! 所有已存在于拆分前的指标名与 HELP 文案均保持不变。
 
-use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
-use super::Metrics;
+use super::{Metrics, SinkId};
 
 impl Metrics {
     /// 导出为 Prometheus 文本格式
@@ -167,80 +166,40 @@ impl Metrics {
             self.process_rss_bytes.load(Ordering::Relaxed)
         ));
 
-        // ===== sink 指标（每个 sink 一组标签）=====
+        // ===== sink 指标（每个内置 sink 一组标签）=====
+        //
+        // P2-2：槽位由 `SinkId` 枚举固定，遍历 `SinkId::ALL` 全量输出——
+        // 即使某个 sink 从未上报过也会输出 0 值，Prometheus 面板不会出现空洞。
+        // 同时不再需要克隆 HashMap / 多次加锁：读的是固定数组里的原子量。
         out.push_str(
             "# HELP gateway_sink_send_total Successful sink.send() calls (entered mpsc)\n",
         );
         out.push_str("# TYPE gateway_sink_send_total counter\n");
-        // r32-PM2: 一次性克隆 sink_send + sink_names 到本地，
-        // 后续循环零锁竞争。sink_names() 内部还会 read 一次 sink_send 之外的表，
-        // 故先建 send snapshot 再建 names。
-        let send_snapshot: std::collections::HashMap<String, u64> = {
-            let m = self.sink_send.read();
-            m.iter()
-                .map(|(k, a)| (k.clone(), a.load(Ordering::Relaxed)))
-                .collect()
-        };
-        let names = self.sink_names();
-        for name in &names {
+        for sink in SinkId::ALL {
             out.push_str(&format!(
                 "gateway_sink_send_total{{sink=\"{}\"}} {}\n",
-                name,
-                send_snapshot.get(name).copied().unwrap_or(0)
+                sink.as_str(),
+                self.sink_send_total(sink)
             ));
         }
 
         out.push_str("# HELP gateway_sink_dropped_total Dropped batches due to mpsc full (async fan-out backpressure)\n");
         out.push_str("# TYPE gateway_sink_dropped_total counter\n");
-        // r31-PM1 (修复)：原实现持锁期间克隆 keys + 后续 format 内又调用 snapshot
-        // 再次获取 read 锁——同一函数 3 次加锁（names / dropped / depth），
-        // metrics 写入侧（每个 sink task）都竞争同一 RwLock，Prometheus 抓取期间
-        // 拖慢 metrics 写入。
-        // 修复：一次性收集 3 个 map 的 keys（在最小锁粒度内），释放锁后再 format 输出。
-        let mut all_names: BTreeSet<String> = names.iter().cloned().collect();
-        {
-            // 仅在 cloned collect 期间持有读锁——keys 克隆后立即释放
-            let dropped_keys = self.sink_dropped.read();
-            for k in dropped_keys.keys() {
-                all_names.insert(k.clone());
-            }
-        }
-        {
-            let depth_keys = self.sink_channel_depth.read();
-            for k in depth_keys.keys() {
-                all_names.insert(k.clone());
-            }
-        }
-        // r32-PM2: 把 dropped / depth 两个 map 也一次性克隆到本地 HashMap，
-        // 后续循环查本地表——消除每个 sink name 一次的隐式 read 锁。
-        // N 个 sink 节省 N×2 次锁竞争（N=已注册 sink 数；典型 3-5）。
-        let dropped_snapshot: std::collections::HashMap<String, u64> = {
-            let m = self.sink_dropped.read();
-            m.iter()
-                .map(|(k, a)| (k.clone(), a.load(Ordering::Relaxed)))
-                .collect()
-        };
-        let depth_snapshot: std::collections::HashMap<String, i64> = {
-            let m = self.sink_channel_depth.read();
-            m.iter()
-                .map(|(k, a)| (k.clone(), a.load(Ordering::Relaxed)))
-                .collect()
-        };
-        for name in &all_names {
+        for sink in SinkId::ALL {
             out.push_str(&format!(
                 "gateway_sink_dropped_total{{sink=\"{}\"}} {}\n",
-                name,
-                dropped_snapshot.get(name).copied().unwrap_or(0)
+                sink.as_str(),
+                self.sink_dropped_total(sink)
             ));
         }
 
         out.push_str("# HELP gateway_sink_channel_depth Current sink internal mpsc depth\n");
         out.push_str("# TYPE gateway_sink_channel_depth gauge\n");
-        for name in &all_names {
+        for sink in SinkId::ALL {
             out.push_str(&format!(
                 "gateway_sink_channel_depth{{sink=\"{}\"}} {}\n",
-                name,
-                depth_snapshot.get(name).copied().unwrap_or(0)
+                sink.as_str(),
+                self.sink_channel_depth(sink)
             ));
         }
 

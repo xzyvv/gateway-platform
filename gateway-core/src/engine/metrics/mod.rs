@@ -19,7 +19,7 @@
 //! - **公共直方图**：`Histogram`（在 `histogram.rs`），被 `CollectMetrics` 与
 //!   `TransactionMetrics` 复用，提供 `record(value_us, &bounds)` 与 `render(...)`。
 //! - **sink fan-out**：`sink_send` / `sink_dropped` / `sink_channel_depth` 三个
-//!   `RwLock<HashMap>` 保留在顶层（与子结构语义无关，generic fan-out 机制）。
+//!   `SinkId` 枚举 + 固定槽位数组保留在顶层（与子结构语义无关，generic fan-out 机制）。
 //!
 //! Prom 命名 100% 向后兼容——所有写死的 `# HELP`/`# TYPE` 字符串与拆分前一致。
 //! 已有 Grafana dashboard / alert rule 无需迁移。
@@ -45,10 +45,7 @@ pub mod sink;
 pub mod transaction;
 pub mod webhook;
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64};
-
-use parking_lot::RwLock;
 
 pub use alarm::AlarmMetrics;
 pub use bus::BusMetrics;
@@ -64,6 +61,7 @@ pub use scoped::{
     REASON_LABELS,
 };
 pub use sim_consumer::SimConsumerMetrics;
+pub use sink::{SinkId, SinkMetrics};
 pub use transaction::TransactionMetrics;
 pub use webhook::WebhookMetrics;
 
@@ -205,15 +203,11 @@ pub struct Metrics {
     pub sim_consumer: SimConsumerMetrics,
 
     // ===== sink fan-out（通用机制，独立于子结构语义）=====
-    /// sink 投递成功（send 进 mpsc，不丢）。Prom 命名：
-    /// `gateway_sink_send_total{name="..."}`。
-    pub sink_send: RwLock<HashMap<String, AtomicU64>>,
-    /// sink 投递被丢弃（mpsc 满）。Prom 命名：
-    /// `gateway_sink_dropped_total{name="..."}`。
-    pub sink_dropped: RwLock<HashMap<String, AtomicU64>>,
-    /// sink 内部 mpsc 通道当前深度。Prom 命名：
-    /// `gateway_sink_channel_depth{name="..."}`。
-    pub sink_channel_depth: RwLock<HashMap<String, AtomicI64>>,
+    /// 每个内置 sink 的 send / dropped / channel depth 固定槽位。
+    ///
+    /// P2-2：由 `SinkId` 枚举（编译期穷举）索引，写路径无锁无分配；
+    /// Prometheus 命名见 [`SinkMetrics`] 各字段文档。
+    pub sink: SinkMetrics,
 }
 
 impl Metrics {

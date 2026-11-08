@@ -22,20 +22,62 @@ use super::{
     CIRCUIT_COOLDOWN_SECS,
 };
 
+/// 自适应单批条数下限。
+///
+/// 下限保持 100：批次过小会让 MQTT 往返次数线性上升（每条一次 PubAck 等待），
+/// 串行 publish 路径下吞吐反而下降。
+const MIN_BATCH_SIZE: usize = 100;
+
+/// 自适应单批条数上限。
+///
+/// 上限 500：单批 payload 过大时 broker 侧内存与单条消息处理耗时会显著上升，
+/// 且断链重发时单条超大会拖慢恢复速度。
+const MAX_BATCH_SIZE: usize = 500;
+
+/// 令牌桶突发容量系数（cap = rate * 该值）。
+///
+/// 允许在补发开始时短时突发，但长期平均速率仍受 rate（条/秒）约束。
+const TOKEN_BUCKET_BURST_FACTOR: u64 = 2;
+
+/// 单次限速等待的上限（毫秒）。
+///
+/// 令牌不足时按"还需多少令牌 / rate"算出等待时长，但单次最多等 1s：
+/// 期间可能有关停请求，拆成多次短等待可让 publish_loop 及时响应停机。
+const MAX_THROTTLE_WAIT_MS: u64 = 1_000;
+
+/// 单批发布的结局。
+///
+/// publish_loop 依据它决定「周期内是否继续排空积压」（P0-1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BatchOutcome {
+    /// 成功发布一批（携带实际发送条数）
+    Sent(usize),
+    /// 队列已空，无待发数据
+    Empty,
+    /// 被令牌桶限速：额度不足，需在 `wait_ms` 毫秒后重试
+    Throttled { wait_ms: u64 },
+    /// 串行发布信号量被占用（其它发布路径正在发布）：本轮应停止，等待下个周期
+    Busy,
+    /// 发布失败（断路器打开 / 网络错误 / PubAck 超时）：本轮应停止，等待下个周期
+    Failed,
+}
+
 impl MqttClient {
     /// 批量发布
     ///
     /// tracing: MQTT 批量发布 span，tracing feature off 时 cfg_attr 剥离为零成本。
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self), level = "debug"))]
-    pub(crate) async fn publish_batch(&self) -> bool {
+    pub(crate) async fn publish_batch(&self) -> BatchOutcome {
         let _permit = match self.publish_semaphore.try_acquire() {
             Ok(p) => p,
             Err(_) => {
-                return false;
+                // 其它发布路径（如 outbox replay）正持有 publish 串行锁。
+                // 不与之争抢：本轮排空结束，下个周期再试。
+                return BatchOutcome::Busy;
             }
         };
         if !self.config.enabled {
-            return false;
+            return BatchOutcome::Failed;
         }
 
         // 断路器检查：若处于断开状态，检查是否已过冷却期
@@ -53,7 +95,7 @@ impl MqttClient {
                     now.saturating_sub(opened_at),
                     CIRCUIT_COOLDOWN_SECS
                 );
-                return false;
+                return BatchOutcome::Failed;
             }
             // 冷却期过，半开：允许一次尝试
             tracing::info!("circuit half-open, attempting publish");
@@ -83,16 +125,46 @@ impl MqttClient {
         // 不变（replay 失败 / 中断的 outbox 行仍在 DB 等下轮 replay），FIFO 严格
         // 保持（perm=1 + broker 保序不变）。
 
-        let dequeue_limit = self.rate_limited_batch_size(100);
+        // P0-2：单批条数按待发量自适应。
+        // `pending` 是队列中尚未 ack 的条数（含 in_flight），clamp 到
+        // [MIN_BATCH_SIZE, MAX_BATCH_SIZE]：积压大时用大包摊薄 MQTT 往返
+        // 开销，积压小时退回小包避免无谓的大 payload。
+        let pending = self.queue.len().await;
+        if pending == 0 {
+            return BatchOutcome::Empty;
+        }
+        let batch_target = pending.clamp(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
+
+        // P0-3：`resume_rate_limit` 的语义是"条/秒"速率上限（None = 不限速）。
+        // 令牌桶容量 = rate * 突发系数，允许短时突发，长期平均速率受 rate 约束。
+        // 令牌按**实际发送条数**扣除（成功路径），失败路径不扣——数据已 release
+        // 回队列待重发，重发时再计费。
+        let rate_limit = match self.config.resume_rate_limit {
+            Some(r) if r > 0 => Some(r as u64),
+            _ => None,
+        };
+        let dequeue_limit = match rate_limit {
+            Some(rate) => {
+                let available = self.rate_available(rate);
+                if available == 0 {
+                    // 令牌不足：本轮不发，等补充后由 publish_loop 重试。
+                    let wait_ms = throttle_wait_ms(batch_target, available, rate);
+                    return BatchOutcome::Throttled { wait_ms };
+                }
+                batch_target.min(available as usize)
+            }
+            None => batch_target,
+        };
+
         let batch = match self.queue.dequeue(dequeue_limit).await {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!("dequeue failed: {}", e);
-                return false;
+                return BatchOutcome::Failed;
             }
         };
         if batch.is_empty() {
-            return false;
+            return BatchOutcome::Empty;
         }
 
         // 构建 JSON 负载并（可选）压缩
@@ -202,7 +274,12 @@ impl MqttClient {
                         // 断路器：成功则重置失败计数
                         self.circuit_failures
                             .store(0, std::sync::atomic::Ordering::Relaxed);
-                        true
+                        // P0-3：按**实际发送条数**扣减令牌（令牌单位=条）。
+                        // 仅在限速生效时扣；不限速（None）时不消耗任何额度。
+                        if rate_limit.is_some() {
+                            self.rate_consume(batch.len());
+                        }
+                        BatchOutcome::Sent(batch.len())
                     }
                     Ok(Err(_)) => {
                         tracing::warn!("mqtt ack channel closed, releasing in_flight for retry");
@@ -217,7 +294,7 @@ impl MqttClient {
                         // #9: 统一清理 outbox——避免重连后 replay 与 queue 重新 dequeue 重复上报
                         self.cleanup_outbox_on_failure(data_id).await;
                         self.record_circuit_failure();
-                        false
+                        BatchOutcome::Failed
                     }
                     Err(_) => {
                         tracing::warn!("mqtt PubAck timeout, releasing in_flight for retry");
@@ -233,7 +310,7 @@ impl MqttClient {
                         // #9: 同上，超时也要清理 outbox
                         self.cleanup_outbox_on_failure(data_id).await;
                         self.record_circuit_failure();
-                        false
+                        BatchOutcome::Failed
                     }
                 }
             }
@@ -247,7 +324,7 @@ impl MqttClient {
                 // #9: publish 调用本身失败同样清理 outbox
                 self.cleanup_outbox_on_failure(data_id).await;
                 self.record_circuit_failure();
-                false
+                BatchOutcome::Failed
             }
         }
     }
@@ -464,35 +541,49 @@ impl MqttClient {
         }
     }
 
-    /// 计算本次可上传的最大条数（令牌桶限速）
+    /// 查询当前可用的发送额度（条数），并推进令牌桶补充。
     ///
-    /// r37-MQTT1 修复：旧实现首次调用（`rate_last_refill == 0`）把令牌桶填满后
-    /// **直接返回取用量却未扣除令牌**——首轮凭空多放行一整桶（rate 条），与
-    /// 后续轮次的扣减语义不一致。现统一改由纯函数 `token_bucket_step` 计算，
-    /// 首次调用同样按实际取用量扣除（令牌记账始终守恒）。
-    pub(crate) fn rate_limited_batch_size(&self, max_size: usize) -> usize {
-        let rate = match self.config.resume_rate_limit {
-            Some(r) if r > 0 => r as u64,
-            _ => return max_size,
-        };
-
+    /// P0-3：`resume_rate_limit` 的语义是"条/秒"，因此令牌桶的令牌单位是
+    /// **条**（而非旧实现的"批"）。旧实现 `take` 恒被 `max_size=100` 卡死，
+    /// 令牌桶从未真正限速——本方法改为返回当前可用的**条数**额度，
+    /// 调用方据此裁剪本次 dequeue 的批量。
+    ///
+    /// 本方法**不扣减**令牌：真正的扣减发生在 `rate_consume`（按实际发送
+    /// 条数、成功路径才扣）。两阶段拆分保证"发布失败的数据不会消耗额度"。
+    ///
+    /// 注：调用点由 `publish_semaphore`（permit=1）串行，故此处对两个原子的
+    /// 读-算-写无需 CAS 循环。
+    pub(crate) fn rate_available(&self, rate: u64) -> u64 {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let (last, tokens, take) = token_bucket_step(
+        let (last, tokens) = token_bucket_refill(
             self.rate_last_refill
                 .load(std::sync::atomic::Ordering::Relaxed),
             self.rate_tokens.load(std::sync::atomic::Ordering::Relaxed),
             rate,
             now_ms,
-            max_size,
         );
         self.rate_last_refill
             .store(last, std::sync::atomic::Ordering::Relaxed);
         self.rate_tokens
             .store(tokens, std::sync::atomic::Ordering::Relaxed);
-        take
+        tokens
+    }
+
+    /// 按**实际发送条数**扣减令牌（仅成功路径调用）。
+    ///
+    /// P0-3：令牌单位为"条"。失败路径（网络错误 / PubAck 超时）不扣减——
+    /// 数据已 release 回队列待重发，重发成功时再计费，避免"失败也扣额度"
+    /// 导致补发速率被系统性低估。
+    pub(crate) fn rate_consume(&self, count: usize) {
+        let count = count as u64;
+        let current = self.rate_tokens.load(std::sync::atomic::Ordering::Relaxed);
+        self.rate_tokens.store(
+            current.saturating_sub(count),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 
@@ -507,29 +598,51 @@ fn circuit_cooldown_active(opened_at: u64, now: u64, cooldown_secs: u64) -> bool
     now.saturating_sub(opened_at) < cooldown_secs
 }
 
-/// r37-MQTT1：令牌桶单步计算（纯函数，便于回归测试）。
+/// P0-3：限速退避时长计算（纯函数）。
 ///
-/// 返回 `(新的补充时间戳, 新的令牌数, 本次可取用数量)`：
-/// - `last_refill == 0` 视为首次调用：满桶（= rate），并按取用量扣除；
-/// - 令牌上限 `2 * rate`（突发容量），补充量 `rate * elapsed_ms / 1000`
-///   （整毫秒取整为 0 时不推进时间戳，避免高频调用把补充量抹平）。
+/// 目标是**攒够一整批**令牌再发，而不是"攒 1 条发 1 条"——后者虽然平均
+/// 速率正确，但会让 MQTT 往返次数暴涨（每条一次 PubAck 等待），把串行
+/// publish 路径的吞吐压到远低于配置值。
 ///
-/// 注：调用点由 `publish_semaphore`（permit=1）串行，故此处对两个原子的
-/// 读-算-写无需 CAS 循环。
-fn token_bucket_step(
-    last_refill: u64,
-    tokens: u64,
-    rate: u64,
-    now_ms: u64,
-    max_size: usize,
-) -> (u64, u64, usize) {
-    let cap = rate.saturating_mul(2);
+/// `need = batch_target - available`（至少 1），所需时间 = `need * 1000 / rate`
+/// 毫秒；单次等待封顶 `MAX_THROTTLE_WAIT_MS`，保证关停响应不被拖住
+/// （超时后再次计算，仍不足则继续短等待）。
+fn throttle_wait_ms(batch_target: usize, available: u64, rate: u64) -> u64 {
+    let need = (batch_target as u64).saturating_sub(available).max(1);
+    let ms = need
+        .saturating_mul(1000)
+        .saturating_add(rate.saturating_sub(1))
+        / rate.max(1);
+    ms.clamp(1, MAX_THROTTLE_WAIT_MS)
+}
+
+/// 令牌桶容量（突发上限，单位：条）。
+///
+/// P0-3：容量 = rate * 突发系数。允许补发开始时短时突发，长期平均速率仍受
+/// rate（条/秒）约束。rate=0 时返回 0（调用方不应进入限速分支）。
+fn token_bucket_cap(rate: u64) -> u64 {
+    rate.saturating_mul(TOKEN_BUCKET_BURST_FACTOR)
+}
+
+/// P0-3：令牌桶补充计算（纯函数，便于回归测试）。
+///
+/// 返回 `(新的补充时间戳, 新的令牌数)`：
+/// - `last_refill == 0` 视为首次调用：直接给满桶（= cap），允许一次突发；
+/// - 令牌上限 `cap`（= rate * 突发系数），补充量 `rate * elapsed_ms / 1000`
+///   （整毫秒取整为 0 时不推进时间戳，避免高频调用把补充量抹平）；
+/// - 时钟回拨（now < last_refill）时 elapsed 饱和为 0，保守地不补充也不回退。
+///
+/// 与旧实现的关键差异：旧 `token_bucket_step` 把 `take` 夹在 `max_size`
+/// （= 单批条数上限）之内，令牌桶实际从未限制过发送量；本函数**只做补充**，
+/// 可用额度由调用方按"批量目标 vs 可用令牌"取小得出。
+fn token_bucket_refill(last_refill: u64, tokens: u64, rate: u64, now_ms: u64) -> (u64, u64) {
+    let cap = token_bucket_cap(rate);
     if last_refill == 0 {
-        let take = (max_size as u64).min(rate);
-        return (now_ms, rate.saturating_sub(take), take as usize);
+        // 首次调用：满桶，允许一次突发（每 rate 条的 2 倍）。
+        return (now_ms, cap);
     }
     let mut last_refill = last_refill;
-    let mut tokens = tokens;
+    let mut tokens = tokens.min(cap);
     let elapsed_ms = now_ms.saturating_sub(last_refill);
     if elapsed_ms > 0 {
         let refill = rate.saturating_mul(elapsed_ms) / 1000;
@@ -538,13 +651,12 @@ fn token_bucket_step(
             tokens = tokens.saturating_add(refill).min(cap);
         }
     }
-    let take = (max_size as u64).min(tokens);
-    (last_refill, tokens - take, take as usize)
+    (last_refill, tokens)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{circuit_cooldown_active, token_bucket_step};
+    use super::{circuit_cooldown_active, throttle_wait_ms, token_bucket_cap, token_bucket_refill};
 
     /// r41-MQTT2 回归：冷却判定对时钟回拨（now < opened_at）必须安全。
     /// 旧实现 `now - opened_at` 在 u64 下溢（debug panic / release 回绕误判冷却已过）。
@@ -559,39 +671,54 @@ mod tests {
         assert!(circuit_cooldown_active(2_000, 0, 30));
     }
 
-    /// 契约：首次调用按满桶取值，并扣除取用量（旧实现漏扣，导致首轮多放行整桶）
+    /// P0-3 契约：首次调用给满桶（cap = rate * 突发系数），额度单位是"条"。
     #[test]
-    fn token_bucket_first_call_deducts_taken_tokens() {
-        // 满桶 rate=10，请求上限 100 → 取 10，余 0
-        assert_eq!(token_bucket_step(0, 0, 10, 1_000, 100), (1_000, 0, 10));
-        // 满桶 rate=10，请求上限 3 → 取 3，余 7（扣减成立）
-        assert_eq!(token_bucket_step(0, 0, 10, 1_000, 3), (1_000, 7, 3));
+    fn token_bucket_first_call_fills_to_cap() {
+        // rate=10 → cap=20，首次调用直接给 20 条额度
+        assert_eq!(token_bucket_refill(0, 0, 10, 1_000), (1_000, 20));
+        // 突发系数恒为 2
+        assert_eq!(token_bucket_cap(10), 20);
+        assert_eq!(token_bucket_cap(1_000), 2_000);
     }
 
-    /// 契约：补充量按 rate*elapsed/1000 计算，且令牌上限为 2*rate
+    /// P0-3 契约：补充量按 rate*elapsed/1000 计算，且令牌上限为 cap。
     #[test]
-    fn token_bucket_refills_and_caps_at_double_rate() {
-        // 1s 补 1000 令牌（rate=1000），请求 5 → 取 5
+    fn token_bucket_refills_and_caps() {
+        // 1s 补 1000 令牌（rate=1000），上限 2000
+        assert_eq!(token_bucket_refill(1_000, 0, 1_000, 2_000), (2_000, 1_000));
+        // 累积补充被上限 2000 截断（1900 + 补 2000 → 封顶 2000）
         assert_eq!(
-            token_bucket_step(1_000, 0, 1_000, 2_000, 5),
-            (2_000, 995, 5)
-        );
-        // 累积补充被上限 2000 截断
-        assert_eq!(
-            token_bucket_step(1_000, 1_900, 1_000, 3_000, 100),
-            (3_000, 1_900, 100)
+            token_bucket_refill(1_000, 1_900, 1_000, 3_000),
+            (3_000, 2_000)
         );
     }
 
     /// 契约：elapsed 的补充量取整为 0 时，不推进时间戳（避免高频调用抹平补充）
     #[test]
     fn token_bucket_small_elapsed_keeps_timestamp() {
-        // rate=1000, elapsed=1ms → refill=1 成立，正常推进（补 1 取 1 余 0）
-        assert_eq!(
-            token_bucket_step(1_000, 0, 1_000, 1_001, 100),
-            (1_001, 0, 1)
-        );
+        // rate=1000, elapsed=1ms → refill=1 成立，正常推进
+        assert_eq!(token_bucket_refill(1_000, 0, 1_000, 1_001), (1_001, 1));
         // rate=1, elapsed=999ms → refill=0，时间戳保持不回退
-        assert_eq!(token_bucket_step(1_000, 0, 1, 1_999, 100), (1_000, 0, 0));
+        assert_eq!(token_bucket_refill(1_000, 0, 1, 1_999), (1_000, 0));
+    }
+
+    /// P0-3 契约：时钟回拨（now < last_refill）不得下溢，也不得补充令牌。
+    #[test]
+    fn token_bucket_handles_clock_rollback() {
+        // now=900 < last_refill=1000 → elapsed 饱和为 0，时间戳与令牌都不变
+        assert_eq!(token_bucket_refill(1_000, 50, 100, 900), (1_000, 50));
+    }
+
+    /// P0-3 契约：退避时长按"攒够一整批"计算，且单次等待不超过上限。
+    #[test]
+    fn throttle_wait_scales_with_batch_target() {
+        // rate=1000，攒 500 条 → 500ms
+        assert_eq!(throttle_wait_ms(500, 0, 1_000), 500);
+        // rate=200，攒 500 条 → 2500ms，被 MAX_THROTTLE_WAIT_MS(1000) 截断
+        assert_eq!(throttle_wait_ms(500, 0, 200), 1_000);
+        // 已攒 400 条、还差 100 条，rate=1000 → 100ms
+        assert_eq!(throttle_wait_ms(500, 400, 1_000), 100);
+        // 至少等 1ms（available 已满时也保持最小退避）
+        assert_eq!(throttle_wait_ms(0, 0, 1_000), 1);
     }
 }

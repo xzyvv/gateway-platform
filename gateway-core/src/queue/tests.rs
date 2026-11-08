@@ -328,6 +328,42 @@ fn make_point_at(id: &str, value: f64, timestamp_ms: i64) -> DataPoint {
 }
 
 #[test]
+fn test_storage_dedups_same_point_and_timestamp() {
+    use crate::queue::storage::QueueStorage;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("queue.db");
+    let storage = SqliteStorage::new(db_path.to_str().unwrap(), Arc::new(Metrics::new())).unwrap();
+
+    let now = DataPoint::now();
+    // 同一批内重复：(p1, now) 出现两次
+    let inserted = storage
+        .enqueue_batch(&[
+            make_point_at("p1", 1.0, now),
+            make_point_at("p1", 9.0, now),
+            make_point_at("p2", 2.0, now),
+        ])
+        .unwrap();
+    assert_eq!(inserted, 2, "P2-1：重复 (point_id, timestamp) 只能落一行");
+    assert_eq!(storage.len(), 2, "depth 必须按实际插入行数累加");
+
+    // 跨批重复：再入队同一 (p1, now)，不得新增行、不得报错
+    let inserted2 = storage
+        .enqueue_batch(&[make_point_at("p1", 3.0, now)])
+        .unwrap();
+    assert_eq!(inserted2, 0, "重复入队应被唯一约束静默跳过");
+    assert_eq!(storage.len(), 2, "重复入队不得增加深度");
+
+    // 同一点位不同时间戳是合法的新数据
+    let inserted3 = storage
+        .enqueue_batch(&[make_point_at("p1", 4.0, now + 1)])
+        .unwrap();
+    assert_eq!(inserted3, 1);
+    assert_eq!(storage.len(), 3);
+}
+
+#[test]
 fn test_storage_retention_quota_truncates_old_records() {
     use tempfile::tempdir;
 

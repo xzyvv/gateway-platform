@@ -28,8 +28,6 @@
 
 #[path = "chaos/harness.rs"]
 mod chaos_harness;
-#[path = "load/north_stub.rs"]
-mod north_stub;
 #[path = "soak/mod.rs"]
 mod soak;
 

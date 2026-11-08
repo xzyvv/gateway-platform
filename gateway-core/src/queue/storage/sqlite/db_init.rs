@@ -11,10 +11,47 @@ use crate::engine::error::{GatewayError, GatewayResult};
 
 use super::wal::backup_db_consistent;
 
+/// 是否允许在数据库打不开 / 完整性校验失败时自动「恢复备份或重建空库」。
+///
+/// 默认**关闭**：`integrity_check` 失败有两种成因——掉电/磁盘损坏，或 keyfile 被替换。
+/// 旧实现无差别地「有备份就覆盖主库、无备份就删库重建」，换 key 时会静默清空全部
+/// 未交付数据，现场只表现为「重启后队列莫名清空」，无法察觉也无法追溯。
+/// 现在默认拒绝启动并保留全部文件；运维确认库确实不可用后，显式设置
+/// `GATEWAY_QUEUE_REBUILD_ON_CORRUPTION=1` 才恢复旧的自愈行为。
+fn rebuild_on_corruption_allowed() -> bool {
+    matches!(
+        std::env::var("GATEWAY_QUEUE_REBUILD_ON_CORRUPTION").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// 构造「拒绝启动」的错误：带上库、密钥路径与处置指引，便于现场区分
+/// 「keyfile 被换了」和「掉电把库写坏了」这两种完全不同的故障。
+fn refuse_unusable_db(db_path: &Path, reason: &str) -> GatewayError {
+    // 未启用 encryption 时不存在 keyfile（`ensure_key` 返回空串），提示里不出现它。
+    #[cfg(feature = "encryption")]
+    let key_hint = format!(
+        "，keyfile: {}",
+        crate::queue::core::keyfile_path(db_path).display()
+    );
+    #[cfg(not(feature = "encryption"))]
+    let key_hint = String::new();
+
+    GatewayError::Queue(format!(
+        "队列数据库无法使用：{reason}（库: {}{key_hint}）。\
+         已按数据保护策略拒绝启动，未删除、未覆盖任何文件。\
+         请先确认 keyfile 是否被替换；若确认库已不可用，设置 \
+         GATEWAY_QUEUE_REBUILD_ON_CORRUPTION=1 重启，程序将尝试从备份恢复，\
+         无备份时重建空库（未交付数据会丢失）",
+        db_path.display()
+    ))
+}
+
 /// 初始化队列数据库：打开/恢复连接、设置 WAL、建表/索引、校准计数器
 ///
 /// 包含：
-/// - SQLite 连接打开 + integrity_check + 备份恢复
+/// - SQLite 连接打开 + integrity_check（失败时默认拒绝启动，见
+///   [`rebuild_on_corruption_allowed`]）
 /// - WAL 模式设置
 /// - data_queue 表 + schema 版本校验与迁移链（`PRAGMA user_version`）
 /// - in_flight 恢复 + 队列深度计数器校准
@@ -23,6 +60,7 @@ pub(super) fn init_queue_db(
     db_path: &Path,
     backup_path: &Path,
     depth: &AtomicI64,
+    rows_total: &AtomicI64,
     key_hex: &str,
     metrics: &Arc<Metrics>,
 ) -> GatewayResult<Connection> {
@@ -36,7 +74,7 @@ pub(super) fn init_queue_db(
                 .unwrap_or(false);
             if integrity_ok {
                 conn
-            } else {
+            } else if rebuild_on_corruption_allowed() {
                 tracing::error!("SQLite integrity check failed, attempting restore from backup...");
                 drop(conn);
                 if backup_path.exists() {
@@ -53,26 +91,38 @@ pub(super) fn init_queue_db(
                     open_with_key(db_path, key_hex)
                         .map_err(|e| GatewayError::Queue(format!("recreate db failed: {}", e)))?
                 }
+            } else {
+                return Err(refuse_unusable_db(
+                    db_path,
+                    "PRAGMA integrity_check 未通过（库损坏或 keyfile 与库不匹配）",
+                ));
             }
         }
         Err(e) => {
-            tracing::error!(
-                "open sqlite failed ({}), attempting restore from backup...",
-                e
-            );
-            if backup_path.exists() {
-                std::fs::copy(backup_path, db_path).map_err(|e2| {
-                    GatewayError::Queue(format!("restore from backup failed: {}", e2))
-                })?;
-                tracing::warn!("restored data_queue.db from backup after open failure");
-                open_with_key(db_path, key_hex).map_err(|e2| {
-                    GatewayError::Queue(format!("reopen after restore failed: {}", e2))
-                })?
-            } else {
-                return Err(GatewayError::Queue(format!(
-                    "open sqlite failed and no backup: {}",
+            if rebuild_on_corruption_allowed() {
+                tracing::error!(
+                    "open sqlite failed ({}), attempting restore from backup...",
                     e
-                )));
+                );
+                if backup_path.exists() {
+                    std::fs::copy(backup_path, db_path).map_err(|e2| {
+                        GatewayError::Queue(format!("restore from backup failed: {}", e2))
+                    })?;
+                    tracing::warn!("restored data_queue.db from backup after open failure");
+                    open_with_key(db_path, key_hex).map_err(|e2| {
+                        GatewayError::Queue(format!("reopen after restore failed: {}", e2))
+                    })?
+                } else {
+                    return Err(GatewayError::Queue(format!(
+                        "open sqlite failed and no backup: {}",
+                        e
+                    )));
+                }
+            } else {
+                return Err(refuse_unusable_db(
+                    db_path,
+                    &format!("打开数据库失败（库损坏或 keyfile 与库不匹配）: {e}"),
+                ));
             }
         }
     };
@@ -157,15 +207,11 @@ pub(super) fn init_queue_db(
     // 会把已 ack 的行重新算进来 → 长期虚高且不可自愈（retention 删行不扣 depth）：
     // 指标失真、drain_and_wait 可能永不返回、enforce_queue_limit 误删仍在
     // 保留期内的历史行。
-    let initial_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM data_queue WHERE delivered = 0",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    depth.store(initial_count, Ordering::Relaxed);
-    metrics.set_queue_depth(initial_count);
+    //
+    // P1-2：同一次扫描顺带取**全表行数**，作为 `rows_total` 计数器的初值。
+    // 之后容量判定全部走内存计数器（`total > max_rows` 才算超限），入队热路径
+    // 不再出现 `SELECT COUNT(*)` 全表扫描。
+    ensure_dedup_unique_index(&conn)?;
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_queue_ts ON data_queue(timestamp)",
@@ -181,9 +227,95 @@ pub(super) fn init_queue_db(
     )
     .map_err(|e| GatewayError::Queue(format!("create point_ts index failed: {}", e)))?;
 
+    // P1-1：投递状态索引。(in_flight, delivered) 前缀让「未送达计数」与
+    // 「stale in_flight 回收（WHERE in_flight = 1）」都走索引，避免每次入队
+    // 触发的恢复 UPDATE 变成全表扫描。
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_delivery ON data_queue(in_flight, delivered)",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create delivery index failed: {}", e)))?;
+
+    // P1-1：容量淘汰专用**部分索引**。淘汰语句是
+    // `WHERE in_flight = 0 ORDER BY timestamp ASC, id ASC LIMIT n`：
+    // 普通 (in_flight, delivered) 索引无法支撑 timestamp 排序，超限时会对全部
+    // 非在途行做一次排序（O(n log n)）；部分索引把「非在途」直接固化进索引，
+    // 天然按 timestamp（末位隐含 rowid）有序 → 淘汰只需读 k 行。
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_evict ON data_queue(timestamp) WHERE in_flight = 0",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create evict index failed: {}", e)))?;
+
+    // 计数器校准放在建索引与去重**之后**：去重会删行，先算会导致终值虚高。
+    let (initial_total, initial_unsent): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(delivered = 0), 0) FROM data_queue",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+    depth.store(initial_unsent, Ordering::Relaxed);
+    rows_total.store(initial_total, Ordering::Relaxed);
+    metrics.set_queue_depth(initial_unsent);
+
     // 降采样聚合表（F5）与它的索引由 v2 → v3 迁移步骤创建，不在这里重复建。
 
     Ok(conn)
+}
+
+/// 确保 `(point_id, timestamp)` 唯一索引存在（P2-1）。
+///
+/// 唯一约束让「重复入队」在存储层被拒绝，堵住 persist 重试、上游重复投递、
+/// 同一批点被两条投递路径各写一次所导致的重复行。落库侧配合
+/// `INSERT ... ON CONFLICT(point_id, timestamp) DO NOTHING`：重复行静默跳过，
+/// 不算错误（不会触发逐行回退的告警风暴）。
+///
+/// 升级兼容：旧版本没有该约束，历史库里可能已存在重复行，直接建唯一索引会
+/// 失败并使网关拒绝启动。因此仅在索引**尚不存在**时做一次去重（每组保留最早
+/// 的 id），随后建索引。索引已存在说明此前已完成迁移，直接返回，不重复扫描。
+fn ensure_dedup_unique_index(conn: &Connection) -> GatewayResult<()> {
+    const INDEX: &str = "idx_queue_dedup";
+    let exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            rusqlite::params![INDEX],
+            |row| row.get(0),
+        )
+        .map_err(|e| GatewayError::Queue(format!("probe dedup index failed: {e}")))?;
+    if exists > 0 {
+        return Ok(());
+    }
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| GatewayError::Queue(format!("begin dedup tx failed: {e}")))?;
+    // 「保留每组最早一行」：重复删行必须一次性完成，否则后续建索引仍会失败。
+    let removed = tx
+        .execute(
+            "DELETE FROM data_queue WHERE id NOT IN (
+                 SELECT MIN(id) FROM data_queue GROUP BY point_id, timestamp
+             )",
+            [],
+        )
+        .map_err(|e| GatewayError::Queue(format!("dedup existing rows failed: {e}")))?;
+    tx.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_dedup ON data_queue(point_id, timestamp)",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create dedup unique index failed: {e}")))?;
+    tx.commit()
+        .map_err(|e| GatewayError::Queue(format!("commit dedup tx failed: {e}")))?;
+
+    if removed > 0 {
+        tracing::warn!(
+            "队列库升级：删除 {} 行重复 (point_id, timestamp) 记录后建立唯一索引",
+            removed
+        );
+    } else {
+        tracing::info!("队列库升级：已建立 (point_id, timestamp) 唯一索引");
+    }
+    Ok(())
 }
 
 // ══════════════════════════════════════════════════════════

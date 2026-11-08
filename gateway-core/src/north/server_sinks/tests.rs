@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::engine::metrics::SinkId;
 use crate::engine::model::DataPoint;
 use crate::north::server::modbus_server::ModbusServer;
 #[cfg(feature = "opcua-server")]
@@ -55,12 +56,12 @@ async fn test_opcua_sink_metrics_incremented() {
     let metrics = test_metrics();
     let srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
     let sink = OpcUaSink::new(Arc::new(srv), metrics.clone());
-    let name = sink.name();
-    let before_send = metrics.sink_send_total(name);
-    let before_dropped = metrics.sink_dropped_total(name);
+    let sid = SinkId::OpcUa;
+    let before_send = metrics.sink_send_total(sid);
+    let before_dropped = metrics.sink_dropped_total(sid);
     sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
-    let after_send = metrics.sink_send_total(name);
-    let after_dropped = metrics.sink_dropped_total(name);
+    let after_send = metrics.sink_send_total(sid);
+    let after_dropped = metrics.sink_dropped_total(sid);
     assert!(after_send > before_send, "send_total delta should be >= 1");
     assert_eq!(
         after_dropped, before_dropped,
@@ -74,16 +75,16 @@ async fn test_modbus_sink_metrics_send_counted() {
     let srv = ModbusServer::new(crate::north::server::ModbusServerConfig::default());
     let sink = ModbusSink::new(Arc::new(srv), metrics.clone());
     sink.build_mappings(&[], 0);
-    let name = sink.name();
-    let before_send = metrics.sink_send_total(name);
-    let before_dropped = metrics.sink_dropped_total(name);
+    let sid = SinkId::Modbus;
+    let before_send = metrics.sink_send_total(sid);
+    let before_dropped = metrics.sink_dropped_total(sid);
     // 灌入 SINK_CHANNEL_CAPACITY + 5 批
     let total_calls = (SINK_CHANNEL_CAPACITY as u64) + 5;
     for _ in 0..total_calls {
         sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
     }
-    let after_send = metrics.sink_send_total(name);
-    let after_dropped = metrics.sink_dropped_total(name);
+    let after_send = metrics.sink_send_total(sid);
+    let after_dropped = metrics.sink_dropped_total(sid);
     let delta = after_send.saturating_sub(before_send);
     let dropped_delta = after_dropped.saturating_sub(before_dropped);
     assert!(
@@ -111,10 +112,10 @@ async fn test_opcua_sink_channel_depth_reported() {
     let srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
     let metrics = test_metrics();
     let sink = OpcUaSink::new(Arc::new(srv), metrics.clone());
-    let name = sink.name();
+    let sid = SinkId::OpcUa;
     sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    let depth = metrics.sink_channel_depth(name);
+    let depth = metrics.sink_channel_depth(sid);
     // depth >= 0：set_sink_channel_depth clamp 负值，且 in_flight 不会下溢
     assert!(depth >= 0, "channel_depth should be >= 0, got {}", depth);
 }
@@ -127,10 +128,10 @@ async fn test_modbus_sink_channel_depth_reported() {
     let metrics = test_metrics();
     let sink = ModbusSink::new(Arc::new(srv), metrics.clone());
     sink.build_mappings(&[], 0);
-    let name = sink.name();
+    let sid = SinkId::Modbus;
     sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    let depth = metrics.sink_channel_depth(name);
+    let depth = metrics.sink_channel_depth(sid);
     assert!(depth >= 0, "channel_depth should be >= 0, got {}", depth);
 }
 

@@ -26,6 +26,29 @@ const INSERT_COLS_PER_ROW: usize = 11;
 /// 单行占位符（11 列，与 INSERT_COLS_PER_ROW 对应）。
 const ROW_PLACEHOLDERS: &str = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+/// 是否为「库级 / IO 级」致命错误：这类错误与具体数据行无关，不能当坏点跳过。
+///
+/// 典型场景是磁盘满（SQLITE_FULL）：SQLite 会自动回滚事务，若继续逐行重试，
+/// 每行都会失败并只留下 warn 日志，最终 commit 报「no transaction is active」，
+/// 真正的「磁盘满」被彻底掩盖。这里把这类错误直接上抛。
+fn is_fatal_storage_error(e: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode;
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if matches!(
+                inner.code,
+                ErrorCode::DiskFull
+                    | ErrorCode::SystemIoFailure
+                    | ErrorCode::DatabaseCorrupt
+                    | ErrorCode::ReadOnly
+                    | ErrorCode::CannotOpen
+                    | ErrorCode::NotADatabase
+                    | ErrorCode::TooBig
+            )
+    )
+}
+
 /// 预拼接的 INSERT 语句：下标 n（1..=INSERT_CHUNK_SIZE）对应一次插入 n 行的完整语句。
 ///
 /// 原实现每个 chunk 现场生成 `INSERT_CHUNK_SIZE` 个占位符 `String` 再 `join` +
@@ -40,6 +63,11 @@ static INSERT_SQL_CACHE: OnceLock<Vec<Box<str>>> = OnceLock::new();
 /// 越界时收敛到合法区间，避免 panic（防御性，正常路径不会触发）。
 fn insert_sql_for_rows(rows: usize) -> &'static str {
     let cache = INSERT_SQL_CACHE.get_or_init(|| {
+        // P2-1：末尾追加冲突子句。`(point_id, timestamp)` 上有唯一索引
+        // `idx_queue_dedup`，重复行（persist 重试、上游重复投递、同一批点被两条
+        // 投递路径各写一次）在存储层被静默跳过，不当作错误——避免触发逐行回退
+        // 的 warn 风暴。冲突目标必须与唯一索引完全一致，否则 SQLite 直接报错
+        // （索引缺失会在启动初始化阶段暴露，不会运行期才发现）。
         const PREFIX: &str = "INSERT INTO data_queue (point_id, device_id, value, raw_value, raw_type, quality, quality_reason, timestamp, source_ts, stale_count, value_text) VALUES ";
         let mut cache: Vec<Box<str>> = Vec::with_capacity(INSERT_CHUNK_SIZE + 1);
         // 下标 0 表示 0 行，不会被使用
@@ -50,7 +78,10 @@ fn insert_sql_for_rows(rows: usize) -> &'static str {
                 values.push(',');
             }
             values.push_str(ROW_PLACEHOLDERS);
-            cache.push(format!("{PREFIX}{values}").into_boxed_str());
+            cache.push(
+                format!("{PREFIX}{values} ON CONFLICT(point_id, timestamp) DO NOTHING")
+                    .into_boxed_str(),
+            );
         }
         cache
     });
@@ -117,26 +148,54 @@ impl SqliteStorage {
     ///
     /// 修复(审查#6)：超限判据由 `depth`（只统计 delivered=0 行）改为表内**真实总行数**。
     ///
-    /// r30-QL4 (已知风险，已评估暂不修)：子查询 `WHERE in_flight = 0 ORDER BY
-    /// timestamp ASC LIMIT ?1` 没有针对性复合索引。
-    /// - 现状：[`db_init.rs`] 已建 `idx_queue_ts(timestamp)`，SQLite 可用索引顺序扫描
-    ///   避免 sort；但子查询的 `in_flight=0` 谓词无法用现有索引覆盖，必须逐行 FILTER。
-    /// - 风险：队列表规模达到 10^5+ 行时，每次入队触发的 `enforce_queue_limit`
-    ///   会执行 O(n) 扫描，阻塞入队事务。
-    /// - 不修的理由：`enforce_queue_limit` 只在超限时才走 DELETE 分支，
-    ///   `idx_queue_ts` 已覆盖 ORDER BY，不是热路径。
-    pub(super) fn enforce_queue_limit(conn: &mut Connection, max_rows: i64) -> OverflowReport {
-        Self::enforce_queue_limit_with(conn, max_rows)
+    /// P1-1/P1-2 (性能修复)：`total` / `unsent` 由调用方通过 O(1) 内存计数器传入，
+    /// 本函数**不再执行 `SELECT COUNT(*)`**。旧实现对每次入队都跑两条全表 COUNT，
+    /// 队列表 10^6 行时单次入队要扫两遍全表（r30-QL4 记录的已知风险）。
+    /// 同时补了部分索引 `idx_queue_evict(timestamp) WHERE in_flight = 0`，
+    /// 淘汰子查询的 `ORDER BY timestamp, id LIMIT n` 可直接顺序读索引，
+    /// 不再需要在超限时对全部非在途行排序。
+    ///
+    /// 计数器与表内真实行数严格一致：所有 INSERT / DELETE 都在同一 `conn` 锁内
+    /// 完成，且每次增删同步更新计数器（见 `SqliteStorage::enqueue_batch` /
+    /// `maintenance` / `cleanup_old_records`）。
+    pub(super) fn enforce_queue_limit(
+        conn: &mut Connection,
+        max_rows: i64,
+        total: i64,
+        unsent: i64,
+    ) -> OverflowReport {
+        Self::enforce_queue_limit_with(conn, max_rows, total, unsent)
     }
 
     /// 可注入上限的 `enforce_queue_limit`（`max_rows` 来自配置项 `queue.max_rows`，
     /// 单测也会用极小阈值验证淘汰逻辑）。
-    fn enforce_queue_limit_with(conn: &mut Connection, max_rows: i64) -> OverflowReport {
-        // r30-QL1 (修复)：把 COUNT + DELETE 包入单个 `BEGIN IMMEDIATE` 事务。
-        // 旧实现两条 query_row 与 delete 分开执行，期间另一线程可能 INSERT 新行
-        // 或 DELETE 其他行 → `total`/`unsent` 与实际 `deleted` 出现短暂不一致。
-        // 用 IMMEDIATE 事务在 SQLite 层强制串行化：避免 BEGIN DEFERRED 的写锁升级
-        // 死锁（SQLite 在并发写事务时会产生 SQLITE_BUSY）。
+    fn enforce_queue_limit_with(
+        conn: &mut Connection,
+        max_rows: i64,
+        total: i64,
+        unsent: i64,
+    ) -> OverflowReport {
+        // P1-2 快速路径：未超限时**不开事务、不写库**，仅用计数器算比例。
+        // 这是入队热路径的常态（队列未满），代价是几次原子读。
+        if total <= max_rows {
+            let ratio = if total > 0 {
+                unsent as f64 / total as f64
+            } else {
+                0.0
+            };
+            return OverflowReport {
+                total,
+                unsent,
+                ratio,
+                unsent_overflow: ratio >= UNSENT_OVERFLOW_RATIO && total > 0,
+                deleted: 0,
+                undelivered_deleted: 0,
+            };
+        }
+
+        // r30-QL1 (修复)：把 DELETE 与其统计包入单个事务。
+        // 旧实现 COUNT 与 DELETE 分开执行，期间另一线程可能 INSERT 新行
+        // → `total`/`unsent` 与实际 `deleted` 出现短暂不一致。
         let tx = match conn.transaction() {
             Ok(t) => t,
             Err(e) => {
@@ -145,35 +204,15 @@ impl SqliteStorage {
             }
         };
 
-        // total 为真实总行数（含已送达/在飞行），unsent 为「未在飞且未送达」。
-        let total: i64 = match tx.query_row("SELECT COUNT(*) FROM data_queue", [], |r| r.get(0)) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!("enforce_queue_limit: total query failed: {}", e);
-                return OverflowReport::default();
-            }
-        };
-        let unsent: i64 = match tx.query_row(
-            "SELECT COUNT(*) FROM data_queue WHERE in_flight = 0 AND delivered = 0",
-            [],
-            |r| r.get(0),
-        ) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!("enforce_queue_limit: unsent query failed: {}", e);
-                return OverflowReport::default();
-            }
-        };
-
-        let mut deleted = 0i64;
-        let mut undelivered_deleted = 0i64;
-        if total > max_rows {
-            let overflow = total - max_rows;
+        let undelivered_deleted: i64;
+        let deleted: i64;
+        let overflow = total - max_rows;
+        {
             // A1：探针与 DELETE 的排序键必须**完全一致**，否则两者选中的行集
             // 可能不同（同一毫秒的多行在 `ORDER BY timestamp` 下顺序不确定），
             // 于是「统计到的未送达行数」与「真正删掉的未送达行数」对不上 →
             // depth 漂移。追加 `id ASC` 作为确定性 tie-break：
-            // `id` 是 rowid 别名，`idx_queue_ts(timestamp)` 隐含携带 rowid，
+            // `id` 是 rowid 别名，`idx_queue_evict` 隐含携带 rowid，
             // 因此 (timestamp, id) 排序仍可走索引，无需额外 sort。
             undelivered_deleted = match tx.query_row(
                 "SELECT COUNT(*) FROM (
@@ -264,6 +303,11 @@ impl SqliteStorage {
             return Ok(0);
         }
         let tx = conn.transaction()?;
+        // P2-1：改成累计「实际插入行数」而非「入参数 - 失败数」。
+        // 有 `ON CONFLICT DO NOTHING` 后，被唯一约束跳过的重复行既不是成功也
+        // 不是失败，必须单独计数，否则 depth / rows_total 会按入参长度虚高。
+        let mut inserted: usize = 0;
+        let mut skipped_dup: usize = 0;
         let mut failed: usize = 0;
 
         for chunk in points.chunks(INSERT_CHUNK_SIZE) {
@@ -300,39 +344,67 @@ impl SqliteStorage {
                 param_values.push(&p.value_text);
             }
 
-            if tx.execute(sql, param_values.as_slice()).is_err() {
-                // r30b-QL3: 旧 fallback 每行重新 `params![...]` 宏 → 每次 10 个参数
-                // 全 ToSql 转换（marshal）。改用 prepare_cached + 复用 param_values 切片：
-                // 一次 prepare，循环里只取每行对应的 10 个 slot 喂给 rusqlite，
-                // 避免 50 行 × 10 次 ToSql 转换 = 500 次冗余 marshal。
-                let mut stmt = tx.prepare_cached(
-                    "INSERT INTO data_queue (point_id, device_id, value, raw_value, raw_type, quality, quality_reason, timestamp, source_ts, stale_count, value_text)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                )?;
-                for (i, p) in chunk.iter().enumerate() {
-                    let row_start = i * INSERT_COLS_PER_ROW;
-                    // 元素本身是 Copy 的 `&dyn ToSql`，直接切片拷贝，无需再 as_ref
-                    let row_params = &param_values[row_start..row_start + INSERT_COLS_PER_ROW];
-                    if let Err(e) = stmt.execute(row_params) {
-                        failed += 1;
-                        tracing::warn!(
-                            "enqueue point failed, skipped: point_id={} err={}",
-                            p.point_id,
-                            e
-                        );
+            match tx.execute(sql, param_values.as_slice()) {
+                Ok(n) => inserted += n,
+                Err(chunk_err) => {
+                    // 库级/IO 级错误（磁盘满、只读、IO 故障、库损坏）不能按「坏数据行跳过」
+                    // 处理：SQLITE_FULL 等错误会让 SQLite 自动回滚当前事务，此时继续逐行
+                    // 重试只会得到「no transaction is active」，最后用已失效的事务 commit，
+                    // 把真正的磁盘满原因掩盖成一句无法定位的 commit 失败。
+                    // 直接向上返回原始错误，让调用方看到 SQLITE_FULL 并走降级/告警。
+                    if is_fatal_storage_error(&chunk_err) {
+                        return Err(chunk_err);
+                    }
+                    // r30b-QL3: 旧 fallback 每行重新 `params![...]` 宏 → 每次 10 个参数
+                    // 全 ToSql 转换（marshal）。改用 prepare_cached + 复用 param_values 切片：
+                    // 一次 prepare，循环里只取每行对应的 10 个 slot 喂给 rusqlite，
+                    // 避免 50 行 × 10 次 ToSql 转换 = 500 次冗余 marshal。
+                    // P2-1：冲突子句必须与批量语句保持一致，否则逐行回退路径会把
+                    // 重复行当成错误计入 failed。
+                    let mut stmt = tx.prepare_cached(
+                        "INSERT INTO data_queue (point_id, device_id, value, raw_value, raw_type, quality, quality_reason, timestamp, source_ts, stale_count, value_text)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                         ON CONFLICT(point_id, timestamp) DO NOTHING",
+                    )?;
+                    for (i, p) in chunk.iter().enumerate() {
+                        let row_start = i * INSERT_COLS_PER_ROW;
+                        // 元素本身是 Copy 的 `&dyn ToSql`，直接切片拷贝，无需再 as_ref
+                        let row_params = &param_values[row_start..row_start + INSERT_COLS_PER_ROW];
+                        match stmt.execute(row_params) {
+                            // 1 = 真正插入；0 = 命中 (point_id, timestamp) 唯一约束被跳过
+                            Ok(1) => inserted += 1,
+                            Ok(_) => skipped_dup += 1,
+                            Err(e) => {
+                                if is_fatal_storage_error(&e) {
+                                    return Err(e);
+                                }
+                                failed += 1;
+                                tracing::warn!(
+                                    "enqueue point failed, skipped: point_id={} err={}",
+                                    p.point_id,
+                                    e
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
 
         tx.commit()?;
-        let inserted = points.len() - failed;
         if failed > 0 {
             tracing::warn!(
-                "enqueue batch done: total={} inserted={} failed={} (skipped bad points, kept good ones)",
+                "enqueue batch done: total={} inserted={} failed={} dup_skipped={} (skipped bad/duplicate points, kept good ones)",
                 points.len(),
                 inserted,
-                failed
+                failed,
+                skipped_dup
+            );
+        }
+        if skipped_dup > 0 {
+            tracing::debug!(
+                "enqueue batch: {} duplicate (point_id, timestamp) rows ignored by unique index",
+                skipped_dup
             );
         }
         Ok(inserted)
@@ -495,6 +567,7 @@ impl SqliteStorage {
         conn: &mut Connection,
         max_age_hours: Option<u64>,
         depth: &AtomicI64,
+        rows_total: &AtomicI64,
     ) -> i64 {
         let Some(max_age_hours) = max_age_hours else {
             return 0;
@@ -544,6 +617,9 @@ impl SqliteStorage {
             Self::saturating_dec(depth, undelivered);
         }
         if deleted > 0 {
+            // P1-2：retention 删的是全表行，`rows_total` 必须同步扣减，
+            // 否则计数器单调虚高 → 容量判定误认为一直超限、每批入队都触发淘汰。
+            Self::saturating_dec(rows_total, deleted);
             tracing::info!(
                 "retention cleanup: deleted {} records older than {}h ({} undelivered, cutoff={})",
                 deleted,
@@ -658,12 +734,27 @@ mod limit_tests {
             .expect("count rows")
     }
 
+    /// 测试辅助：按表内真实行数调用 `enforce_queue_limit_with`。
+    ///
+    /// 生产路径由 O(1) 内存计数器传入 total/unsent（P1-2），测试里没有计数器，
+    /// 直接查一次表即可——被测的仍是淘汰逻辑本身。
+    fn enforce(conn: &mut Connection, max_rows: i64) -> super::OverflowReport {
+        let (total, unsent): (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(in_flight = 0 AND delivered = 0), 0) FROM data_queue",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("count rows");
+        SqliteStorage::enforce_queue_limit_with(conn, max_rows, total, unsent)
+    }
+
     /// 修复(审查#6) 回归：已送达行堆积到超过上限时必须被回收。
     #[test]
     fn delivered_rows_are_pruned_by_total_row_count() {
         let mut conn = setup_conn();
         insert_rows(&conn, 10, 1);
-        let report = SqliteStorage::enforce_queue_limit_with(&mut conn, 4);
+        let report = enforce(&mut conn, 4);
 
         assert_eq!(row_count(&conn), 4, "应被削到上限行数");
         assert_eq!(report.deleted, 6);
@@ -684,7 +775,7 @@ mod limit_tests {
     fn undelivered_rows_pruned_when_over_capacity() {
         let mut conn = setup_conn();
         insert_rows(&conn, 9, 0);
-        let report = SqliteStorage::enforce_queue_limit_with(&mut conn, 4);
+        let report = enforce(&mut conn, 4);
 
         assert_eq!(report.deleted, 5, "超出上限的 5 行未送达必须被淘汰");
         assert_eq!(report.undelivered_deleted, 5, "被删的 5 行全部是未送达行");
@@ -703,7 +794,7 @@ mod limit_tests {
         let mut conn = setup_conn();
         insert_rows_from(&conn, 6, 1, 1000); // 最旧 6 行，已送达
         insert_rows_from(&conn, 3, 0, 2000); // 较新 3 行，未送达
-        let report = SqliteStorage::enforce_queue_limit_with(&mut conn, 2);
+        let report = enforce(&mut conn, 2);
 
         assert_eq!(report.deleted, 7, "10 行削到 2 行，应删 7 行");
         assert_eq!(
@@ -721,7 +812,7 @@ mod limit_tests {
     fn in_flight_rows_are_never_pruned() {
         let mut conn = setup_conn();
         insert_rows_in_flight(&conn, 5);
-        let report = SqliteStorage::enforce_queue_limit_with(&mut conn, 1);
+        let report = enforce(&mut conn, 1);
 
         assert_eq!(report.deleted, 0, "在途行一条都不能删");
         assert_eq!(row_count(&conn), 5);
@@ -734,7 +825,7 @@ mod limit_tests {
         let mut conn = setup_conn();
         insert_rows(&conn, 1, 1);
         insert_rows(&conn, 3, 0);
-        let report = SqliteStorage::enforce_queue_limit_with(&mut conn, 1000);
+        let report = enforce(&mut conn, 1000);
 
         assert_eq!(report.deleted, 0);
         assert_eq!(row_count(&conn), 4);
@@ -754,7 +845,7 @@ mod limit_tests {
         insert_rows_from(&conn, 7, 1, 1000);
         insert_rows_from(&conn, 3, 0, 2000);
 
-        let report = SqliteStorage::enforce_queue_limit_with(&mut conn, 5);
+        let report = enforce(&mut conn, 5);
 
         assert_eq!(report.deleted, 5);
         assert_eq!(report.undelivered_deleted, 0);
@@ -783,7 +874,7 @@ mod limit_tests {
         let mut conn = setup_conn();
         // 100 行已送达，max_rows=10 → 删 90 行
         insert_rows(&conn, 100, 1);
-        let report = SqliteStorage::enforce_queue_limit_with(&mut conn, 10);
+        let report = enforce(&mut conn, 10);
         assert_eq!(report.deleted, 90);
         assert_eq!(row_count(&conn), 10);
         assert_eq!(report.unsent, 0);
@@ -796,11 +887,17 @@ mod limit_tests {
         let mut conn = setup_conn();
         insert_rows(&conn, 3, 0); // timestamp 1000..1002，远早于当前时间
         let depth = AtomicI64::new(3);
+        let rows_total = AtomicI64::new(3);
 
-        let deleted = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth);
+        let deleted = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
 
         assert_eq!(deleted, 3, "超期未送达行必须被回收");
         assert_eq!(row_count(&conn), 0);
+        assert_eq!(
+            rows_total.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "retention 删行必须同步扣减 rows_total，否则容量判定恒超限"
+        );
         assert_eq!(
             depth.load(std::sync::atomic::Ordering::Relaxed),
             0,
@@ -814,11 +911,17 @@ mod limit_tests {
         let mut conn = setup_conn();
         insert_rows_in_flight(&conn, 2);
         let depth = AtomicI64::new(0);
+        let rows_total = AtomicI64::new(2);
 
-        let deleted = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth);
+        let deleted = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
 
         assert_eq!(deleted, 0, "在途行不能删");
         assert_eq!(row_count(&conn), 2);
+        assert_eq!(
+            rows_total.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "没删行时 rows_total 不得变化"
+        );
     }
 
     /// r30c-QL6 (回归)：enqueue_batch 收到空切片应早返 Ok(0)，不开事务。

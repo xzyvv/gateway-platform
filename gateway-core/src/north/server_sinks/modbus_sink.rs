@@ -6,6 +6,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::config::PointConfig;
+use crate::engine::metrics::SinkId;
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
 use crate::north::server::RegisterMapping;
@@ -53,7 +54,7 @@ impl ModbusSink {
         // 或者端口被外部进程抢占、或者 modbus 进程自身 panic 后 supervisor 还没拉起）。
         let server_for_recovery = server.clone();
         let core = SinkCore::new(
-            "modbus",
+            SinkId::Modbus,
             shutdown,
             metrics,
             move |points| {

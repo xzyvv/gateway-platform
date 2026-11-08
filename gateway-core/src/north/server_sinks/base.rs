@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use crate::engine::metrics::Metrics;
+use crate::engine::metrics::{Metrics, SinkId};
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
 
@@ -35,12 +35,16 @@ pub(super) struct SinkCore {
     metrics: Arc<Metrics>,
     /// metrics key（历史值，如 "opcua" / "modbus"）
     name: &'static str,
+    /// P2-2：指标固定槽位。由 `SinkId` 枚举决定，`name` 由它派生，
+    /// 保证「日志名」与「指标槽位」不可能不一致。
+    sink: SinkId,
 }
 
 impl SinkCore {
     /// 创建内核并启动内部消费 task
     ///
-    /// - `name`：metrics key（与 `send` 内部一致）
+    /// - `sink`：内置 sink 标识（`SinkId` 枚举，P2-2）。metrics 标签与 task 名
+    ///   均由它派生，编译期即可防止 sink 名拼错导致指标落到错误的槽位。
     /// - `apply`：消费一批点位时的写回动作（同步、在内部 task 中串行执行）。
     ///   返回 `Err(())` 表示**「写入无意义」**（典型：server 未运行 / 内部状态损坏），
     ///   内核会调用 `on_failure` 触发 server 重连/重启并**重试一次**本批。
@@ -53,7 +57,7 @@ impl SinkCore {
     /// —— 静默失联无告警。改造为：apply 主动检查 server.is_running()，不健康时
     /// 触发 on_failure 重连/重启并重试一次。
     pub(super) fn new<F, G>(
-        name: &'static str,
+        sink: SinkId,
         shutdown: ShutdownToken,
         metrics: Arc<Metrics>,
         apply: F,
@@ -63,6 +67,7 @@ impl SinkCore {
         F: Fn(&[DataPoint]) -> Result<(), ()> + Send + 'static,
         G: Fn() + Send + 'static,
     {
+        let name: &'static str = sink.as_str();
         let (tx, mut rx) = mpsc::channel::<Vec<DataPoint>>(SINK_CHANNEL_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -98,13 +103,12 @@ impl SinkCore {
                                         let n = in_flight_for_task
                                             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed)
                                             .saturating_sub(1);
-                                        metrics_for_task
-                                            .inc_sink_dropped(name);
+                                        metrics_for_task.inc_sink_dropped(sink);
                                         // A2：丢弃分支原先只减了计数、没更新 gauge，
                                         // 导致 `sink_channel_depth` 永久偏高
                                         // （每丢一批偏 1）→ 现场看深度只涨不落。
-                                        metrics_for_task.set_sink_channel_depth(name, n as i64);
-                                        let total = metrics_for_task.sink_dropped_total(name);
+                                        metrics_for_task.set_sink_channel_depth(sink, n as i64);
+                                        let total = metrics_for_task.sink_dropped_total(sink);
                                         tracing::error!(
                                             target: "north.server_sink",
                                             "{name} apply still failed after on_failure, batch dropped (sink_dropped_total={}, channel_depth={})",
@@ -121,7 +125,7 @@ impl SinkCore {
                                 let depth = in_flight_for_task
                                     .fetch_sub(1, Ordering::Relaxed)
                                     .saturating_sub(1);
-                                metrics_for_task.set_sink_channel_depth(name, depth as i64);
+                                metrics_for_task.set_sink_channel_depth(sink, depth as i64);
                             }
                             None => break,
                         }
@@ -134,9 +138,9 @@ impl SinkCore {
                 let depth = in_flight_for_task
                     .fetch_sub(1, Ordering::Relaxed)
                     .saturating_sub(1);
-                metrics_for_task.set_sink_channel_depth(name, depth as i64);
+                metrics_for_task.set_sink_channel_depth(sink, depth as i64);
             }
-            metrics_for_task.set_sink_channel_depth(name, 0);
+            metrics_for_task.set_sink_channel_depth(sink, 0);
             tracing::info!("{name}_sink: internal task exited");
         });
 
@@ -146,6 +150,7 @@ impl SinkCore {
             in_flight,
             metrics,
             name,
+            sink,
         })
     }
 
@@ -157,6 +162,7 @@ impl SinkCore {
     /// 投递一批采集数据到通道（非阻塞 try_send）
     pub(super) fn send(&self, points: Vec<DataPoint>) {
         let name = self.name;
+        let sink = self.sink;
         // A2：`in_flight` 必须**先于** `try_send` 自增。
         //
         // 旧实现把 `fetch_add(1)` 放在 `try_send` 成功之后，于是存在一个竞态窗口：
@@ -168,8 +174,8 @@ impl SinkCore {
         let depth = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
         match self.tx.try_send(points) {
             Ok(()) => {
-                self.metrics.inc_sink_send(name);
-                self.metrics.set_sink_channel_depth(name, depth as i64);
+                self.metrics.inc_sink_send(sink);
+                self.metrics.set_sink_channel_depth(sink, depth as i64);
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // 未入队 → 回滚自增
@@ -177,13 +183,13 @@ impl SinkCore {
                     .in_flight
                     .fetch_sub(1, Ordering::Relaxed)
                     .saturating_sub(1);
-                self.metrics.set_sink_channel_depth(name, depth as i64);
+                self.metrics.set_sink_channel_depth(sink, depth as i64);
                 let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
                 tracing::warn!(
                     target: "north.server_sink",
                     "{name} channel full, dropped batch (total={n})"
                 );
-                self.metrics.inc_sink_dropped(name);
+                self.metrics.inc_sink_dropped(sink);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // Bug 153: 消费者内部 task 已退出（panic 被 catch 或提前 break）
@@ -194,13 +200,13 @@ impl SinkCore {
                     .in_flight
                     .fetch_sub(1, Ordering::Relaxed)
                     .saturating_sub(1);
-                self.metrics.set_sink_channel_depth(name, depth as i64);
+                self.metrics.set_sink_channel_depth(sink, depth as i64);
                 let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
                 tracing::error!(
                     target: "north.server_sink",
                     "{name} channel closed (consumer task exited), dropped batch (total={n})"
                 );
-                self.metrics.inc_sink_dropped(name);
+                self.metrics.inc_sink_dropped(sink);
             }
         }
     }

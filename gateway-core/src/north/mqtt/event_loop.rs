@@ -6,8 +6,16 @@
 //! 同时承载与事件循环紧密耦合的发布 / outbox 周期方法：
 //! publish_loop、replay_outbox、cleanup_outbox、publish_raw、publish_now。
 
+use super::publish::BatchOutcome;
 use super::*;
 use crate::config::ReconnectBackoffConfig;
+
+/// P0-1：单个发布周期内允许的最大批次数。
+///
+/// 排空循环必须有上界：否则当"生产速度 ≥ 消费速度"时单个周期永远排不空，
+/// 会饿死外层定时器与优雅停机（80s 宽限）。100 批 × 500 条/批 = 5 万条/周期，
+/// 足以覆盖正常积压场景。
+const MAX_BATCHES_PER_CYCLE: usize = 100;
 
 /// 入站下行报文发送端槽位：Some = 订阅者已挂接可投递，None = 尚未挂接
 type IncomingTxSlot = Option<mpsc::Sender<(String, Vec<u8>)>>;
@@ -258,7 +266,12 @@ impl MqttClient {
                     break;
                 }
                 _ = tokio::time::sleep(interval) => {
-                    self.publish_batch().await;
+                    // P0-1：周期内排空积压（旧的"每周期只发一批"是上行 20 条/s
+                    // 天花板的根因）。排空逻辑见 `drain_pending`。
+                    let sent = self.drain_pending(&hb).await;
+                    if sent > 0 {
+                        tracing::debug!("mqtt publish cycle drained {} points", sent);
+                    }
                     // 每 10 个发布周期清理一次已确认的 outbox 记录（>1小时）
                     cleanup_counter += 1;
                     if cleanup_counter >= 10 {
@@ -289,6 +302,45 @@ impl MqttClient {
             }
         }
         tracing::info!("mqtt publish loop stopped");
+    }
+
+    /// P0-1：在单个发布周期内排空 MQTT 上行积压。
+    ///
+    /// 旧实现每 `publish_interval`（默认 5s）只发**一批**（上限 100 条），
+    /// 上行吞吐被硬锁在 100 / 5s = 20 条/s。本方法在周期内连续发布，直到
+    /// 队列排空 / 发布失败 / 达到批次数上界。
+    ///
+    /// 退出条件与语义：
+    /// - `Sent(n)`：本批成功，继续排空；
+    /// - `Throttled { wait_ms }`：令牌桶额度不足，退避 `wait_ms` 后重试
+    ///   （退避期间仍监听关停，避免拖住优雅停机）；
+    /// - `Empty`：队列已空，本轮结束；
+    /// - `Busy`：串行发布锁被 outbox replay 占用，本轮结束，把机会让给它；
+    /// - `Failed`：断路器打开 / 网络错误 / PubAck 超时，本轮结束，等下个周期。
+    ///
+    /// 安全约束：
+    /// - 每批之前检查 `stopping`，保证 80s 优雅停机宽限不被排空循环耗尽；
+    /// - 批次数上界 `MAX_BATCHES_PER_CYCLE`，防止"生产 ≥ 消费"时单周期永不结束；
+    /// - 每批之间 kick 心跳，防止排空耗时超过心跳超时被误判为死循环。
+    async fn drain_pending(&self, hb: &crate::engine::monitor::heartbeat::Heartbeat) -> usize {
+        let mut sent_total = 0usize;
+        for _ in 0..MAX_BATCHES_PER_CYCLE {
+            if self.stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            match self.publish_batch().await {
+                BatchOutcome::Sent(n) => sent_total += n,
+                BatchOutcome::Throttled { wait_ms } => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(wait_ms)) => {}
+                        _ = wait_shutdown(&self.shutdown, &self.stopping) => break,
+                    }
+                }
+                BatchOutcome::Empty | BatchOutcome::Busy | BatchOutcome::Failed => break,
+            }
+            hb.kick();
+        }
+        sent_total
     }
 
     /// T2.2: 清理已确认且过期的 outbox 记录（周期调用）
