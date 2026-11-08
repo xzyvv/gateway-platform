@@ -16,7 +16,7 @@ use crate::engine::model::DataPoint;
 use super::db_init::init_queue_db;
 use super::history::{aggregate_minute_windows, query_history_ex, query_raw_rows};
 use super::read_pool::ReadPool;
-use super::retention::run_retention_cleanup;
+use super::retention::{run_incremental_vacuum, run_retention_cleanup};
 use super::wal::{check_wal_size, run_wal_checkpoint, wal_path_for};
 
 use crate::queue::core::limit::{update_in_flight_metric, update_queue_depth_metric};
@@ -25,6 +25,12 @@ use crate::queue::storage::{HistoryQueryResult, QueueStorage};
 
 /// in_flight 超时阈值（毫秒）：超过此时间未 ack 的 in_flight 记录自动释放
 const INFLIGHT_TIMEOUT_MS: i64 = 5 * 60 * 1000;
+
+/// 每次维护回收的空闲页数（4KB/页，256 页≈1MB）。
+///
+/// 分小批回收而不是一次 `VACUUM`：retention 每轮都会删行，空闲页是持续产生的，
+/// 单次回收过多只会延长写锁持有时间，对采集入队没有收益。
+const INCREMENTAL_VACUUM_PAGES: i64 = 256;
 
 /// SQLite WAL 模式存储后端
 pub struct SqliteStorage {
@@ -334,12 +340,15 @@ impl QueueStorage for SqliteStorage {
             }
         }
 
-        // 3. 每 20 ticks (10 分钟): WAL checkpoint
+        // 3. 每 20 ticks (10 分钟): WAL checkpoint + 空闲页回收
         if new_tick.is_multiple_of(20) {
             let mut guard = self.conn.lock();
             // S01: 透传 metrics，使 wal_checkpoint_total 指标按 reason 累计（schedule vs wal_overflow）
             run_wal_checkpoint(&mut guard, "schedule", Some(&self.metrics));
             Self::wal_checkpoint_truncate(&mut guard);
+            // auto_vacuum=INCREMENTAL 才生效：把前面各步删除释放的空闲页
+            // 分小批还给文件系统，避免主库文件只增不减。
+            run_incremental_vacuum(&guard, INCREMENTAL_VACUUM_PAGES);
         }
 
         // 4. 每 120 ticks (1 小时): retention cleanup（v2.0: 保留天数由 storage_days 配额驱动）

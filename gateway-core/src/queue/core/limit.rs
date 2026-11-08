@@ -30,6 +30,13 @@ pub(crate) fn update_in_flight_metric(in_flight: &AtomicI64, metrics: &Arc<Metri
 /// 队列行数上限：超过时由存储后端的淘汰逻辑删除最旧的**不在途**记录
 pub const MAX_QUEUE_ROWS: i64 = 1_000_000;
 
+/// 降采样聚合表（`data_queue_aggregated`）行数上限。
+///
+/// 时间维（license `storage_days`）之外的第二重保护：点位很多时分钟桶仍是
+/// 库里最大的表，且「保留 30 天」在 10k 点位量级下可以是数亿行。超过此上限后
+/// 由 retention 按 `window_start` 从旧到新分批淘汰，避免磁盘被历史桶写满。
+pub const MAX_AGGREGATED_ROWS: i64 = 5_000_000;
+
 /// 积压预警阈值：达到即产生 warning 级告警（无论有没有北向消费者）
 pub const BACKLOG_WARN_ROWS: i64 = 10_000;
 

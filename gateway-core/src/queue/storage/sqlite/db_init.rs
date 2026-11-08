@@ -83,6 +83,12 @@ pub(super) fn init_queue_db(
     // 备份恢复将丢失最近一次运行的数据。与维护路径（maintenance 第 5 步）保持同序。
     let _ = backup_db_consistent(&mut conn, db_path, backup_path);
 
+    // 空闲页回收：retention 只做 DELETE，SQLite 默认不把释放的页还给文件系统，
+    // 主库文件因此只增不减。开启 `auto_vacuum=INCREMENTAL` 后，maintenance 周期
+    // 调用 `PRAGMA incremental_vacuum(N)` 就能分小批把空闲页交还 OS。
+    // 放在 WAL 设置与建表之前：已有库需要一次 VACUUM 才会把该设置写进库头。
+    configure_auto_vacuum(&conn);
+
     // WAL 调优：综合设置 journal_mode + synchronous + busy_timeout + cache_size + wal_autocheckpoint + mmap_size
     // - journal_mode=WAL: 写入不阻塞读，崩溃恢复由 WAL 保证
     // - synchronous=FULL: 计费场景必须保证已 commit 数据不丢——NORMAL 下 WAL 不 fsync，
@@ -191,8 +197,9 @@ pub(super) fn init_queue_db(
 ///   以及所有「引入版本号之前」的老库（它们的 `user_version` 为 0）。
 /// - v2：补齐 7 个业务列（device_id / quality_reason / source_ts / stale_count /
 ///   in_flight / dequeued_at / delivered）。
-/// - v3：value_text 列 + 降采样聚合表 `data_queue_aggregated` 及其索引（当前）。
-pub(super) const SCHEMA_VERSION: i32 = 3;
+/// - v3：value_text 列 + 降采样聚合表 `data_queue_aggregated` 及其索引。
+/// - v4：聚合表补 `window_start` 单列索引（支撑行数上界的按序淘汰）（当前）。
+pub(super) const SCHEMA_VERSION: i32 = 4;
 
 fn read_schema_version(conn: &Connection) -> GatewayResult<i32> {
     conn.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
@@ -232,6 +239,10 @@ fn migrate_schema(conn: &Connection) -> GatewayResult<()> {
     if from < 3 {
         migrate_to_v3(conn)?;
         write_schema_version(conn, 3)?;
+    }
+    if from < 4 {
+        migrate_to_v4(conn)?;
+        write_schema_version(conn, 4)?;
     }
     Ok(())
 }
@@ -317,6 +328,55 @@ fn migrate_to_v3(conn: &Connection) -> GatewayResult<()> {
     )
     .map_err(|e| GatewayError::Queue(format!("create aggregated index failed: {}", e)))?;
     Ok(())
+}
+
+/// v3 → v4：聚合表补 `window_start` 单列索引。
+///
+/// 行数上界淘汰的删除条件是「按 `window_start` 从旧到新取 N 行」，
+/// 只有 (point_id, window_start) 复合索引无法支撑全局排序，会退化为全表排序。
+fn migrate_to_v4(conn: &Connection) -> GatewayResult<()> {
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agg_window ON data_queue_aggregated(window_start)",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create aggregated window index failed: {}", e)))?;
+    Ok(())
+}
+
+/// 开启 SQLite 增量 vacuum（`auto_vacuum=INCREMENTAL`）。
+///
+/// retention / FIFO 淘汰只做 `DELETE`，SQLite 默认（`auto_vacuum=NONE`）不会把
+/// 释放的页还给文件系统 → 主库文件只增不减，长期运行后把 eMMC 写满。
+///
+/// - 新建库：在第一次建表前设置即可，`VACUUM` 代价可忽略；
+/// - 已有库：必须跑一次全量 `VACUUM` 才会把该设置写进库头（这是 SQLite 的语义，
+///   仅设置 pragma 不生效），之后由 maintenance 周期调用
+///   `PRAGMA incremental_vacuum(N)` 分小批回收，避免一次长时间锁表。
+///
+/// 失败**不阻断启动**：磁盘不足或库被占用时降级为「本次运行不回收空闲页」，
+/// 采集与上报不受影响，下次启动会重试。
+fn configure_auto_vacuum(conn: &Connection) {
+    let mode: i64 = conn
+        .pragma_query_value(None, "auto_vacuum", |row| row.get(0))
+        .unwrap_or(0);
+    if mode == 2 {
+        return;
+    }
+    if let Err(e) = conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;") {
+        tracing::warn!("开启 incremental auto_vacuum 失败: {}", e);
+        return;
+    }
+    let started = std::time::Instant::now();
+    match conn.execute_batch("VACUUM;") {
+        Ok(()) => tracing::info!(
+            "SQLite auto_vacuum 已切换为 INCREMENTAL（VACUUM 耗时 {:?}）",
+            started.elapsed()
+        ),
+        Err(e) => tracing::warn!(
+            "为启用 incremental auto_vacuum 执行 VACUUM 失败（本次运行不回收空闲页）: {}",
+            e
+        ),
+    }
 }
 
 /// 幂等执行 `ALTER TABLE ... ADD COLUMN`。
@@ -735,6 +795,84 @@ mod migration_tests {
             SCHEMA_VERSION,
             "未版本化老库升级后必须被盖章为最新版本"
         );
+    }
+
+    /// 全新库必须开启 `auto_vacuum=INCREMENTAL`：retention 删除后由 maintenance
+    /// 周期 `incremental_vacuum` 把空闲页还给文件系统，否则主库只增不减。
+    #[test]
+    fn fresh_db_enables_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db_path = dir.path().join("queue.db");
+
+        let _storage = crate::queue::storage::SqliteStorage::new(
+            db_path.to_str().expect("db path utf8"),
+            Arc::new(Metrics::new()),
+        )
+        .expect("open fresh db");
+
+        let conn = Connection::open(&db_path).expect("open db");
+        let mode: i64 = conn
+            .pragma_query_value(None, "auto_vacuum", |r| r.get(0))
+            .expect("read auto_vacuum");
+        assert_eq!(mode, 2, "auto_vacuum 必须为 INCREMENTAL(2)，实际 {}", mode);
+    }
+
+    /// 已存在的 v3 库（auto_vacuum 默认 NONE）打开后必须一次性切换为
+    /// INCREMENTAL，并补出 v4 的行数上界索引。
+    #[test]
+    fn legacy_v3_db_upgraded_to_v4_index_and_incremental_vacuum() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db_path = dir.path().join("queue.db");
+        {
+            let conn = Connection::open(&db_path).expect("open v3 db");
+            conn.execute_batch(OLD_SCHEMA)
+                .expect("create v3 data_queue");
+            conn.execute_batch("ALTER TABLE data_queue ADD COLUMN value_text TEXT;")
+                .expect("add value_text");
+            conn.execute_batch(
+                "CREATE TABLE data_queue_aggregated (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        point_id TEXT NOT NULL,
+                        window_start INTEGER NOT NULL,
+                        avg_value REAL NOT NULL,
+                        min_value REAL NOT NULL,
+                        max_value REAL NOT NULL,
+                        sample_count INTEGER NOT NULL,
+                        UNIQUE(point_id, window_start)
+                    );
+                    CREATE INDEX idx_agg_point_ts
+                        ON data_queue_aggregated(point_id, window_start);",
+            )
+            .expect("create v3 aggregated table");
+            let before: i64 = conn
+                .pragma_query_value(None, "auto_vacuum", |r| r.get(0))
+                .expect("read auto_vacuum");
+            assert_eq!(before, 0, "前置条件：v3 库默认 auto_vacuum=NONE");
+            conn.pragma_update(None, "user_version", 3)
+                .expect("stamp v3");
+        }
+
+        let _storage = crate::queue::storage::SqliteStorage::new(
+            db_path.to_str().expect("db path utf8"),
+            Arc::new(Metrics::new()),
+        )
+        .expect("v3 库必须能升到 v4");
+
+        assert_eq!(user_version_of(&db_path), SCHEMA_VERSION);
+        let conn = Connection::open(&db_path).expect("open migrated db");
+        let mode: i64 = conn
+            .pragma_query_value(None, "auto_vacuum", |r| r.get(0))
+            .expect("read auto_vacuum");
+        assert_eq!(mode, 2, "已有库必须一次性切换为 INCREMENTAL");
+        let idx: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_agg_window'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("check idx_agg_window");
+        assert_eq!(idx, 1, "v4 迁移必须建出聚合表 window_start 索引");
     }
 
     /// 回滚保护：库版本高于程序支持版本时必须拒绝启动。
