@@ -302,6 +302,9 @@ pub(crate) async fn get_metrics(
     if let Some(tx) = state.north.north_feed.as_ref() {
         body.push_str(&tx.stats().prometheus_lines());
     }
+    // 广播 Lagged 丢批：按消费端打标签。此前该计数只存在于内部与节流日志里，
+    // 指标端点看不到「哪个下游在掉队」（north-status 只是 JSON 且仅覆盖北向）。
+    body.push_str(&state.south.realtime_bus.lagged_counts().prometheus_lines());
     (
         [(
             axum::http::header::CONTENT_TYPE,

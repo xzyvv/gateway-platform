@@ -44,6 +44,24 @@ pub struct LaggedCounts {
     pub alarm: u64,
 }
 
+impl LaggedCounts {
+    /// 转成 Prometheus 文本片段（按消费端打标签）。
+    ///
+    /// 三类计数语义不同、不能合并成一个总数：north 掉队 = 上行缺口，
+    /// websocket 掉队 = 看板掉点，alarm 掉队 = 限值判定漏批。只报总数时
+    /// 运维只能看到"有丢帧"，无法判断是哪个下游拖慢了广播。
+    pub fn prometheus_lines(&self) -> String {
+        format!(
+            "# HELP gateway_realtime_bus_lagged_batches_total Broadcast batches dropped because a subscriber lagged\n\
+             # TYPE gateway_realtime_bus_lagged_batches_total counter\n\
+             gateway_realtime_bus_lagged_batches_total{{consumer=\"north\"}} {}\n\
+             gateway_realtime_bus_lagged_batches_total{{consumer=\"websocket\"}} {}\n\
+             gateway_realtime_bus_lagged_batches_total{{consumer=\"alarm\"}} {}\n",
+            self.north, self.websocket, self.alarm
+        )
+    }
+}
+
 /// 实时数据广播总线
 ///
 /// 处理管道把"边缘过滤+转换之后、即将入队"的点发布到这里，
@@ -109,5 +127,46 @@ impl RealtimeBus {
             websocket: self.lagged_websocket.load(Ordering::Relaxed),
             alarm: self.lagged_alarm.load(Ordering::Relaxed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 指标端点依赖固定指标名与消费端标签；改名会让既有告警规则静默失效。
+    #[test]
+    fn lagged_counts_prometheus_lines_use_fixed_names_and_labels() {
+        let text = LaggedCounts {
+            north: 5,
+            websocket: 2,
+            alarm: 0,
+        }
+        .prometheus_lines();
+        assert!(
+            text.contains("gateway_realtime_bus_lagged_batches_total{consumer=\"north\"} 5"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gateway_realtime_bus_lagged_batches_total{consumer=\"websocket\"} 2"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gateway_realtime_bus_lagged_batches_total{consumer=\"alarm\"} 0"),
+            "{text}"
+        );
+    }
+
+    /// 快照必须按类别独立累计，不能互相串号。
+    #[test]
+    fn note_lagged_accumulates_per_consumer() {
+        let bus = RealtimeBus::new(16);
+        assert_eq!(bus.note_lagged(BusConsumerKind::North, 3), 3);
+        assert_eq!(bus.note_lagged(BusConsumerKind::North, 2), 5);
+        assert_eq!(bus.note_lagged(BusConsumerKind::WebSocket, 7), 7);
+        let counts = bus.lagged_counts();
+        assert_eq!(counts.north, 5);
+        assert_eq!(counts.websocket, 7);
+        assert_eq!(counts.alarm, 0);
     }
 }

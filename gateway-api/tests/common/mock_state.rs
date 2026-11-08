@@ -428,6 +428,32 @@ pub fn mock_app_state_with_cellular(
     )
 }
 
+/// 同 [`mock_app_state`]，但装配北向专用队列发送端，供 `/api/metrics` 的
+/// `gateway_north_feed_*` 指标做端到端断言（默认测试态不装配处理管道）。
+///
+/// 一并返回接收端：`mpsc` 发送端在接收端 drop 后 `send` 会失败，
+/// 用例必须持有它直到断言完成。
+#[allow(dead_code)]
+pub fn mock_app_state_with_north_feed(
+    capacity: usize,
+) -> (
+    Arc<AppState>,
+    gateway_core::north::NorthSender,
+    tokio::sync::mpsc::Receiver<Arc<Vec<DataPoint>>>,
+) {
+    let (tx, rx) = gateway_core::north::NorthFeed::channel(capacity);
+    let gateway = Arc::new(MockGateway::new());
+    let state = build_mock_state_with_devices(
+        None,
+        Vec::new(),
+        gateway,
+        HashMap::new(),
+        Vec::new(),
+        Some(tx.clone()),
+    );
+    (state, tx, rx)
+}
+
 /// 同 [`mock_app_state`]，但额外返回 mock gateway 实例。
 ///
 /// 需要向 gateway 侧注入可变状态（如磁盘压力信号）的测试用该变体。
@@ -483,6 +509,7 @@ pub fn mock_app_state_for_self_heal(
         gateway.clone() as Arc<dyn GatewayTrait>,
         HashMap::new(),
         devices,
+        None,
     );
     (state, gateway)
 }
@@ -493,16 +520,17 @@ fn build_mock_state(
     gateway: Arc<dyn GatewayTrait>,
     collectors: HashMap<String, Arc<dyn Collector>>,
 ) -> Arc<AppState> {
-    build_mock_state_with_devices(cellular, buses, gateway, collectors, Vec::new())
+    build_mock_state_with_devices(cellular, buses, gateway, collectors, Vec::new(), None)
 }
 
-/// 同 [`build_mock_state`]，但可注入设备运行态（自愈健康快照用）。
+/// 同 [`build_mock_state`]，但可注入设备运行态（自愈健康快照用）与北向队列发送端。
 fn build_mock_state_with_devices(
     cellular: Option<Arc<gateway_core::platform::cellular::CellularManager>>,
     buses: Vec<BusConfig>,
     gateway: Arc<dyn GatewayTrait>,
     collectors: HashMap<String, Arc<dyn Collector>>,
     devices: Vec<DeviceStatus>,
+    north_feed: Option<gateway_core::north::NorthSender>,
 ) -> Arc<AppState> {
     let instance = MOCK_INSTANCE.fetch_add(1, Ordering::SeqCst);
     // 每个实例一个独立临时目录：tempfile 生成的名字跨进程唯一。原实现用 `instance`
@@ -618,8 +646,9 @@ fn build_mock_state_with_devices(
                 let (_north_tx, north_rx) = gateway_core::north::NorthFeed::channel(1);
                 gateway_core::north::ConversionManager::new(north_rx)
             },
-            // 测试态不装配处理管道，`/apin` 不输出北向队列指标。
-            north_feed: None,
+            // 默认不装配处理管道，`/api/metrics` 不输出北向队列指标；
+            // 需要断言该组指标的用例走 `mock_app_state_with_north_feed`。
+            north_feed,
             // 模拟消费者：mock 态给一个**未启动**的实例（运行态由 API 控制）。
             // enabled=true 表示「配置意图为启用」，与 running=false 的实际
             // 运行态并存——状态接口须同时体现二者。
