@@ -39,7 +39,6 @@ gateway-core/src/platform/ota/apply.rs	555
 gateway-core/src/platform/ota/bootenv.rs	634
 gateway-core/src/queue/core/task.rs	722
 gateway-core/src/queue/mod.rs	790
-gateway-core/src/queue/storage/sqlite/db_init.rs	907
 gateway-core/src/queue/storage/sqlite/limit.rs	859
 gateway-core/src/queue/storage/sqlite/sqlite_storage.rs	626
 gateway-core/src/south/bus/serial_task.rs	745

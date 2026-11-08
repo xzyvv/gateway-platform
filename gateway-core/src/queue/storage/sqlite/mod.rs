@@ -14,5 +14,9 @@ mod wal;
 
 #[cfg(test)]
 mod consistency_tests;
+/// SQLCipher 加密落盘回归（文件内 `#![cfg(feature = "encryption")]`，
+/// 默认构建下为空模块）。
+#[cfg(test)]
+mod encryption_tests;
 
 pub use sqlite_storage::SqliteStorage;

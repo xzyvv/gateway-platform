@@ -5,9 +5,9 @@ import { GATEWAY_E2E_URL } from './env'
 /**
  * E2E 冒烟（阶段 1：本地跑通）
  * ───────────────────────────────────────────────────────────
- * 刻意克制的 5 条只读核心链路：
+ * 刻意克制的 6 条只读核心链路：
  *   G0 栈健康 → 登录核心链路 → 核心路由巡游
- *   → license 状态端点 → 登出
+ *   → license 状态端点 → metrics 端点 → 登出
  *
  * N-13：暗色持久化与 404/降级路由两例已由 vitest（theme.spec / LoadFailedRoute.spec /
  * routerError.spec）完全覆盖，e2e 只保留「真实浏览器 + 真实后端」才能验证的链路。
@@ -157,6 +157,41 @@ test.describe('gateway-web E2E 冒烟', () => {
       expect(quota, `quota 缺少字段 ${key}`).toHaveProperty(key)
       const v = quota[key]
       expect(v === null || typeof v === 'number', `quota.${key} 应为 number|null，实得 ${JSON.stringify(v)}`).toBe(true)
+    }
+  })
+
+  test('metrics 端点：北向 feed 四指标与广播 LaggedCounts 可观测', async ({ request }) => {
+    // P2 补的北向 feed 四指标与广播 LaggedCounts 此前只有单测覆盖
+    // （gateway-api/tests/metrics_api.rs、gateway-core/src/engine/bus.rs），
+    // 这里在真实 gatewayd + 真实 HTTP 链路上再钉一次指标名与标签，
+    // 防止「单测 mock 了指标、真实装配却没接上」这类只在线性链路上暴露的回归。
+    const login = await request.post('/api/auth/login', {
+      data: { username: 'admin', password: 'admin' },
+    })
+    expect(login.ok()).toBeTruthy()
+    const { token } = (await login.json()) as { token: string }
+    const resp = await request.get(`${GATEWAY_E2E_URL}/api/metrics`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    expect(resp.status()).toBe(200)
+    const text = await resp.text()
+
+    // 广播淘汰计数：内存总线恒存在，三个消费者标签必须齐全。
+    for (const consumer of ['north', 'websocket', 'alarm']) {
+      expect(text).toContain(`gateway_realtime_bus_lagged_batches_total{consumer="${consumer}"}`)
+    }
+
+    // 北向 feed：只有装配了北向发送端才会输出。空配置网关应整段缺省；
+    // 一旦出现则四个指标必须齐全且为数字，避免「只补一半」的回归。
+    if (text.includes('gateway_north_feed_capacity_batches')) {
+      for (const name of [
+        'gateway_north_feed_pending_batches',
+        'gateway_north_feed_capacity_batches',
+        'gateway_north_feed_sent_batches_total',
+        'gateway_north_feed_backpressure_events_total',
+      ]) {
+        expect(text, `缺少指标 ${name}`).toMatch(new RegExp(`^${name} \\d+`, 'm'))
+      }
     }
   })
 

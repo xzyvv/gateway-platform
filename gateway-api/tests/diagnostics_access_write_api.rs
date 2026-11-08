@@ -325,6 +325,9 @@ async fn diagnostics_task_diag_reports_unknown_point_as_offline() {
     assert!(body["data"]["last_check_at_ms"].as_i64().unwrap() > 0);
 }
 
+// 仅在未启用 remote-shell 的构建里成立：全特性矩阵会打开该 feature，
+// 此时 exec 是执行分支而不是拒绝分支。
+#[cfg(not(feature = "remote-shell"))]
 #[tokio::test]
 async fn diagnostics_exec_is_disabled_without_remote_shell_feature() {
     let state = common::mock_state::mock_app_state();

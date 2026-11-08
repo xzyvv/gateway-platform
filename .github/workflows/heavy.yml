@@ -1,8 +1,8 @@
 name: heavy
 
 # ── 重作业套件（可复用）──
-# 这 8 个作业（chaos / coverage / cross-arm / static-musl / bench /
-# soak-smoke / sku-size-matrix / release-package）原本长在 ci.yml 里，只能靠
+# 这 9 个作业（all-features / chaos / coverage / cross-arm / static-musl /
+# bench / soak-smoke / sku-size-matrix / release-package）原本长在 ci.yml 里，只能靠
 # `if: github.event_name == 'workflow_dispatch' || vars.RUN_HEAVY == 'true'`
 # 手动触发才跑 —— 于是「发布前必跑」根本不存在：没人记得点那个按钮，
 # 发布时才发现某些重作业从没跑过。
@@ -55,6 +55,48 @@ jobs:
 
       - name: cargo test (chaos)
         run: cargo test -p gateway-core --test chaos --quiet
+        env:
+          RUSTFLAGS: ""
+
+  # 全特性矩阵：所有 feature 同时打开，真跑整个 workspace 的测试。
+  #
+  # 快门禁按「单 feature / 单 SKU」逐个 check，只能证明每种裁剪各自能编译；
+  # feature 之间的组合（encryption × tracing-otlp × remote-shell × 全部协议）
+  # 拼在同一构建里会激活另一套 cfg 视图，这部分代码路径从未被执行过。
+  # bundled-sqlcipher 需要 OpenSSL 头文件与 perl，故先装依赖。
+  # gateway-desktop 已冻结（Tauri 依赖需要 Linux sysroot），显式排除。
+  all-features:
+    name: all-features test matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override cargo config for CI
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-allfeat-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install OpenSSL build deps
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config perl
+
+      - name: cargo test (workspace, all features)
+        run: |
+          # 只跑 lib 单测 + 集成测试：doctest / bench 由其它作业覆盖，
+          # 这里要的是「所有 feature 同时打开时，测试是否仍然全绿」。
+          cargo test --workspace --exclude gateway-desktop --all-features --lib --tests --quiet
         env:
           RUSTFLAGS: ""
 
@@ -133,9 +175,13 @@ jobs:
   # macOS 曾在基线初始化时随模板带进来（commit d748f7b），但它唯一多验的
   # 是 crypto/secret.rs 里的 license 指纹回退分支（IOPlatformUUID）——该分支
   # 已在移除 macOS 作业时一并删除（指纹现在只有 Linux / Windows 两条路径），
-  # 在 Linux 交叉编译产物中本就不会被编译进去。代价却最高：macOS runner
-  # $0.062/min（Linux 的 10 倍），且按 10 倍倍率消耗 included 分钟
-  # （2000 分钟额度只够跑 200 分钟 macOS）。故已移除。
+  # 在 Linux 交叉编译产物中本就不会被编译进去。既然那条分支已经没了，这个
+  # 作业就验不到任何**交付形态**上会跑的代码 —— 留着只是白烧机器。
+  #
+  # 补充：本仓库是公有库，标准 runner 的 Actions 分钟不计入额度，所以「省
+  # 分钟」从来不是移除 macOS 的理由（真正的理由是上面那条：验不到交付代码）。
+  # 顺带说明 macOS runner 的并发上限只有 5（Free 计划），比 Linux 的 20 更紧，
+  # 真要加回来的话它才是先撞并发墙的那个。
   #
   # 只跑一遍 `-D dead_code`（原先"普通 check +严格 check"要编译两遍，
   # RUSTFLAGS 变化会让缓存全失效，耗时翻倍；严格版已包含普通版的覆盖）。
@@ -399,6 +445,25 @@ jobs:
           #    在 ARM 上真跑一遍，确认队列 / RealtimeBus / 转换链在目标架构上成立。
           run_tests vpp cargo test -p gateway-core --target "$TARGET" --locked \
             --test virtual_point_pipeline
+
+          # ③ gateway-api 集成测试：Web 面（鉴权 / 路由 / 指标 / license / 契约）
+          #    在 ARM 上真跑。此前 QEMU 只覆盖 gateway-core lib 与一条 pipeline，
+          #    axum + tower 中间件 + 序列化层在 32/64 位对齐、字节序上的差异没人验过。
+          #    只挑无 wall-clock 上限断言的契约类目标：QEMU 比原生慢 3~10 倍，
+          #    带 50ms/1s 上限轮询的用例（integration / access_api / self_heal /
+          #    protocol_debug_bus / project_io / points_write_unified 等）留在原生跑。
+          run_tests api cargo test -p gateway-api --target "$TARGET" --locked \
+            --test api_contract \
+            --test read_api_coverage \
+            --test health_report_api \
+            --test config_version_redaction \
+            --test core_domains_api \
+            --test quality_api \
+            --test license_api \
+            --test license_quota_checks \
+            --test virtual_points_api \
+            --test sim_consumer_api \
+            --test gateway_diag_api
         env:
           # 测试代码里的 warning 不该阻断"在 ARM 上能不能跑"这个判定；
           # 生产代码的 warning 仍由 check job 的 -D warnings 严格把关。
@@ -917,6 +982,12 @@ jobs:
               exit 1
             fi
           done
+
+      # 交付脚本的"包体检"子集：与上一步的断言不同源，它走的是现场真正执行的
+      # verify-deploy.sh --package-only，防止 CI 断言与脚本口径各自漂移。
+      - name: Verify ARM64 package (verify-deploy.sh --package-only)
+        run: |
+          bash deploy/out/verify-deploy.sh --package-only
 
       - name: Package tarball
         run: |

@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   heavy:
-    name: heavy suite (cross-arm / static-musl / coverage / chaos / bench / soak / sku-size)
+    name: heavy suite (all-features / cross-arm / static-musl / coverage / chaos / bench / soak / sku-size)
     # 无条件执行 —— 门禁在这里，不在被调用的 heavy.yml 里
     uses: ./.github/workflows/heavy.yml
 
@@ -72,6 +72,7 @@ jobs:
             echo ""
             echo "| 重作业 | 覆盖内容 |"
             echo "|---|---|"
+            echo "| all-features | 所有 feature 同时打开（encryption / tracing-otlp / remote-shell / 全协议）跑 lib + 集成测试 |"
             echo "| cross-arm | aarch64/armv7 交叉构建 + QEMU 真启动（整个 lib 的测试） |"
             echo "| static-musl | x86_64/aarch64/armv7 静态 musl 构建 + QEMU 真启动 |"
             echo "| coverage | 后端覆盖率地板门禁 |"

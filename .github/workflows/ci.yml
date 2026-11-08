@@ -8,11 +8,27 @@ on:
   # 手动触发：跑完整套件（含下面的重作业）
   workflow_dispatch:
 
-# ── CI 分级与额度 ──
-# 私有仓库的 Actions 分钟额度有限（免费个人账户 2000 分钟/月）。全量矩阵（musl
-# 交叉编译 + QEMU 真启动、跨架构 release 构建、5 个 SKU 体积矩阵、criterion 基准、
-# 10 分钟 soak、47 项 chaos）每次 push 全跑会迅速吃光额度，表现为作业"0 步骤、
-# 无 runner、秒失败"，报错 "The job was not started because ... spending limit"。
+# ── CI 分级 ──
+# 本仓库是**公有库**（visibility: public），标准 GitHub-hosted runner 的 Actions
+# 分钟不计入任何额度（官方口径：public repositories 上 standard runner 用量
+# 保持免费）。所以分级的理由**不是**"分钟会耗尽 / spending limit 导致作业秒失败"
+# —— 那是私有库的行为，这里不会出现。
+#
+# 真实的约束是另外三条：
+#
+# 1. **PR 墙钟时间**。全量矩阵（musl 交叉编译 + QEMU 真启动、跨架构 release
+#    构建、5 个 SKU 体积矩阵、criterion 基准、10 分钟 soak、47 项 chaos）展开
+#    后是 11 个 runner 实例，串起来要 30+ 分钟。开发者等不起这种反馈速度，
+#    快速门禁的价值就是"几分钟内告诉你坏没坏"。
+#
+# 2. **并发上限**。Free 计划标准 runner 并发 20（macOS 仅 5），且是**账号级**
+#    共享的 —— 本仓库自己就有 7 个快门禁 job，重作业再叠 11 个就逼近上限，
+#    多仓库叠加会互相排队。拉长单次运行的墙钟时间同时也会挤压并发额度。
+#
+# 3. **fork PR 是不可信代码**。公有库意味着任何人都能开 PR。`pull_request`
+#    事件从 fork 触发时只有只读 GITHUB_TOKEN、拿不到 secrets（本仓库工作流
+#    里 `secrets.` 零命中，安全上没问题），但让外部 PR 跑 sudo + QEMU + 20 分钟
+#    的重作业纯属浪费公共算力。
 #
 # 因此分两级：
 # - **快门禁**（每次 push/PR 都跑）：check（fmt/clippy/test）、e2e、deploy-lint、
@@ -31,6 +47,11 @@ on:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# 显式收窄 GITHUB_TOKEN 权限。公有库上默认权限取决于仓库/组织设置，不显式声明
+# 就等于依赖外部配置 —— 这里所有 job 只需要读代码。
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -111,6 +132,17 @@ jobs:
             # 那会让这道门禁静默退化成空跑——显式卡住"至少跑了一个用例"。
             printf '%s' "$log" | grep -Eq 'test result: ok\. [1-9][0-9]* passed' || {
               echo "TZ=$tz 下一条用例都没跑到（过滤条件可能失配）" >&2
+              exit 1
+            }
+
+            # API 侧：history / retention / schedule 的返回体同样含时间，
+            # 且时间格式化发生在序列化层（与 core 的内部表示不同）。
+            # 三个契约目标把这条链路也钉进时区矩阵；首次运行会编译，之后只重跑。
+            api_log="$(TZ="$tz" cargo test -p gateway-api --quiet \
+                    --test integration --test read_api_coverage --test core_domains_api 2>&1)"
+            echo "$api_log"
+            printf '%s' "$api_log" | grep -Eq 'test result: ok\. [1-9][0-9]* passed' || {
+              echo "TZ=$tz 下 gateway-api 集成测试未跑通或未执行用例" >&2
               exit 1
             }
             echo "TZ=$tz 通过"
@@ -344,10 +376,10 @@ jobs:
   # 观察期内 `continue-on-error: true` 意味着这些用例失败从不阻塞合并——而它们
   # 覆盖的恰恰是总线/协议重构最易回归的故障恢复路径。现直接作为合并门禁。
   heavy:
-    # 重作业套件：7 个作业已抽到 .github/workflows/heavy.yml（可被
+    # 重作业套件：9 个作业已抽到 .github/workflows/heavy.yml（可被
     # release-gate.yml 复用）。这里只是调用方，触发条件与原先完全一致：
     # 手动触发 workflow_dispatch，或仓库变量 RUN_HEAVY=true。
-    name: heavy suite (chaos / coverage / cross-arm / static-musl / bench / soak / sku-size)
+    name: heavy suite (all-features / chaos / coverage / cross-arm / static-musl / bench / soak / sku-size)
     needs: check
     if: github.event_name == 'workflow_dispatch' || vars.RUN_HEAVY == 'true'
     uses: ./.github/workflows/heavy.yml
@@ -387,7 +419,7 @@ jobs:
   # 不引入 Docker/cross，避免额外网络与镜像依赖。
   # armv7 用 gnueabihf（硬浮点 ABI），与网关板卡的软硬浮点约定一致。
   encryption-check:
-    name: encryption feature build
+    name: encryption feature tests
     runs-on: ubuntu-latest
     needs: check
     steps:
@@ -414,11 +446,38 @@ jobs:
       - name: Install OpenSSL build deps
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config perl
 
-      - name: cargo check (encryption)
+      - name: cargo check (encryption, all targets)
         run: |
           set -euo pipefail
           cargo check -p gateway-core --all-targets --features encryption --quiet
           cargo check -p gateway-api --all-targets --features encryption --quiet
+        env:
+          RUSTFLAGS: ""
+
+      # 只编译不算数：encryption 的 cfg 分支（`PRAGMA key` 喂入、密文库读写）
+      # 此前在 CI 里从未被执行过——与 tracing-otlp 当年「只 check 不跑」是同一类缺口，
+      # 加密路径改坏了没有任何用例会失败。这里真跑 lib 用例；
+      # 加密落盘语义（密文文件 / 密钥持久化 / 错误密钥打不开）见
+      # gateway-core/src/queue/storage/sqlite/encryption_tests.rs。
+      # 过滤条件失配时 cargo 报 0 passed 却返回 0，必须显式卡住空跑。
+      - name: cargo test (encryption)
+        run: |
+          set -euo pipefail
+          run_test() {
+            local label="$1"; shift
+            local out="/tmp/enc-test-${label}.log"
+            set +e
+            "$@" 2>&1 | tee "$out"
+            local rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] || { echo "encryption 测试失败: $label (rc=$rc)" >&2; exit "$rc"; }
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$out" || {
+              echo "encryption 测试未实际执行任何用例: $label" >&2
+              exit 1
+            }
+          }
+          run_test core cargo test -p gateway-core --lib --features encryption --quiet
+          run_test api cargo test -p gateway-api --lib --features encryption --quiet
         env:
           RUSTFLAGS: ""
 

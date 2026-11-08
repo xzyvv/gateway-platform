@@ -1,0 +1,114 @@
+name: keepalive
+
+# ── 为什么需要这个工作流 ──
+# 本仓库是**公有库**（visibility: public）。GitHub 对公有库有一条静默规则
+# （官方文档 "Disable and enable a workflow"）：
+#
+#   "In a public repository, scheduled workflows are automatically disabled
+#    when no repository activity has occurred in 60 days."
+#
+# 停用是**静默的** —— 没有邮件、没有失败 run、没有红色记录，Actions 面板一片绿，
+# 只是 cron 不再响。症状是「一切正常」，但门禁其实已经不存在了。
+#
+# 本仓库有 3 个 cron 依赖它：
+#   - release-gate.yml   每周一 03:17 UTC（发布前必跑的重作业门禁）
+#   - nightly-load.yml   每天 18:00 UTC（夜间负载回归）
+#   - security.yml       每周一 02:00 UTC（cargo-audit）
+#
+# 其中 release-gate.yml 的定时路径是「重作业每次发版前必须过」的最后一道保险，
+# 悄悄停掉就等于门禁形同虚设 —— 而且这种失效不会有任何报错，只是没人再提 PR 了。
+#
+# ── 这个工作流怎么起作用 ──
+# 关键点：**定时任务的运行本身不算「仓库活动」**（"Activity" means a push, a
+# release, a PR merge — anything that modifies the repository. Issue comments
+# and stars don't count.）。所以光靠「每天跑一个空 job」救不了 —— 空跑同样
+# 不重置 60 天计时器，它自己的 cron 也照样会被停。
+#
+# 必须产生**真实的仓库活动**：一次真实的 commit。
+#
+# 为什么这样能自维持：keepalive 每天跑一次 → 发现主分支已静默 ≥40 天 → 推一个
+# 空 commit → 计时器被重置 → 三个 cron 永远不会被停。这是一个自洽的闭环。
+#
+# 之所以不是"每天都推"，是因为每天推会在 main 上留垃圾历史。本工作流只在
+# 真正接近 60 天红线时才动手，正常开发节奏下它每天都跑但什么也不做
+# （日志里会写明"还剩多少天"）。
+#
+# 注意：用 GITHUB_TOKEN 推的 commit **不会触发**其他工作流（GitHub 的既定行为，
+# 防止 token 造成工作流递归），所以这个心跳 commit 不会连带跑一遍 ci.yml。
+#
+# ── 万一还是被停了 ──
+# 若仓库曾经长期静默导致 cron 已被停用（Actions 面板会出现
+# "This scheduled workflow is disabled because there hasn't been activity in this
+# repository for at least 60 days"），需要手动重新启用一次：
+#   Actions → 对应工作流 → Enable workflow
+#   或 gh workflow enable <workflow-name>
+# 本工作流额外支持 repository_dispatch，方便外部探活服务（cron-job.org 等）
+# 在不依赖仓库内 cron 的前提下把它拉起来。
+on:
+  schedule:
+    # 每天 04:47 UTC（北京时间 12:47）。刻意避开整点 —— GitHub 的 cron 队列
+    # 在 :00 附近最拥挤，错开能减少被延迟丢弃的概率。
+    - cron: '47 4 * * *'
+  # 手动触发：Actions → keepalive → Run workflow
+  workflow_dispatch:
+  # 外部探活：
+  #   curl -X POST -H "Accept: application/vnd.github+json" \
+  #     -H "Authorization: Bearer $PAT" \
+  #     https://api.github.com/repos/xzyvv/gateway-platform/dispatches \
+  #     -d '{"event_type":"keepalive"}'
+  repository_dispatch:
+    types: [keepalive]
+
+# 心跳 commit 需要写权限；这是本仓库里唯一授予写权限的工作流。
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    name: heartbeat / keep repo active
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要完整历史才能读到主分支最后一次提交的时间
+          fetch-depth: 0
+
+      - name: Push a heartbeat commit if the repo is going quiet
+        env:
+          # 距上次提交多少天就动手。取 40 而不是 45/50：要给 GitHub 的 60 天
+          # 计时器留足余量，也要覆盖"任务被延迟执行"的抖动。
+          SILENT_DAYS: '40'
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          last_ts=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          silent_days=$(( (now - last_ts) / 86400 ))
+          echo "last commit: $silent_days days ago (threshold: ${SILENT_DAYS} days)"
+
+          if [ "$silent_days" -lt "$SILENT_DAYS" ]; then
+            echo "repo is still active — no heartbeat needed."
+            exit 0
+          fi
+
+          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          git commit --allow-empty -m "chore(keepalive): heartbeat ${ts}"
+
+          # 优先推主分支（活动判定口径最稳）。若主分支有保护规则推不上去，
+          # 退而求其次推到 keepalive 分支 —— 只要仓库被改动过就算活动。
+          if git push origin HEAD:main; then
+            echo "heartbeat pushed to main."
+          elif git push origin HEAD:keepalive; then
+            echo "heartbeat pushed to keepalive branch (main push was rejected)."
+          else
+            echo "::error::failed to push heartbeat commit — the 60-day timer is still running."
+            exit 1
+          fi
