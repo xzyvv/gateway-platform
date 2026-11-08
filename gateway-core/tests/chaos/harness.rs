@@ -712,6 +712,7 @@ pub async fn real_scheduler(
         virtual_points: gateway_core::pipeline::VirtualPointEngine::empty(),
         queue: queue.clone(),
         realtime_bus: None,
+        north_tx: None,
         buffer: 1024,
         metrics: Arc::new(Metrics::new()),
     });

@@ -33,8 +33,8 @@ impl crate::north::NorthConnector for TestConnector {
 
 #[tokio::test]
 async fn test_conversion_manager_fanout() {
-    let bus = RealtimeBus::new(16);
-    let mgr = ConversionManager::new(bus.clone());
+    let (tx, rx) = crate::north::NorthFeed::channel(16);
+    let mgr = ConversionManager::new(rx);
 
     let s1 = Arc::new(TestConnector {
         name_str: "s1".into(),
@@ -48,26 +48,30 @@ async fn test_conversion_manager_fanout() {
     mgr.register_connector(s2.clone() as Arc<dyn NorthConnector>);
     assert_eq!(mgr.connector_count(), 2);
 
-    // 启动 run 在后台 task（broadcast 必须在 publish 前有 receiver，否则消息丢失）
     let mgr_clone = mgr.clone();
     let run_handle = tokio::spawn(async move { mgr_clone.run().await });
-    // 等 ConversionManager 内部 subscribe 完成（spawn 后 yield 一次）
     tokio::task::yield_now().await;
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-    // 推 5 批（RealtimeBus.publish 接收 Arc<Vec<DataPoint>>）
+    // 推 5 批（直接投递到北向专用队列）
     for i in 0..5 {
-        bus.publish(Arc::new(vec![DataPoint::good(
+        tx.send(Arc::new(vec![DataPoint::good(
             &format!("p{}", i),
             "d1",
             i as f64,
             i as f64,
             "u16",
-        )]));
+        )]))
+        .await
+        .unwrap();
     }
 
     // 等 fan-out 跑完
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    for _ in 0..100 {
+        if s1.count.load(Ordering::Relaxed) == 5 && s2.count.load(Ordering::Relaxed) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 
     // 每个 connector 收到 5 批
     assert_eq!(s1.count.load(Ordering::Relaxed), 5);
@@ -80,17 +84,18 @@ async fn test_conversion_manager_fanout() {
 
 #[tokio::test]
 async fn test_conversion_manager_empty_connectors() {
-    let bus = RealtimeBus::new(16);
-    let mgr = ConversionManager::new(bus.clone());
+    let (tx, rx) = crate::north::NorthFeed::channel(16);
+    let mgr = ConversionManager::new(rx);
     assert_eq!(mgr.connector_count(), 0);
 
     let mgr_clone = mgr.clone();
     let run_handle = tokio::spawn(async move { mgr_clone.run().await });
     tokio::task::yield_now().await;
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
     // 推 1 批（无 connector 注册，不应 panic）
-    bus.publish(Arc::new(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]));
+    tx.send(Arc::new(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]))
+        .await
+        .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 
     mgr.shutdown_token().shutdown();
@@ -116,16 +121,15 @@ async fn test_connector_publish_batch_no_panic_on_empty() {
 ///
 /// graceful_shutdown 依赖此保证——若 JoinHandle 不 resolve（shutdown 信号丢失
 /// / run 循环死锁），停机序会白等 5s 才推进，且 systemd SIGKILL 时 run task
-/// 会被硬杀，RealtimeBus sender 计数异常。此处锁死该行为。
+/// 会被硬杀，发送端计数异常。此处锁死该行为。
 #[tokio::test]
 async fn r66_conversion_manager_run_exits_after_shutdown() {
-    let bus = RealtimeBus::new(16);
-    let mgr = ConversionManager::new(bus.clone());
+    let (_tx, rx) = crate::north::NorthFeed::channel(16);
+    let mgr = ConversionManager::new(rx);
 
     let mgr_clone = mgr.clone();
     let run_handle = tokio::spawn(async move { mgr_clone.run().await });
     tokio::task::yield_now().await;
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
     // 触发 shutdown
     mgr.shutdown_token().shutdown();
@@ -139,4 +143,68 @@ async fn r66_conversion_manager_run_exits_after_shutdown() {
         res.unwrap().is_ok(),
         "r66: ConversionManager run 应正常结束（Ok），不应是 JoinError"
     );
+}
+
+/// 第 5 层验收：发送端全部 drop 后 run 必须自然退出（不依赖 shutdown 信号）。
+#[tokio::test]
+async fn conversion_manager_exits_when_feed_closed() {
+    let (tx, rx) = crate::north::NorthFeed::channel(4);
+    let mgr = ConversionManager::new(rx);
+    let mgr_clone = mgr.clone();
+    let run_handle = tokio::spawn(async move { mgr_clone.run().await });
+    tokio::task::yield_now().await;
+
+    drop(tx);
+    let res = tokio::time::timeout(std::time::Duration::from_secs(5), run_handle).await;
+    assert!(res.is_ok(), "发送端关闭后 run 必须退出，否则停机序会白等");
+    assert!(res.unwrap().is_ok(), "run 应正常结束");
+}
+
+/// 第 5 层验收：小容量 + 慢消费时 send 背压等待而非丢批，
+/// 最终所有批次都到达 connector（对比广播总线会 Lagged 丢帧）。
+#[tokio::test]
+async fn north_feed_backpressure_delivers_every_batch() {
+    let total = 32usize;
+    let (tx, rx) = crate::north::NorthFeed::channel(1);
+    let mgr = ConversionManager::new(rx);
+    let connector = Arc::new(TestConnector {
+        name_str: "bp".into(),
+        count: AtomicUsize::new(0),
+    });
+    mgr.register_connector(connector.clone() as Arc<dyn NorthConnector>);
+
+    let mgr_clone = mgr.clone();
+    let run_handle = tokio::spawn(async move { mgr_clone.run().await });
+    tokio::task::yield_now().await;
+
+    for i in 0..total {
+        tx.send(Arc::new(vec![DataPoint::good(
+            &format!("p{}", i),
+            "d1",
+            i as f64,
+            i as f64,
+            "u16",
+        )]))
+        .await
+        .expect("队列满时应等待而不是失败");
+    }
+
+    for _ in 0..200 {
+        if connector.count.load(Ordering::Relaxed) == total {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        connector.count.load(Ordering::Relaxed),
+        total,
+        "背压期间不得丢批（广播总线下会被 Lagged 截断）"
+    );
+    assert!(
+        tx.stats().backpressure_events > 0,
+        "容量 1 + 连续投递应至少触发一次背压"
+    );
+
+    mgr.shutdown_token().shutdown();
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(500), run_handle).await;
 }

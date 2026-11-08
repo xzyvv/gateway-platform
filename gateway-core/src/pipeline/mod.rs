@@ -28,6 +28,7 @@ use tracing::Instrument;
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
+use crate::north::NorthSender;
 use crate::queue::DataQueue;
 
 /// 采集侧发送给处理管道的消息
@@ -79,7 +80,7 @@ impl CollectedBatch {
 /// 6. 实时数据 WebSocket 广播
 ///
 /// 北向上报（MQTT/Webhook/Server Sinks）由 ConversionManager 统一管理，
-/// 从 RealtimeBus 订阅数据，不再由 Pipeline 直接持有。
+/// 从北向专用队列（第 5 层无损通道）接收数据，不再由 Pipeline 直接持有。
 pub struct ProcessingPipeline {
     edge: Arc<EdgeProcessor>,
     /// C1: 协议转换模板引擎（广播/入队之前执行 raw/linear/enum）
@@ -88,6 +89,10 @@ pub struct ProcessingPipeline {
     virtual_points: Arc<VirtualPointEngine>,
     queue: Arc<DataQueue>,
     realtime_bus: Option<Arc<RealtimeBus>>,
+    /// 北向专用无损队列发送端（队列满时在此 await 施加背压）。
+    /// `Mutex<Option<..>>` 支持停机时主动 drop 发送端，让 ConversionManager
+    /// 消费完积压后自然退出。
+    north_tx: parking_lot::Mutex<Option<NorthSender>>,
     /// 采集侧 → 处理侧 的通道
     tx: mpsc::Sender<CollectedBatch>,
     /// M2: 优雅退出信号
@@ -106,6 +111,8 @@ pub struct PipelineSpawnInputs {
     pub virtual_points: Arc<VirtualPointEngine>,
     pub queue: Arc<DataQueue>,
     pub realtime_bus: Option<Arc<RealtimeBus>>,
+    /// 北向专用无损队列发送端（`None` = 无北向 fan-out，仅广播）
+    pub north_tx: Option<NorthSender>,
     /// 通道缓冲区大小，满时采集侧 send 将阻塞（背压）
     pub buffer: usize,
     pub metrics: Arc<crate::engine::metrics::Metrics>,
@@ -122,6 +129,7 @@ impl ProcessingPipeline {
             virtual_points,
             queue,
             realtime_bus,
+            north_tx,
             buffer,
             metrics,
         } = inputs;
@@ -133,6 +141,7 @@ impl ProcessingPipeline {
             virtual_points,
             queue,
             realtime_bus,
+            north_tx: parking_lot::Mutex::new(north_tx),
             tx,
             shutdown_tx,
             metrics,
@@ -247,6 +256,14 @@ impl ProcessingPipeline {
         let _ = self.shutdown_tx.send(true);
     }
 
+    /// 关闭北向专用队列的发送端（停机用）。
+    ///
+    /// drop 后 ConversionManager 消费完已积压的批次即收到 `None` 自然退出，
+    /// 不会因停机信号提前截断而丢掉最终批。
+    pub fn close_north_feed(&self) {
+        self.north_tx.lock().take();
+    }
+
     /// 处理一批数据，返回需要入队的数据点
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self, batch), fields(n_in = batch.items.len())))]
     async fn process_batch(&self, batch: CollectedBatch) -> Vec<DataPoint> {
@@ -289,16 +306,31 @@ impl ProcessingPipeline {
         to_upload.extend(derived);
 
         // 3. 实时广播到 WebSocket（单槽覆盖，无背压内存问题）
-        //    RealtimeBus 的订阅者（ConversionManager）负责 fan-out 到所有北向 connector。
+        //    RealtimeBus 的订阅者（WS / 报警 / 最新值快照）只服务可容忍丢帧的下游。
+        //    北向走第 5 层的专用无损队列，与广播并列投递同一份 Arc（零拷贝共享）。
         if !to_upload.is_empty() {
+            let arc = Arc::new(to_upload.clone());
             if let Some(bus) = &self.realtime_bus {
-                let arc = Arc::new(to_upload.clone());
-                bus.publish(arc);
+                bus.publish(arc.clone());
+            }
+            // 先克隆发送端句柄再 await，避免 MutexGuard 跨 await 持有。
+            let north_tx = self.north_tx.lock().clone();
+            if let Some(tx) = north_tx {
+                // 队列满时在此挂起 → 背压传导到采集调度（宁可降速，不丢上报）。
+                // 失败仅发生在 ConversionManager 已退出（停机窗口），
+                // 历史数据仍由 DataQueue 保证，不做落盘兜底。
+                if let Err(e) = tx.send(arc).await {
+                    tracing::warn!(
+                        target: "pipeline",
+                        "[hot-path] north feed closed, batch dropped: {}",
+                        e
+                    );
+                }
             }
         }
 
         // M1: 入队由 run() 的 micro-batching 合并处理，这里返回数据点
-        // 北向上报已由 ConversionManager 从 RealtimeBus 订阅，Pipeline 不再直接持有 sink。
+        // 北向上报已由 ConversionManager 从北向专用队列消费，Pipeline 不再直接持有 sink。
         to_upload
     }
 
@@ -313,6 +345,6 @@ impl ProcessingPipeline {
     }
 }
 
-// 实时广播总线契约已下沉到 engine::bus（消除 engine ↔ pipeline 循环依赖）。
-// 这里保留重导出，gateway_core::pipeline::RealtimeBus 等既有调用点无需改动。
-pub use crate::engine::bus::RealtimeBus;
+// 实时广播总线契约已下沉到 `engine::bus`（消除 `engine ↔ pipeline` 循环依赖）。
+// 这里保留重导出，`gateway_core::pipeline::RealtimeBus` 等既有调用点无需改动。
+pub use crate::engine::bus::{BusConsumerKind, LaggedCounts, RealtimeBus};

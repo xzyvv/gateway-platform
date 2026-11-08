@@ -597,9 +597,11 @@ fn build_mock_state_with_devices(
             gateway,
             north_servers: Vec::new(),
             // N-7：测试态无 connector，状态接口按「无可用连接器」如实返回。
-            conversion: gateway_core::north::ConversionManager::new(
-                gateway_core::pipeline::RealtimeBus::new(1024),
-            ),
+            // 第 5 层：ConversionManager 消费北向专用队列（此处不启动 run）。
+            conversion: {
+                let (_north_tx, north_rx) = gateway_core::north::NorthFeed::channel(1);
+                gateway_core::north::ConversionManager::new(north_rx)
+            },
             // 模拟消费者：mock 态给一个**未启动**的实例（运行态由 API 控制）。
             // enabled=true 表示「配置意图为启用」，与 running=false 的实际
             // 运行态并存——状态接口须同时体现二者。

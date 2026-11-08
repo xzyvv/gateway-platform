@@ -1,58 +1,57 @@
-//! 协议转换管理器：订阅 RealtimeBus 并 fan-out 到所有已注册的北向 connector。
+//! 协议转换管理器：消费北向专用无损队列并 fan-out 到所有已注册的北向 connector。
 //!
-//! 设计：async fan-out（核心优化）
-//! - ConversionManager 单 task 消费 RealtimeBus
-//! - 每个 connector 自带内部 task + mpsc channel
-//! - `connector.publish_batch()` 是非阻塞语义（内部 try_send / enqueue）
-//! - connector 内部 task 串行处理 apply_points / apply_registers，互不阻塞
+//! 设计（RealtimeBus 第 5 层）：
+//! - 处理管道把同一份 `Arc<Vec<DataPoint>>` 同时投递到广播总线与北向专用队列；
+//! - 本管理器只消费专用队列（mpsc），队列满时背压回传到处理管道，**不丢批**；
+//! - 广播总线保留给 WS / 报警 / 最新值快照等可容忍丢帧的下游。
 //!
 //! 优雅停机：
-//! - ConversionManager 任务在 broadcast sender drop 后退出
-//! - connector task 监听 ShutdownToken，shutdown() 后立即 break
+//! - 停机信号触发后先把队列中已积压的批次同步 fan-out 完再退出；
+//! - 发送端全部 drop（`pipeline.close_north_feed()`）后 `recv()` 返回 None，
+//!   队列自然排空即退出。
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
+use tokio::sync::mpsc;
 
+use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
-use crate::pipeline::RealtimeBus;
 
 use super::NorthConnector;
 
 /// 协议转换管理器
 ///
-/// 订阅 RealtimeBus，将采集数据分发给所有已注册的北向 connector（async fan-out）。
+/// 消费北向专用队列，将采集数据分发给所有已注册的北向 connector。
 pub struct ConversionManager {
-    /// 实时数据总线
-    realtime_bus: Arc<RealtimeBus>,
+    /// 北向专用队列接收端：`run()` 启动时 take 走（所有权需要），
+    /// 同时保证 run 循环只可能被启动一次。
+    feed: Mutex<Option<mpsc::Receiver<Arc<Vec<DataPoint>>>>>,
     /// 已注册的北向 connector 列表
     connectors: RwLock<Vec<Arc<dyn NorthConnector>>>,
     /// 关闭信号（connector task 也可监听同一个 shutdown，进程级协调停机）
     shutdown: ShutdownToken,
-    /// #6: RealtimeBus 广播溢出（Lagged）累计被丢弃的批次数（单调递增）。
-    /// 持续增长说明下游（SQLite/北向）出现背压，实时 fan-out 掉队，实时推送存在缺口。
-    lagged_dropped_batches: AtomicU64,
 }
 
 impl ConversionManager {
     /// 创建转换管理器（使用全局 ShutdownToken）
-    pub fn new(realtime_bus: Arc<RealtimeBus>) -> Arc<Self> {
+    pub fn new(feed: mpsc::Receiver<Arc<Vec<DataPoint>>>) -> Arc<Self> {
         Arc::new(Self {
-            realtime_bus,
+            feed: Mutex::new(Some(feed)),
             connectors: RwLock::new(Vec::new()),
             shutdown: ShutdownToken::new(),
-            lagged_dropped_batches: AtomicU64::new(0),
         })
     }
 
     /// 创建带指定 ShutdownToken 的转换管理器
-    pub fn with_shutdown(realtime_bus: Arc<RealtimeBus>, shutdown: ShutdownToken) -> Arc<Self> {
+    pub fn with_shutdown(
+        feed: mpsc::Receiver<Arc<Vec<DataPoint>>>,
+        shutdown: ShutdownToken,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            realtime_bus,
+            feed: Mutex::new(Some(feed)),
             connectors: RwLock::new(Vec::new()),
             shutdown,
-            lagged_dropped_batches: AtomicU64::new(0),
         })
     }
 
@@ -69,12 +68,6 @@ impl ConversionManager {
     /// 当前注册的 connector 数量
     pub fn connector_count(&self) -> usize {
         self.connectors.read().len()
-    }
-
-    /// #6: 实时广播因溢出（Lagged）被丢弃的累计批次数（供运维/指标观测）。
-    /// 大于 0 且持续增长 ⇒ 发生了背压性数据缺口。
-    pub fn lagged_dropped_batches(&self) -> u64 {
-        self.lagged_dropped_batches.load(Ordering::Relaxed)
     }
 
     /// N-7: 汇总所有已注册 connector 的真实健康状态。
@@ -98,71 +91,36 @@ impl ConversionManager {
             .collect()
     }
 
-    /// 启动转换循环：订阅 RealtimeBus 并 fan-out 到各 connector。
+    /// 启动转换循环：从北向专用队列接收并 fan-out 到各 connector。
     ///
     /// 退出条件：
-    /// - broadcast sender 全部 drop（`Err(RecvError)`）
-    /// - shutdown 信号触发
+    /// - 队列发送端全部 drop（`recv()` 返回 None）
+    /// - shutdown 信号触发（先把积压批次 drain 完再退出）
     pub async fn run(&self) {
-        let mut rx = self.realtime_bus.subscribe();
+        let mut rx = match self.feed.lock().take() {
+            Some(rx) => rx,
+            None => {
+                tracing::error!("conversion_manager: run() 被重复调用，忽略本次");
+                return;
+            }
+        };
         loop {
             tokio::select! {
                 biased;
                 _ = self.shutdown.wait() => {
                     tracing::info!("conversion_manager: shutdown signal received");
+                    // 停机信号可能先于最后一批数据到达：把队列里已积压的批次
+                    // 同步 fan-out 出去再退出，避免最终批被停机窗口截断。
+                    while let Ok(points) = rx.try_recv() {
+                        self.fanout(points).await;
+                    }
                     break;
                 }
-                result = rx.recv() => {
-                    match result {
-                        Ok(points) => {
-                            // fan-out：给每个 connector.publish_batch 一份（&[DataPoint]）。
-                            // publish_batch 实现为非阻塞语义（try_send / enqueue 立即返回），
-                            // 不会卡住 ConversionManager。
-                            //
-                            // r36-CONV1: 广播项本身即 `Arc<Vec<DataPoint>>`，直接借其
-                            // 切片传给各 connector，省去旧实现 `(*points).clone()` 每条
-                            // 消息一次整批点位深拷贝（高频采集下的无谓分配/memcpy）。
-                            let batch = points.as_slice();
-                            // 先克隆 Arc 快照并立即释放读锁，避免锁 guard 跨 await 持有
-                            let snapshot: Vec<_> = self.connectors.read().iter().cloned().collect();
-                            for connector in snapshot {
-                                // Bug 151: 跳过未启用的 connector——旧实现不加判断，
-                                // 对已关闭的北向通道仍调用 publish_batch（其内部多为
-                                // 静默丢弃），既浪费开销又掩盖"配置已关但不该有数据流出"
-                                // 的语义。is_enabled() 反映各 connector 的配置意图。
-                                if !connector.is_enabled() {
-                                    continue;
-                                }
-                                // connector.publish_batch 是非阻塞语义（内部 try_send 或 enqueue），
-                                // .await 立即返回，不会卡住 fan-out 循环。
-                                if let Err(e) = connector.publish_batch(batch).await {
-                                    tracing::warn!(
-                                        target: "conversion_manager",
-                                        connector = connector.name(),
-                                        "publish_batch error: {:?}",
-                                        e,
-                                    );
-                                }
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            // #6: 广播通道满导致丢帧。旧实现仅 warn、无累计，背压期间
-                            // 「静默少点」无法被观测。此处累计丢帧数并写入日志，便于运维
-                            // 判断是否发生背压性数据缺口（实时推送 / 北向 fan-out 掉队）。
-                            let total = self
-                                .lagged_dropped_batches
-                                .fetch_add(n, Ordering::Relaxed)
-                                .saturating_add(n);
-                            tracing::warn!(
-                                target: "conversion_manager",
-                                "realtime bus lagged: dropped {} frames (cumulative {}); \
-                                 downstream backpressure is causing realtime data gaps",
-                                n,
-                                total
-                            );
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            tracing::info!("conversion_manager: broadcast closed, exiting");
+                batch = rx.recv() => {
+                    match batch {
+                        Some(points) => self.fanout(points).await,
+                        None => {
+                            tracing::info!("conversion_manager: north feed closed, exiting");
                             break;
                         }
                     }
@@ -170,6 +128,33 @@ impl ConversionManager {
             }
         }
         tracing::info!("conversion_manager: fan-out loop exited");
+    }
+
+    /// 把一批点位投递给所有已启用 connector。
+    ///
+    /// 并发投递：各 connector 的 `publish_batch` 相互独立（MQTT 入队 /
+    /// Webhook 写 outbox / sink 更新快照），串行 await 会让慢 connector
+    /// 阻塞快 connector，在批次积压时放大延迟。`join_all` 在批内保持点序、
+    /// 跨批仍由队列容量施加背压。
+    async fn fanout(&self, points: Arc<Vec<DataPoint>>) {
+        let batch = points.as_slice();
+        // 先克隆 Arc 快照并立即释放读锁，避免锁 guard 跨 await 持有
+        let snapshot: Vec<_> = self.connectors.read().iter().cloned().collect();
+        let publishes = snapshot.iter().filter(|c| c.is_enabled()).map(|connector| {
+            async move {
+                // connector.publish_batch 是非阻塞语义（内部 try_send 或 enqueue），
+                // 正常路径立即返回；Webhook 等写 outbox 的路径并发执行。
+                if let Err(e) = connector.publish_batch(batch).await {
+                    tracing::warn!(
+                        target: "conversion_manager",
+                        connector = connector.name(),
+                        "publish_batch error: {:?}",
+                        e,
+                    );
+                }
+            }
+        });
+        futures::future::join_all(publishes).await;
     }
 }
 

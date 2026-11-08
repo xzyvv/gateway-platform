@@ -117,12 +117,15 @@ impl SoakFarm {
         // 长跑必须覆盖真实持久化路径（WAL / 容量淘汰 / retention / 计数器对账）。
         let (queue, sqlite_dir) = real_queue_for(spec.storage).await;
         let realtime_bus = RealtimeBus::new(8192);
+        // 第 5 层：北向走专用无损队列（容量按批，8192 批足以吸收长跑抖动）
+        let (north_tx, north_rx) = gateway_core::north::NorthFeed::channel(8192);
         let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
             edge: Arc::new(EdgeProcessor::new()),
             convert: ConvertEngine::empty(),
             virtual_points: gateway_core::pipeline::VirtualPointEngine::empty(),
             queue: queue.clone(),
             realtime_bus: Some(realtime_bus.clone()),
+            north_tx: Some(north_tx),
             buffer: 8192,
             metrics: metrics.clone(),
         });
@@ -194,9 +197,9 @@ impl SoakFarm {
             metrics.clone(),
         ));
 
-        // 北向：质量计数桩，验证“采集 → 管道 → 实时总线 → 北向”整链打通
+        // 北向：质量计数桩，验证“采集 → 管道 → 北向专用队列 → 北向”整链打通
         let sink = QualitySink::new();
-        let cm = ConversionManager::new(realtime_bus.clone());
+        let cm = ConversionManager::new(north_rx);
         cm.register_connector(sink.clone() as Arc<dyn gateway_core::north::NorthConnector>);
         let cm_handle = tokio::spawn(async move { cm.run().await });
 

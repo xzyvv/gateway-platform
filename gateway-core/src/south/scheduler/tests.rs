@@ -57,6 +57,7 @@ fn test_pipeline(metrics: Arc<Metrics>) -> Arc<ProcessingPipeline> {
         virtual_points: crate::pipeline::VirtualPointEngine::empty(),
         queue,
         realtime_bus: None,
+        north_tx: None,
         buffer: 16,
         metrics,
     })

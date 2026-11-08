@@ -187,7 +187,12 @@ pub(crate) async fn init_north_and_processing(
     );
 
     // ===== 1.2: ConversionManager（统一北向连接器注册）=====
-    let conversion_mgr = gateway_core::north::ConversionManager::new(realtime_bus.clone());
+    //
+    // RealtimeBus 第 5 层：北向单独一条无损 mpsc 队列（容量 1024 批）。
+    // 处理管道与广播并列投递同一个 Arc；队列满时背压回传，不静默丢上报。
+    let (north_tx, north_rx) =
+        gateway_core::north::NorthFeed::channel(gateway_core::north::DEFAULT_NORTH_FEED_CAPACITY);
+    let conversion_mgr = gateway_core::north::ConversionManager::new(north_rx);
 
     // 注册 MQTT connector（若启用）
     if let Some(mqtt_client) = &mqtt {
@@ -299,6 +304,7 @@ pub(crate) async fn init_north_and_processing(
         virtual_points: virtual_points.clone(),
         queue: queue.clone(),
         realtime_bus: Some(realtime_bus.clone()),
+        north_tx: Some(north_tx),
         buffer: 4096,
         metrics: pipeline_metrics,
     });

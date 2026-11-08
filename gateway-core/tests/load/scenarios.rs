@@ -25,10 +25,12 @@ fn soak_secs() -> u64 {
 ///
 /// 返回 (增量报告, 农场, 计数桩)。农场已 stop，ConversionManager 任务已 abort。
 async fn run_load(spec: FarmSpec, secs: u64) -> (Report, Farm, Arc<CountingSink>) {
-    let farm = Farm::build(spec).await;
+    let mut farm = Farm::build(spec).await;
     let sink = CountingSink::new();
 
-    let cm = ConversionManager::new(farm.realtime_bus.clone());
+    // 第 5 层：ConversionManager 消费北向专用队列（而非广播总线）
+    let north_rx = farm.north_rx.take().expect("north feed receiver");
+    let cm = ConversionManager::new(north_rx);
     cm.register_connector(sink.clone() as Arc<dyn gateway_core::north::NorthConnector>);
     let cm_handle = tokio::spawn(async move { cm.run().await });
 

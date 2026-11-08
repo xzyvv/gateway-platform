@@ -1,9 +1,11 @@
 //! 北向（上报层）：MQTT / Webhook / Server（OPC UA + Modbus）
 //!
 //! 统一管理所有北向上报通道。NorthConnector trait + ConversionManager
-//! 负责把 RealtimeBus 的采集数据分发到已注册的 connector。
+//! 负责把北向专用队列（`feed`，第 5 层无损通道）的采集数据分发到已注册的
+//! connector，不经过可丢帧的广播总线。
 
 pub mod conversion;
+pub mod feed;
 pub mod mqtt;
 pub mod outbox_monitor;
 pub mod server;
@@ -13,6 +15,7 @@ pub mod template;
 pub mod webhook;
 
 pub use conversion::ConversionManager;
+pub use feed::{NorthFeed, NorthFeedStatsSnapshot, NorthSender, DEFAULT_NORTH_FEED_CAPACITY};
 pub use server_sinks::ModbusSink;
 #[cfg(feature = "opcua-server")]
 pub use server_sinks::OpcUaSink;

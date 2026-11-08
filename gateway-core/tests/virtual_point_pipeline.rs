@@ -102,16 +102,6 @@ async fn wait_queue_len(queue: &Arc<DataQueue>, expected: usize) -> usize {
     queue.len().await
 }
 
-async fn wait_subscriber(bus: &Arc<RealtimeBus>) {
-    for _ in 0..200 {
-        if bus.subscriber_count() > 0 {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("realtime bus 无订阅者：ConversionManager 未启动");
-}
-
 async fn wait_points(connector: &Arc<RecordingConnector>, expected: usize) -> Vec<String> {
     for _ in 0..200 {
         let ids = connector.point_ids();
@@ -131,10 +121,10 @@ async fn derived_virtual_point_reaches_queue_and_northbound() {
     let bus = RealtimeBus::new(64);
 
     let connector = RecordingConnector::new();
-    let cm = ConversionManager::new(bus.clone());
+    let (north_tx, north_rx) = gateway_core::north::NorthFeed::channel(64);
+    let cm = ConversionManager::new(north_rx);
     cm.register_connector(connector.clone() as Arc<dyn NorthConnector>);
     let cm_handle = tokio::spawn(async move { cm.run().await });
-    wait_subscriber(&bus).await;
 
     // 虚拟点位：总功率 = U * I
     let engine = VirtualPointEngine::new(vec![virtual_point("vp_power", "{u} * {i}")]);
@@ -144,6 +134,7 @@ async fn derived_virtual_point_reaches_queue_and_northbound() {
         virtual_points: engine.clone(),
         queue: queue.clone(),
         realtime_bus: Some(bus.clone()),
+        north_tx: Some(north_tx),
         buffer: 16,
         metrics: metrics.clone(),
     });
@@ -209,6 +200,7 @@ async fn derived_value_is_not_re_emitted_when_input_unchanged() {
         virtual_points: engine.clone(),
         queue: queue.clone(),
         realtime_bus: None,
+        north_tx: None,
         buffer: 16,
         metrics: metrics.clone(),
     });

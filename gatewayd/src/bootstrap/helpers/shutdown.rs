@@ -285,6 +285,11 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
     tokio::time::sleep(Duration::from_millis(500)).await;
     tracing::info!("graceful_shutdown: pipeline flushed");
 
+    // 第 5 层：先关闭北向专用队列发送端——ConversionManager 先把积压批次
+    // 消费完，再因 `recv()` 返回 None 自然退出（停机信号分支也会 drain 残余）。
+    // 必须在 drain queue 之前完成，确保 pipeline 最后一批已 fan-out 到下游。
+    pipeline.close_north_feed();
+    tracing::info!("graceful_shutdown: north feed sender closed");
 
     // 停北向 fan-out（ConversionManager 与所有 sink/connector 共享同一关闭信号）。
     // 必须在 drain queue 之前触发：确保 pipeline 最后一批数据已 fan-out 到

@@ -93,6 +93,7 @@ pub fn gateway_without_buses_for_test() -> Arc<Gateway> {
         virtual_points: VirtualPointEngine::empty(),
         queue: queue.clone(),
         realtime_bus: None,
+        north_tx: None,
         buffer: 16,
         metrics: metrics.clone(),
     });

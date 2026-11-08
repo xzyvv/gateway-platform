@@ -103,15 +103,19 @@ async fn wait_queue_len(queue: &Arc<DataQueue>, expected: usize) -> usize {
     queue.len().await
 }
 
-/// 等待 RealtimeBus 出现订阅者（ConversionManager 已订阅）。
-async fn wait_subscriber(bus: &Arc<RealtimeBus>) {
+/// 等待 n 个批次到达（背压队列投递是异步的）。
+async fn wait_batches(connector: &CountingConnector, expected: usize) {
     for _ in 0..200 {
-        if bus.subscriber_count() > 0 {
+        if connector.batches() >= expected {
             return;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("realtime bus 无订阅者：ConversionManager 未启动");
+    panic!(
+        "北向 connector 未在超时内收到 {} 批（实际 {}）",
+        expected,
+        connector.batches()
+    );
 }
 
 /// 一批采集 → data_queue 恰好 1 行 → 各 connector 恰好收 1 批 1 点。
@@ -122,6 +126,8 @@ async fn n1_one_collected_batch_is_delivered_exactly_once() {
     let bus = RealtimeBus::new(64);
 
     // 北向侧：MQTT（不可达 broker，构造不失败）+ 一个计数 connector
+    // 第 5 层：北向走专用无损队列
+    let (north_tx, north_rx) = gateway_core::north::NorthFeed::channel(64);
     let mqtt_cfg = MqttConfig {
         enabled: true,
         broker: "tcp://127.0.0.1:1".to_string(),
@@ -133,11 +139,10 @@ async fn n1_one_collected_batch_is_delivered_exactly_once() {
     );
     let counter = CountingConnector::new();
 
-    let cm = ConversionManager::new(bus.clone());
+    let cm = ConversionManager::new(north_rx);
     cm.register_connector(mqtt.clone() as Arc<dyn NorthConnector>);
     cm.register_connector(counter.clone() as Arc<dyn NorthConnector>);
     let cm_handle = tokio::spawn(async move { cm.run().await });
-    wait_subscriber(&bus).await;
 
     // 采集侧：pipeline 与 MQTT 共用同一队列（与 bootstrap 装配一致）
     let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
@@ -146,6 +151,7 @@ async fn n1_one_collected_batch_is_delivered_exactly_once() {
         virtual_points: gateway_core::pipeline::VirtualPointEngine::empty(),
         queue: queue.clone(),
         realtime_bus: Some(bus.clone()),
+        north_tx: Some(north_tx),
         buffer: 16,
         metrics: metrics.clone(),
     });
@@ -165,12 +171,7 @@ async fn n1_one_collected_batch_is_delivered_exactly_once() {
     );
 
     // 等待扇出完成
-    for _ in 0..200 {
-        if counter.batches() > 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+    wait_batches(&counter, 1).await;
 
     // 不变量 2：每个 connector 恰好收 1 批 / 1 点
     assert_eq!(
@@ -207,6 +208,7 @@ async fn n1_history_survives_when_mqtt_disabled() {
         virtual_points: gateway_core::pipeline::VirtualPointEngine::empty(),
         queue: queue.clone(),
         realtime_bus: Some(bus.clone()),
+        north_tx: None,
         buffer: 16,
         metrics: metrics.clone(),
     });

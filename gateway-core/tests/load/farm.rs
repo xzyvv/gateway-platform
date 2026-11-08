@@ -68,6 +68,9 @@ pub struct Farm {
     pub scheduler: Arc<Scheduler>,
     pub queue: Arc<DataQueue>,
     pub realtime_bus: Arc<RealtimeBus>,
+    /// 第 5 层：北向专用队列接收端，由调用方交给 ConversionManager。
+    pub north_rx:
+        Option<tokio::sync::mpsc::Receiver<Arc<Vec<gateway_core::engine::model::DataPoint>>>>,
     /// 每总线串口桩（可断言事务数）
     pub ports: Vec<ThrottledModbusPort>,
     /// sqlite 后端时保留 DB 所在 tempdir，必须活到农场析构
@@ -80,12 +83,15 @@ impl Farm {
         // A1：后端可切换（`LOAD_STORAGE=sqlite`），覆盖生产真实持久化路径。
         let (queue, sqlite_dir) = real_queue_for(spec.storage).await;
         let realtime_bus = RealtimeBus::new(4096);
+        // 第 5 层：北向走专用无损队列
+        let (north_tx, north_rx) = gateway_core::north::NorthFeed::channel(4096);
         let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
             edge: Arc::new(EdgeProcessor::new()),
             convert: ConvertEngine::empty(),
             virtual_points: gateway_core::pipeline::VirtualPointEngine::empty(),
             queue: queue.clone(),
             realtime_bus: Some(realtime_bus.clone()),
+            north_tx: Some(north_tx),
             buffer: 4096,
             metrics: metrics.clone(),
         });
@@ -157,6 +163,7 @@ impl Farm {
             scheduler,
             queue,
             realtime_bus,
+            north_rx: Some(north_rx),
             ports,
             _sqlite_dir: sqlite_dir,
         }
