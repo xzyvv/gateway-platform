@@ -351,11 +351,20 @@ impl QueueStorage for SqliteStorage {
             run_incremental_vacuum(&guard, INCREMENTAL_VACUUM_PAGES);
         }
 
-        // 4. 每 120 ticks (1 小时): retention cleanup（v2.0: 保留天数由 storage_days 配额驱动）
+        // 4. 每 120 ticks (1 小时): retention cleanup
+        //    - 保留天数由 license storage_days 配额驱动；
+        //    - 磁盘水位联动：Warn 收紧天数/上限，Critical 起清空聚合历史；
+        //    - 行数上界按库所在分区容量自适应（小 eMMC 不再套用固定 500 万行）。
         if new_tick.is_multiple_of(120) {
-            let mut guard = self.conn.lock();
             let days = *self.storage_retention_days.lock();
-            run_retention_cleanup(&mut guard, days);
+            let disk_level = self.metrics.disk_level.load(Ordering::Relaxed);
+            // 容量探测放在取 conn 锁之前：statvfs 是系统调用，不应阻塞写路径。
+            let disk_total = crate::engine::monitor::health::disk_total_bytes(
+                self.db_path.to_str().unwrap_or_default(),
+            )
+            .unwrap_or(0);
+            let mut guard = self.conn.lock();
+            run_retention_cleanup(&mut guard, days, disk_level, disk_total);
         }
 
         // 5. 每 240 ticks (2 小时): 定时备份

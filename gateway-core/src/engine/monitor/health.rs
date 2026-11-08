@@ -141,6 +141,73 @@ pub fn disk_usage_percent(path: &str) -> GatewayResult<f64> {
     check_disk_space(path).map(|free| (100.0 - free).clamp(0.0, 100.0))
 }
 
+/// 指定路径所在分区的**总容量**（字节）。
+///
+/// 用于按设备容量自适应决定降采样聚合表的上限：小容量 eMMC（2~4GB）上
+/// 固定的 500 万行（约 0.5GB）会挤占采集所需的剩余空间。
+/// 探测失败返回 `None`，调用方回退到保守常量。
+#[allow(clippy::unnecessary_cast)]
+pub fn disk_total_bytes(path: &str) -> Option<u64> {
+    let effective = nearest_existing_dir(path).unwrap_or_else(|| path.to_string());
+    #[cfg(unix)]
+    {
+        use std::mem::MaybeUninit;
+        let c_path = std::ffi::CString::new(effective.as_str()).ok()?;
+        let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
+        // SAFETY:
+        // - `c_path` 含 NUL 终止符，指针在调用期间有效；
+        // - `stat` 为 MaybeUninit，statvfs 返回 0 后 assume_init 安全（POD）。
+        unsafe {
+            if libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) != 0 {
+                return None;
+            }
+            let stat = stat.assume_init();
+            Some(stat.f_blocks as u64 * stat.f_frsize as u64)
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetDiskFreeSpaceExW(
+                lp_directory_name: *const u16,
+                free_bytes_available: *mut u64,
+                total_number_of_bytes: *mut u64,
+                total_number_of_free_bytes: *mut u64,
+            ) -> i32;
+        }
+
+        let wide: Vec<u16> = OsStr::new(effective.as_str())
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut free_available: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        let mut total_free: u64 = 0;
+        // SAFETY: 同 check_disk_space：宽字符串含 NUL，三个输出指针指向栈上 u64。
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_available,
+                &mut total_bytes,
+                &mut total_free,
+            )
+        };
+        if ok == 0 || total_bytes == 0 {
+            return None;
+        }
+        Some(total_bytes)
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let _ = effective;
+        None
+    }
+}
+
 /// 剩余空间百分比是否足以继续入队（`>= 10%`）。
 ///
 /// 抽成纯函数：阈值边界（9.99% vs 10.0%）是现场最容易踩的点——既不需要真造一个
