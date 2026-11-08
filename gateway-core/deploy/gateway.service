@@ -134,6 +134,24 @@ LimitCORE=0
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=gateway
+# 本服务的日志速率上限（systemd.exec 的 unit 级设置）。
+# 它**覆盖** journald.conf 里的全局 RateLimitIntervalSec/RateLimitBurst，
+# 作用范围仅限本服务：journald 的全局默认是 30s 内 10000 条，且实际阈值还要
+# 按可用磁盘空间再乘一个倍率（≤1MB→1 … ≤1TB→6）—— 磁盘越空倍率越小，
+# 反而更容易触发「日志被丢弃但没有任何提示」。
+# 这里给一个宽松但有界的固定值：正常运行的日志是生命周期/事件级的
+# （每分钟个位数到几十条），1000 条/30s 远高于正常量级，不会误杀正常日志；
+# 而一旦出现异常刷屏（连接风暴、协议重试打满），超出的部分会被丢弃，
+# 避免 journal 在几分钟内把数据盘写满。
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=1000
+# 注意：journal 的**磁盘占用上限**（SystemMaxUse=）**不在这里配**。
+# SystemMaxUse/SystemKeepFree 属于 journald.conf 的 [Journal] 段，
+# 写进 unit 会被 systemd 忽略（unit 里没有 [Journal] 段）。
+# 正确位置是 /etc/systemd/journald.conf.d/*.conf（drop-in，优先级高于主文件），
+# 由 install.sh 落地 —— 见 install.sh 的 [6.5/7] 步与 verify-deploy.sh 的 [6d] 段。
+# 没有这个上限时，journal 与 SQLite 数据队列同盘，日志写满磁盘 →
+# SQLite 入库暂停 → 表现为「数据停采而不是报错」，现场极难定位。
 
 # 串口权限：补充 dialout 组以访问 /dev/ttyUSB* /dev/ttyS*
 SupplementaryGroups=dialout

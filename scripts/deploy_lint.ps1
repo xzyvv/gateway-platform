@@ -38,6 +38,11 @@
       C13 install.sh 的 OTA 分区改写幂等，且每个 SLOT 变量恰好一条赋值
       C14 串口稳定名链路完整：生成器按稳定标识匹配并保留已有绑定、
           install.sh 接入、build-release.sh 打包、verify-deploy.sh 核对 port_name
+      C15~C25 见脚本内各段注释（数据留存边界 / 依赖倒置 / 巨型文件拆分 /
+          行数预算 / 硬件探测口径与代码常量一致等）
+      C26 journald 日志限额落地链路完整：unit 级 LogRateLimit* +
+          install.sh 写 journald.conf.d drop-in（SystemMaxUse/SystemKeepFree）
+          + verify-deploy.sh 查 drop-in 与 unit 限流
 
 .PARAMETER Strict
     任何检查失败都返回 1；否则只打印警告并返回 0。
@@ -500,6 +505,14 @@ else {
         }
         $names = $names | Sort-Object -Unique
         foreach ($n in $names) {
+            # 白名单：脚本合法操作的**系统级 unit**（不是网关服务本身）。
+            # 例如 install.sh 重启 systemd-journald 让 journald 限额生效 ——
+            # 它本来就该与 SyslogIdentifier 无关。这类 unit 必须显式列出，
+            # 否则任何新引入的系统 unit 都会被当成「查错了服务」。
+            if ($n -in @("systemd-journald", "systemd-journal-flush", "systemd-modules-load", "systemd-networkd")) {
+                Ok "$rel 引用的系统 unit $n 属白名单（非网关服务，无需与 SyslogIdentifier 一致）"
+                continue
+            }
             if ($serviceText -match "(?m)^SyslogIdentifier=$([regex]::Escape($n))\s") {
                 Ok "$rel 引用的服务名 $n 与 gateway.service 一致"
             }
@@ -2263,6 +2276,222 @@ if ($tighten.Count -gt 0) {
 Write-Host ""
 Write-Host ""
 
+# ══════════════════════════════════════════════════════════
+# C25  verify-deploy.sh 的硬件探测口径 = 代码常量
+# ══════════════════════════════════════════════════════════
+#
+# 交付验收脚本说「硬件就绪」，但代码 open() 不到那个设备 —— 现场最难查的一类故障。
+# 根因是脚本里的设备路径各写各的：代码加了一个看门狗候选路径，脚本没跟上，
+# 脚本就会在 watchdog0 的板卡上判「无硬件看门狗」，验收结论直接是错的。
+#
+# 这里把三处口径双向钉死（脚本 ↔ 代码）：
+#   ① 看门狗候选：collection.rs 的 WATCHDOG_DEVICE_CANDIDATES ≡ 脚本的 WD_CANDIDATES
+#      （含顺序：代码取第一个存在的，脚本选错优先级会报出另一个设备）
+#   ② GPIO 芯片：gpio.rs 里 gpiod::Chip::new(...) 的路径 ≡ 脚本的 GPIO_CHIP
+#   ③ OTA 默认分区：ota/mod.rs 的 AbPartitionConfig::default ≡ install.sh 写进 unit 的
+#      Environment 默认值（install.sh 是唯一写 unit 的地方，verify-deploy.sh 读回校验）
+# 任一侧增删，另一侧必须同步改，否则这里 FAIL。
+Write-Host "[C25] verify-deploy.sh 的硬件探测口径与代码常量一致" -ForegroundColor Cyan
+$verifyText = ReadText "deploy/verify-deploy.sh"
+if ($null -eq $verifyText) {
+    Fail "找不到 deploy/verify-deploy.sh"
+}
+elseif ($null -eq $collectionText) {
+    Warn "找不到 collection.rs（已在 C2 报告），跳过 C25"
+}
+else {
+    # ── ① 看门狗候选 ──
+    $wdM = [regex]::Match($collectionText, '(?s)WATCHDOG_DEVICE_CANDIDATES[^=]*=\s*&\[(.*?)\]')
+    $wdScriptM = [regex]::Match($verifyText, '(?m)^\s*WD_CANDIDATES="([^"]*)"')
+    if (-not $wdM.Success) {
+        Warn "无法从 collection.rs 解析 WATCHDOG_DEVICE_CANDIDATES（跳过看门狗口径断言）"
+    }
+    elseif (-not $wdScriptM.Success) {
+        Fail "verify-deploy.sh 里没有 WD_CANDIDATES 变量 —— 硬件探测口径已无法与代码对齐"
+    }
+    else {
+        $codeWd = @([regex]::Matches($wdM.Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+        $scriptWd = @($wdScriptM.Groups[1].Value -split '\s+' | Where-Object { $_ })
+        $onlyCode = @($codeWd | Where-Object { $scriptWd -notcontains $_ })
+        $onlyScript = @($scriptWd | Where-Object { $codeWd -notcontains $_ })
+        if ($onlyCode.Count -eq 0 -and $onlyScript.Count -eq 0) {
+            Ok "看门狗候选口径一致（$($codeWd.Count) 个：$($codeWd -join ', ')）"
+            $sameOrder = ($codeWd.Count -eq $scriptWd.Count)
+            if ($sameOrder) {
+                for ($i = 0; $i -lt $codeWd.Count; $i++) {
+                    if ($codeWd[$i] -ne $scriptWd[$i]) { $sameOrder = $false; break }
+                }
+            }
+            if ($sameOrder) {
+                Ok "看门狗候选优先级顺序与代码一致"
+            }
+            else {
+                Fail "看门狗候选的**顺序**与代码不一致（代码：$($codeWd -join ' > ')；脚本：$($scriptWd -join ' > ')）—— 两者会选中不同设备"
+            }
+        }
+        else {
+            if ($onlyCode.Count -gt 0) {
+                Fail "代码会探测但 verify-deploy.sh 未探测看门狗路径：$($onlyCode -join ', ') —— 这些板卡上验收会误判为「无硬件看门狗」"
+            }
+            if ($onlyScript.Count -gt 0) {
+                Fail "verify-deploy.sh 探测了但代码不使用的看门狗路径：$($onlyScript -join ', ') —— 结论口径与运行时不符"
+            }
+        }
+    }
+
+    # ── ② GPIO 芯片 ──
+    $gpioText = ReadText "gateway-core/src/platform/gpio.rs"
+    $gpioScriptM = [regex]::Match($verifyText, '(?m)^\s*GPIO_CHIP="([^"]*)"')
+    if ($null -eq $gpioText) {
+        Warn "找不到 gateway-core/src/platform/gpio.rs（跳过 GPIO 口径断言）"
+    }
+    elseif (-not $gpioScriptM.Success) {
+        Fail "verify-deploy.sh 里没有 GPIO_CHIP 变量 —— GPIO 探测口径已无法与代码对齐"
+    }
+    else {
+        $codeGpioM = [regex]::Match($gpioText, 'gpiod::Chip::new\("(/dev/[^"]+)"\)')
+        if (-not $codeGpioM.Success) {
+            Warn "无法从 gpio.rs 解析 gpiod::Chip::new 的设备路径（跳过）"
+        }
+        else {
+            $codeGpio = $codeGpioM.Groups[1].Value
+            $scriptGpio = $gpioScriptM.Groups[1].Value
+            if ($codeGpio -eq $scriptGpio) {
+                Ok "GPIO 探测口径一致（$codeGpio）"
+            }
+            else {
+                Fail "GPIO 探测口径不一致：代码打开 $codeGpio，但 verify-deploy.sh 探测 $scriptGpio —— 探测的不是同一个设备"
+            }
+        }
+    }
+
+    # ── ③ OTA 默认分区 ──
+    # 口径链是三方：代码 default（ota/mod.rs）→ install.sh 写入 unit 的 Environment
+    # → verify-deploy.sh 读回 Environment 校验。
+    # install.sh 与代码默认值不一致时，install.sh 会把 unit 写成另一套路径，
+    # 而代码在环境变量缺失时回退自己那套 —— 两边指向不同分区，OTA 静默失败。
+    $otaText2 = ReadText "gateway-core/src/platform/ota/mod.rs"
+    $installText = ReadText "gateway-core/deploy/install.sh"
+    if ($null -eq $otaText2) {
+        Warn "找不到 ota/mod.rs（已在 C3 报告），跳过 OTA 口径断言"
+    }
+    elseif ($null -eq $installText) {
+        Warn "找不到 gateway-core/deploy/install.sh（已在 C3 报告），跳过 OTA 口径断言"
+    }
+    else {
+        $otaDefM = [regex]::Match($otaText2, '(?s)impl Default for AbPartitionConfig.*?\{(.*?)\n\s*\}')
+        $instM = [regex]::Match($installText, '(?m)^OTA_SLOT_A="\$\{GATEWAY_OTA_SLOT_A:-(/dev/[^"]+)\}"')
+        $instMB = [regex]::Match($installText, '(?m)^OTA_SLOT_B="\$\{GATEWAY_OTA_SLOT_B:-(/dev/[^"]+)\}"')
+        if (-not $otaDefM.Success) {
+            Warn "无法从 ota/mod.rs 解析 AbPartitionConfig::default（跳过）"
+        }
+        elseif (-not $instM.Success -or -not $instMB.Success) {
+            Warn "无法从 install.sh 解析 OTA_SLOT_A/B 的默认值（跳过）"
+        }
+        else {
+            $codeOta = @([regex]::Matches($otaDefM.Groups[1].Value, '"(/dev/[^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+            $instOta = @($instM.Groups[1].Value, $instMB.Groups[1].Value)
+            $otaMiss = @($codeOta | Where-Object { $instOta -notcontains $_ })
+            if ($otaMiss.Count -eq 0) {
+                Ok "OTA 默认分区口径一致（代码 default 与 install.sh 均为 $($codeOta -join ', ')）"
+            }
+            else {
+                Fail "代码的 OTA 默认分区与 install.sh 写入 unit 的不一致：代码 $($codeOta -join ', ') vs install.sh $($instOta -join ', ') —— 环境变量缺失时两边会指向不同分区，OTA 静默失败"
+            }
+        }
+    }
+}
+Write-Host ""
+
+# ══════════════════════════════════════════════════════════
+# C26  journald 日志限额落地链路完整
+# ══════════════════════════════════════════════════════════
+#
+# 场景：gateway.service 用 StandardOutput=journal，日志落在 /var/log/journal，
+# 与 SQLite 数据队列同一个盘。没有磁盘占用上限时，journal 会一路涨到磁盘满，
+# 而磁盘满会直接卡住 SQLite 入库 → **表现为「数据停采而不是报错」**，现场极难定位。
+#
+# 这里有个很容易踩的坑：**SystemMaxUse= 不是 unit 选项**，它是 journald.conf
+# 的 [Journal] 段设置，写进 gateway.service 会被 systemd 忽略（静默不生效）。
+# 正确位置是 /etc/systemd/journald.conf 或 /etc/systemd/journald.conf.d/*.conf。
+#
+# 因此这条链路必须三段齐全，缺一段就等于没修：
+#   ① gateway.service：unit 级 LogRateLimit*（只挡日志风暴，不限磁盘占用）
+#   ② install.sh：写 journald.conf.d drop-in（SystemMaxUse/SystemKeepFree）
+#   ③ verify-deploy.sh：查 drop-in（不能只查主文件，否则误报「未设置」）
+# 三段任缺其一，这里 FAIL。
+Write-Host "[C26] journald 日志限额落地链路完整（unit 限流 + drop-in + 验收）" -ForegroundColor Cyan
+$svcText = ReadText "gateway-core/deploy/gateway.service"
+$installText26 = ReadText "gateway-core/deploy/install.sh"
+$verifyText26 = ReadText "deploy/verify-deploy.sh"
+if ($null -eq $svcText) {
+    Fail "找不到 gateway-core/deploy/gateway.service"
+}
+elseif ($null -eq $installText26) {
+    Fail "找不到 gateway-core/deploy/install.sh"
+}
+elseif ($null -eq $verifyText26) {
+    Fail "找不到 deploy/verify-deploy.sh"
+}
+else {
+    # ── ① unit 级限流 ──
+    $hasRlInterval = $svcText -match '(?m)^\s*LogRateLimitIntervalSec='
+    $hasRlBurst = $svcText -match '(?m)^\s*LogRateLimitBurst='
+    if ($hasRlInterval -and $hasRlBurst) {
+        Ok "gateway.service 设了 LogRateLimitIntervalSec / LogRateLimitBurst（异常刷屏有 unit 级兜底）"
+    }
+    else {
+        if (-not $hasRlInterval) { Fail "gateway.service 缺 LogRateLimitIntervalSec —— 日志风暴时没有 unit 级兜底" }
+        if (-not $hasRlBurst) { Fail "gateway.service 缺 LogRateLimitBurst —— 与 LogRateLimitIntervalSec 必须成对出现，缺一不生效" }
+    }
+
+    # ── unit 里不得出现 SystemMaxUse ──
+    # 它是 journald.conf 的 [Journal] 段选项；写进 unit 会被 systemd 忽略，
+    # 看起来「配了」实际一点作用没有 —— 比不配更危险（会误以为已受保护）。
+    if ($svcText -match '(?m)^\s*SystemMaxUse=') {
+        Fail "gateway.service 里出现了 SystemMaxUse= —— 它是 journald.conf 的 [Journal] 段选项，写在 unit 里会被 systemd 忽略（静默不生效）；应写在 /etc/systemd/journald.conf.d/*.conf"
+    }
+    else {
+        Ok "gateway.service 未误把 SystemMaxUse= 写进 unit（该选项归 journald.conf）"
+    }
+
+    # ── ② install.sh 写 drop-in ──
+    if ($installText26 -match 'journald\.conf\.d') {
+        Ok "install.sh 会写 journald.conf.d drop-in（SystemMaxUse 落在正确位置）"
+    }
+    else {
+        Fail "install.sh 未写 journald.conf.d drop-in —— SystemMaxUse 无处落地，journal 仍无磁盘上限"
+    }
+    foreach ($opt in @("SystemMaxUse=", "SystemKeepFree=")) {
+        if ($installText26 -match [regex]::Escape($opt)) {
+            Ok "install.sh 的 journald drop-in 含 $opt"
+        }
+        else {
+            Fail "install.sh 的 journald drop-in 缺 $opt —— 只限上限不保底空闲时，journal 仍可能把数据盘占满"
+        }
+    }
+    if ($installText26 -match 'Storage=persistent') {
+        Ok "install.sh 的 journald drop-in 含 Storage=persistent（SystemMaxUse 只对持久化 journal 生效）"
+    }
+    else {
+        Fail "install.sh 的 journald drop-in 缺 Storage=persistent —— Storage=volatile 时日志在 /run 内存盘上，SystemMaxUse 形同虚设"
+    }
+
+    # ── ③ verify-deploy.sh 必须查 drop-in ──
+    if ($verifyText26 -match 'journald\.conf\.d') {
+        Ok "verify-deploy.sh 会查 journald.conf.d drop-in（不会把已落地的限额误报为未设置）"
+    }
+    else {
+        Fail "verify-deploy.sh 只查 journald.conf 主文件、不查 drop-in —— install.sh 用 drop-in 落地后会被误报「未设置 SystemMaxUse」"
+    }
+    if ($verifyText26 -match 'LogRateLimit') {
+        Ok "verify-deploy.sh 会核对 unit 级 LogRateLimit*"
+    }
+    else {
+        Fail "verify-deploy.sh 未核对 unit 级 LogRateLimit* —— unit 限流被删掉时验收查不出来"
+    }
+}
+Write-Host ""
 
 Write-Host "[deploy-lint] 通过 $passes 项，失败 $($failures.Count) 项，警告 $($warnings.Count) 项"
 if ($failures.Count -gt 0) {

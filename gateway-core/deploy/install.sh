@@ -359,6 +359,70 @@ chown -R root:root "$INSTALL_DIR"
 # gateway 进程需要能读 UI
 chmod -R a+rX "$UI_DIR"
 
+# 6.5 journald 日志限额
+#
+# 为什么必须在这一步落地：
+#   gateway.service 用 StandardOutput=journal，日志落在 /var/log/journal，
+#   与 /var/lib/gateway 的 SQLite 数据队列**同一个盘**。journald 没有磁盘占用
+#   上限时，长周期运行 + 异常刷屏会把盘写满；而磁盘满会直接卡住 SQLite 入库 →
+#   表现为「数据停采而不是报错」，现场极难定位。
+#
+# SystemMaxUse= / SystemKeepFree= 是 journald.conf 的 [Journal] 段选项，
+# **写进 gateway.service 无效**（unit 里没有 [Journal] 段，systemd 会忽略）。
+# 正确位置是 /etc/systemd/journald.conf.d/*.conf（drop-in）：
+#   - 不污染发行版自带的 /etc/systemd/journald.conf（升级不冲突）
+#   - drop-in 优先级高于主文件；同名选项按文件名字典序取最后一个，
+#     所以用 60- 前缀（官方建议 /etc/ 下用 60-90 区间，压过发行版自带的 10-40）
+# 运行时限流（LogRateLimitIntervalSec/LogRateLimitBurst）写在 unit 里，
+# 只挡「日志风暴」，不限制磁盘占用 —— 两者是不同层面的保险，缺一不可。
+echo "[6.5/7] 配置 journald 日志限额..."
+JOURNAL_CONF_DIR="/etc/systemd/journald.conf.d"
+JOURNAL_CONF="$JOURNAL_CONF_DIR/60-gateway-journal.conf"
+# 可用环境变量覆盖（不同 eMMC 容量差异大）：
+#   GATEWAY_JOURNAL_SYSTEM_MAX_USE  持久化 journal 占用上限（/var/log/journal）
+#   GATEWAY_JOURNAL_SYSTEM_KEEP_FREE 为数据盘预留的空闲空间（journald 取两者较小值）
+#   GATEWAY_JOURNAL_RUNTIME_MAX_USE 易失 journal 上限（/run/log/journal，内存盘）
+JOURNAL_SYSTEM_MAX_USE="${GATEWAY_JOURNAL_SYSTEM_MAX_USE:-512M}"
+JOURNAL_SYSTEM_KEEP_FREE="${GATEWAY_JOURNAL_SYSTEM_KEEP_FREE:-1G}"
+JOURNAL_RUNTIME_MAX_USE="${GATEWAY_JOURNAL_RUNTIME_MAX_USE:-64M}"
+JOURNAL_CONF_BODY="[Journal]
+# SystemMaxUse 只作用于持久化 journal（/var/log/journal）。
+# 若 Storage=volatile（发行版常发 #Storage=auto），日志落在 /run 的内存盘，
+# 上限根本用不上 —— 显式写 persistent 让限额真正生效。
+# 持久化目录不可写时 systemd 会自动回落到 /run，不影响服务启动。
+Storage=persistent
+SystemMaxUse=$JOURNAL_SYSTEM_MAX_USE
+SystemKeepFree=$JOURNAL_SYSTEM_KEEP_FREE
+RuntimeMaxUse=$JOURNAL_RUNTIME_MAX_USE"
+# 写 drop-in 失败不阻断安装（日志限额是保护措施，不该让整个装机流程挂掉）；
+# 但必须明确告警 —— 否则现场会以为限额已生效。
+JOURNAL_WRITE_OK=1
+mkdir -p "$JOURNAL_CONF_DIR" 2>/dev/null || JOURNAL_WRITE_OK=0
+if [ "$JOURNAL_WRITE_OK" = "1" ]; then
+  {
+    echo "# 由 gateway install.sh 生成（$(date +%F)）"
+    echo "# 服务日志（StandardOutput=journal）与 SQLite 数据队列同盘，"
+    echo "# 必须限制 journal 占用上限，否则日志写满磁盘会导致入库暂停（表现为数据停采）。"
+    printf '%s\n' "$JOURNAL_CONF_BODY"
+  } > "$JOURNAL_CONF" 2>/dev/null || JOURNAL_WRITE_OK=0
+fi
+if [ "$JOURNAL_WRITE_OK" = "1" ]; then
+  chmod 644 "$JOURNAL_CONF" 2>/dev/null || true
+  echo "  ✓ 已写入 $JOURNAL_CONF"
+  echo "    SystemMaxUse=$JOURNAL_SYSTEM_MAX_USE  SystemKeepFree=$JOURNAL_SYSTEM_KEEP_FREE  RuntimeMaxUse=$JOURNAL_RUNTIME_MAX_USE"
+  # 立即生效需要重启 journald；失败不阻断安装（重启机器后同样生效）
+  if systemctl restart systemd-journald 2>/dev/null; then
+    echo "  ✓ systemd-journald 已重启，日志限额立即生效"
+  else
+    echo "  ⚠ 重启 systemd-journald 失败，限额将在下次重启后生效"
+  fi
+else
+  echo "  ⚠ 写入 $JOURNAL_CONF 失败 —— 日志限额未生效，日志仍可能占满数据盘"
+  echo "    处置: 手动创建 /etc/systemd/journald.conf.d/60-gateway-journal.conf，"
+  echo "          写入 [Journal] / Storage=persistent / SystemMaxUse=$JOURNAL_SYSTEM_MAX_USE / SystemKeepFree=$JOURNAL_SYSTEM_KEEP_FREE，"
+  echo "          然后 sudo systemctl restart systemd-journald"
+fi
+
 # 7. 安装 systemd 服务
 echo "[7/7] 安装 systemd 服务..."
 if [ -z "$SERVICE_SRC" ]; then

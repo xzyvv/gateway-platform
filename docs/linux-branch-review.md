@@ -662,3 +662,78 @@ actionlint + shellcheck，**根本没调用过这个脚本**）。
 3. **OTA 分区参数化只覆盖 `DeviceAllow` 与 `Environment=` 两处**：若现场用 SD/NVMe，
    还要确认 U-Boot 侧的 A/B 槽位定义同步（属真机验收项，见 §4）。
 
+### 10.7 P1 补强：交付验收脚本的硬件探测口径落后于代码
+
+§10.2~10.4 把「代码与 unit 的一致性」钉死在静态断言里，但**验收脚本自己**的口径没人管：
+
+| 缺陷 | 现象 |
+|---|---|
+| `verify-deploy.sh` 只查 `/dev/watchdog` | 代码早已支持 `watchdog0` / `watchdog1` / `softdog` 四个候选（§9.2 第 6 条），但验收脚本在 watchdog0 板卡上判「无硬件看门狗」→ **验收结论是错的** |
+| 脚本全无 `DeviceAllow` 核对 | §10.2/10.3 那类「设备在、unit 没放行 → open() 之前 EPERM」的问题，验收脚本一个都查不出；而这类故障的表现是**服务正常、控制台能开、硬件功能却是空的**，现场几乎无法定位 |
+| 脚本全无 OTA / journald 检查 | OTA 分区路径与实际介质不匹配（§10.6 第 3 条的遗留风险）要到升级当场才暴露；journald 无 `SystemMaxUse` 会让日志吃满数据盘 → SQLite 入库暂停 → **表现为数据停采而非报错** |
+
+修复（只改验收脚本与门禁，不动运行时行为）：
+
+1. **看门狗口径对齐**：脚本按代码同款候选顺序探测，并报出「代码实际会选中哪一个」。
+2. **新增 [6c] DeviceAllow 双向核对**：
+   - 正向：unit 放行的路径在本机是否存在（不存在 → 该条是摆设）
+   - 反向：本机存在的关键硬件（看门狗 / GPIO / 串口 / OTA 分区）是否真的被放行
+   - 按 systemd 语义还原匹配规则：路径形式精确匹配，`char-<组名>` 形式匹配该组次设备
+   - **OTA 分区取 `Environment=GATEWAY_OTA_SLOT_A/B` 里的路径**（代码读的就是这个环境变量），
+     DeviceAllow 只是放行侧；两者都指向真实节点才算通过
+3. **新增 [6d] journald 限额检查** + 数据分区剩余空间换算（对应 §9.1 队列触顶与磁盘不足两条停采路径）
+4. **新增门禁 C25**：把「脚本里的设备路径」与「代码里的常量」双向钉死 ——
+   看门狗候选集合**及其顺序**、`gpiod::Chip::new(...)` 的 GPIO 路径、
+   OTA 默认分区（代码 default ⇄ `install.sh` 写进 unit 的默认值）。
+   任一侧增删而另一侧没同步 → C25 FAIL。
+
+> 顺序也要对齐：代码按候选顺序取**第一个存在的**路径，脚本若选错优先级会报出另一个设备，
+> 结论同样不可信。
+
+> OTA 介质匹配的判据也踩过一个坑：**不能用「剥掉尾部数字」当同族判据**——
+> 那会把整盘 `/dev/mmcblk0` 削成 `/dev/mmcblk`、`/dev/nvme0n1` 削成 `/dev/nvme0n`，
+> 媒体匹配就失真了。脚本改为按命名族分别推导所属整盘
+> （`pN` 族 `mmcblk0p2 → mmcblk0` / `nvme0n1p2 → nvme0n1`；`sdX N` 族 `sda1 → sda`；
+> 整盘名 `mmcblk0` / `nvme0n1` 原样保留），且判定用**同族磁盘**而非「有无任意块设备」——
+> 否则没装 eMMC、只有 `/dev/sda` 的 CI runner 会被误判成部署失败。
+
+### 10.8 P1 补强：journal 磁盘限额没落地（且不能写在 unit 里）
+
+§10.7 第 3 条只补了**验收脚本**（`[6d]` 段查 `SystemMaxUse`），但**限额本身从未被落地**——
+脚本只会报一句「未设置」，装完还是没设，磁盘照样会被日志吃满。而这条路径的后果是
+**数据停采而不是报错**（§9.1 队列触顶 + 磁盘不足），现场几乎无法定位。
+
+这里有个反直觉的坑，也是最容易改错的地方：
+
+| 缺陷 | 现象 |
+|---|---|
+| `SystemMaxUse=` 写进 `gateway.service` | **静默不生效**。它是 `journald.conf` 的 `[Journal]` 段选项，unit 里没有 `[Journal]` 段，systemd 直接忽略。看着「配了限额」，实际 journal 无上限——比不配更危险 |
+| 只查 `/etc/systemd/journald.conf` 主文件 | 若按官方推荐用 drop-in 落地，验收脚本反而报「未设置」→ 现场误以为没生效，反复排查 |
+| 只有限额、没有 unit 级限流 | 限额只兜住「总量」，兜不住「速率」。异常刷屏时 journal 会在几分钟内冲到上限，数据盘瞬间见底 |
+| 只有 unit 级限流、没有限额 | `LogRateLimit*` 丢弃超限消息，但**不限制磁盘占用**——总量仍会一路涨到磁盘满 |
+
+修复（三段缺一不可）：
+
+1. **`gateway.service`**：加 unit 级 `LogRateLimitIntervalSec=30s` + `LogRateLimitBurst=1000`。
+   它覆盖 journald.conf 的全局 `RateLimit*`（全局默认 30s/10000 条，且实际阈值还要按可用磁盘
+   空间再乘一个倍率，磁盘越空倍率越小、反而越容易触发丢弃）。1000 条/30s 远高于正常量级
+   （正常运行是生命周期/事件级，每分钟个位数到几十条），不会误杀正常日志。
+2. **`install.sh` 新增 [6.5/7] 步**：写 drop-in
+   `/etc/systemd/journald.conf.d/60-gateway-journal.conf`（`SystemMaxUse` / `SystemKeepFree` /
+   `RuntimeMaxUse`），并重启 `systemd-journald` 生效。
+   用 drop-in 而不是改主文件：不污染发行版自带的 `journald.conf`，且 drop-in 优先级高于主文件；
+   `60-` 前缀压得过发行版常见的 `10-40` 号 drop-in（同名选项按文件名字典序取最后一个）。
+3. **`verify-deploy.sh` 的 `[6d]` 段**：改为解析**生效值**——主文件（`/etc` > `/run` >
+   `/usr/local/lib` > `/usr/lib`，第一个存在的生效）+ 全部 drop-in（按 basename 排序、
+   同 basename 取高优先级目录，覆盖主文件），同时核对 `SystemKeepFree` 与 unit 级
+   `LogRateLimit*`。
+
+> 顺带把 `C7` 的服务名一致性检查开了一个**系统 unit 白名单**：install.sh 现在会
+> `systemctl restart systemd-journald`，它本来就与 `SyslogIdentifier` 无关。
+> 白名单显式列出，避免以后引入系统 unit 时被当成「查错了服务」。
+
+新增门禁 **C26**，把这条链路钉死：unit 有 `LogRateLimit*`、unit 里**没有**误写
+`SystemMaxUse=`、install.sh 会写 drop-in 且含 `SystemMaxUse`/`SystemKeepFree`、
+verify-deploy.sh 会查 drop-in 且会核对 unit 限流。任一段被删 → C26 FAIL。
+
+

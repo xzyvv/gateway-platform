@@ -4,9 +4,11 @@ set -euo pipefail
 # ────────────────────────────────────────────────────────────
 # 工业网关部署后验证脚本
 # 用法: sudo bash verify-deploy.sh [--port 8080] [--token xxx] [--build-info path] [--report path]
-#                                  [--retention-signed]
+#                                  [--retention-signed] [--package-only]
 #       --port/--host 省略时自动读 /etc/gateway/config.json 的 web.listen_addr
 #       --retention-signed  数据留存边界已由客户签字确认（不放行则检查单打「未签字」并计 WARN）
+#       --package-only      只做交付包静态体检（文件完整性/架构/静态链接/配置/unit/脚本语法），
+#                           不访问 systemd 与 API；用于 CI 对 ARM64 产物复用同一判定口径
 #
 # 在目标 Linux 上跑完 install.sh 后执行。
 # 覆盖：systemd 服务（含开机自启）/ 环境变量 / 配置可解析性 / 时区 / 二进制兼容性 /
@@ -27,6 +29,9 @@ REPORT="$SCRIPT_DIR/out/delivery-checklist-$(date +%Y%m%d-%H%M%S).md"
 # 这里不用交互式提示（现场常由脚本批量执行），而是用显式开关记录签字事实：
 # 不传 --retention-signed 时检查单会打成「未签字」并在清单里给一条 WARN。
 RETENTION_SIGNED=0
+# 包体检模式：只对交付包做与运行环境无关的静态检查（未安装、甚至跨架构也能跑），
+# 供 CI 在 ARM64 产物上复用同一套判定口径。
+PACKAGE_ONLY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port)  PORT="$2"; shift 2 ;;
@@ -39,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --report) REPORT="$2"; shift 2 ;;
     --report=*) REPORT="${1#*=}"; shift ;;
     --retention-signed) RETENTION_SIGNED=1; shift ;;
+    --package-only) PACKAGE_ONLY=1; shift ;;
     *) shift ;;
   esac
 done
@@ -205,6 +211,10 @@ write_report() {
           ;;
       esac
       echo "- 有硬件时：短接 DI0→+24V 验证 DI0 变 HIGH；插 Modbus 从站后新建设备跑发现向导。"
+      echo "- systemd 设备放行（DeviceAllow）为白名单语义：设备节点存在但未放行时，"
+      echo "  systemd 会在程序 open() 之前 EPERM 拒绝，看门狗/GPIO/OTA 会**静默失效**"
+      echo "  （服务正常、控制台能开，但硬件功能为空）。本脚本已逐项核对本机实际硬件"
+      echo "  与 unit 放行列表的一致性；如需调整，改 unit 后务必 daemon-reload + restart。"
     else
       echo "失败项按顺序处置，常用诊断命令："
       echo ""
@@ -235,6 +245,104 @@ echo "${BOLD}══════════════════════�
 echo "目标: $API"
 echo "时间: $(date -Is)"
 echo ""
+
+# ── 包体检模式（--package-only）──
+# 完整验证依赖已安装的服务、端口和硬件，只能在真机跑；本模式只跑**与运行环境无关**
+# 的子集，让 CI 能在 ARM64 交叉产物上复用同一套判定口径（此前 release-package
+# 只断言了文件存在，交付脚本的语法/可执行位/静态链接没人验）。
+if [ "$PACKAGE_ONLY" -eq 1 ]; then
+  PKG="$SCRIPT_DIR"
+  # 包内 BUILD-INFO.txt 与脚本同级；仓库默认路径是 out/BUILD-INFO.txt。
+  if [ ! -f "$BUILD_INFO" ] && [ -f "$PKG/BUILD-INFO.txt" ]; then
+    BUILD_INFO="$PKG/BUILD-INFO.txt"
+  fi
+
+  echo "${BOLD}[1/5] 包内文件完整性${RESET}"
+  for f in install.sh deliver.sh serial-rules.sh verify-deploy.sh gateway.service config.factory.json BUILD-INFO.txt; do
+    if [ -f "$PKG/$f" ]; then ok "$f"; else fail "$f 缺失"; fi
+  done
+  if [ -f "$PKG/ui-dist/index.html" ]; then
+    ok "ui-dist/index.html"
+  else
+    fail "ui-dist/index.html 缺失（现场控制台会白屏）"
+  fi
+  if [ -d "$PKG/templates" ] && [ -n "$(ls -A "$PKG/templates" 2>/dev/null)" ]; then
+    ok "templates/ 非空"
+  else
+    fail "templates/ 缺失或为空"
+  fi
+
+  echo "${BOLD}[2/5] 二进制架构与链接方式${RESET}"
+  # 不用 `ls | head`：脚本开着 pipefail，head 提前退出会让上游收到 SIGPIPE。
+  BIN=""
+  for cand in "$PKG"/gatewayd-*; do
+    if [ -f "$cand" ]; then BIN="$cand"; break; fi
+  done
+  if [ -z "$BIN" ]; then
+    fail "未找到 gatewayd-* 二进制"
+  else
+    ok "二进制存在: $(basename "$BIN")"
+    if [ -x "$BIN" ]; then ok "二进制有可执行位"; else fail "二进制缺少可执行位"; fi
+    if command -v file >/dev/null 2>&1; then
+      desc="$(file -b "$BIN")"
+      case "$desc" in
+        *"ARM aarch64"*) ok "架构: ARM aarch64" ;;
+        *) fail "架构不符: $desc" ;;
+      esac
+      case "$desc" in
+        *"statically linked"*) ok "静态链接（不依赖现场 glibc）" ;;
+        *) fail "非静态链接: $desc" ;;
+      esac
+    else
+      warn "缺少 file 命令，跳过架构/链接检查"
+    fi
+  fi
+
+  echo "${BOLD}[3/5] 工厂配置可解析性${RESET}"
+  if [ -f "$PKG/config.factory.json" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      if python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert (d.get("web") or {}).get("listen_addr")
+for k in ("web", "south", "north", "queue"):
+    assert k in d, k
+' "$PKG/config.factory.json" 2>/dev/null; then
+        ok "可解析，且 web.listen_addr / south / north / queue 齐全"
+      else
+        fail "不可解析或缺关键节"
+      fi
+    else
+      warn "缺少 python3，跳过配置解析"
+    fi
+  fi
+
+  echo "${BOLD}[4/5] gateway.service 关键指令${RESET}"
+  if [ -f "$PKG/gateway.service" ]; then
+    for key in 'ExecStart=' 'User=' 'Restart=' 'MemoryMax='; do
+      if grep -q "^$key" "$PKG/gateway.service"; then
+        ok "unit 含 $key"
+      else
+        fail "unit 缺少 $key"
+      fi
+    done
+  fi
+
+  echo "${BOLD}[5/5] 交付脚本语法${RESET}"
+  for s in install.sh deliver.sh serial-rules.sh verify-deploy.sh; do
+    if [ -f "$PKG/$s" ]; then
+      if bash -n "$PKG/$s" 2>/dev/null; then ok "$s 语法通过"; else fail "$s 语法错误"; fi
+    fi
+  done
+
+  echo ""
+  verdict="包体检通过（静态子集）"
+  if [ "$FAIL" -ne 0 ]; then verdict="包体检失败（静态子集）"; fi
+  echo "${BOLD}${verdict}${RESET}：PASS $PASS / FAIL $FAIL / WARN $WARN"
+  echo "说明：systemd 运行态、端口、API 契约、时区、硬件能力需安装后在真机执行完整验证。"
+  [ "$FAIL" -eq 0 ] || exit 1
+  exit 0
+fi
 
 # ── 0. 前置 ──
 if ! command -v curl &>/dev/null; then
@@ -560,7 +668,7 @@ fi
 case "$BIND_ADDR" in
   "") fail "TCP $PORT 未监听" ;;
   127.0.0.1:*|"[::1]:"*)
-    warn "TCP $PORT 仅监听回环（$BIND_ADDR）：本机验证可用，但车间 LAN 浏览器打不开；需把 config.json 的 web.listen_addr 设为 0.0.0.0:$PORT 后重启" ;;
+    warn "TCP $PORT 仅监听回环（$BIND_ADDR）：本机验证可用，但车间 LAN 浏览器打不开；需把 config.json 的 web.listen_addr 设为 0.0.0.0:$PORT 后重启（注意：改监听地址前必须先设置 web.password_hash，否则触发 fail-closed，网关会拒绝启动）" ;;
   0.0.0.0:*|"*:"*|"[::]:"*|":::"*)
     ok "TCP $PORT 已监听（$BIND_ADDR，全部网卡）" ;;
   *)
@@ -836,18 +944,38 @@ KERNEL=$(uname -s)
 ARCH=$(uname -m)
 info "内核: $KERNEL / $ARCH"
 
+# ── 硬件探测口径必须与代码常量一致 ──
+#
+# 这里的每个路径都不是「随便写一个像样的设备名」，而是代码真正会 open() 的路径。
+# 口径一旦落后于代码，现场就会出现「脚本说硬件就绪、实际功能却是空的」：
+#   · 看门狗代码按 /dev/watchdog → /dev/watchdog0 → /dev/watchdog1 → /dev/softdog
+#     逐个探测（gatewayd/src/bootstrap/helpers/collection.rs 的
+#     WATCHDOG_DEVICE_CANDIDATES + select_watchdog_device），
+#     只查 /dev/watchdog 会在 watchdog0 的板卡上误判为「无硬件看门狗」。
+#   · GPIO 代码硬编码 /dev/gpiochip0（gateway-core/src/platform/gpio.rs 的
+#     gpiod::Chip::new("/dev/gpiochip0")）。
+#   · OTA 分区代码读 GATEWAY_OTA_SLOT_A/B 环境变量，缺省回退 /dev/mmcblk0p2/p3
+#     （gateway-core/src/platform/ota/mod.rs 的 AbPartitionConfig::default）。
+# 三处常量与 scripts/deploy_lint.ps1 的 C25 双向断言，改一处必须同步另一处。
+
 # GPIO chip
-if [ -e /dev/gpiochip0 ]; then
-  ok "/dev/gpiochip0 存在 → GPIO 硬件可用"
+GPIO_CHIP="/dev/gpiochip0"
+if [ -e "$GPIO_CHIP" ]; then
+  ok "$GPIO_CHIP 存在 → GPIO 硬件可用"
 else
-  warn "/dev/gpiochip0 不存在 → GPIO 将走 stub（Windows / 非工控 Linux 正常）"
+  warn "$GPIO_CHIP 不存在 → GPIO 将走 stub（Windows / 非工控 Linux 正常）"
 fi
 
-# 硬件看门狗
-if [ -e /dev/watchdog ]; then
-  ok "/dev/watchdog 存在 → 硬件看门狗可用"
+# 硬件看门狗：按代码同款候选顺序探测，报出**代码实际会选中哪一个**
+WD_CANDIDATES="/dev/watchdog /dev/watchdog0 /dev/watchdog1 /dev/softdog"
+WD_FOUND=""
+for wd in $WD_CANDIDATES; do
+  if [ -e "$wd" ]; then WD_FOUND="$wd"; break; fi
+done
+if [ -n "$WD_FOUND" ]; then
+  ok "硬件看门狗可用：$WD_FOUND（代码按同一优先级会选中它）"
 else
-  warn "/dev/watchdog 不存在 → 看门狗走 stub"
+  warn "未找到硬件看门狗（已查: $WD_CANDIDATES）→ 看门狗走 stub"
 fi
 
 # 串口（Modbus 关键设备）
@@ -950,6 +1078,284 @@ else
   warn "/opt/gatewayd/ui-dist 缺失 → Rust 将返回 WEB_UI_HTML fallback（不是完整 Vue 控制台）"
 fi
 
+# ── 6c. systemd 设备放行（DeviceAllow）与硬件实际存在性的一致性 ──
+#
+# 这段解决的是「设备明明在，程序却打不开」这一类现场最费时的故障。
+#
+# DeviceAllow 是**白名单**语义：只要 unit 里出现了任何一条 DeviceAllow=，
+# 未列出的设备一律拒绝。而 systemd 的拒绝发生在**程序 open() 之前**：
+#   · 程序里的 watch 是 "no such device"，
+#   · 但服务本身启动正常、HTTP 正常、控制台能打开，
+#   · 看门狗/GPIO/OTA 却是**静默失效**的——
+#     现象是「设备卡死不会被硬件复位」「DI 采集不出数」，现场极难定位。
+#
+# 因此这里做**双向**核对：
+#   正向：unit 里放行的路径，在本机是否真的存在（不存在 → 该条是摆设）
+#   反向：本机存在的关键硬件，是否真的被放行（没放行 → 运行时会被 EPERM 拒绝）
+echo "${BOLD}[6c] systemd 设备放行与硬件一致性${RESET}"
+SVC_UNIT="/etc/systemd/system/gateway.service"
+if [ ! -f "$SVC_UNIT" ]; then
+  warn "未找到 $SVC_UNIT（跳过 DeviceAllow 一致性核对）"
+else
+  # 取 unit 里的 DeviceAllow 路径列表（去掉权限后缀 rw/rwm）
+  DEVICE_ALLOW_PATHS=$(grep -E '^[[:space:]]*DeviceAllow=' "$SVC_UNIT" 2>/dev/null |
+    sed -E 's/^[[:space:]]*DeviceAllow=[[:space:]]*//; s/[[:space:]]+(rwm|rw|r)[[:space:]]*$//' || true)
+  ALLOW_COUNT=$(printf '%s\n' "$DEVICE_ALLOW_PATHS" | grep -c . || true)
+  ALLOW_COUNT=${ALLOW_COUNT:-0}
+
+  # 反向核对：本机存在的关键硬件是否被放行
+  #   放行规则按 systemd 语义还原：
+  #     · 路径形式（/dev/watchdog）→ 精确匹配
+  #     · 设备组形式（char-ttyUSB）→ 放行该设备组的全部次设备（/dev/ttyUSB*）
+  device_allowed() {
+    local dev="$1" p grp
+    for p in $DEVICE_ALLOW_PATHS; do
+      [ -n "$p" ] || continue
+      case "$dev" in
+        "$p") return 0 ;;
+      esac
+      case "$p" in
+        char-*)
+          grp="${p#char-}"
+          case "$dev" in
+            "/dev/${grp}"*) return 0 ;;
+          esac
+          ;;
+      esac
+    done
+    return 1
+  }
+
+  # 由分区路径推出所属整盘路径，供 OTA 介质匹配判断使用：
+  #   /dev/mmcblk0p2 → /dev/mmcblk0   （pN 后缀：mmcblk / nvme 命名）
+  #   /dev/nvme0n1p2 → /dev/nvme0n1
+  #   /dev/sda1     → /dev/sda       （sdX N 命名）
+  #   /dev/mmcblk0  → /dev/mmcblk0   （本来就是整盘，不做裁剪）
+  # 注意不能用无脑的「剥掉尾部数字」：那会把整盘 /dev/mmcblk0 削成 /dev/mmcblk、
+  # 把 /dev/nvme0n1 削成 /dev/nvme0n，媒体匹配判断就失真了。
+  ota_parent_disk() {
+    local p="$1" base dir nums rest stem
+    base="${p##*/}"
+    case "$p" in
+      */*) dir="${p%/*}" ;;
+      *) dir="." ;;
+    esac
+    nums="${base##*[^0-9]}"     # 结尾的数字串（分区号），无则为空
+    rest="${base%"$nums"}"      # 去掉分区号后的部分
+    case "$base" in
+      *[0-9]p[0-9]*)
+        # pN 命名：mmcblk0p2 → mmcblk0；nvme0n1p2 → nvme0n1
+        stem="${rest%p}"
+        ;;
+      sd*|hd*|vd*|xvd*)
+        # sdX N 命名：sda1 → sda；整盘 sda 无数字 → 保持不变
+        if [ -n "$nums" ]; then stem="$rest"; else stem="$base"; fi
+        ;;
+      *)
+        # mmcblk0 / nvme0n1 / loop0 这类整盘名本身带数字，不能削
+        stem="$base"
+        ;;
+    esac
+    if [ "$dir" = "." ]; then
+      printf '%s\n' "$stem"
+    else
+      printf '%s/%s\n' "$dir" "$stem"
+    fi
+  }
+
+  if [ "$ALLOW_COUNT" -eq 0 ]; then
+    warn "$SVC_UNIT 里没有任何 DeviceAllow —— 若服务以 PrivateDevices=true 启动则所有硬件访问都会被拒（本 unit 当前为 false，故仅提示）"
+  else
+    ok "gateway.service 已放行 $ALLOW_COUNT 条设备路径"
+
+    # 看门狗：代码实际会选中哪个，那个必须被放行
+    if [ -n "$WD_FOUND" ]; then
+      if device_allowed "$WD_FOUND"; then
+        ok "看门狗 $WD_FOUND 已被 DeviceAllow 放行"
+      else
+        fail "看门狗 $WD_FOUND 存在但未被 DeviceAllow 放行 —— systemd 会在程序 open() 之前以 EPERM 拒绝，看门狗静默失效（设备卡死不会被硬件复位）"
+        echo "    处置: 在 $SVC_UNIT 的 DeviceAllow 里加上 $WD_FOUND rw 后 sudo systemctl daemon-reload && sudo systemctl restart gateway"
+      fi
+    fi
+
+    # GPIO chip：代码硬编码 /dev/gpiochip0
+    if [ -e "$GPIO_CHIP" ]; then
+      if device_allowed "$GPIO_CHIP"; then
+        ok "GPIO $GPIO_CHIP 已被 DeviceAllow 放行"
+      else
+        fail "GPIO $GPIO_CHIP 存在但未被 DeviceAllow 放行 —— DI 采集 / DO 输出 / RS485 DE 方向控制会全部静默失效"
+        echo "    处置: 在 $SVC_UNIT 的 DeviceAllow 里加上 $GPIO_CHIP rw 后 sudo systemctl daemon-reload && sudo systemctl restart gateway"
+      fi
+    fi
+
+    # 串口：本机存在的串口节点必须被某个 char-<组> 放行
+    SERIAL_NODES=$(ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | head -20 || true)
+    SERIAL_ALLOWED=0
+    SERIAL_TOTAL=0
+    for sn in $SERIAL_NODES; do
+      SERIAL_TOTAL=$((SERIAL_TOTAL + 1))
+      if device_allowed "$sn"; then SERIAL_ALLOWED=$((SERIAL_ALLOWED + 1)); fi
+    done
+    if [ "$SERIAL_TOTAL" -gt 0 ]; then
+      if [ "$SERIAL_ALLOWED" -eq "$SERIAL_TOTAL" ]; then
+        ok "本机 $SERIAL_TOTAL 个串口节点均已被 DeviceAllow 放行"
+      else
+        fail "本机 $SERIAL_TOTAL 个串口节点里有 $((SERIAL_TOTAL - SERIAL_ALLOWED)) 个未被 DeviceAllow 放行 —— 对应总线的采集会全程无数据"
+        echo "    处置: 确认 unit 里有 DeviceAllow=char-ttyUSB rw / char-ttyS rw / char-ttyACM rw（组名必须在 /proc/devices 里能解析）"
+      fi
+    fi
+
+    # OTA A/B 分区：代码读的是 Environment=GATEWAY_OTA_SLOT_A/B（AbPartitionConfig::default
+    # 先读环境变量，缺省才回退 /dev/mmcblk0p2/p3），所以**环境变量里的路径才是操作性路径**，
+    # DeviceAllow 只是放行侧。两者必须都指向真实存在的节点。
+    # 现场用 SD/NVMe 做 OTA 介质时，install.sh 会同步改写这两处；若 unit 是手工改的、
+    # 或换过介质而没同步，路径就指向不存在的节点 → OTA 现场直接失败。
+    OTA_ENV_PATHS=$(grep -E '^[[:space:]]*Environment=GATEWAY_OTA_SLOT_[AB]=' "$SVC_UNIT" 2>/dev/null |
+      sed -E 's/^[[:space:]]*Environment=GATEWAY_OTA_SLOT_[AB]=//' | tr -d ' ' || true)
+    if [ -z "$OTA_ENV_PATHS" ]; then
+      warn "unit 里没有 Environment=GATEWAY_OTA_SLOT_A/B —— 代码会回退到默认分区 /dev/mmcblk0p2/p3；若本机介质不是 eMMC，OTA 会写到不存在的节点"
+    fi
+    # OTA 分区路径与实际介质的匹配判断，分三种情形：
+    #   ① 分区节点存在 → PASS
+    #   ② 分区节点不存在，但**同一块磁盘**存在（如配 /dev/mmcblk0p2 而 /dev/mmcblk0 在）
+    #      → 分区号配错，是配置错误 → FAIL
+    #   ③ 整块磁盘都不存在（本机没有同族 eMMC）→ 这台机器没有可做 A/B 的介质 → WARN
+    # 判据必须是「同族磁盘」而不是「有没有任何块设备」：
+    # 现场机可能是 NVMe（配 /dev/nvme0n1p2）而 CI runner 只有 /dev/sda，
+    # 用「有无任意块设备」会把没装 eMMC 的 CI runner 误判成部署失败。
+    for op in $OTA_ENV_PATHS; do
+      # 由分区路径推出所属磁盘：/dev/mmcblk0p2 → /dev/mmcblk0；/dev/sda1 → /dev/sda
+      op_disk=$(ota_parent_disk "$op")
+      disk_present=0
+      for bd in "${op_disk}"*; do
+        if [ -e "$bd" ]; then disk_present=1; break; fi
+      done
+      if [ -e "$op" ]; then
+        ok "OTA 分区 $op 存在（Environment 指定）"
+      elif [ "$disk_present" -eq 1 ]; then
+        fail "OTA 分区 $op 不存在，但所属磁盘 ${op_disk} 在本机存在 —— 分区号配错，与实际介质不匹配，OTA 写分区必然失败；请用 --ota-slot-a/b 改写为真实分区"
+      else
+        warn "OTA 分区 $op 不存在，且本机没有同族磁盘 ${op_disk} —— 这台机器没有可做 A/B 的介质，本轮 OTA 不可用（介质在别的盘上时请用 --ota-slot-a/b 指定）"
+      fi
+      if device_allowed "$op"; then
+        ok "OTA 分区 $op 已被 DeviceAllow 放行"
+      else
+        fail "OTA 分区 $op 未被 DeviceAllow 放行 —— systemd 会在程序 open() 之前 EPERM 拒绝，OTA 写分区必然失败"
+      fi
+    done
+    # 放行侧：unit 里出现但本机不存在的 mmcblk/sd/nvme 节点
+    OTA_ALLOW_PATHS=$(printf '%s\n' "$DEVICE_ALLOW_PATHS" | grep -E '^/dev/(mmcblk|sd|nvme)' || true)
+    for op in $OTA_ALLOW_PATHS; do
+      if [ ! -e "$op" ]; then
+        warn "DeviceAllow 放行了 $op，但本机没有这个节点（该条是摆设）"
+      fi
+    done
+  fi
+fi
+
+# ── 6d. journald 日志上限 ──
+# StandardOutput=journal 意味着日志落在 /var/log/journal（同一个数据盘）。
+# 没有 SystemMaxUse 限额时，journal 只在达到系统默认上限前才轮转，
+# 长周期运行 + 高频日志会一路吃到磁盘满，
+# 而磁盘满会直接卡住 SQLite 入库 → 数据停采。
+#
+# 注意 SystemMaxUse= 是 journald.conf 的 [Journal] 段选项，
+# **不能**写在 gateway.service 里（unit 里没有 [Journal] 段，systemd 会忽略）。
+# 生效位置是 /etc/systemd/journald.conf（主文件）或 /etc/systemd/journald.conf.d/*.conf
+# （drop-in，优先级高于主文件）—— install.sh 落地的就是后者。
+# 所以这里必须**同时**查主文件和 drop-in 目录，否则会误报「未设置」。
+echo "${BOLD}[6d] journald 日志限额${RESET}"
+
+# drop-in 收集。官方语义（journald.conf(5)「Configuration Directories and Precedence」）：
+#   · 主配置文件按 /etc > /run > /usr/local/lib > /usr/lib 顺序找，**只用第一个找到的**
+#   · drop-in 目录（*.conf.d/）里的文件**按文件名字典序排序，不看目录**；
+#     同名选项取排序最后的那个；同名文件跨目录时 /etc 覆盖 /usr/lib
+#   · 因此本机自己的 drop-in 用 60- 前缀（官方建议 /etc 用 60-90 区间），
+#     才能压过发行版放在 /usr/ 下的 10-40 号 drop-in
+# 输出：basename<TAB>rank<TAB>path —— basename 是主排序键，rank 只用于同名文件跨目录时定序
+journald_dropin_files() {
+  local rank=0 d f
+  for d in /usr/lib/systemd/journald.conf.d /usr/local/lib/systemd/journald.conf.d \
+           /run/systemd/journald.conf.d /etc/systemd/journald.conf.d; do
+    if [ -d "$d" ]; then
+      for f in "$d"/*.conf; do
+        [ -f "$f" ] || continue
+        printf '%s\t%03d\t%s\n' "$(basename "$f")" "$rank" "$f"
+      done
+    fi
+    rank=$((rank+1))
+  done
+  return 0
+}
+
+# 取某个 journald 选项的**生效值**（drop-in 覆盖主文件；同名选项取最后一个）
+# $1 = 选项名（如 SystemMaxUse）
+journald_effective_opt() {
+  local opt="$1" val="" v m b rank path
+  # 1) 主文件：/etc > /run > /usr/local/lib > /usr/lib，第一个存在的生效
+  for m in /etc/systemd/journald.conf /run/systemd/journald.conf \
+           /usr/local/lib/systemd/journald.conf /usr/lib/systemd/journald.conf; do
+    if [ -f "$m" ]; then
+      val=$(grep -E "^[[:space:]]*${opt}=" "$m" 2>/dev/null |
+        tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+      break
+    fi
+  done
+  # 2) drop-in 覆盖主文件：按 basename 排序，同 basename 取高优先级目录
+  while IFS=$'\t' read -r b rank path; do
+    [ -n "$path" ] || continue
+    v=$(grep -E "^[[:space:]]*${opt}=" "$path" 2>/dev/null |
+      tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    if [ -n "$v" ]; then val="$v"; fi
+  done < <(journald_dropin_files | sort -t$'\t' -k1,1 -k2,2)
+  printf '%s' "$val"
+}
+
+JOURNAL_MAX="$(journald_effective_opt SystemMaxUse)"
+JOURNAL_KEEP="$(journald_effective_opt SystemKeepFree)"
+if [ -n "$JOURNAL_MAX" ] && [ "$JOURNAL_MAX" != "0" ] && [ "$JOURNAL_MAX" != "infinity" ]; then
+  ok "journald SystemMaxUse=$JOURNAL_MAX（日志占用有上限，不会挤占数据盘）"
+else
+  warn "journald 未设置有效的 SystemMaxUse —— 日志无上限增长，与数据队列同盘时会挤占磁盘"
+  echo "    处置: 重新执行 install.sh（会写 /etc/systemd/journald.conf.d/60-gateway-journal.conf），"
+  echo "          或手动创建该 drop-in 写入 SystemMaxUse=512M 后 sudo systemctl restart systemd-journald"
+fi
+if [ -n "$JOURNAL_KEEP" ] && [ "$JOURNAL_KEEP" != "0" ] && [ "$JOURNAL_KEEP" != "infinity" ]; then
+  ok "journald SystemKeepFree=$JOURNAL_KEEP（为数据盘预留空闲空间）"
+else
+  warn "journald 未设置 SystemKeepFree —— 磁盘被占满时 journald 不会主动让出空间"
+  echo "    处置: 在 journald drop-in 里加一行 SystemKeepFree=1G 后 sudo systemctl restart systemd-journald"
+fi
+
+# Storage 决定日志落在哪：SystemMaxUse 只作用于持久化 journal（/var/log/journal）。
+# 若 Storage=volatile，日志在 /run 的内存盘上，磁盘上限根本用不上。
+JOURNAL_STORAGE="$(journald_effective_opt Storage)"
+if [ "$JOURNAL_STORAGE" = "persistent" ]; then
+  ok "journald Storage=persistent（日志落在 /var/log/journal，磁盘上限生效）"
+elif [ -z "$JOURNAL_STORAGE" ]; then
+  ok "journald Storage 未设置（默认 persistent，日志落在 /var/log/journal）"
+else
+  warn "journald Storage=$JOURNAL_STORAGE —— SystemMaxUse 不作用于该存储，日志限额形同虚设"
+  echo "    处置: 在 journald drop-in 里加一行 Storage=persistent 后 sudo systemctl restart systemd-journald"
+fi
+
+# unit 级限流：LogRateLimit* 只挡「日志风暴」，不限制磁盘占用，
+# 与上面的 SystemMaxUse 是两层保险，缺一不可（详见 gateway.service 注释）。
+if [ -f "$SVC_UNIT" ]; then
+  UNIT_LOG_RL=$(grep -E '^[[:space:]]*LogRateLimitIntervalSec=' "$SVC_UNIT" 2>/dev/null |
+    tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+  UNIT_LOG_BURST=$(grep -E '^[[:space:]]*LogRateLimitBurst=' "$SVC_UNIT" 2>/dev/null |
+    tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+  if [ -n "$UNIT_LOG_RL" ] && [ -n "$UNIT_LOG_BURST" ]; then
+    ok "unit 级日志限流 LogRateLimitIntervalSec=$UNIT_LOG_RL / Burst=$UNIT_LOG_BURST（异常刷屏时会被丢弃）"
+  else
+    warn "unit 缺少 LogRateLimitIntervalSec/LogRateLimitBurst —— 日志风暴时没有 unit 级兜底"
+    echo "    处置: 在 $SVC_UNIT 的 [Service] 段加 LogRateLimitIntervalSec=30s 与 LogRateLimitBurst=1000 后 systemctl daemon-reload && systemctl restart gateway"
+  fi
+else
+  warn "未找到 $SVC_UNIT（跳过 unit 级日志限流核对）"
+fi
+
 # ── 7. 资源占用 ──
 echo "${BOLD}[7/7] 资源占用${RESET}"
 RSS=$(ps -o rss= -p "$(systemctl show -p MainPID --value gateway 2>/dev/null)" 2>/dev/null | awk '{printf "%.0f MB", $1/1024}' || echo "?")
@@ -957,6 +1363,18 @@ info "gatewayd RSS: $RSS"
 DISK_CFG=$(df -h /etc/gateway 2>/dev/null | tail -1 | awk '{print "config partition "$5" used"}' || echo "?")
 DISK_DATA=$(df -h /var/lib/gateway 2>/dev/null | tail -1 | awk '{print "data partition "$5" used"}' || echo "?")
 info "磁盘: $DISK_CFG, $DISK_DATA"
+
+# 数据分区剩余空间 vs 队列上限：磁盘见底时入库会暂停（数据停采），不是报错
+# 注意 df 在路径不存在时返回非零 —— set -o pipefail 下必须兜底，否则整脚本在此退出
+DATA_FREE_KB=$(df -Pk /var/lib/gateway 2>/dev/null | tail -1 | awk '{print $4}' || echo 0)
+if [ -n "$DATA_FREE_KB" ] && [ "$DATA_FREE_KB" -gt 0 ] 2>/dev/null; then
+  DATA_FREE_MB=$((DATA_FREE_KB / 1024))
+  if [ "$DATA_FREE_MB" -lt 512 ]; then
+    warn "数据分区剩余仅 ${DATA_FREE_MB}MB —— 队列入库会因磁盘不足暂停（表现为数据停采而非报错）"
+  else
+    ok "数据分区剩余 ${DATA_FREE_MB}MB"
+  fi
+fi
 
 # ── 汇总 ──
 echo ""
