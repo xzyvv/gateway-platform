@@ -204,6 +204,30 @@
 新增任何设备、任何需要落盘的目录，都必须同步更新这三个清单（`DeviceAllow` /
 `ReadWritePaths` / `install.sh` 权限），否则 CI 会拦住。
 
+### 1.8 部署侧 journal 磁盘限额（补全 §1.7 的同类约束）
+
+| 缺陷 | 现场表现 | 根因 | 修复 |
+|---|---|---|---|
+| **P1-5** journal 无磁盘占用上限 | 日志与 SQLite 数据队列同盘 → journal 涨到磁盘满 → **SQLite 入库暂停 → 表现为「数据停采而不是报错」** | `StandardOutput=journal` 但 `SystemMaxUse=` **从未被落地**（`verify-deploy.sh` 只查不写）；且它属于 `journald.conf` 的 `[Journal]` 段，**写进 unit 会被 systemd 静默忽略** | `install.sh` 新增 `[6.5/7]` 步写 drop-in `/etc/systemd/journald.conf.d/60-gateway-journal.conf`（`SystemMaxUse` / `SystemKeepFree` / `RuntimeMaxUse`）并重启 journald；`gateway.service` 加 unit 级 `LogRateLimitIntervalSec` / `LogRateLimitBurst` 兜速率 |
+| 连带：验收口径与落地方式不一致 | 按 drop-in 落地后，`[6d]` 段仍报「未设置」→ 现场反复排查 | `[6d]` 只 grep `/etc/systemd/journald.conf` 主文件，不看 `journald.conf.d/*.conf` | `[6d]` 改为解析**生效值**（主文件按 `/etc`>`/run`>`/usr/local/lib`>`/usr/lib` 取第一个存在的；drop-in 按 basename 排序、同名取高优先级目录，覆盖主文件），并核对 `SystemKeepFree` 与 unit 级限流 |
+
+新增门禁 **C26** 把这条链路钉死：unit 有 `LogRateLimit*`、unit 里没有误写 `SystemMaxUse=`、
+`install.sh` 写 drop-in 且含两个限额项、`verify-deploy.sh` 查 drop-in 且核对 unit 限流。
+细节见 [docs/linux-branch-review.md §10.8](linux-branch-review.md)。
+
+### 1.9 容量规划：点位规模 → 磁盘占用的换算参考（文档侧补全）
+
+| 缺口 | 现场表现 | 根因 | 补全 |
+|---|---|---|---|
+| **P5-1 缺容量换算表** | 装机现场按点位规模拍脑袋配 eMMC：卡配小了**断网几小时就开始 FIFO 丢历史**（不报错，只是历史变短）；卡配大了白花钱 | 仓库里**完全没有**「点位规模 → 磁盘占用」的换算依据：`queue.max_rows` 默认 100 万行、聚合表按磁盘 2% 预算自适应、备份是完整文件副本——三个变量互相影响，但没有一个文档把它们连起来 | 新增 [docs/容量规划.md](容量规划.md)：三步换算（点位 × 周期 → 每天行数 → `max_rows` → 卡容量）、表 A~D、五项占用总账（原始库 / 备份副本 / 聚合表 / WAL / journald）、磁盘水位四档与现场自查命令 |
+| 连带：`max_rows` 默认值对多数现场不够 | 500 点位 / 5 秒周期下，默认 100 万行只够缓冲 **2.8 小时** | 默认值沿用「配置化前的硬编码 100 万」，从未按实际点位规模重算过 | 表 B 给出按缓冲时长（4/8/24/72 h）反查 `max_rows` 的表，并在「装机前准备清单」§9 速查表新增「断网几小时后历史少了最旧一段」条目 |
+| 连带：聚合表覆盖天数是反直觉的 | 现场以为「卡越大历史越长」，实际 5000 点位给 32 GB 卡，分钟桶历史也只有 **0.7 天** | 聚合表行数上限 = 磁盘 2% 预算，而每天桶数随点数线性增长——点数涨 50 倍，历史就短 50 倍 | 表 §4.1 单列「聚合覆盖天数」矩阵，并在「常见误配」里写明「长历史只能靠原始表 + 定期导出」 |
+
+> 这一节**不新增任何运行时功能**，与 §1.7 / §1.8 同属「把已交付能力的现场使用条件写下来」。
+> 全部数字可追到代码常量或生产 schema 实测（原始行 200 B 代码口径 / 145 B 实测，
+> 聚合行 96 B 代码口径 / 150 B 实测），代码依据索引见
+> [docs/容量规划.md §8](容量规划.md)。
+
 ---
 
 ## 2. 逐项价值评估（三因子：现场价值 × 维护成本 × 定位契合）
