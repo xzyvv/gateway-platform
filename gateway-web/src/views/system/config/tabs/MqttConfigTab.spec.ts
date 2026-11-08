@@ -66,7 +66,7 @@ describe('MqttConfigTab.vue 高级参数分组', () => {
     const wrap = wrapper.find('.el-collapse-item__wrap')
     expect(wrap.isVisible(), '点击标题后高级参数应展开').toBe(true)
     const text = wrapper.text()
-    for (const label of ['心跳间隔（秒）', 'ACK 超时（秒）', '压缩方式', '压缩阈值（字节）', '续传限速（条/秒）', '重连退避', 'Payload 模板']) {
+    for (const label of ['心跳间隔（秒）', 'ACK 超时（秒）', '压缩方式', '压缩阈值（字节）', '续传限速（条/秒）', 'CA 证书路径', '重连退避', 'Payload 模板']) {
       expect(text, `高级字段缺失：${label}`).toContain(label)
     }
     wrapper.unmount()
@@ -139,6 +139,36 @@ describe('MqttConfigTab.vue 高级参数分组', () => {
     expect(text).toContain('心跳 默认')
     expect(text).toContain('ACK 默认')
     expect(text).not.toContain('-s')
+    wrapper.unmount()
+  })
+})
+
+describe('MqttConfigTab.vue TLS CA 证书', () => {
+  it('填写路径后写入 tls.ca_cert_path，且不改动 insecure_skip_verify 原值', async () => {
+    const mqtt = makeMqtt()
+    const wrapper = mountTab(mqtt)
+    await wrapper.find('.el-collapse-item__header').trigger('click')
+    await nextTick()
+
+    const input = wrapper.findAll('input').find((i) => i.attributes('placeholder') === '留空 = 使用系统根证书')
+    expect(input, 'CA 证书路径输入框缺失').toBeTruthy()
+    await input!.setValue('/etc/gateway/ca.pem')
+
+    expect(mqtt.tls).toEqual({ ca_cert_path: '/etc/gateway/ca.pem', insecure_skip_verify: false })
+    wrapper.unmount()
+  })
+
+  it('清空路径时把 tls 整体置回 null（恢复系统根证书语义）', async () => {
+    const mqtt = makeMqtt({ tls: { ca_cert_path: '/etc/gateway/ca.pem', insecure_skip_verify: false } })
+    const wrapper = mountTab(mqtt)
+    await wrapper.find('.el-collapse-item__header').trigger('click')
+    await nextTick()
+
+    const input = wrapper.findAll('input').find((i) => i.attributes('placeholder') === '留空 = 使用系统根证书')
+    expect(input).toBeTruthy()
+    await input!.setValue('')
+
+    expect(mqtt.tls).toBeNull()
     wrapper.unmount()
   })
 })

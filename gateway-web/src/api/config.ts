@@ -28,6 +28,8 @@ const RESTART_SECTION_LABELS: Record<string, string> = {
   telemetry: '遥测上报',
   self_heal: '自愈（自动重启保护）',
   web: 'Web 服务（监听地址/CORS/限流）',
+  sim_consumer: '模拟消费者',
+  queue: '数据队列容量',
 }
 
 /**
@@ -40,10 +42,14 @@ function notifyRestartRequired(result: ConfigReloadResult | undefined): void {
   const sections = (result?.restart_required ?? []).filter(Boolean)
   if (sections.length === 0) return
   const names = sections.map((s) => RESTART_SECTION_LABELS[s] ?? s).join('、')
+  // 主进程无法通过 API 自重启（见 gateway-api restart_service 注释），
+  // 因此这里给出手动重启方式，避免用户看到「需重启」却不知道下一步做什么。
   ElMessage({
     type: 'warning',
-    message: `配置已保存，但 ${names} 需重启网关后生效`,
-    duration: 8000,
+    message:
+      `配置已保存，但 ${names} 需重启网关后生效。` +
+      '重启方式：在设备上执行 sudo systemctl restart gateway（容器部署请重启对应容器）。',
+    duration: 12000,
     showClose: true,
   })
 }

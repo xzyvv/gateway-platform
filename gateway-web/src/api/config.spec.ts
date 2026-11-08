@@ -92,7 +92,9 @@ describe('config 配置读写契约', () => {
     expect(arg.type).toBe('warning')
     expect(arg.message).toContain('Webhook')
     expect(arg.message).toContain('OPC UA 服务端')
-    expect(arg.duration).toBe(8000)
+    // 主进程无法 API 自重启，提示必须带可执行的重启方式，否则用户只看到「需重启」无从下手
+    expect(arg.message).toContain('systemctl restart gateway')
+    expect(arg.duration).toBe(12000)
     expect(arg.showClose).toBe(true)
   })
 

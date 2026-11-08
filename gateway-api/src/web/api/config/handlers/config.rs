@@ -22,7 +22,7 @@ pub async fn import_config(
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
     let old = state.config.load_full();
-    // 审计所需的规模数字必须在 apply_reload 移走 payload.config 之前取好
+    // 审计所需的规模数字必须在 reload_then_save 消费配置之前取好
     let device_count = payload
         .config
         .devices
@@ -31,7 +31,19 @@ pub async fn import_config(
         .unwrap_or(0);
     let point_count = payload.config.points.len();
     let bus_count = payload.config.buses.len();
-    let outcome = apply_reload(&state, &old, payload.config).await?;
+    let (outcome, effective) =
+        crate::web::config_apply::reload_then_save(&state, &old, &payload.config).await?;
+    // 导入是覆盖式写操作，必须与 POST /api/config 一样留版本快照，
+    // 否则导入前的配置在版本库里没有落点，无法回滚。
+    // 快照失败只降级为告警：配置已落盘生效，不应因历史归档失败而回滚本次导入。
+    match state
+        .config
+        .version_store
+        .save_version(&effective, "config import")
+    {
+        Ok(vid) => tracing::info!("config version v{} saved after import", vid),
+        Err(e) => tracing::warn!("failed to save config version after import: {}", e),
+    }
     // E1: 整份配置导入是覆盖式写操作，单独落审计（通用 config.update 看不出「导入」语义）
     state.platform.audit.log(
         "config.import",

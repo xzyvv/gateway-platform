@@ -180,6 +180,59 @@
         />
         <div class="field-hint">单连接同时在途请求数，默认 8</div>
       </el-form-item>
+      <!-- 采集调优：吞吐/硬件相关，默认值适配多数现场，折叠起来避免误改 -->
+      <el-collapse class="bus-advanced">
+        <el-collapse-item name="advanced">
+          <template #title>
+            <span class="advanced-name">高级（采集调优）</span>
+          </template>
+          <el-form-item label="通道容量">
+            <el-input-number
+              v-model="bus.channel_capacity"
+              :min="1"
+              :max="4096"
+              controls-position="right"
+              style="width: 100%"
+            />
+            <div class="field-hint">
+              单总线在途采集事件的缓冲深度（默认 128）；高频 TCP 总线可调大，改完保存即重建该总线。
+            </div>
+          </el-form-item>
+          <el-form-item label="RS485 方向引脚">
+            <el-input-number
+              :model-value="bus.de_pin ?? undefined"
+              :min="0"
+              :max="1024"
+              placeholder="留空=内核自动方向"
+              controls-position="right"
+              style="width: 100%"
+              aria-label="RS485 方向引脚"
+              @update:model-value="(v: number | undefined) => (bus.de_pin = v ?? null)"
+            />
+            <div class="field-hint">
+              仅串口总线有效；填 GPIO 编号（如 17）由程序控制 DE/RE 收发方向，留空沿用内核自动方向。
+            </div>
+          </el-form-item>
+          <el-form-item label="重连退避">
+            <div class="backoff-field">
+              <el-select
+                :model-value="busBackoffPreset(bus)"
+                style="width: 100%"
+                aria-label="重连退避预设"
+                @update:model-value="(v: BackoffPreset) => setBusBackoff(bus, v)"
+              >
+                <el-option
+                  v-for="opt in BACKOFF_OPTIONS"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.label"
+                />
+              </el-select>
+              <div class="field-hint">当前：{{ busBackoffText(bus) }}</div>
+            </div>
+          </el-form-item>
+        </el-collapse-item>
+      </el-collapse>
     </div>
   </el-form>
   <empty-state
@@ -206,6 +259,13 @@ import {
   protocolVariantsOf,
 } from '@/composables/devices/useProtocol'
 import type { BusConfig, OpcUaClientConfig } from '@/api/types'
+import {
+  BACKOFF_OPTIONS,
+  BACKOFF_PRESETS,
+  applyPreset,
+  presetOf,
+  type BackoffPreset,
+} from '@/utils/backoffPresets'
 
 // 总线列表为受控模型；增删/协议切换等业务逻辑仍由 useConfigActions 提供，经事件上抛。
 const buses = defineModel<BusConfig[]>({ required: true })
@@ -281,4 +341,40 @@ function setOpcuaMode(bus: BusConfig, mode: string) {
 /** 需要证书/私钥：X.509 认证，或非 none 的安全策略。 */
 const needsCert = (bus: BusConfig) =>
   authOf(bus).auth === 'certificate' || authOf(bus).security_policy !== 'none'
+
+/** 反查总线当前退避档位（不在预设内则为「自定义」展示态） */
+const busBackoffPreset = (bus: BusConfig): BackoffPreset =>
+  presetOf(bus.reconnect_backoff ?? BACKOFF_PRESETS.standard)
+
+/** 当前退避的可读描述；旧配置可能没有该字段，回落标准档 */
+function busBackoffText(bus: BusConfig): string {
+  const b = bus.reconnect_backoff ?? BACKOFF_PRESETS.standard
+  return `${b.seconds.join(' / ')} 秒，抖动 ${Math.round(b.jitter_ratio * 100)}%`
+}
+
+/** 选中预设时改写退避参数；「自定义」不改写，保护现场手调的档位 */
+function setBusBackoff(bus: BusConfig, preset: BackoffPreset) {
+  const next = applyPreset(preset)
+  if (!next) return
+  bus.reconnect_backoff = next
+}
 </script>
+
+<style scoped>
+.bus-advanced {
+  margin: 4px 0 8px;
+}
+.bus-advanced :deep(.el-collapse-item__header) {
+  padding-left: 0;
+}
+.bus-advanced :deep(.el-collapse-item__wrap) {
+  padding-left: 0;
+  padding-right: 0;
+}
+.advanced-name {
+  font-weight: 600;
+}
+.backoff-field {
+  width: 100%;
+}
+</style>

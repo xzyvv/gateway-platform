@@ -134,6 +134,13 @@
           <TelemetryConfigTab v-model="config.telemetry" />
         </el-tab-pane>
 
+        <el-tab-pane name="queue">
+          <template #label>
+            <span class="tab-label"><el-icon><Box /></el-icon> 队列</span>
+          </template>
+          <QueueConfigTab v-model="config.queue" />
+        </el-tab-pane>
+
         <el-tab-pane name="webhook">
           <template #label>
             <span class="tab-label"><el-icon><Promotion /></el-icon> Webhook</span>
@@ -210,6 +217,7 @@ import WebConfigTab from './tabs/WebConfigTab.vue'
 import MqttConfigTab from './tabs/MqttConfigTab.vue'
 import NtpConfigTab from './tabs/NtpConfigTab.vue'
 import TelemetryConfigTab from './tabs/TelemetryConfigTab.vue'
+import QueueConfigTab from './tabs/QueueConfigTab.vue'
 import WebhookConfigTab from './tabs/WebhookConfigTab.vue'
 import OpcuaConfigTab from './tabs/OpcuaConfigTab.vue'
 import ModbusServerConfigTab from './tabs/ModbusServerConfigTab.vue'

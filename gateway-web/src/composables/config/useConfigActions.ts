@@ -333,7 +333,14 @@ export function useConfigActions() {
       } catch (e) {
         // 写操作失败全局不再弹窗（拦截器只留痕），此处给出带动作语境的提示。
         // 保存失败的常见原因（配额超限 / 配置校验未过 / 磁盘只读）必须透出来
-        ElMessage.error(`${failureMessage('保存配置', e)}；配置未被修改`)
+        const msg = failureMessage('保存配置', e)
+        // 后端是「先热重载内存、再原子落盘」：落盘失败时运行态已是新配置，
+        // 只有磁盘还是旧的，重启后会回退——不能笼统提示「配置未被修改」。
+        if (msg.includes('disk save failed')) {
+          ElMessage.error(`${msg}；运行态已更新，但磁盘未写入，重启后将回到旧配置`)
+        } else {
+          ElMessage.error(`${msg}；配置未被修改`)
+        }
       }
     } finally {
       if (!isUnmounted()) saving.value = false

@@ -69,14 +69,27 @@
         <el-form-item label="续传限速（条/秒）">
           <el-input-number v-model="mqtt.resume_rate_limit" :min="0" placeholder="0=不限速" />
         </el-form-item>
+        <el-form-item label="CA 证书路径">
+          <el-input
+            :model-value="mqtt.tls?.ca_cert_path ?? ''"
+            placeholder="留空 = 使用系统根证书"
+            clearable
+            @update:model-value="onCaCertInput"
+          />
+          <div class="tls-hint">
+            仅 Broker 使用 TLS（mqtts/wss）时生效；填 PEM/DER 证书的绝对路径，用于自签或企业私有 CA。
+          </div>
+        </el-form-item>
         <el-form-item label="重连退避">
           <!-- 逐档秒数是调优项，前端只给三个预设；现场特殊需求仍可直接改 config.json -->
           <div class="backoff-field">
             <el-select v-model="backoffPreset" style="width: 100%">
-              <el-option value="standard" label="标准（2/4/8/16/32/60 秒，抖动 40%）" />
-              <el-option value="fast" label="快速（1/1/2/3/5/10 秒，抖动 20%）" />
-              <el-option value="conservative" label="保守（5/15/30/60/120/300 秒，抖动 50%）" />
-              <el-option value="custom" label="自定义（配置文件档位，选此项不改写）" />
+              <el-option
+                v-for="opt in BACKOFF_OPTIONS"
+                :key="opt.value"
+                :value="opt.value"
+                :label="opt.label"
+              />
             </el-select>
             <div class="backoff-hint">
               当前：{{ backoff.seconds.join(' / ') }} 秒，抖动 {{ Math.round(backoff.jitter_ratio * 100) }}%
@@ -95,6 +108,15 @@
 import { computed, ref } from 'vue'
 import DurationSelect from '@/components/industrial/DurationSelect.vue'
 import type { MqttConfig } from '@/api/types'
+import {
+  BACKOFF_LABELS,
+  BACKOFF_OPTIONS,
+  BACKOFF_PRESETS,
+  applyPreset,
+  presetOf,
+  type Backoff,
+  type BackoffPreset,
+} from '@/utils/backoffPresets'
 
 const mqtt = defineModel<MqttConfig>({ required: true })
 
@@ -127,52 +149,39 @@ const compressionProxy = computed<string>({
 })
 
 /**
- * 重连退避预设。
- *
- * 标准档与后端 `default_reconnect_backoff()` 完全一致（2/4/8/16/32/60 秒 + 40% 抖动），
- * 保证「不动这个下拉」不会改变升级前的重连节奏。
+ * 重连退避：预设与总线页共用（见 @/utils/backoffPresets），避免两处档位漂移。
  */
-type BackoffPreset = 'standard' | 'fast' | 'conservative' | 'custom'
-type Backoff = MqttConfig['reconnect_backoff']
-
-const BACKOFF_PRESETS: Record<Exclude<BackoffPreset, 'custom'>, Backoff> = {
-  standard: { seconds: [2, 4, 8, 16, 32, 60], jitter_ratio: 0.4 },
-  fast: { seconds: [1, 1, 2, 3, 5, 10], jitter_ratio: 0.2 },
-  conservative: { seconds: [5, 15, 30, 60, 120, 300], jitter_ratio: 0.5 },
-}
-
-/** 当前生效的退避参数（配置缺失时按标准档展示） */
 const backoff = computed<Backoff>(() => mqtt.value?.reconnect_backoff ?? BACKOFF_PRESETS.standard)
 
-const BACKOFF_LABELS: Record<BackoffPreset, string> = {
-  standard: '标准',
-  fast: '快速',
-  conservative: '保守',
-  custom: '自定义',
-}
-
-function sameBackoff(a: Backoff, b: Backoff) {
-  return (
-    a.seconds.length === b.seconds.length &&
-    a.seconds.every((s, i) => s === b.seconds[i]) &&
-    Math.abs(a.jitter_ratio - b.jitter_ratio) < 1e-9
-  )
-}
-
 const backoffPreset = computed<BackoffPreset>({
-  get: () => {
-    const cur = backoff.value
-    const hit = (Object.keys(BACKOFF_PRESETS) as Array<keyof typeof BACKOFF_PRESETS>)
-      .find((k) => sameBackoff(cur, BACKOFF_PRESETS[k]))
-    return hit ?? 'custom'
-  },
+  get: () => presetOf(backoff.value),
   set: (preset) => {
     // 「自定义」只是展示态：选中时不改写配置，避免覆盖现场手调的档位
-    if (preset === 'custom' || !mqtt.value) return
-    const p = BACKOFF_PRESETS[preset]
-    mqtt.value.reconnect_backoff = { seconds: [...p.seconds], jitter_ratio: p.jitter_ratio }
+    const next = applyPreset(preset)
+    if (!next || !mqtt.value) return
+    mqtt.value.reconnect_backoff = next
   },
 })
+
+/**
+ * 自定义 CA 证书路径。
+ *
+ * - 清空时把 `tls` 整体置 null，恢复「使用系统根证书」的旧语义；
+ * - 只暴露 ca_cert_path：insecure_skip_verify 会被后端校验直接拒绝，不提供开关；
+ * - 后端用 rumqttc 建链，改完保存即重建客户端（连不上会保留旧连接）。
+ */
+function onCaCertInput(v: string) {
+  if (!mqtt.value) return
+  const path = v.trim()
+  if (!path) {
+    mqtt.value.tls = null
+    return
+  }
+  mqtt.value.tls = {
+    ca_cert_path: path,
+    insecure_skip_verify: mqtt.value.tls?.insecure_skip_verify ?? false,
+  }
+}
 
 /** 折叠状态下仍能看到当前高级参数取值，不必展开就能确认配置是否生效 */
 const advancedSummary = computed(() => {
@@ -188,6 +197,7 @@ const advancedSummary = computed(() => {
     `退避 ${BACKOFF_LABELS[backoffPreset.value]}`,
   ]
   if (m.resume_rate_limit) parts.push(`限速 ${m.resume_rate_limit} 条/秒`)
+  if (m.tls?.ca_cert_path) parts.push('自签 CA')
   if (m.payload_template) parts.push('自定义 Payload')
   return parts.join(' · ')
 })
@@ -234,6 +244,12 @@ const advancedSummary = computed(() => {
 .backoff-hint {
   margin-top: 4px;
   font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.tls-hint {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  line-height: 1.5;
   color: var(--text-secondary);
 }
 </style>

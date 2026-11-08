@@ -6,8 +6,10 @@
  *
  * 旧实现：BrokerScheme::Tls + 无 client_cert 路径走 rumqttc::Transport::tls_with_default_config()，
  *         仅信任 WebPKI + 系统 CA 证书池；内网自签或私有 CA 签发的 broker 必失败。
- * 新增：ca_cert_path 显式指定 PEM/DER 格式 CA bundle；insecure_skip_verify 留给
- *         测试场景（生产警告）。
+ * 新增：ca_cert_path 显式指定 PEM/DER 格式 CA bundle。
+ * 注意：insecure_skip_verify 是**保留字段**——rumqttc 无法真正关闭服务器证书校验，
+ *         配置为 true 会在配置校验阶段直接被拒绝（见 validate/gate.rs），
+ *         现场请改用 ca_cert_path 指定自签/私有 CA。
  */
 export type MqttTlsConfig = { 
 /**
@@ -15,6 +17,7 @@ export type MqttTlsConfig = {
  */
 ca_cert_path: string | null, 
 /**
- * 跳过服务器证书验证（仅测试/排错使用；生产启用会在启动时记 error 日志）
+ * 跳过服务器证书验证（**未实现**：rumqttc 无法关闭证书校验；配置为 true 会被
+ * 配置校验直接拒绝，保留字段只为给出明确错误，避免静默忽略）
  */
 insecure_skip_verify: boolean, };

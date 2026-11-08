@@ -57,6 +57,58 @@
           开启后，webhook 测试禁止访问回环/私网/CGNAT/链路本地地址（严格模式不跟随重定向）。
         </div>
       </el-form-item>
+
+      <!-- 性能与限流：多数部署用默认值，折叠避免与必填项抢注意力 -->
+      <el-collapse v-model="advancedOpen" class="web-advanced">
+        <el-collapse-item name="advanced">
+          <template #title>
+            <span class="advanced-name">高级（性能与限流）</span>
+          </template>
+          <el-form-item label="实时推送并发上限">
+            <el-input-number v-model="web.realtime_max_subscribers" :min="1" :max="1024" />
+            <div class="field-hint">
+              WebSocket 同时在线连接上限（1~1024，默认 64）；超限的新连接直接返回 503。保存后对新连接立即生效。
+            </div>
+          </el-form-item>
+          <el-form-item label="实时推送缓冲">
+            <el-input-number v-model="web.realtime_buffer" :min="16" :max="65536" :step="128" />
+            <div class="field-hint">
+              WebSocket 断线重连时可回放的事件条数（默认 1024）；越大抗抖动越好、内存占用越高。改动需重启网关后生效。
+            </div>
+          </el-form-item>
+          <el-form-item label="接口限流（次/秒）">
+            <div class="rate-limit-field">
+              <el-switch v-model="rateLimitEnabled" active-text="开启" inactive-text="关闭" />
+              <el-input-number
+                v-if="rateLimitEnabled"
+                v-model="rateLimitValue"
+                :min="1"
+                :max="10000"
+              />
+            </div>
+            <div class="field-hint">
+              单客户端每秒请求上限；关闭=不限流（默认）。改动需重启网关后生效。
+            </div>
+          </el-form-item>
+          <el-form-item label="跨域来源白名单">
+            <div class="cors-field">
+              <el-switch v-model="corsRestricted" active-text="限制来源" inactive-text="允许任意来源" />
+              <el-input
+                v-if="corsRestricted"
+                :model-value="corsText"
+                type="textarea"
+                :rows="3"
+                placeholder="每行一个来源，如 http://192.168.1.10:5173"
+                aria-label="跨域来源白名单"
+                @update:model-value="onCorsInput"
+              />
+            </div>
+            <div class="field-hint">
+              关闭=允许任意网站跨域（默认，存在 CSRF 风险）；开启且留空=仅同源；填写=按白名单放行。改动需重启网关后生效。
+            </div>
+          </el-form-item>
+        </el-collapse-item>
+      </el-collapse>
     </el-form>
 
     <!-- 访问密码：独立走 /api/auth/password（服务端哈希），不写 password_hash 字段 -->
@@ -111,6 +163,56 @@ const oldPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
 const savingPwd = ref(false)
+/** 高级分组默认收起：性能与限流参数多数部署用默认值即可 */
+const advancedOpen = ref<string[]>([])
+
+/**
+ * 接口限流开关：配置里 `null` 表示不限流。
+ * 关闭时写回 null；重新开启时回落到上次的数值（默认 60 次/秒），
+ * 避免「关一下再开」把现场已调好的阈值清成默认值。
+ */
+const LAST_RATE_LIMIT = 60
+const rateLimitEnabled = computed<boolean>({
+  get: () => web.value?.rate_limit_per_sec != null,
+  set: (on) => {
+    if (!web.value) return
+    web.value.rate_limit_per_sec = on ? LAST_RATE_LIMIT : null
+  },
+})
+const rateLimitValue = computed<number | undefined>({
+  get: () => web.value?.rate_limit_per_sec ?? LAST_RATE_LIMIT,
+  set: (v) => {
+    // el-input-number 清空时会给出 null/undefined，保持原值不写入，避免非法配置
+    if (!web.value || v == null) return
+    web.value.rate_limit_per_sec = v
+  },
+})
+
+/**
+ * 跨域来源白名单（后端三态）：
+ * - `null` = 不限制，允许任意来源（默认，校验会告警）；
+ * - `[]` = 仅同源；
+ * - 非空数组 = 白名单。
+ * 关闭开关写回 null；开启先落到 []，避免「开了却仍然全放开」的错觉。
+ */
+const corsRestricted = computed<boolean>({
+  get: () => web.value?.cors_origins != null,
+  set: (on) => {
+    if (!web.value) return
+    web.value.cors_origins = on ? [] : null
+  },
+})
+
+const corsText = computed(() => (web.value?.cors_origins ?? []).join('\n'))
+
+function onCorsInput(v: string) {
+  if (!web.value) return
+  // 逗号与换行都当分隔符，逐项 trim；清空即 []（仅同源）
+  web.value.cors_origins = v
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
 const canSubmitPwd = computed(
   () => !!oldPassword.value && newPassword.value.length >= 6 && newPassword.value === confirmPassword.value,
 )
@@ -157,6 +259,29 @@ void props
 }
 .web-alert {
   margin-bottom: 4px;
+}
+.web-advanced {
+  margin-top: 4px;
+}
+.web-advanced :deep(.el-collapse-item__header),
+.web-advanced :deep(.el-collapse-item__wrap) {
+  padding-left: 0;
+  padding-right: 0;
+}
+.advanced-name {
+  font-weight: 600;
+}
+.rate-limit-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+.cors-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
 }
 .field-hint {
   margin-top: 4px;

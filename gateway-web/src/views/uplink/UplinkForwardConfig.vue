@@ -40,7 +40,7 @@
       title="所有转发通道当前都处于停用状态，网关不会向外上报数据"
     >
       <p class="empty-guide-hint">
-        打开表格里的「启用」开关即可上报，无需离开本页；要改 Broker / Topic 请点「参数」到运行参数。
+        打开表格里的「启用」开关即可上报，无需离开本页；MQTT 开关即时生效，HTTP 转发需重启网关后生效；要改 Broker / Topic 请点「参数」到运行参数。
       </p>
       <div class="guide-actions">
         <el-button size="small" type="primary" @click="goRuntimeConfig(primarySection)">前往运行参数</el-button>
@@ -234,7 +234,12 @@ async function onToggle(c: Channel) {
     if (c.type === 'mqtt' && cfg.mqtt) cfg.mqtt.enabled = c.enabled
     else if (c.type === 'http' && cfg.webhook) cfg.webhook.enabled = c.enabled
     await postConfig(cfg)
-    ElMessage.success(c.enabled ? '已启用' : '已停用')
+    // HTTP 转发器只在启动时创建，开关改动落盘但不热更，必须明确告知需要重启
+    ElMessage.success(
+      c.type === 'http'
+        ? `${c.enabled ? '已启用' : '已停用'}（需重启网关后生效）`
+        : c.enabled ? '已启用' : '已停用',
+    )
   } catch (e) { showToast(e, '操作失败') }
 }
 

@@ -90,6 +90,10 @@ pub fn reload_scope(old: &GatewayConfig, new: &GatewayConfig) -> ReloadScope {
     if old.virtual_points != new.virtual_points {
         scope.applied.push("virtual_points");
     }
+    // 协议转换规则：与虚拟点位同一机制，由 Gateway::reload_config 在线替换规则集
+    if old.convert_rules != new.convert_rules {
+        scope.applied.push("convert_rules");
+    }
 
     // ===== 仅落盘，需重启进程 =====
     // 这些分节在 bootstrap 阶段一次性 spawn（见 gatewayd/bootstrap），运行中没有重载路径。
@@ -256,5 +260,63 @@ mod tests {
         let scope = reload_scope(&old, &new);
         assert_eq!(scope.applied, vec!["virtual_points"]);
         assert!(scope.restart_required.is_empty());
+    }
+
+    #[test]
+    fn convert_rules_change_is_applied_online() {
+        // 协议转换规则与虚拟点位同机制，由 reload_config 在线替换规则集
+        let old = base();
+        let mut new = old.clone();
+        new.convert_rules = Some(Vec::new());
+        let scope = reload_scope(&old, &new);
+        assert_eq!(scope.applied, vec!["convert_rules"]);
+        assert!(scope.restart_required.is_empty());
+    }
+
+    /// 守护测试：配置里的每个顶层分节都必须显式归类。
+    ///
+    /// 之前 convert_rules 漏了归类，出现「实际已热更，但接口既不报 applied 也不报重启」的静默生效。
+    /// 这里以 serde 序列化后的顶层键为基准比对归类清单：新增分节若不同步登记，本用例直接失败。
+    #[test]
+    fn every_config_section_is_classified_in_reload_scope() {
+        // applied = 热更；restart = 需重启；silent = 纯元数据/内部字段（不提示）
+        // web 为分字段生效：动态项 applied，监听地址/CORS/限流/实时缓冲为 restart
+        const CLASSIFIED: &[(&str, &str)] = &[
+            ("schema_version", "silent"),
+            ("buses", "applied"),
+            ("points", "applied"),
+            ("point_trash", "silent"),
+            ("convert_rules", "applied"),
+            ("devices", "applied"),
+            ("mqtt", "applied"),
+            ("sim_consumer", "restart"),
+            ("ntp", "applied"),
+            ("web", "applied/restart"),
+            ("webhook", "restart"),
+            ("cellular", "restart"),
+            ("opcua", "restart"),
+            ("modbus_server", "restart"),
+            ("modbus_passthrough", "restart"),
+            ("device_groups", "silent"),
+            ("device_assets", "silent"),
+            ("virtual_points", "applied"),
+            ("telemetry", "restart"),
+            ("license", "silent"),
+            ("self_heal", "restart"),
+            ("queue", "restart"),
+        ];
+
+        let json = serde_json::to_value(base()).expect("配置应可序列化");
+        let obj = json.as_object().expect("配置顶层应为对象");
+
+        // 注意：Option 分节在 None 时不会出现在序列化结果里（如未启用的 webhook、convert_rules），
+        // 因此这里只保证「已出现的分节都有归类」；清单中残留已删除分节需人工清理。
+        for key in obj.keys() {
+            assert!(
+                CLASSIFIED.iter().any(|(k, _)| k == key),
+                "配置分节 `{}` 未在 reload_scope 归类：新增分节必须显式选择热更/重启/静默",
+                key
+            );
+        }
     }
 }
