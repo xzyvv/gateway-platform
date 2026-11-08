@@ -19,7 +19,7 @@ use super::super::model::{ControlCommand, SendCommandRequest, WritablePoint};
 pub(crate) async fn list_writable_points(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<WritablePoint>>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
+    let cfg = state.config.load_full();
     let mut writable: Vec<WritablePoint> = Vec::new();
     for p in &cfg.points {
         // S11: 写入白名单——仅返回显式标记 writable=true 的点位，

@@ -121,8 +121,8 @@ pub(crate) async fn get_config(
     axum::extract::Query(q): axum::extract::Query<ConfigQuery>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
-    let mut value = serde_json::to_value(&cfg)
+    let cfg = state.config.load_full();
+    let mut value = serde_json::to_value(&*cfg)
         .map_err(|e| ApiError::internal(format!("serialize config failed: {}", e)))?;
     if q.include_secrets {
         crate::web::api::config::handlers::ensure_primary_token(
@@ -147,7 +147,7 @@ pub(crate) async fn post_config(
 
     // A5: 串行化整个热重载流程，防止并发配置更新交错产生半旧状态
     let _reload_guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
+    let old = state.config.load_full();
 
     // 2-5. 展开设备模板 + 热重载 + 持久化（A5 顺序：reload → store → save）
     //      统一走 config_apply，消除与 rollback / restart_service 的重复实现。
@@ -296,7 +296,7 @@ pub(crate) async fn rollback_config_version(
     // A5: 串行化整个回滚流程
     let _reload_guard = state.config.config_reload_lock.lock().await;
 
-    let old = state.config.load_full().as_ref().clone();
+    let old = state.config.load_full();
     let new_config = state
         .config
         .version_store
@@ -393,7 +393,7 @@ pub(crate) async fn config_diff(
     State(state): State<Arc<AppState>>,
     Json(new_config): Json<GatewayConfig>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let old = state.config.load_full().as_ref().clone();
+    let old = state.config.load_full();
     let diffs = config_field_diffs(&old, &new_config);
     Ok(Json(serde_json::json!({
         "changed_fields": diffs,

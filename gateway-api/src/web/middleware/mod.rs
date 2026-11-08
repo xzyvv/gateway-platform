@@ -15,7 +15,7 @@ pub use rate_limit::RateLimiter;
 pub(crate) use auth::{
     allow_anon_read, api_token, extract_token_from_headers, extract_token_from_ws_protocol,
     extract_token_from_ws_query, require_admin_or_exec_scope, require_auth,
-    require_auth_if_anon_disabled, token_matches,
+    require_auth_if_anon_disabled, token_matches, AuthedApiKey,
 };
 pub(crate) use category::{
     tag_config_entry, tag_config_management, tag_diagnostic, tag_protocol_tool,

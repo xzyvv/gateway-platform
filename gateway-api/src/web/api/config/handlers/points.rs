@@ -79,8 +79,8 @@ pub async fn create_point(
 ) -> Result<ApiResponse<PointConfig>, ApiError> {
     // D2: 串行化「读→改→写」，防止并发配置变更丢更新（与 users/groups 等一致）
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     // Q17: 校验 device_id 存在性
     let device_exists = cfg
         .devices
@@ -165,8 +165,8 @@ pub async fn update_point(
 ) -> Result<ApiResponse<()>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     // Bug 39: validate payload fields (skip uniqueness check, ID unchanged)
     if payload.protocol.is_empty() {
         return Ok(ApiResponse::err(4002, "protocol 不能为空"));
@@ -292,8 +292,8 @@ pub async fn delete_point(
 ) -> Result<ApiResponse<()>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     let Some(pos) = cfg.points.iter().position(|p| p.id == id) else {
         return Ok(ApiResponse::err(4004, "point not found"));
     };
@@ -320,8 +320,8 @@ pub async fn restore_point(
 ) -> Result<ApiResponse<PointConfig>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     let Some(pos) = cfg
         .point_trash
         .as_ref()
@@ -353,8 +353,8 @@ pub async fn restore_point(
 pub async fn list_point_trash(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<PointTrashEntry>>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
-    let mut trash = cfg.point_trash.unwrap_or_default();
+    let cfg = state.config.load_full();
+    let mut trash = cfg.point_trash.clone().unwrap_or_default();
     trash.sort_by_key(|a| std::cmp::Reverse(a.deleted_at_ms));
     Ok(Json(ApiResponse::ok(trash)))
 }
@@ -366,8 +366,8 @@ pub async fn purge_point(
 ) -> Result<ApiResponse<()>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     let removed = match cfg.point_trash.as_mut() {
         Some(trash) => {
             let before = trash.len();
@@ -396,8 +396,8 @@ pub async fn purge_all_point_trash(
 ) -> Result<ApiResponse<()>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     cfg.point_trash = None;
     apply_reload(&state, &old, cfg).await?;
     state

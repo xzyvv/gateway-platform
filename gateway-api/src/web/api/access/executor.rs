@@ -131,7 +131,7 @@ async fn execute_read_point(state: &Arc<AppState>, task: &ScheduledTask) -> Exec
     let Some(target) = task.target.as_deref() else {
         return missing_target();
     };
-    let config = state.config.load_full().as_ref().clone();
+    let config = state.config.load_full();
     let Some(point) = config.points.iter().find(|p| p.id == target).cloned() else {
         return ExecResult {
             ok: false,
@@ -161,7 +161,7 @@ async fn execute_read_device(state: &Arc<AppState>, task: &ScheduledTask) -> Exe
     let Some(target) = task.target.as_deref() else {
         return missing_target();
     };
-    let config = state.config.load_full().as_ref().clone();
+    let config = state.config.load_full();
     // 与 /api/devices/:id/points 同口径：优先按 device_id 匹配，回退按 bus 名
     let points: Vec<_> = config
         .points
@@ -206,7 +206,7 @@ async fn execute_read_device(state: &Arc<AppState>, task: &ScheduledTask) -> Exe
 }
 
 fn execute_backup_config(state: &Arc<AppState>) -> ExecResult {
-    let config = state.config.load_full().as_ref().clone();
+    let config = state.config.load_full();
     match state
         .config
         .version_store

@@ -52,8 +52,8 @@ pub(crate) async fn offset_apply(
     Json(req): Json<ApplyOffsetRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let mut count = 0usize;
     for p in &mut new_cfg.points {
         if !req.ids.contains(&p.id) {

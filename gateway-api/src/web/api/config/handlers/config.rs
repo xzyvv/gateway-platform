@@ -21,7 +21,7 @@ pub async fn import_config(
     }
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
+    let old = state.config.load_full();
     // 审计所需的规模数字必须在 apply_reload 移走 payload.config 之前取好
     let device_count = payload
         .config
@@ -54,7 +54,7 @@ pub async fn reload_config(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
+    let old = state.config.load_full();
     // 从磁盘重新加载最新内容（避免内存与文件不一致）。
     // 使用 Q18 新增的 reload() 而非 load()：文件缺失时返回错误，
     // 而非静默生成默认配置——对显式 reload 端点更合理。
@@ -117,7 +117,7 @@ fn validate_config(config: &GatewayConfig) -> GatewayResult<()> {
 pub async fn backup_config(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
+    let cfg = state.config.load_full();
     let vid = state
         .config
         .version_store

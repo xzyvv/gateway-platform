@@ -48,8 +48,8 @@ pub(crate) async fn create_group(
         return Ok(ApiResponse::err(6001, "组名不能为空"));
     }
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let groups = new_cfg.device_groups.get_or_insert_with(Vec::new);
     if groups.iter().any(|g| g.name == payload.name) {
         return Ok(ApiResponse::err(
@@ -103,8 +103,8 @@ pub(crate) async fn update_group(
     Json(payload): Json<UpdateGroupRequest>,
 ) -> Result<ApiResponse<()>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
         None => return Ok(ApiResponse::err(6002, "group not found")),
@@ -139,8 +139,8 @@ pub(crate) async fn delete_group(
     Path(id): Path<String>,
 ) -> Result<ApiResponse<()>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
         None => return Ok(ApiResponse::err(6002, "group not found")),
@@ -176,8 +176,8 @@ pub(crate) async fn add_device_to_group(
 ) -> Result<ApiResponse<()>, ApiError> {
     let device_id = payload.device_id;
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
         None => return Ok(ApiResponse::err(6002, "group not found")),
@@ -202,8 +202,8 @@ pub(crate) async fn remove_device_from_group(
     Path((group_id, device_id)): Path<(String, String)>,
 ) -> Result<ApiResponse<()>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
         None => return Ok(ApiResponse::err(6002, "group not found")),

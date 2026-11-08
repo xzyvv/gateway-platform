@@ -102,7 +102,7 @@ pub(crate) async fn list_services(
     let total = devices.len();
     let online = devices
         .iter()
-        .filter(|d| d["quality"] == "good" || d["consecutive_failures"] == 0)
+        .filter(|d| d.quality == "good" || d.consecutive_failures == 0)
         .count();
     let collect_failures = metrics.collect.collect_failures.load(Ordering::Relaxed);
     let collect_status = if total > 0 && online == 0 {

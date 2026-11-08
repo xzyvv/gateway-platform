@@ -127,8 +127,8 @@ pub(crate) async fn change_password(
     }
 
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
 
     // #11: 服务端校验当前密码。此前仅由前端"再登录一次"在客户端代偿，服务端只要
     // 拿到有效 token 就能直接改密——一旦 token 泄漏（无需知道原密码）攻击者即可永久
@@ -199,19 +199,26 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// 主 token 为管理员，API 密钥按 scope 区分读写。
 pub(crate) async fn whoami(
     State(state): State<Arc<AppState>>,
+    authed: Option<axum::extract::Extension<AuthedApiKey>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<WhoAmIResponse>, ApiError> {
     use crate::web::middleware::{api_token, extract_token_from_headers, token_matches};
-    let (credential, scopes) = match extract_token_from_headers(&headers) {
-        Some(token) if token_matches(&token, &api_token(&state)) => {
-            ("primary".to_string(), vec!["*".to_string()])
+    // require_auth 已把已认证的 API 密钥放进 request extensions，这里直接读取。
+    // 旧实现在此处再调一次 authenticate：同一请求会查库两次、调用计数也加两次。
+    let (credential, scopes) = match authed {
+        Some(axum::extract::Extension(AuthedApiKey(key))) => ("api_key".to_string(), key.scopes),
+        // 无扩展 = 主 token（require_auth 只对 API 密钥写扩展）。
+        // 兜底按 header 判定，保持 handler 被直接调用时的旧语义。
+        None => {
+            let is_primary = extract_token_from_headers(&headers)
+                .map(|t| token_matches(&t, &api_token(&state)))
+                .unwrap_or(false);
+            if is_primary {
+                ("primary".to_string(), vec!["*".to_string()])
+            } else {
+                ("unknown".to_string(), Vec::new())
+            }
         }
-        // require_auth 已放行，此处只区分「主 token / API 密钥」；查不到密钥时降级为无 scope。
-        Some(token) => match state.platform.api_keys.authenticate(&token) {
-            Ok(Some(key)) => ("api_key".to_string(), key.scopes.clone()),
-            _ => ("api_key".to_string(), Vec::new()),
-        },
-        None => ("unknown".to_string(), Vec::new()),
     };
 
     let cfg = state.config.load_full();

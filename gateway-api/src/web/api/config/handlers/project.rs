@@ -142,7 +142,7 @@ pub(crate) async fn export_project(
     Query(q): Query<ProjectExportQuery>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
+    let cfg = state.config.load_full();
     let project = ProjectFile::from_config(&cfg);
     let mut value = serde_json::to_value(&project)
         .map_err(|e| ApiError::internal(format!("serialize project failed: {}", e)))?;
@@ -175,8 +175,8 @@ pub(crate) async fn import_project(
 
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new = old.clone();
+    let old = state.config.load_full();
+    let mut new = old.as_ref().clone();
     payload.apply_to(&mut new);
     // 默认导出的工程文件凭据是 `"********"` 占位符，导入时必须从目标机既有配置还原，
     // 否则会把占位串当作真实凭据落盘（北向通道与 `buses[].opcua` 同此口径）。

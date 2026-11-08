@@ -10,6 +10,13 @@ use axum::{
 use crate::web::error::ApiError;
 use crate::web::types::AppState;
 
+/// 已认证的 API 密钥（鉴权中间件写入 request extensions）。
+///
+/// 供 handler 直接读取已认证身份（如 `/api/auth/whoami` 需要返回 scopes），
+/// 避免为了拿 scope 再查一次库——那会重复一次鉴权与一次调用统计。
+#[derive(Debug, Clone)]
+pub(crate) struct AuthedApiKey(pub gateway_core::config::ApiKeyRecord);
+
 /// 从请求头中提取 token：支持 `Authorization: Bearer <token>` 或 `X-API-Token: <token>`
 pub(crate) fn extract_token_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(auth) = headers.get(header::AUTHORIZATION) {
@@ -134,7 +141,7 @@ pub(crate) fn token_matches(provided: &str, expected: &str) -> bool {
 
 pub(crate) async fn require_auth(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     // 写端点按「域」校验密钥 scope：取方法 + 路径参与判定（只读请求不受限）
@@ -145,7 +152,11 @@ pub(crate) async fn require_auth(
         Some(token) if token_matches(&token, &api_token(&state)) => next.run(req).await,
         // 主 token 未命中 → 尝试 API 密钥（写接口按路径域校验写权限 scope）
         Some(token) => match authenticate_api_key(&state, &token, Some((&method, &path))) {
-            Ok(()) => next.run(req).await,
+            Ok(key) => {
+                // 透传已认证密钥，避免 handler（如 whoami）二次查库鉴权。
+                req.extensions_mut().insert(AuthedApiKey(key));
+                next.run(req).await
+            }
             Err(e) => e.into_response(),
         },
         None => ApiError::unauthorized(
@@ -214,7 +225,7 @@ fn authenticate_api_key(
     state: &Arc<AppState>,
     token: &str,
     write_ctx: Option<(&str, &str)>,
-) -> Result<(), ApiError> {
+) -> Result<gateway_core::config::ApiKeyRecord, ApiError> {
     match state.platform.api_keys.authenticate(token) {
         Ok(Some(key)) => {
             if let Some((method, path)) = write_ctx {
@@ -234,7 +245,7 @@ fn authenticate_api_key(
                     });
                 }
             }
-            Ok(())
+            Ok(key)
         }
         Ok(None) => Err(ApiError::unauthorized("invalid api token")),
         Err(e) => {
@@ -395,7 +406,7 @@ fn is_sensitive_read_path(path: &str) -> bool {
 
 pub(crate) async fn require_auth_if_anon_disabled(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     let path = req.uri().path().to_string();
@@ -414,7 +425,10 @@ pub(crate) async fn require_auth_if_anon_disabled(
         Some(token) if token_matches(&token, &api_token(&state)) => next.run(req).await,
         // 主 token 未命中 → 尝试 API 密钥（只读接口不校验 scope）
         Some(token) => match authenticate_api_key(&state, &token, None) {
-            Ok(()) => next.run(req).await,
+            Ok(key) => {
+                req.extensions_mut().insert(AuthedApiKey(key));
+                next.run(req).await
+            }
             Err(e) => e.into_response(),
         },
         None => ApiError::unauthorized(

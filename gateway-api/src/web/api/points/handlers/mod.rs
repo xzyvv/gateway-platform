@@ -42,8 +42,8 @@ async fn upsert_points(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // D2: 串行化「读→改→写」，防止并发批量导入丢更新
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut config = old.clone();
+    let old = state.config.load_full();
+    let mut config = old.as_ref().clone();
     let before = config.points.len();
     for p in points {
         if let Some(existing) = config.points.iter_mut().find(|x| x.id == p.id) {
@@ -71,8 +71,8 @@ async fn edit_points(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut config = old.clone();
+    let old = state.config.load_full();
+    let mut config = old.as_ref().clone();
     let (mut added, mut updated, mut deleted) = (0usize, 0usize, 0usize);
     for id in &delete {
         if let Some(pos) = config.points.iter().position(|p| p.id == *id) {
@@ -119,7 +119,7 @@ pub async fn point_read_now(
     State(state): State<Arc<AppState>>,
     Path(point_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let config = state.config.load_full().as_ref().clone();
+    let config = state.config.load_full();
     let point = config
         .points
         .iter()
@@ -218,7 +218,7 @@ pub(crate) async fn write_points_core(
         ));
     }
 
-    let config = state.config.load_full().as_ref().clone();
+    let config = state.config.load_full();
     let collectors = state.south.scheduler.collectors();
 
     if mode == WriteMode::Single {

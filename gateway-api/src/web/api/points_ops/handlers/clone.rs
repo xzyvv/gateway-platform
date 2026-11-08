@@ -58,8 +58,8 @@ pub(crate) async fn clone_apply(
     Json(req): Json<CloneApplyRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
 
     // 1. 取源设备所有点位（克隆定义）
     let src_points: Vec<gateway_core::config::PointConfig> = new_cfg

@@ -62,8 +62,8 @@ pub(crate) async fn update_asset(
     Json(payload): Json<UpdateAssetRequest>,
 ) -> Result<Json<ApiResponse<DeviceAsset>>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let assets = new_cfg.device_assets.get_or_insert_with(Vec::new);
     let asset = DeviceAsset {
         device_id: device_id.clone(),

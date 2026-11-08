@@ -33,6 +33,8 @@ mod devices;
 mod diagnostics;
 mod history;
 mod license;
+/// 点位归属索引（按设备反查点位，替代 O(D×P) 线性扫描）
+pub(crate) mod point_owner;
 mod points;
 mod points_ops;
 mod protocol_tools;

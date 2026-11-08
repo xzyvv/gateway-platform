@@ -15,6 +15,7 @@ use axum::Json;
 
 use gateway_core::config::{DeviceConfig, PointConfig};
 
+use crate::web::api::point_owner::PointOwnerIndex;
 use crate::web::types::{ApiError, ApiResponse, AppState};
 
 use super::super::model::{TopoLink, TopoNode, TopoStats, TopologyData};
@@ -32,52 +33,23 @@ fn expand_points(state: &AppState) -> Vec<PointConfig> {
         .unwrap_or_default()
 }
 
-/// 某设备的点位 ID：显式点位按 `device_id` 匹配，模板展开点位按 `"{设备名}_"` 前缀匹配。
-fn device_point_ids(
-    device: &DeviceConfig,
-    cfg_points: &[PointConfig],
-    expanded: &[PointConfig],
-) -> Vec<String> {
-    let prefix = format!("{}_", device.name);
-    let mut ids = Vec::new();
-    for p in cfg_points.iter().chain(expanded.iter()) {
-        let by_id = !device.id.is_empty() && p.device_id.as_deref() == Some(device.id.as_str());
-        let by_prefix = !device.name.is_empty() && p.id.starts_with(&prefix);
-        if by_id || by_prefix {
-            ids.push(p.id.clone());
-        }
-    }
-    ids
-}
-
-/// 点位所属设备 id：显式点位取 device_id；模板展开点位按 "{设备名}_" 前缀反查。
-fn point_owner_id(p: &PointConfig, devices: &[DeviceConfig]) -> Option<String> {
-    if let Some(did) = &p.device_id {
-        if !did.is_empty() {
-            return Some(did.clone());
-        }
-    }
-    devices
-        .iter()
-        .find(|d| !d.name.is_empty() && p.id.starts_with(&format!("{}_", d.name)))
-        .map(|d| d.id.clone())
-}
-
 /// GET /api/devices/topology — 总线→设备→点位 拓扑（含聚合统计）
 pub(crate) async fn device_topology(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<TopologyData>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
+    let cfg = state.config.load_full();
     let statuses = state.south.scheduler.device_status();
     let expanded = expand_points(&state);
+    let devices: &[DeviceConfig] = cfg.devices.as_deref().unwrap_or(&[]);
 
     // 构建 point_id -> quality 映射
-    let mut point_quality: HashMap<String, String> = HashMap::new();
+    let mut point_quality: HashMap<&str, &str> = HashMap::new();
     for s in &statuses {
-        if let (Some(pid), Some(q)) = (s["point_id"].as_str(), s["quality"].as_str()) {
-            point_quality.insert(pid.to_string(), q.to_string());
-        }
+        point_quality.insert(s.point_id.as_str(), s.quality.as_str());
     }
+
+    // 点位归属索引：替代「每台设备线性扫描全部点位」的 O(D×P) 查找
+    let owner_index = PointOwnerIndex::from_config_points(&cfg.points, &expanded, devices);
 
     let mut nodes: Vec<TopoNode> = Vec::new();
     let mut links: Vec<TopoLink> = Vec::new();
@@ -98,53 +70,51 @@ pub(crate) async fn device_topology(
     let mut warning = 0usize;
     let mut offline = 0usize;
     let mut device_count = 0usize;
-    if let Some(devices) = &cfg.devices {
-        for dev in devices {
-            // 计算设备状态：如果该设备下有点位 quality=good 则 online，否则 offline
-            // （含模板展开点位，否则模板化设备恒误判 offline）
-            let dev_points = device_point_ids(dev, &cfg.points, &expanded);
-            let mut has_good = false;
-            let mut has_warning = false;
-            for pid in &dev_points {
-                match point_quality.get(pid).map(|s| s.as_str()) {
-                    Some("good") => has_good = true,
-                    Some("stale") => has_warning = true,
-                    _ => {}
-                }
+    for dev in devices {
+        // 计算设备状态：如果该设备下有点位 quality=good 则 online，否则 offline
+        // （含模板展开点位，否则模板化设备恒误判 offline）
+        let dev_points = owner_index.point_ids_of(dev);
+        let mut has_good = false;
+        let mut has_warning = false;
+        for pid in &dev_points {
+            match point_quality.get(pid.as_str()).copied() {
+                Some("good") => has_good = true,
+                Some("stale") => has_warning = true,
+                _ => {}
             }
-            let status = if has_good {
-                online += 1;
-                "online"
-            } else if has_warning {
-                warning += 1;
-                "warning"
-            } else {
-                offline += 1;
-                "offline"
-            }
-            .to_string();
-
-            device_count += 1;
-            nodes.push(TopoNode {
-                id: dev.id.clone(),
-                name: dev.name.clone(),
-                node_type: "device".to_string(),
-                status: Some(status),
-                meta: Some(format!("slave: {}", dev.slave_id.unwrap_or(0))),
-            });
-            links.push(TopoLink {
-                source: dev.bus.clone(),
-                target: dev.id.clone(),
-            });
         }
+        let status = if has_good {
+            online += 1;
+            "online"
+        } else if has_warning {
+            warning += 1;
+            "warning"
+        } else {
+            offline += 1;
+            "offline"
+        }
+        .to_string();
+
+        device_count += 1;
+        nodes.push(TopoNode {
+            id: dev.id.clone(),
+            name: dev.name.clone(),
+            node_type: "device".to_string(),
+            status: Some(status),
+            meta: Some(format!("slave: {}", dev.slave_id.unwrap_or(0))),
+        });
+        links.push(TopoLink {
+            source: dev.bus.clone(),
+            target: dev.id.clone(),
+        });
     }
 
     // 点位节点（显式点位 + 模板展开点位；展开点位的归属链路按设备名前缀反查）
-    let devices = cfg.devices.clone().unwrap_or_default();
-    for p in cfg.points.iter().chain(expanded.iter()) {
+    // 下标与 owner_index 内部顺序一致（cfg.points → expanded）
+    for (idx, p) in cfg.points.iter().chain(expanded.iter()).enumerate() {
         let status = point_quality
-            .get(&p.id)
-            .map(|q| if q == "good" { "online" } else { "offline" }.to_string());
+            .get(p.id.as_str())
+            .map(|q| if *q == "good" { "online" } else { "offline" }.to_string());
         nodes.push(TopoNode {
             id: p.id.clone(),
             name: p.name.clone().unwrap_or_else(|| p.id.clone()),
@@ -152,9 +122,9 @@ pub(crate) async fn device_topology(
             status,
             meta: Some(format!("addr: {}", p.address)),
         });
-        if let Some(did) = point_owner_id(p, &devices) {
+        if let Some(did) = owner_index.owner_at(idx) {
             links.push(TopoLink {
-                source: did,
+                source: did.to_string(),
                 target: p.id.clone(),
             });
         }

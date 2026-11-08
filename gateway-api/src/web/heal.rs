@@ -141,23 +141,12 @@ impl HealthSnapshot {
             .scheduler
             .device_status()
             .iter()
-            .filter_map(|v| {
-                let bus = v
-                    .get("bus")
-                    .and_then(|b| b.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                Some(DeviceHealth {
-                    id: v.get("point_id")?.as_str()?.to_string(),
-                    consecutive_failures: v.get("consecutive_failures")?.as_u64()? as u32,
-                    quality: v
-                        .get("quality")
-                        .and_then(|q| q.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    serial: serial_ports.contains(&bus),
-                    bus,
-                })
+            .map(|v| DeviceHealth {
+                id: v.point_id.clone(),
+                consecutive_failures: v.consecutive_failures,
+                quality: v.quality.clone(),
+                serial: serial_ports.contains(&v.bus),
+                bus: v.bus.clone(),
             })
             .collect();
 
@@ -773,7 +762,7 @@ pub(crate) async fn reload_services(
     audit_detail: &str,
 ) -> Result<(), ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
+    let old = state.config.load_full();
     let new = state
         .config
         .config_loader

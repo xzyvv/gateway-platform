@@ -24,7 +24,8 @@ use ts_rs::TS;
 use gateway_core::config::{DeviceConfig, PointConfig};
 use gateway_core::engine::metrics::ScopeStats;
 
-use crate::web::types::{ApiError, ApiResponse, AppState};
+use crate::web::api::point_owner::PointOwnerIndex;
+use crate::web::types::{ApiError, ApiResponse, AppState, DeviceStatus};
 
 /// 健康评分窗口：最近 24 小时
 const HEALTH_WINDOW_MS: i64 = 86_400_000;
@@ -91,15 +92,10 @@ pub(crate) fn quality_code(raw: &str, consecutive_failures: u32) -> &'static str
 }
 
 /// 把一个点位（可选快照）计入质量分布
-pub(crate) fn acc_quality(bd: &mut QualityBreakdown, state: Option<&serde_json::Value>) {
+pub(crate) fn acc_quality(bd: &mut QualityBreakdown, state: Option<&DeviceStatus>) {
     bd.total += 1;
-    let cf = state
-        .map(|v| state_i64(v, "consecutive_failures").max(0) as u32)
-        .unwrap_or(0);
-    let raw = state
-        .and_then(|v| v.get("quality"))
-        .and_then(|q| q.as_str())
-        .unwrap_or("bad");
+    let cf = state.map(|v| v.consecutive_failures).unwrap_or(0);
+    let raw = state.map(|v| v.quality.as_str()).unwrap_or("bad");
     match quality_code(raw, cf) {
         "good" => bd.good += 1,
         "uncertain" => bd.uncertain += 1,
@@ -165,24 +161,6 @@ fn sum_points(ids: &[String], snapshot: &HashMap<String, ScopeStats>) -> ScopeSt
     acc
 }
 
-/// 某设备的点位 ID：显式点位按 `device_id` 匹配，模板展开点位按 `"{设备名}_"` 前缀匹配。
-fn device_point_ids(
-    device: &DeviceConfig,
-    cfg_points: &[PointConfig],
-    expanded: &[PointConfig],
-) -> Vec<String> {
-    let prefix = format!("{}_", device.name);
-    let mut ids = Vec::new();
-    for p in cfg_points.iter().chain(expanded.iter()) {
-        let by_id = !device.id.is_empty() && p.device_id.as_deref() == Some(device.id.as_str());
-        let by_prefix = !device.name.is_empty() && p.id.starts_with(&prefix);
-        if by_id || by_prefix {
-            ids.push(p.id.clone());
-        }
-    }
-    ids
-}
-
 fn expand_points(state: &AppState) -> Vec<PointConfig> {
     let cfg = state.config.load_full();
     cfg.devices
@@ -192,33 +170,25 @@ fn expand_points(state: &AppState) -> Vec<PointConfig> {
         .unwrap_or_default()
 }
 
-/// 从调度器点位状态里取整数/字符串字段
-fn state_i64(v: &serde_json::Value, key: &str) -> i64 {
-    v.get(key).and_then(|x| x.as_i64()).unwrap_or(0)
-}
-
 fn build_health(
     device: &DeviceConfig,
-    cfg_points: &[PointConfig],
-    expanded: &[PointConfig],
+    point_ids: &[String],
     point_snapshot: &HashMap<String, ScopeStats>,
-    point_states: &HashMap<String, serde_json::Value>,
+    point_states: &HashMap<String, DeviceStatus>,
 ) -> DeviceHealth {
-    let ids = device_point_ids(device, cfg_points, expanded);
-    let stats = sum_points(&ids, point_snapshot);
+    let stats = sum_points(point_ids, point_snapshot);
 
     // 离线次数 / 最后在线 / 质量分布：来自调度器真实点位状态
     let mut offline: u32 = 0;
     let mut last_seen = stats.last_success_ms;
     let mut cf_sum: i32 = 0;
     let mut breakdown = QualityBreakdown::default();
-    for id in &ids {
+    for id in point_ids {
         let st = point_states.get(id);
         if let Some(v) = st {
-            offline = offline.saturating_add(state_i64(v, "offline_episodes").max(0) as u32);
-            last_seen = last_seen.max(state_i64(v, "last_good_ts"));
-            cf_sum = cf_sum
-                .saturating_add(clamp_i32(state_i64(v, "consecutive_failures").max(0) as u64));
+            offline = offline.saturating_add(v.offline_episodes);
+            last_seen = last_seen.max(v.last_good_ts);
+            cf_sum = cf_sum.saturating_add(clamp_i32(v.consecutive_failures as u64));
         }
         acc_quality(&mut breakdown, st);
     }
@@ -298,7 +268,7 @@ fn build_health(
 /// 本函数结果或其逐点同源实现派生；排行视图已合并进前端健康评分页，不再单独出端点。
 pub(crate) fn build_all(state: &AppState, now: i64) -> Vec<DeviceHealth> {
     let cfg = state.config.load_full();
-    let devices = cfg.devices.clone().unwrap_or_default();
+    let devices: &[DeviceConfig] = cfg.devices.as_deref().unwrap_or(&[]);
     if devices.is_empty() {
         return Vec::new();
     }
@@ -308,20 +278,22 @@ pub(crate) fn build_all(state: &AppState, now: i64) -> Vec<DeviceHealth> {
         .metrics
         .scoped
         .point_snapshot(now - HEALTH_WINDOW_MS);
-    let point_states: HashMap<String, serde_json::Value> = state
+    let point_states: HashMap<String, DeviceStatus> = state
         .south
         .scheduler
         .device_status()
         .into_iter()
-        .filter_map(|v| {
-            let id = v.get("point_id").and_then(|x| x.as_str())?.to_string();
-            Some((id, v))
-        })
+        .map(|v| (v.point_id.clone(), v))
         .collect();
+    // 点位归属索引：替代「每台设备线性扫描全部点位」的 O(D×P) 查找
+    let owner_index = PointOwnerIndex::from_config_points(&cfg.points, &expanded, devices);
 
     devices
         .iter()
-        .map(|d| build_health(d, &cfg.points, &expanded, &point_snapshot, &point_states))
+        .map(|d| {
+            let ids = owner_index.point_ids_of(d);
+            build_health(d, &ids, &point_snapshot, &point_states)
+        })
         .collect()
 }
 

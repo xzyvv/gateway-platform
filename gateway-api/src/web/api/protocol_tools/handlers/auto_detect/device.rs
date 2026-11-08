@@ -16,8 +16,8 @@ pub(super) fn resolve_device(
     state: &AppState,
     device_id: &str,
 ) -> Result<(DeviceConfig, String, u8), DebugError> {
-    let cfg = state.config.load_full().as_ref().clone();
-    let devices = cfg.devices.unwrap_or_default();
+    let cfg = state.config.load_full();
+    let devices = cfg.devices.clone().unwrap_or_default();
     let device = devices
         .into_iter()
         .find(|d| d.id == device_id)

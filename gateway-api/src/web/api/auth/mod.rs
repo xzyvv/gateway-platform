@@ -5,6 +5,8 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub(crate) use crate::web::middleware::AuthedApiKey;
+
 #[derive(Deserialize)]
 pub(crate) struct LoginRequest {
     pub(crate) username: String,

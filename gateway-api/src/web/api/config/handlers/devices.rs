@@ -14,8 +14,8 @@ use gateway_core::engine::error::{GatewayError, GatewayResult};
 pub async fn list_devices(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<DeviceConfig>>>, ApiError> {
-    let cfg = state.config.load_full().as_ref().clone();
-    let devices = cfg.devices.unwrap_or_default();
+    let cfg = state.config.load_full();
+    let devices = cfg.devices.clone().unwrap_or_default();
     Ok(Json(ApiResponse::ok(devices)))
 }
 
@@ -33,8 +33,8 @@ pub async fn create_device(
 ) -> Result<ApiResponse<DeviceConfig>, ApiError> {
     // D2: 串行化「读→改→写」，防止并发配置变更丢更新
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     if let Err(e) = validate_device(&payload, &cfg) {
         return Ok(ApiResponse::err(4001, e.message()));
     }
@@ -98,8 +98,8 @@ pub async fn update_device(
 ) -> Result<ApiResponse<()>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     // Bug 38: validate payload fields (skip uniqueness check, ID unchanged)
     if payload.name.is_empty() {
         return Ok(ApiResponse::err(4001, "device name 不能为空"));
@@ -166,8 +166,8 @@ pub async fn delete_device(
 ) -> Result<ApiResponse<()>, ApiError> {
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut cfg = old.clone();
+    let old = state.config.load_full();
+    let mut cfg = old.as_ref().clone();
     let mut removed = false;
     if let Some(devices) = cfg.devices.as_mut() {
         let before = devices.len();

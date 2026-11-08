@@ -111,8 +111,8 @@ pub(crate) async fn create_virtual_point(
     Json(payload): Json<VirtualPointPayload>,
 ) -> Result<Json<ApiResponse<VirtualPointView>>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let vps = new_cfg.virtual_points.get_or_insert_with(Vec::new);
     let id = payload
         .id
@@ -157,8 +157,8 @@ pub(crate) async fn update_virtual_point(
     Json(payload): Json<VirtualPointPayload>,
 ) -> Result<Json<ApiResponse<VirtualPointView>>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let vps = new_cfg.virtual_points.get_or_insert_with(Vec::new);
     let pos = vps
         .iter()
@@ -196,8 +196,8 @@ pub(crate) async fn delete_virtual_point(
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
     let _guard = state.config.config_reload_lock.lock().await;
-    let old = state.config.load_full().as_ref().clone();
-    let mut new_cfg = old.clone();
+    let old = state.config.load_full();
+    let mut new_cfg = old.as_ref().clone();
     let vps = new_cfg.virtual_points.get_or_insert_with(Vec::new);
     let pos = vps
         .iter()
