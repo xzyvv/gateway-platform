@@ -124,6 +124,12 @@ DeviceAllow=/dev/mmcblk0p3 rw
 MemoryMax=512M
 CPUQuota=200%
 
+# 禁止生成 core dump：
+# 崩溃-重启循环（Restart=always）下，每次 panic 都会按 RLIMIT_CORE 落一个
+# core.<pid>（几百 MB，且不在 /var/log/gateway，日志轮转管不到），
+# 几次循环就能把 eMMC 剩余空间吃光，比日志增长更隐蔽。
+LimitCORE=0
+
 # 日志
 StandardOutput=journal
 StandardError=journal
