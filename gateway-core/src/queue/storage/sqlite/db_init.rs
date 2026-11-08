@@ -87,7 +87,7 @@ pub(super) fn init_queue_db(
     // 主库文件因此只增不减。开启 `auto_vacuum=INCREMENTAL` 后，maintenance 周期
     // 调用 `PRAGMA incremental_vacuum(N)` 就能分小批把空闲页交还 OS。
     // 放在 WAL 设置与建表之前：已有库需要一次 VACUUM 才会把该设置写进库头。
-    configure_auto_vacuum(&conn);
+    crate::support::sqlite_maintenance::ensure_incremental_auto_vacuum(&conn, "队列主库");
 
     // WAL 调优：综合设置 journal_mode + synchronous + busy_timeout + cache_size + wal_autocheckpoint + mmap_size
     // - journal_mode=WAL: 写入不阻塞读，崩溃恢复由 WAL 保证
@@ -341,42 +341,6 @@ fn migrate_to_v4(conn: &Connection) -> GatewayResult<()> {
     )
     .map_err(|e| GatewayError::Queue(format!("create aggregated window index failed: {}", e)))?;
     Ok(())
-}
-
-/// 开启 SQLite 增量 vacuum（`auto_vacuum=INCREMENTAL`）。
-///
-/// retention / FIFO 淘汰只做 `DELETE`，SQLite 默认（`auto_vacuum=NONE`）不会把
-/// 释放的页还给文件系统 → 主库文件只增不减，长期运行后把 eMMC 写满。
-///
-/// - 新建库：在第一次建表前设置即可，`VACUUM` 代价可忽略；
-/// - 已有库：必须跑一次全量 `VACUUM` 才会把该设置写进库头（这是 SQLite 的语义，
-///   仅设置 pragma 不生效），之后由 maintenance 周期调用
-///   `PRAGMA incremental_vacuum(N)` 分小批回收，避免一次长时间锁表。
-///
-/// 失败**不阻断启动**：磁盘不足或库被占用时降级为「本次运行不回收空闲页」，
-/// 采集与上报不受影响，下次启动会重试。
-fn configure_auto_vacuum(conn: &Connection) {
-    let mode: i64 = conn
-        .pragma_query_value(None, "auto_vacuum", |row| row.get(0))
-        .unwrap_or(0);
-    if mode == 2 {
-        return;
-    }
-    if let Err(e) = conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;") {
-        tracing::warn!("开启 incremental auto_vacuum 失败: {}", e);
-        return;
-    }
-    let started = std::time::Instant::now();
-    match conn.execute_batch("VACUUM;") {
-        Ok(()) => tracing::info!(
-            "SQLite auto_vacuum 已切换为 INCREMENTAL（VACUUM 耗时 {:?}）",
-            started.elapsed()
-        ),
-        Err(e) => tracing::warn!(
-            "为启用 incremental auto_vacuum 执行 VACUUM 失败（本次运行不回收空闲页）: {}",
-            e
-        ),
-    }
 }
 
 /// 幂等执行 `ALTER TABLE ... ADD COLUMN`。

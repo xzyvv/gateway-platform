@@ -23,7 +23,7 @@ use super::super::{CollectionChain, GatewayHandles, NorthProcessing};
 use super::*;
 use gateway_core::support::{
     default_audit_log, default_diag_log, default_license_clock_db, default_ota_staging,
-    default_version_db,
+    default_outbox_db, default_version_db,
 };
 
 // ============================================================================
@@ -264,6 +264,26 @@ pub(crate) struct AppStateInputs<'a> {
     pub(crate) audit: Arc<gateway_core::engine::audit::AuditLog>,
 }
 
+/// 构造死信门面。
+///
+/// 独立打开一次 outbox 库（与 webhook/MQTT 各持一个连接，WAL + busy_timeout
+/// 下写锁冲突可控）。失败时降级为 `NoopDeadLetter`：死信查询/重投是运维辅助
+/// 能力，若因库打不开就让整个 Web 面起不来，属于「辅助功能拖挂主功能」。
+fn open_dead_letter() -> Arc<dyn gateway_api::web::traits::DeadLetterTrait> {
+    let path = std::path::Path::new(default_outbox_db());
+    match gateway_api::web::traits::SqliteDeadLetter::open(path) {
+        Ok(dl) => Arc::new(dl),
+        Err(e) => {
+            warn!(
+                outbox = %path.display(),
+                error = %e,
+                "死信库打开失败，死信查询/重投接口将返回 503（北向上报不受影响）"
+            );
+            Arc::new(gateway_api::web::traits::NoopDeadLetter)
+        }
+    }
+}
+
 /// 构造 AppState：把 chain / north / deps / web_cfg / gateway / passthrough 聚合到
 /// 单一共享状态中。
 pub(crate) fn build_app_state(inputs: AppStateInputs<'_>) -> Arc<AppState> {
@@ -300,6 +320,11 @@ pub(crate) fn build_app_state(inputs: AppStateInputs<'_>) -> Arc<AppState> {
             conversion: north.conversion_mgr.clone(),
             // 模拟消费者实例（恒存在）：Web 侧的状态接口与启停接口操作的就是它。
             sim_consumer: north.sim_consumer.clone(),
+            // 北向队列观测句柄：/apin 从这里读积压/背压，不新增后台采样任务。
+            north_feed: north.pipeline.north_sender(),
+            // 死信查询/重投门面：独立打开 outbox 库（同文件第二连接，WAL 下安全）。
+            // 打不开时降级为 Noop——死信是运维辅助能力，不该阻断网关启动。
+            dead_letter: open_dead_letter(),
         },
         south: SouthRefs {
             scheduler: scheduler.clone(),
@@ -877,9 +902,8 @@ mod baseline_version_tests {
     fn seeds_baseline_only_when_history_is_empty() {
         // 用文件库而非 ":memory:"：与其他 Store 一样走长驻连接，
         // 内存库在 Store drop 后即消失，不利于断言落盘结果。
-        let db_path =
-            std::env::temp_dir().join(format!("gw-version-baseline-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&db_path);
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let db_path = tmp.path().join("version-baseline.db");
         let store =
             gateway_core::config::ConfigVersionStore::new(db_path.to_str().unwrap()).unwrap();
         let cfg = GatewayConfig::default();
@@ -903,6 +927,5 @@ mod baseline_version_tests {
             "基线快照应为可回滚的完整配置, got {}",
             baseline.config_json
         );
-        let _ = std::fs::remove_file(&db_path);
     }
 }

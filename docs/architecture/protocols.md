@@ -27,18 +27,16 @@
 |---|---|---|
 | `health_routes`（内联） | 无 | `/health/live`、`/health/ready`，供 K8s / 负载均衡探测 |
 | `auth_routes` | 分层 | `POST /api/auth/login` 无鉴权；`whoami` / 改密始终需 token |
-| `system_routes` | 分层 | 读：`allow_anon_read=false` 时需 token；写：始终需 token（状态 / 指标 / 配置写入 / IO / OTA / NTP / 模板） |
+| `system_routes` | 分层 | 读：`allow_anon_read=false` 时需 token；写：始终需 token（状态 / 版本 / 指标 / 健康报告 / OTA / NTP / 服务与证书 / 上行与死信） |
 | `audit_routes` | 读层 | 审计日志查询 |
 | `history_routes` | 读层 | 历史数据查询与 CSV 导出（带截断标记响应头） |
-| `points_routes` | 写层 | 点位值读取/写入缓存（语义为写，统一 `require_auth`） |
-| `realtime_routes` | 读层 + 管理员 scope | 实时数据；订阅者监控额外需 admin/exec scope |
+| `realtime_routes` | 读层 | 实时数据 WebSocket |
 | `license_routes` | 分层 | 授权状态只读 + 导入/激活写入 |
-| `devices_routes` | 分层 | 设备列表/详情只读 + 设备写入 |
-| `config_routes`（CRUD） | 分层 | 设备/点位 CRUD + 配置导入导出 + 热重载 |
+| `devices_routes` | 分层 | **`/api/devices*` 唯一注册点**：设备 CRUD（原 `config`）+ 运维（原 `device_ops`）+ IO 控制 / 设备模板 |
+| `points_routes` | 分层 | **`/api/points*` 唯一注册点**：点位 CRUD / 回收站（原 `config`）+ 即时读写 + 虚拟点位 / 批量工具（原 `points_ops`） |
+| `config_routes` | 分层 | **`/api/config*` 唯一注册点** + `/api/project/*` + `/api/buses/*`（导入导出 / 热重载 / 校验 / 版本与回滚） |
 | `uplink_routes` | 分层 | 上送通道配置 + 上送测试 |
-| `device_ops_routes` | 分层 | 设备运维动作（诊断/健康评分/批量操作） |
-| `points_ops_routes` | 分层 | 点位运维动作（数据质量/批量校验） |
-| `diagnostics_routes` | 分层 | 诊断日志 tail / 归档下载 / 只读 Shell（受 `remote-shell` 门控） |
+| `diagnostics_routes` | 分层 | **`/api/diagnostics*` 唯一注册点**：诊断聚合 / 日志 tail 与归档 / 只读 Shell（受 `remote-shell` 门控） |
 | `access_routes` | 分层 | API 密钥与限流规则 |
 | `protocol_tools_routes` | 分层 | 协议工具（报文解析/组帧/连通性测试等） |
 | `fallback_service` | — | `gateway-web/dist/` 静态托管 + SPA fallback（`/api`、`/health` 未命中回 404 JSON） |
@@ -64,7 +62,8 @@
 | GET | `/api/history` | 历史数据查询 |
 | GET | `/api/history/export` | 历史数据 CSV 导出 |
 | GET | `/api/points/{id}/read` | 立即读取单个点位 |
-| POST | `/api/points/batch` | 点位批量导入 |
+| POST | `/api/point-tools/batch` | 点位批量导入 |
+| POST | `/api/point-tools/write` | 点位统一写入口 |
 | POST | `/api/discover` | 设备发现 |
 | GET/POST | `/api/io/status`、`/api/io/{index}` | GPIO 状态 / 控制 |
 | GET/POST | `/api/ota/status`、`/api/ota/upload`、`/api/ota/rollback` | OTA 升级 |

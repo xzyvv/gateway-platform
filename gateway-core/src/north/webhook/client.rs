@@ -195,6 +195,10 @@ impl WebhookClient {
         let stopping = client.stopping.clone();
         let stop_notify = client.stop_notify.clone();
         let last_flush = client.last_flush.clone();
+        // 死信维护节流游标：run 循环是单任务，用局部变量即可，无需共享状态。
+        // 初值取 now 而非 now-INTERVAL：启动首轮的 `drop_exhausted_pending` 刚搬完，
+        // 立刻再全表 COUNT 一次没有信息增量。
+        let mut last_dl_maint = Instant::now();
         loop {
             // 立刻检查 stopping——若 stop() 在 enable 之前已置位，立刻退出。
             if stopping.load(Ordering::SeqCst) {
@@ -236,6 +240,23 @@ impl WebhookClient {
                     // r65-SD1：记下新 flush 句柄，下一 tick 顶部再
                     // break 时 await。
                     *last_flush.lock() = Some(handle);
+
+                    // 死信维护：刷新 gauge + 兜底按行数上限裁剪。
+                    // 独立 spawn，避免全表 COUNT/大幅 DELETE 拖慢上报节拍。
+                    // 句柄有意不保存：维护是幂等的，停机时被打断也无副作用
+                    // （裁剪只按行数进行，下次启动会重新收敛）。
+                    if last_dl_maint.elapsed() >= DEAD_LETTER_MAINT_INTERVAL {
+                        last_dl_maint = Instant::now();
+                        let c2 = client.clone();
+                        // `drop(JoinHandle)` 等价于 detach（不取消任务），
+                        // 用它而不是 `let _ =` 是为了显式表达"有意不等待"。
+                        drop(crate::engine::supervision::spawn_catch_unwind(
+                            "webhook_dead_letter_maint",
+                            async move {
+                                c2.maintain_dead_letters().await;
+                            },
+                        ));
+                    }
                 }
             }
         }
@@ -259,23 +280,81 @@ impl WebhookClient {
         tracing::info!("webhook run loop exited");
     }
 
-    /// r51-WH1：删除 http 协议下已超过 `MAX_WEBHOOK_ATTEMPTS` 的 pending 行。
+    /// 死信维护（周期调用）：刷新 `gateway_dead_letter_rows` gauge，并在超出
+    /// `OutboxStore::MAX_DEAD_LETTER_ROWS` 时按最旧优先裁剪。
     ///
-    /// 调用 `OutboxStore::drop_exhausted_pending`：本函数是它在 webhook 层的
-    /// 薄包装，统一走 spawn_blocking 避免阻塞 tokio 运行时（rusqlite 无异步）。
+    /// 为什么裁剪必须在这里做而不是在 `move_to_dead_letter` 里：搬移是异常路径，
+    /// 每次搬移都 COUNT 一次全表代价高；而维护循环天然按周期运行，成本可控。
+    /// 代价是最多 20 万分之一秒级延迟——对"人工处置"场景无影响。
+    async fn maintain_dead_letters(&self) {
+        // 降级（sqlite 打不开、走内存模式）时死信表不存在，直接跳过，
+        // 避免每 60s 刷一条无意义的错误日志。
+        if self.outbox.lock().is_degraded() {
+            return;
+        }
+        let outbox = self.outbox.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            let mut g = outbox.lock();
+            let total = g.count_dead_letters(None)?;
+            let trimmed = if total > OutboxStore::MAX_DEAD_LETTER_ROWS {
+                g.trim_dead_letters(OutboxStore::MAX_DEAD_LETTER_ROWS)?
+            } else {
+                0
+            };
+            Ok::<_, GatewayError>((total, trimmed))
+        })
+        .await;
+
+        match res {
+            Ok(Ok((total, trimmed))) => {
+                let remaining = total - trimmed as i64;
+                if let Some(m) = &self.metrics {
+                    m.set_dead_letter_rows(remaining);
+                    // #6：除累计条数外，再记「上次裁剪的时间/条数」——累计值
+                    // 回答不了"上次丢数据是什么时候"，而那正是现场最先问的问题。
+                    m.record_dead_letter_trim(trimmed as i64);
+                }
+                if trimmed > 0 {
+                    // error 而非 warn：这是**不可恢复**的数据丢弃，且现场大概率
+                    // 没人知道接收端一直拒绝——必须能在日志里被 grep 到。
+                    tracing::error!(
+                        "dead letter overflow: trimmed {} oldest rows (cap {}), {} rows kept — \
+                         these {} batches are permanently lost, check the receiver endpoint",
+                        trimmed,
+                        OutboxStore::MAX_DEAD_LETTER_ROWS,
+                        remaining,
+                        trimmed
+                    );
+                }
+            }
+            Ok(Err(e)) => tracing::warn!("dead letter maintenance: query/trim failed: {}", e),
+            Err(e) => tracing::warn!("dead letter maintenance: blocking join failed: {}", e),
+        }
+    }
+
+    /// r51-WH1：把 http 协议下已超过 `MAX_WEBHOOK_ATTEMPTS` 的 pending 行移入死信表。
+    ///
+    /// 调用 `OutboxStore::move_exhausted_pending_to_dead_letter`：本函数是它在
+    /// webhook 层的薄包装，统一走 spawn_blocking 避免阻塞 tokio 运行时（rusqlite 无异步）。
     /// 仅在启动首轮调用一次；周期 `flush_pending` 中的内存 give-up 路径
     /// 仍走 in-memory `RetryState`，无需每次 SQL 检查。
     pub(crate) async fn drop_exhausted_pending(&self) -> GatewayResult<usize> {
         let outbox = self.outbox.clone();
-        tokio::task::spawn_blocking(move || {
+        let moved = tokio::task::spawn_blocking(move || {
             // parking_lot::Mutex::lock() 永不自毒、无需 unwrap。
             // 在 spawn_blocking 上下文中是同步调用，不阻塞 tokio 调度。
-            outbox
-                .lock()
-                .drop_exhausted_pending("http", MAX_WEBHOOK_ATTEMPTS)
+            outbox.lock().move_exhausted_pending_to_dead_letter(
+                "http",
+                MAX_WEBHOOK_ATTEMPTS,
+                "retry_exhausted",
+            )
         })
         .await
-        .map_err(|e| GatewayError::Message(format!("join drop_exhausted_pending: {}", e)))?
+        .map_err(|e| GatewayError::Message(format!("join drop_exhausted_pending: {}", e)))??;
+        if let Some(m) = &self.metrics {
+            m.add_dead_letter_moved(moved as i64);
+        }
+        Ok(moved)
     }
 
     /// 将一批数据持久化到 outbox（protocol='http'）。
@@ -482,7 +561,7 @@ impl WebhookClient {
                     .await;
                     tracing::debug!("webhook acked & removed outbox_id={}", outbox_id);
                 }
-                SendOutcome::Retriable => {
+                SendOutcome::Retriable(reason) => {
                     // 更新该消息的重试状态（计算全部在锁内完成，不跨 await 持锁）。
                     let attempts = {
                         let mut retries = self.retries.lock();
@@ -506,12 +585,14 @@ impl WebhookClient {
                     })
                     .await;
                     if attempts >= MAX_WEBHOOK_ATTEMPTS {
-                        // 达到尝试上限仍失败：显式记 error 并**物理删除** outbox 行，
-                        // 避免永久重试占满带宽。Bug P0-B2 (fix)：原 mark_acked 仅置
-                        // status=1，需等 cleanup_acked（默认 1 小时）才删；永久失败
-                        // 已是死信，应立即物理删除以释放表空间。
+                        // 达到尝试上限仍失败：移入**死信表**并删除 outbox 行，
+                        // 避免永久重试占满带宽。
+                        //
+                        // Bug P0-B2 原实现是直接 remove（物理删除，数据永久消失）。
+                        // 改为死信：这批数据在接收端修好（路径/鉴权/白名单）之后
+                        // 仍然可以人工重投，现场不必接受"丢一批"。
                         tracing::error!(
-                            "webhook give up after {} attempts, dropping outbox_id={} (data lost)",
+                            "webhook give up after {} attempts, moving outbox_id={} to dead letter",
                             attempts,
                             outbox_id
                         );
@@ -521,23 +602,33 @@ impl WebhookClient {
                             m.inc_webhook_giveup();
                         }
                         let outbox = self.outbox.clone();
-                        // E-5：只有 outbox 行确实删掉才重置 attempt 计数。删除失败时保留
+                        // E-5：只有 outbox 行确实搬走才重置 attempt 计数。搬移失败时保留
                         // （attempts 已 >= 上限），由退避闸门永久跳过，避免死信无限重发。
-                        let removed =
-                            tokio::task::spawn_blocking(move || outbox.lock().remove(outbox_id))
-                                .await;
-                        match removed {
-                            Ok(Ok(())) => {
+                        let moved = tokio::task::spawn_blocking(move || {
+                            outbox
+                                .lock()
+                                .move_to_dead_letter(outbox_id, "retry_exhausted")
+                        })
+                        .await;
+                        match moved {
+                            Ok(Ok(true)) => {
+                                if let Some(m) = &self.metrics {
+                                    m.add_dead_letter_moved(1);
+                                }
+                                self.retries.lock().remove(&outbox_id);
+                            }
+                            Ok(Ok(false)) => {
+                                // outbox 行已被并发 ack/删除，无需计数
                                 self.retries.lock().remove(&outbox_id);
                             }
                             Ok(Err(e)) => tracing::error!(
-                                "webhook give-up: remove outbox_id={} failed: {} \
+                                "webhook give-up: move outbox_id={} to dead letter failed: {} \
                                  (attempt count kept, will not retry until restart)",
                                 outbox_id,
                                 e
                             ),
                             Err(e) => tracing::error!(
-                                "webhook give-up: remove outbox_id={} join failed: {} \
+                                "webhook give-up: dead-letter join failed for outbox_id={}: {} \
                                  (attempt count kept, will not retry until restart)",
                                 outbox_id,
                                 e
@@ -545,39 +636,60 @@ impl WebhookClient {
                         }
                     } else {
                         tracing::warn!(
-                            "webhook send failed (retriable), outbox_id={} attempt={} retry_in={}ms",
+                            "webhook send failed (retriable), outbox_id={} attempt={} retry_in={}ms: {}",
                             outbox_id,
                             attempts,
-                            retry_backoff(self.config.interval_ms, attempts).as_millis()
+                            retry_backoff(self.config.interval_ms, attempts).as_millis(),
+                            reason
                         );
                     }
                 }
-                SendOutcome::Permanent => {
+                SendOutcome::Permanent(reason) => {
+                    // 4xx 永久失败：**移入死信表**而不是物理删除。
+                    //
+                    // 现场最常见的成因不是"数据无效"，而是接收端配置错误
+                    // （路径改了、Token 过期、IP 白名单变更）。这类问题修好后
+                    // 数据本可正常投递，原实现却直接丢弃，等于把一次配置失误
+                    // 变成一段永久的数据空洞。
+                    //
+                    // D6：原因直接取自本次 `send_once` 的返回值，不再读共享槽
+                    // `last_error`——那个槽是"全局最近一次错误"，同批次里后一条
+                    // 消息的失败会把它覆盖，导致先失败那条的死信 reason 指向别人。
                     tracing::error!(
-                        "webhook permanent failure (non-retriable status), dropping outbox_id={} (data lost)",
+                        "webhook permanent failure ({}), moving outbox_id={} to dead letter",
+                        reason,
                         outbox_id
                     );
-                    // r79-OBX1：永久失败（4xx 端点直接拒）数据已不可恢复，
-                    // 递增 data_lost 指标。
+                    // r79-OBX1：永久失败递增 data_lost 指标。
+                    // 语义已从「数据丢失」变为「数据进入死信（需人工处置）」，
+                    // 指标名保持不变以兼容既有 Grafana 面板。
                     if let Some(m) = &self.metrics {
                         m.inc_webhook_data_lost();
                     }
                     let outbox = self.outbox.clone();
-                    let removed = tokio::task::spawn_blocking(move || {
-                        // Bug P0-B2 (fix)：永久失败 4xx 应立即物理删除，
-                        // 不要等 cleanup_acked。
-                        outbox.lock().remove(outbox_id)
+                    let reason_for_task = reason.clone();
+                    let moved = tokio::task::spawn_blocking(move || {
+                        outbox
+                            .lock()
+                            .move_to_dead_letter(outbox_id, &reason_for_task)
                     })
                     .await;
-                    // E-5：删除成功才清 in-memory 重试状态；失败时保留 attempts 并标记为
+                    // E-5：搬移成功才清 in-memory 重试状态；失败时保留 attempts 且标记为
                     // 「已达上限」，退避闸门会永久跳过，避免 4xx 死信无限重发。
-                    match removed {
-                        Ok(Ok(())) => {
+                    match moved {
+                        Ok(Ok(true)) => {
+                            if let Some(m) = &self.metrics {
+                                m.add_dead_letter_moved(1);
+                            }
+                            self.retries.lock().remove(&outbox_id);
+                        }
+                        Ok(Ok(false)) => {
+                            // outbox 行已被并发 ack/删除，无需计数
                             self.retries.lock().remove(&outbox_id);
                         }
                         Ok(Err(e)) => {
                             tracing::error!(
-                                "webhook permanent failure: remove outbox_id={} failed: {}",
+                                "webhook permanent failure: dead-letter outbox_id={} failed: {}",
                                 outbox_id,
                                 e
                             );
@@ -592,7 +704,7 @@ impl WebhookClient {
                         }
                         Err(e) => {
                             tracing::error!(
-                                "webhook permanent failure: remove outbox_id={} join failed: {}",
+                                "webhook permanent failure: dead-letter join failed for outbox_id={}: {}",
                                 outbox_id,
                                 e
                             );
@@ -665,19 +777,20 @@ impl WebhookClient {
                     SendOutcome::Ack
                 } else if is_retriable_status(status) {
                     tracing::warn!("webhook retriable http error: status={}", status);
-                    *self.last_error.write() = Some(format!("http status {status}"));
+                    let reason = format!("http status {status}");
+                    *self.last_error.write() = Some(reason.clone());
                     if let Some(m) = &self.metrics {
                         m.inc_webhook_publish(false);
                     }
-                    SendOutcome::Retriable
+                    SendOutcome::Retriable(reason)
                 } else {
                     tracing::error!("webhook non-retriable http error: status={}", status);
-                    *self.last_error.write() =
-                        Some(format!("http status {status} (non-retriable)"));
+                    let reason = format!("http status {status} (non-retriable)");
+                    *self.last_error.write() = Some(reason.clone());
                     if let Some(m) = &self.metrics {
                         m.inc_webhook_publish(false);
                     }
-                    SendOutcome::Permanent
+                    SendOutcome::Permanent(reason)
                 }
             }
             Err(e) => {
@@ -693,28 +806,31 @@ impl WebhookClient {
                 // - 其它（罕见）→ 保守为 Retriable
                 if e.is_timeout() || e.is_connect() {
                     tracing::warn!("webhook retriable transport error: {}", e);
-                    *self.last_error.write() = Some(e.to_string());
+                    let reason = e.to_string();
+                    *self.last_error.write() = Some(reason.clone());
                     if let Some(m) = &self.metrics {
                         m.inc_webhook_publish(false);
                     }
-                    SendOutcome::Retriable
+                    SendOutcome::Retriable(reason)
                 } else if e.is_builder() || e.is_request() || e.is_decode() {
                     tracing::error!(
                         "webhook permanent transport error (config/protocol issue): {}",
                         e
                     );
-                    *self.last_error.write() = Some(e.to_string());
+                    let reason = e.to_string();
+                    *self.last_error.write() = Some(reason.clone());
                     if let Some(m) = &self.metrics {
                         m.inc_webhook_publish(false);
                     }
-                    SendOutcome::Permanent
+                    SendOutcome::Permanent(reason)
                 } else {
                     tracing::warn!("webhook unknown transport error (treated retriable): {}", e);
-                    *self.last_error.write() = Some(e.to_string());
+                    let reason = e.to_string();
+                    *self.last_error.write() = Some(reason.clone());
                     if let Some(m) = &self.metrics {
                         m.inc_webhook_publish(false);
                     }
-                    SendOutcome::Retriable
+                    SendOutcome::Retriable(reason)
                 }
             }
         }
@@ -794,3 +910,11 @@ impl WebhookClient {
         self.last_flush.lock().is_some()
     }
 }
+
+/// 客户端级回归测试（真实 HTTP 桩 + 真实 sqlite outbox）。
+///
+/// 必须是 `client` 的**子模块**：用例要驱动私有的 `flush_pending`，并直接读
+/// `self.outbox` 断言 outbox / 死信表状态。放在 `webhook/tests.rs` 里够不到这些。
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod client_tests;

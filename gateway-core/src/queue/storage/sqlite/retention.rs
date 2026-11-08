@@ -19,12 +19,17 @@
 
 use super::aggregated_trim::enforce_aggregated_row_cap;
 use crate::engine::model::DataPoint;
+use crate::engine::monitor::health::DiskLevel;
 use crate::queue::core::limit::MAX_AGGREGATED_ROWS;
 use rusqlite::{params, Connection};
 
-/// `DiskLevel` 的 `u8` 编码（Ok=0 / Warn=1 / Critical=2 / Blocking=3）。
-const DISK_LEVEL_WARN: i64 = 1;
-const DISK_LEVEL_CRITICAL: i64 = 2;
+/// 水位档位阈值直接取自 [`DiskLevel`] 的判别值。
+///
+/// 不写 1/2 字面量：`DiskLevel` 是跨层契约（`metrics.disk_level` 以 `u8` 传递），
+/// 一旦枚举插入新档位或重排，字面量会静默把「严重」当成「预警」用；
+/// 取判别值后编译器能保证这里永远跟随枚举。
+const DISK_LEVEL_WARN: i64 = DiskLevel::Warn as i64;
+const DISK_LEVEL_CRITICAL: i64 = DiskLevel::Critical as i64;
 
 /// 聚合表占用磁盘的预算比例（2%）。
 ///
@@ -121,17 +126,6 @@ pub(crate) fn adaptive_aggregated_row_cap(disk_total_bytes: u64) -> i64 {
     }
     let rows = (disk_total_bytes as f64 * AGGREGATED_DISK_SHARE / AGGREGATED_BYTES_PER_ROW) as i64;
     rows.clamp(MIN_AGGREGATED_ROWS, MAX_AGGREGATED_ROWS)
-}
-
-/// 回收空闲页（需库已启用 `auto_vacuum=INCREMENTAL`，见 `configure_auto_vacuum`）。
-///
-/// 每次只回收 `pages` 页（4KB/页），由 maintenance 周期调用：既能把 retention
-/// 删除释放的页交还文件系统，又不会像全量 `VACUUM` 那样长时间锁表。
-/// `auto_vacuum=NONE` 时该语句是空操作，不会报错。
-pub(crate) fn run_incremental_vacuum(conn: &Connection, pages: i64) {
-    if let Err(e) = conn.execute_batch(&format!("PRAGMA incremental_vacuum({});", pages)) {
-        tracing::warn!("incremental_vacuum 失败: {}", e);
-    }
 }
 
 #[cfg(test)]

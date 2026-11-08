@@ -7,18 +7,12 @@
 use super::*;
 use crate::engine::metrics::Metrics;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use tempfile::TempDir;
 
-/// 递增序号，保证并发运行的测试各自使用独立临时目录
-static SEQ: AtomicU32 = AtomicU32::new(0);
-
-fn temp_dir(tag: &str) -> PathBuf {
-    let n = SEQ.fetch_add(1, Ordering::SeqCst);
-    let dir =
-        std::env::temp_dir().join(format!("gw_ota_test_{}_{}_{}", std::process::id(), tag, n));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+fn temp_dir() -> (TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().to_path_buf();
+    (dir, path)
 }
 
 fn new_manager(dir: &Path, signing_key: Option<Vec<u8>>) -> Arc<OtaManager> {
@@ -105,7 +99,7 @@ fn build_signed_delta(new_version: u32, old_fw: &[u8], new_fw: &[u8], key: &[u8]
 
 #[tokio::test]
 async fn rejects_too_small_firmware() {
-    let dir = temp_dir("small");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let err = mgr
         .clone()
@@ -114,48 +108,44 @@ async fn rejects_too_small_firmware() {
         .unwrap_err();
     assert!(err.message().contains("too small"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn rejects_invalid_magic() {
-    let dir = temp_dir("magic");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let mut fw = build_firmware(1, b"hello");
     fw[0] = 0x00; // 破坏 magic
     let err = mgr.clone().process_firmware(fw).await.unwrap_err();
     assert!(err.message().contains("magic"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn rejects_crc_mismatch() {
-    let dir = temp_dir("crc");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let mut fw = build_firmware(1, b"hello world");
     fw[8] ^= 0xFF; // 破坏 crc32 字段
     let err = mgr.clone().process_firmware(fw).await.unwrap_err();
     assert!(err.message().contains("CRC32"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn rejects_oversized_firmware_without_state_change() {
-    let dir = temp_dir("oversize");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     // 固件上限 64MB，超限应被拒且因检查在置位 Uploading 之前，状态保持 Idle
     let big = vec![0u8; 64 * 1024 * 1024 + 1];
     let err = mgr.clone().process_firmware(big).await.unwrap_err();
     assert!(err.message().contains("too large"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Idle);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn happy_path_writes_inactive_slot_then_pending_reboot() {
-    let dir = temp_dir("ok");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let payload = b"firmware-bytes-v2";
     mgr.clone()
@@ -176,12 +166,11 @@ async fn happy_path_writes_inactive_slot_then_pending_reboot() {
     // 活动分区不应被触碰（仍为预建的空文件）
     let active = std::fs::read(dir.join("slot_a.bin")).expect("slot_a exists");
     assert!(active.is_empty(), "active slot must be untouched");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn rejects_concurrent_ota() {
-    let dir = temp_dir("concurrent");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     mgr.clone()
         .process_firmware(build_firmware(3, b"abc"))
@@ -201,12 +190,11 @@ async fn rejects_concurrent_ota() {
     // 状态与目标版本不被第二次调用破坏
     assert_eq!(mgr.status().state, OtaState::PendingReboot);
     assert_eq!(mgr.status().target_version, Some(3));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn rollback_only_allowed_in_pending_reboot() {
-    let dir = temp_dir("rollback");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     // Idle 状态下回滚被拒
     let err = mgr.rollback().unwrap_err();
@@ -222,12 +210,11 @@ async fn rollback_only_allowed_in_pending_reboot() {
     assert_eq!(st.state, OtaState::Idle);
     assert_eq!(st.progress, 0);
     assert_eq!(st.target_version, None);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn unsigned_firmware_rejected_when_key_configured() {
-    let dir = temp_dir("nosig");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, Some(b"secret-key".to_vec()));
     let err = mgr
         .clone()
@@ -236,14 +223,13 @@ async fn unsigned_firmware_rejected_when_key_configured() {
         .unwrap_err();
     assert!(err.message().contains("no signature"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn signed_firmware_accepted_and_tamper_rejected() {
     let key = b"secret-key";
     // 合法签名 → 通过
-    let dir = temp_dir("sig_ok");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, Some(key.to_vec()));
     let payload = b"signed-payload";
     mgr.clone()
@@ -253,7 +239,7 @@ async fn signed_firmware_accepted_and_tamper_rejected() {
     assert_eq!(mgr.status().state, OtaState::PendingReboot);
 
     // 篡改 payload（CRC 重新计算以绕过 CRC 校验），签名仍用原 payload → 验签失败
-    let dir2 = temp_dir("sig_tamper");
+    let (_dir2, dir2) = temp_dir();
     let mgr2 = new_manager(&dir2, Some(key.to_vec()));
     let mut tampered = build_firmware(8, b"evil-payload");
     tampered.extend_from_slice(&SIG_MAGIC);
@@ -266,15 +252,13 @@ async fn signed_firmware_accepted_and_tamper_rejected() {
         err.message()
     );
     assert_eq!(mgr2.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&dir2);
 }
 
 // ===== 差分升级（bsdiff）=====
 
 #[tokio::test]
 async fn delta_happy_path_patches_active_slot_into_inactive() {
-    let dir = temp_dir("delta_ok");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     // 预置活动分区 slot_a 为“旧固件”（差异化内容保证补丁非空）
     let old_fw = b"firmware-v1\x00\x01\x02-common-tail-block-abcdefghijklmnop".to_vec();
@@ -297,12 +281,11 @@ async fn delta_happy_path_patches_active_slot_into_inactive() {
     // 活动分区不被触碰
     let active = std::fs::read(dir.join("slot_a.bin")).expect("slot_a");
     assert_eq!(active, old_fw);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn delta_rejects_invalid_magic() {
-    let dir = temp_dir("delta_magic");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let old_fw = b"old-fw".to_vec();
     let new_fw = b"new-fw".to_vec();
@@ -311,12 +294,11 @@ async fn delta_rejects_invalid_magic() {
     let err = mgr.clone().process_delta(d).await.unwrap_err();
     assert!(err.message().contains("magic"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn delta_rejects_crc_mismatch() {
-    let dir = temp_dir("delta_crc");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let old_fw = b"old-fw-abcdef".to_vec();
     let new_fw = b"new-fw-ghijkl-EXTRA".to_vec();
@@ -326,12 +308,11 @@ async fn delta_rejects_crc_mismatch() {
     let err = mgr.clone().process_delta(d).await.unwrap_err();
     assert!(err.message().contains("CRC32"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn delta_unsigned_rejected_when_key_configured() {
-    let dir = temp_dir("delta_nosig");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, Some(b"secret-key".to_vec()));
     let old_fw = b"old-fw".to_vec();
     let new_fw = b"new-fw-diff".to_vec();
@@ -342,13 +323,12 @@ async fn delta_unsigned_rejected_when_key_configured() {
         .unwrap_err();
     assert!(err.message().contains("no signature"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn delta_signed_accepted() {
     let key = b"secret-key";
-    let dir = temp_dir("delta_sig");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, Some(key.to_vec()));
     let old_fw = b"firmware-v1-common".to_vec();
     let new_fw = b"firmware-v2-common-CHANGED".to_vec();
@@ -361,7 +341,6 @@ async fn delta_signed_accepted() {
     assert_eq!(mgr.status().state, OtaState::PendingReboot);
     let written = std::fs::read(dir.join("slot_b.bin")).expect("slot_b");
     assert_eq!(written, new_fw);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 与 `new_manager` 相同，但可指定活动槽（用于验证回滚目标随活动槽变化）。
@@ -389,7 +368,7 @@ fn new_manager_active(dir: &Path, active: char) -> Arc<OtaManager> {
 /// 活动槽 = 'a'
 #[tokio::test]
 async fn rollback_boot_env_targets_active_slot_a() {
-    let dir = temp_dir("rb_env_a");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None); // active_slot = 'a'
     assert_eq!(mgr.status().active_slot, 'a');
 
@@ -413,13 +392,12 @@ async fn rollback_boot_env_targets_active_slot_a() {
         "回滚必须把 boot_partition 设回当前运行槽 a，实际 {:?}",
         mgr.boot_env.writes()
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 同上，活动槽 = 'b'：升级写 slot_a（非活动槽 a），回滚须设回 'b'。
 #[tokio::test]
 async fn rollback_boot_env_targets_active_slot_b() {
-    let dir = temp_dir("rb_env_b");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager_active(&dir, 'b');
     assert_eq!(mgr.status().active_slot, 'b');
 
@@ -443,24 +421,22 @@ async fn rollback_boot_env_targets_active_slot_b() {
         "回滚必须把 boot_partition 设回当前运行槽 b，实际 {:?}",
         mgr.boot_env.writes()
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn delta_rejects_oversized_without_state_change() {
-    let dir = temp_dir("delta_oversize");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let big = vec![0u8; MAX_FIRMWARE_SIZE + 1];
     let err = mgr.clone().process_delta(big).await.unwrap_err();
     assert!(err.message().contains("too large"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Idle);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Bug 2.5: fail() 后 progress 必须重置为 0，避免 UI 永远卡在 70% (Writing)
 #[test]
 fn test_fail_resets_progress() {
-    let dir = temp_dir("fail_progress");
+    let (_dir, dir) = temp_dir();
     let m = new_manager(&dir, None);
     // 模拟进入 Writing 状态后失败
     *m.state.lock() = OtaState::Writing;
@@ -478,7 +454,7 @@ fn test_fail_resets_progress() {
 /// 正常流程：PendingReboot 不变动 progress（fail 路径不干扰正常状态）
 #[test]
 fn test_pending_reboot_keeps_full_progress() {
-    let dir = temp_dir("reboot_progress");
+    let (_dir, dir) = temp_dir();
     let m = new_manager(&dir, None);
     *m.state.lock() = OtaState::Writing;
     *m.progress.lock() = 70;
@@ -505,7 +481,7 @@ fn parse_signing_key_base64() {
 /// 内含 target version (u32 LE 字节)。回滚时标记被删除。
 #[tokio::test]
 async fn pending_reboot_marker_created_on_success_and_cleared_on_rollback() {
-    let dir = temp_dir("marker");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     let payload = b"v2-payload";
     mgr.clone()
@@ -537,14 +513,12 @@ async fn pending_reboot_marker_created_on_success_and_cleared_on_rollback() {
     // 3) 回滚后标记被删除
     mgr.rollback().expect("rollback ok");
     assert!(!marker_path.exists(), "rollback 后标记应被删除");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// r31-OTA4 补充：重复 rollback 幂等（标记文件不存在时不报错）。
 #[tokio::test]
 async fn rollback_when_no_marker_is_idempotent() {
-    let dir = temp_dir("marker_idem");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     mgr.clone()
         .process_firmware(build_firmware(2, b"x"))
@@ -555,7 +529,6 @@ async fn rollback_when_no_marker_is_idempotent() {
     // 不会触达 marker 删除逻辑——但已删除的 marker 仍应保持"不存在"状态。
     let marker = mgr.pending_reboot_marker_path();
     assert!(!marker.exists());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #2 回归（核心）：升级生效后重启，`boot_rollback_check` 不得把 `boot_partition`
@@ -563,7 +536,7 @@ async fn rollback_when_no_marker_is_idempotent() {
 /// 都回退、新固件永不生效。生效时应清除标记。
 #[tokio::test]
 async fn boot_rollback_check_does_not_revert_after_upgrade_effective() {
-    let dir = temp_dir("bootcheck_effective");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None); // 升级前 active_slot = 'a'
     mgr.clone()
         .process_firmware(build_firmware(2, b"v2"))
@@ -587,14 +560,13 @@ async fn boot_rollback_check_does_not_revert_after_upgrade_effective() {
         "升级已生效时不得把 boot_partition 切回旧槽 a，实际写入 {:?}",
         writes
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #2：标记存在但尚未切到目标槽（如断电 / env 写丢失）→ 重新确认 `boot_partition`
 /// 指向目标槽并保留标记，待下次启动复核。
 #[tokio::test]
 async fn boot_rollback_check_reaffirms_target_slot_when_not_yet_effective() {
-    let dir = temp_dir("bootcheck_pending");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None); // active_slot = 'a'
     mgr.clone()
         .process_firmware(build_firmware(2, b"v2"))
@@ -613,7 +585,6 @@ async fn boot_rollback_check_reaffirms_target_slot_when_not_yet_effective() {
         mgr.pending_reboot_marker_path().exists(),
         "升级尚未生效时应保留标记"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `bootcount >= 3`（新分区连续启动失败）→ 启动自检必须触发自动回滚：
@@ -623,7 +594,7 @@ async fn boot_rollback_check_reaffirms_target_slot_when_not_yet_effective() {
 /// 既验证语义又不会重启 CI runner。
 #[test]
 fn bootcount_over_threshold_triggers_auto_rollback_and_reboot() {
-    let dir = temp_dir("bootcount_rollback");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None); // active_slot = 'a'
     mgr.boot_env.set_var("bootcount", "3");
 
@@ -645,13 +616,12 @@ fn bootcount_over_threshold_triggers_auto_rollback_and_reboot() {
         writes
     );
     assert_eq!(mgr.boot_env.reboot_count(), 1, "自动回滚必须触发一次重启");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `bootcount` 未达阈值 → 不回滚、不重启。
 #[test]
 fn bootcount_below_threshold_does_not_trigger_rollback() {
-    let dir = temp_dir("bootcount_ok");
+    let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, None);
     mgr.boot_env.set_var("bootcount", "1");
 
@@ -662,7 +632,6 @@ fn bootcount_below_threshold_does_not_trigger_rollback() {
         0,
         "bootcount 未达阈值不得重启设备"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 环境变量覆盖 A/B 分区节点路径（现场介质不是 eMMC 时必需）。

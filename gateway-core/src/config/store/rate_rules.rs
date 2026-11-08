@@ -326,20 +326,14 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use tempfile::TempDir;
 
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_store() -> (RateRuleStore, PathBuf) {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("rate_rule_store_test_{}_{}", std::process::id(), n));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let db = dir.join("test.db");
+    fn temp_store() -> (RateRuleStore, TempDir) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db = dir.path().join("test.db");
         (
             RateRuleStore::new(db.to_str().expect("utf8")).expect("new"),
-            db,
+            dir,
         )
     }
 
@@ -360,7 +354,7 @@ mod tests {
 
     #[test]
     fn rule_crud_roundtrip() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         let created = store.create_rule(sample_rule()).expect("create");
         assert!(created.id.starts_with("rr_"));
         assert!(created.created_at > 0);
@@ -385,13 +379,11 @@ mod tests {
         assert!(store.delete_rule(&created.id).expect("delete"));
         assert!(store.list_rules().expect("list").is_empty());
         assert!(!store.delete_rule("rr_nonexistent").expect("delete none"));
-
-        let _ = std::fs::remove_file(&db);
     }
 
     #[test]
     fn access_log_append_query_stats() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         for i in 0..10 {
             store
                 .append_access_log(&ApiAccessLog {
@@ -417,15 +409,13 @@ mod tests {
         // 均值必须排除 429 样本：非限流请求延迟 10..=18，均值 14；
         // 若混入 429 样本（延迟 19）则为 14.5→15。
         assert_eq!(stats.avg_latency_ms, 14, "avg 不得混入被限流请求");
-
-        let _ = std::fs::remove_file(&db);
     }
 
     /// 全部请求都被限流时 avg 应为 0（CASE 全 NULL → COALESCE 兜底），
     /// 而不是除零错误或沿用旧值。
     #[test]
     fn stats_avg_zero_when_all_limited() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         store
             .append_access_log(&ApiAccessLog {
                 id: 0,
@@ -442,7 +432,5 @@ mod tests {
         assert_eq!(stats.total_requests, 1);
         assert_eq!(stats.limited_requests, 1);
         assert_eq!(stats.avg_latency_ms, 0);
-
-        let _ = std::fs::remove_file(&db);
     }
 }

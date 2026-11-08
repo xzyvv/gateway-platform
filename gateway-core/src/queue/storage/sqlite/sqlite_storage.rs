@@ -11,12 +11,12 @@ use rusqlite::Connection;
 
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::metrics::Metrics;
-use crate::engine::model::DataPoint;
+use crate::{engine::model::DataPoint, support::sqlite_maintenance::run_incremental_vacuum};
 
 use super::db_init::init_queue_db;
 use super::history::{aggregate_minute_windows, query_history_ex, query_raw_rows};
 use super::read_pool::ReadPool;
-use super::retention::{run_incremental_vacuum, run_retention_cleanup};
+use super::retention::run_retention_cleanup;
 use super::wal::{check_wal_size, run_wal_checkpoint, wal_path_for};
 
 use crate::queue::core::limit::{update_in_flight_metric, update_queue_depth_metric};
@@ -58,6 +58,12 @@ pub struct SqliteStorage {
     /// trait 方法暴露给 `DataQueue::enqueue` 入口判断走 fallback 路径。
     /// 恢复由 `maintenance` 周期再次检查后自动清除（unsent 比例降下来时）。
     unsent_overflow: Arc<AtomicBool>,
+    /// 累计因容量上限被物理删除的行数（进程内累计，重启归零）。
+    /// 与 `unsent_overflow` 的"当前是否超限"布尔不同，这是"历史上一共丢了多少"的
+    /// 单调计数——用于告警（本次淘汰增量）与前端展示（累计淘汰量）。
+    evicted_total: Arc<AtomicI64>,
+    /// 上述淘汰中未送达（delivered=0）的行数，即彻底的计费/审计数据丢失。
+    evicted_undelivered_total: Arc<AtomicI64>,
 }
 
 impl SqliteStorage {
@@ -87,6 +93,8 @@ impl SqliteStorage {
             storage_retention_days: Arc::new(parking_lot::Mutex::new(Some(30))),
             metrics,
             unsent_overflow: Arc::new(AtomicBool::new(false)),
+            evicted_total: Arc::new(AtomicI64::new(0)),
+            evicted_undelivered_total: Arc::new(AtomicI64::new(0)),
         })
     }
 
@@ -130,6 +138,16 @@ impl SqliteStorage {
         let cur = counter.load(Ordering::Relaxed);
         counter.store(cur.saturating_sub(n).max(0), Ordering::Relaxed);
     }
+
+    /// 单调累加计数器（淘汰行数等只增不减的审计量）。
+    /// 用 `fetch_add` 而非 load/store：淘汰可能发生在入队与维护两条路径上，
+    /// 非原子的读改写会丢增量，导致"到底丢了多少"统计偏小。
+    pub(super) fn saturating_add(counter: &AtomicI64, n: i64) {
+        if n <= 0 {
+            return;
+        }
+        counter.fetch_add(n, Ordering::Relaxed);
+    }
 }
 
 impl QueueStorage for SqliteStorage {
@@ -162,6 +180,14 @@ impl QueueStorage for SqliteStorage {
                 report.undelivered_deleted,
                 report.total
             );
+            // 单机网关无异地副本：这些行是**物理删除且不可恢复**的。
+            // 只打 debug 日志（默认不输出）等于静默丢数据，因此必须同时
+            // ① 累加进程内单调计数 → 供告警取增量、供前端展示累计值；
+            // ② 累加 Prometheus 计数器 → 供运维配告警规则。
+            Self::saturating_add(&self.evicted_total, report.deleted);
+            Self::saturating_add(&self.evicted_undelivered_total, report.undelivered_deleted);
+            self.metrics
+                .add_queue_evicted(report.deleted, report.undelivered_deleted);
         }
         // #20-2026：把 OverflowReport 翻译为 unsent_overflow AtomicBool。
         // 这里只更新"硬超限"信号，DataQueue::enqueue 入口的 fallback 决策
@@ -267,6 +293,15 @@ impl QueueStorage for SqliteStorage {
         self.in_flight.load(Ordering::Relaxed).max(0)
     }
 
+    fn evicted_stats(&self) -> (i64, i64) {
+        let total = self.evicted_total.load(Ordering::Relaxed).max(0);
+        let undelivered = self
+            .evicted_undelivered_total
+            .load(Ordering::Relaxed)
+            .max(0);
+        (total, undelivered)
+    }
+
     fn history_query(
         &self,
         point_id: &str,
@@ -348,7 +383,7 @@ impl QueueStorage for SqliteStorage {
             Self::wal_checkpoint_truncate(&mut guard);
             // auto_vacuum=INCREMENTAL 才生效：把前面各步删除释放的空闲页
             // 分小批还给文件系统，避免主库文件只增不减。
-            run_incremental_vacuum(&guard, INCREMENTAL_VACUUM_PAGES);
+            run_incremental_vacuum(&guard, INCREMENTAL_VACUUM_PAGES, "队列主库");
         }
 
         // 4. 每 120 ticks (1 小时): retention cleanup

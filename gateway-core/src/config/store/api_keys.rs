@@ -403,25 +403,20 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use tempfile::TempDir;
 
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_store() -> (ApiKeyStore, PathBuf) {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("api_key_store_test_{}_{}", std::process::id(), n));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let db = dir.join("test.db");
+    fn temp_store() -> (ApiKeyStore, TempDir) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db = dir.path().join("test.db");
         (
             ApiKeyStore::new(db.to_str().expect("utf8")).expect("new"),
-            db,
+            dir,
         )
     }
 
     #[test]
     fn create_auth_lifecycle() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         let scopes = vec!["points:read".to_string()];
         let (rec, full_key) = store.create("测试", &scopes, None).expect("create");
         assert!(full_key.starts_with("gwk_"));
@@ -451,26 +446,24 @@ mod tests {
         // 删除
         assert!(store.delete(&rec.id).expect("delete"));
         assert!(store.list().expect("list").is_empty());
-        let _ = std::fs::remove_file(&db);
     }
 
     #[test]
     fn expired_key_rejected() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         // expires_days=0 语义是「立即过期」的边界：创建时 now + 0 = now，authenticate 判 >= 过期。
         // 正常用法前端只允许 >=1 或永不过期；这里直接验证过期判定分支。
         let (rec, full_key) = store.create("将过期", &[], Some(1)).expect("create");
         assert!(rec.expires_at.is_some());
         // 未过期可用
         assert!(store.authenticate(&full_key).expect("x").is_some());
-        let _ = std::fs::remove_file(&db);
     }
 
     /// 批量化统计契约：鉴权只做内存累加，flush 后落盘且不重复计数；
     /// list 在 flush 前后都能读到包含未落盘增量在内的累计值。
     #[test]
     fn usage_stats_batched_and_flushed_once() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         let (rec, full_key) = store.create("批量统计", &[], None).expect("create");
 
         store.authenticate(&full_key).expect("auth1");
@@ -493,6 +486,5 @@ mod tests {
             store.list().expect("list").first().map(|r| r.call_count),
             Some(3)
         );
-        let _ = std::fs::remove_file(&db);
     }
 }

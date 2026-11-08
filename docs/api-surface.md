@@ -6,7 +6,7 @@
 
 **数据来源**：`gateway-api/src/web/mod.rs`（health 探针）+ `gateway-api/src/web/api/*/routes.rs`（各业务子域）。
 
-**统计**：18 个路由组 / 142 条唯一路径 / 170 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
+**统计**：16 个路由组 / 144 条唯一路径 / 173 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
 
 **鉴权说明**：`token` = 始终需要 `Authorization: Bearer <token>`；`token（allow_anon_read=true 时可匿名）` = 匿名只读开关打开时可不带 token；
 `admin / exec scope` = 需要管理员或 `exec` scope 的 API 密钥；`无` = 公开端点。
@@ -60,25 +60,13 @@
 | GET | `/api/auth/whoami` | token | `whoami` |
 | POST | `/api/auth/password` | token | `change_password` |
 
-## `config` — 设备 / 点位 CRUD 与配置导入导出
+## `config` — 配置域（config / project / buses）
 
-入口函数：`config_routes`；端点数：21
+入口函数：`config_routes`；端点数：16
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
-| GET | `/api/devices` | token（`allow_anon_read=true` 时可匿名） | `list_devices` |
-| GET | `/api/devices/:id/points` | token（`allow_anon_read=true` 时可匿名） | `list_points` |
-| GET | `/api/points/trash` | token（`allow_anon_read=true` 时可匿名） | `list_point_trash` |
 | GET | `/api/buses/paused` | token（`allow_anon_read=true` 时可匿名） | `list_paused_buses` |
-| POST | `/api/devices` | token | `create_device` |
-| PUT | `/api/devices/:id` | token | `update_device` |
-| DELETE | `/api/devices/:id` | token | `delete_device` |
-| POST | `/api/devices/:id/points` | token | `create_point` |
-| PUT | `/api/points/:id` | token | `update_point` |
-| DELETE | `/api/points/:id` | token | `delete_point` |
-| DELETE | `/api/points/trash` | token | `purge_all_point_trash` |
-| DELETE | `/api/points/trash/:id` | token | `purge_point` |
-| POST | `/api/points/:id/restore` | token | `restore_point` |
 | POST | `/api/buses/:name/pause` | token | `pause_bus_collect` |
 | POST | `/api/buses/:name/resume` | token | `resume_bus_collect` |
 | POST | `/api/config/backup` | token | `backup_config` |
@@ -87,13 +75,26 @@
 | POST | `/api/config/validate` | token | `validate_config_report` |
 | GET | `/api/project/export` | token | `export_project` |
 | POST | `/api/project/import` | token | `import_project` |
+| GET | `/api/config` | token（`allow_anon_read=true` 时可匿名） | `get_config` |
+| GET | `/api/config/versions` | token（`allow_anon_read=true` 时可匿名） | `list_config_versions` |
+| GET | `/api/config/versions/:id` | token（`allow_anon_read=true` 时可匿名） | `get_config_version` |
+| GET | `/api/config/versions/:id/compare` | token（`allow_anon_read=true` 时可匿名） | `compare_config_versions` |
+| POST | `/api/config` | token | `post_config` |
+| POST | `/api/config/versions/:id/rollback` | token | `rollback_config_version` |
+| POST | `/api/config/diff` | token | `config_diff` |
 
-## `device_ops` — 设备运维
+## `devices` — 设备域（CRUD / 运维 / IO / 模板）
 
-入口函数：`device_ops_routes`；端点数：18
+入口函数：`devices_routes`；端点数：29
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
+| GET | `/api/devices` | token（`allow_anon_read=true` 时可匿名） | `list_devices` |
+| GET | `/api/devices/:id/points` | token（`allow_anon_read=true` 时可匿名） | `list_points` |
+| POST | `/api/devices` | token | `create_device` |
+| PUT | `/api/devices/:id` | token | `update_device` |
+| DELETE | `/api/devices/:id` | token | `delete_device` |
+| POST | `/api/devices/:id/points` | token | `create_point` |
 | GET | `/api/device-groups` | token（`allow_anon_read=true` 时可匿名） | `list_groups` |
 | GET | `/api/devices/assets` | token（`allow_anon_read=true` 时可匿名） | `list_assets` |
 | GET | `/api/devices/:id/asset` | token（`allow_anon_read=true` 时可匿名） | `get_asset` |
@@ -112,22 +113,15 @@
 | DELETE | `/api/device-groups/:id/devices/:did` | token | `remove_device_from_group` |
 | PUT | `/api/devices/:id/asset` | token | `update_asset` |
 | POST | `/api/devices/control/send` | token | `send_command` |
-
-## `devices` — IO 控制与设备模板
-
-入口函数：`devices_routes`；端点数：5
-
-| 方法 | 路径 | 鉴权 | 处理器 |
-|---|---|---|---|
 | GET | `/api/io/status` | token（`allow_anon_read=true` 时可匿名） | `io_status` |
 | GET | `/api/templates` | token（`allow_anon_read=true` 时可匿名） | `list_templates` |
 | POST | `/api/io/:index` | token | `control_io` |
 | POST | `/api/templates` | token | `save_template` |
 | DELETE | `/api/templates/:name` | token | `delete_template` |
 
-## `diagnostics` — 诊断
+## `diagnostics` — 诊断（含日志流 / exec）
 
-入口函数：`diagnostics_routes`；端点数：11
+入口函数：`diagnostics_routes`；端点数：13
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
@@ -142,6 +136,8 @@
 | POST | `/api/diagnostics/bus-load/refresh` | token | `refresh_bus_loads` |
 | POST | `/api/diagnostics/task-diag/:point_id` | token | `diagnose_point` |
 | GET | `/api/diagnostics/gateway` | token（`allow_anon_read=true` 时可匿名） | `get_gateway_diag` |
+| GET | `/api/diagnostics/logs` | token（`allow_anon_read=true` 时可匿名） | `diagnostics_logs_ws` |
+| POST | `/api/diagnostics/exec` | admin / exec scope | `diagnostics_exec` |
 
 ## `history` — 历史数据
 
@@ -161,33 +157,32 @@
 | GET | `/api/license` | token（`allow_anon_read=true` 时可匿名） | `get_license` |
 | POST | `/api/license/import` | token | `import_license` |
 
-## `points` — 点位值读写
+## `points` — 点位域（CRUD / 回收站 / 即时读写 / 虚拟点位 / 批量）
 
-入口函数：`points_routes`；端点数：3
+入口函数：`points_routes`；端点数：20
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
+| GET | `/api/point-trash` | token（`allow_anon_read=true` 时可匿名） | `list_point_trash` |
+| DELETE | `/api/point-trash` | token | `purge_all_point_trash` |
+| DELETE | `/api/point-trash/:id` | token | `purge_point` |
+| PUT | `/api/points/:id` | token | `update_point` |
+| DELETE | `/api/points/:id` | token | `delete_point` |
+| POST | `/api/points/:id/restore` | token | `restore_point` |
 | GET | `/api/points/:id/read` | token | `point_read_now` |
-| POST | `/api/points/write` | token | `points_write_unified` |
-| POST | `/api/points/batch` | token | `points_batch` |
-
-## `points_ops` — 点位运维
-
-入口函数：`points_ops_routes`；端点数：11
-
-| 方法 | 路径 | 鉴权 | 处理器 |
-|---|---|---|---|
-| GET | `/api/points/virtual` | token（`allow_anon_read=true` 时可匿名） | `list_virtual_points` |
-| POST | `/api/points/virtual` | token | `create_virtual_point` |
-| POST | `/api/points/virtual/:id/recalc` | token | `recalc_virtual_point` |
-| PUT | `/api/points/virtual/:id` | token | `update_virtual_point` |
-| DELETE | `/api/points/virtual/:id` | token | `delete_virtual_point` |
-| GET | `/api/points/offset` | token（`allow_anon_read=true` 时可匿名） | `offset_list` |
-| GET | `/api/points/clone/devices` | token（`allow_anon_read=true` 时可匿名） | `clone_devices` |
-| POST | `/api/points/find-replace/search` | token | `find_replace_search` |
-| POST | `/api/points/find-replace/apply` | token | `find_replace_apply` |
-| POST | `/api/points/offset/apply` | token | `offset_apply` |
-| POST | `/api/points/clone/apply` | token | `clone_apply` |
+| POST | `/api/point-tools/write` | token | `points_write_unified` |
+| POST | `/api/point-tools/batch` | token | `points_batch` |
+| GET | `/api/point-tools/virtual` | token（`allow_anon_read=true` 时可匿名） | `list_virtual_points` |
+| POST | `/api/point-tools/virtual` | token | `create_virtual_point` |
+| POST | `/api/point-tools/virtual/:id/recalc` | token | `recalc_virtual_point` |
+| PUT | `/api/point-tools/virtual/:id` | token | `update_virtual_point` |
+| DELETE | `/api/point-tools/virtual/:id` | token | `delete_virtual_point` |
+| GET | `/api/point-tools/offset` | token（`allow_anon_read=true` 时可匿名） | `offset_list` |
+| GET | `/api/point-tools/clone/devices` | token（`allow_anon_read=true` 时可匿名） | `clone_devices` |
+| POST | `/api/point-tools/find-replace/search` | token | `find_replace_search` |
+| POST | `/api/point-tools/find-replace/apply` | token | `find_replace_apply` |
+| POST | `/api/point-tools/offset/apply` | token | `offset_apply` |
+| POST | `/api/point-tools/clone/apply` | token | `clone_apply` |
 
 ## `protocol_tools` — 协议工具
 
@@ -240,13 +235,11 @@
 
 ## `realtime` — 实时数据 / WebSocket
 
-入口函数：`realtime_routes`；端点数：3
+入口函数：`realtime_routes`；端点数：1
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
 | GET | `/api/realtime` | token（`allow_anon_read=true` 时可匿名） | `realtime_ws` |
-| GET | `/api/diagnostics/logs` | token（`allow_anon_read=true` 时可匿名） | `diagnostics_logs_ws` |
-| POST | `/api/diagnostics/exec` | admin / exec scope | `diagnostics_exec` |
 
 ## `sim_consumer` — 内置模拟消费者
 
@@ -258,39 +251,35 @@
 | POST | `/api/sim_consumer/start` | token | `start_sim_consumer` |
 | POST | `/api/sim_consumer/stop` | token | `stop_sim_consumer` |
 
-## `system` — 系统与配置
+## `system` — 系统（状态 / OTA / NTP / 指标 / 证书 / 看门狗 / 上行）
 
-入口函数：`system_routes`；端点数：27
+入口函数：`system_routes`；端点数：23
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
-| GET | `/api/config` | token（`allow_anon_read=true` 时可匿名） | `get_config` |
 | GET | `/api/version` | token（`allow_anon_read=true` 时可匿名） | `get_version` |
 | GET | `/api/status` | token（`allow_anon_read=true` 时可匿名） | `get_status` |
 | GET | `/api/health/report` | token（`allow_anon_read=true` 时可匿名） | `get_health_report` |
 | GET | `/api/ota/status` | token（`allow_anon_read=true` 时可匿名） | `ota_status` |
 | GET | `/api/ntp/status` | token（`allow_anon_read=true` 时可匿名） | `ntp_status` |
-| GET | `/api/config/versions` | token（`allow_anon_read=true` 时可匿名） | `list_config_versions` |
-| GET | `/api/config/versions/:id` | token（`allow_anon_read=true` 时可匿名） | `get_config_version` |
-| GET | `/api/config/versions/:id/compare` | token（`allow_anon_read=true` 时可匿名） | `compare_config_versions` |
 | GET | `/api/metrics` | token（`allow_anon_read=true` 时可匿名） | `get_metrics` |
 | GET | `/api/cellular/status` | token（`allow_anon_read=true` 时可匿名） | `cellular_status` |
 | GET | `/api/passthrough/sessions` | token（`allow_anon_read=true` 时可匿名） | `passthrough_sessions` |
 | GET | `/api/north/status` | token（`allow_anon_read=true` 时可匿名） | `north_status` |
+| GET | `/api/north/dead-letters` | token（`allow_anon_read=true` 时可匿名） | `list_dead_letters` |
 | GET | `/api/health/disk/history` | token（`allow_anon_read=true` 时可匿名） | `disk_health_history` |
 | GET | `/api/watchdog/services` | token（`allow_anon_read=true` 时可匿名） | `list_services` |
 | GET | `/api/watchdog/events` | token（`allow_anon_read=true` 时可匿名） | `list_heal_events` |
 | GET | `/api/certificates` | token（`allow_anon_read=true` 时可匿名） | `list_certificates` |
-| POST | `/api/config` | token | `post_config` |
 | POST | `/api/ota/upload` | token | `ota_upload` |
 | POST | `/api/ota/rollback` | token | `ota_rollback` |
 | POST | `/api/ntp/sync` | token | `ntp_sync` |
-| POST | `/api/config/versions/:id/rollback` | token | `rollback_config_version` |
-| POST | `/api/config/diff` | token | `config_diff` |
 | POST | `/api/watchdog/services/:name/restart` | token | `restart_service` |
 | POST | `/api/certificates/upload` | token | `upload_certificate` |
 | POST | `/api/certificates/renew` | token | `renew_certificate` |
 | POST | `/api/webhook/test` | token | `test_webhook` |
+| POST | `/api/north/dead-letters/:id/replay` | token | `replay_dead_letter` |
+| DELETE | `/api/north/dead-letters` | token | `purge_dead_letters` |
 
 ## `uplink` — 上行配置与上送测试
 

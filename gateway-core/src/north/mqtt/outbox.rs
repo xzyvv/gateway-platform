@@ -57,6 +57,39 @@ pub enum OutboxMode {
     Memory,
 }
 
+/// 死信记录（对外 DTO）。
+///
+/// 只暴露摘要与 payload 预览，不把完整 payload 带出存储层：
+/// 列表接口若一次返回几十条几十 KB 的 payload，现场 4G 链路会直接卡死。
+/// 需要原件时走「重投」（重新进入 outbox 发送），而不是读取。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeadLetterRecord {
+    pub id: i64,
+    pub protocol: String,
+    pub data_id: i64,
+    pub topic: String,
+    /// 原始 payload 字节数
+    pub payload_len: i64,
+    /// payload 前 512 字节的可读预览（文本原样，二进制转 hex），仅供人工判断内容
+    pub payload_preview: String,
+    pub qos: i32,
+    /// 消息最初进入 outbox 的时间
+    pub created_at: i64,
+    /// 判定为死信的时间
+    pub failed_at: i64,
+    /// 失败前已尝试次数
+    pub attempt_count: i32,
+    /// 死信原因（如 `http_404` / `http_401` / `retry_exhausted`）
+    pub reason: String,
+    /// 若曾重投过，记录重投时间
+    pub replayed_at: Option<i64>,
+}
+
+/// D5：死信 payload 预览的渲染规则（`PREVIEW_BYTES` / `payload_preview`）。
+mod preview;
+
+use preview::payload_preview;
+
 /// Outbox 存储
 pub struct OutboxStore {
     conn: Connection,
@@ -139,7 +172,17 @@ impl OutboxStore {
                 // 时遇到 SQLITE_BUSY 会立即返回错误（默认 0ms），导致 outbox persist
                 // 偶发失败、消息被丢弃。设置 5s 退避重试，让并发写自动排队。
                 "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
+             -- outbox 持久化等级与主队列（data_queue.db，已用 FULL）对齐。
+             --
+             -- 历史原因这里曾是 NORMAL：WAL + NORMAL 下 SQLite 只在 checkpoint
+             -- 时 fsync，进程崩溃安全但**掉电**可能丢失最近若干已提交事务。而
+             -- outbox 恰恰是「北向接收端长期不可达 / 断网」场景下待发数据的最后
+             -- 一道保险——网关多为无 UPS 的现场设备，掉电是常态而非异常。此时
+             -- 丢失 outbox 尾部记录 = 数据永久丢失，且队列侧已 ack 无法补救。
+             --
+             -- 代价：每次事务多一次 fsync。outbox 写入量远小于主队列（仅北向
+             -- 待发批次），且每次批量 persist 共用一次事务，fsync 次数随之摊薄。
+             PRAGMA synchronous=FULL;
              PRAGMA busy_timeout=5000;
              CREATE TABLE IF NOT EXISTS mqtt_outbox (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,7 +216,35 @@ impl OutboxStore {
              CREATE TABLE IF NOT EXISTS outbox_replay_cursor (
                  protocol TEXT PRIMARY KEY,
                  after_id INTEGER NOT NULL DEFAULT 0
-             );",
+             );
+             -- 死信表：**不可投递**的待发批次在这里留档，而不是直接物理删除。
+             --
+             -- 原实现（Bug P0-B2 的后果）：4xx 永久失败 / 重试用尽时直接把
+             -- mqtt_outbox 行 remove 掉，只留一行 error 日志与一个指标计数器。
+             -- 现场后果：客户接收端若因路径写错、鉴权过期、网关白名单变更而
+             -- 返回 404/401/403，这批数据就静默消失，且**没有任何入口可以捞回来**；
+             -- 指标要配到 Grafana 才看得见，而单机现场通常没有 Grafana。
+             --
+             -- 现在改为：移入本表（保留完整 payload）→ 可查询 → 可手工重投。
+             -- 重投成功后行被删除；未重投的行按 retention 周期清理。
+             CREATE TABLE IF NOT EXISTS outbox_dead_letter (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 protocol TEXT NOT NULL,
+                 data_id INTEGER NOT NULL,
+                 data_ids BLOB,
+                 topic TEXT NOT NULL,
+                 payload BLOB NOT NULL,
+                 qos INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL,
+                 failed_at INTEGER NOT NULL,
+                 attempt_count INTEGER NOT NULL DEFAULT 0,
+                 reason TEXT NOT NULL,
+                 replayed_at INTEGER
+             );
+             CREATE INDEX IF NOT EXISTS idx_dead_letter_protocol_failed
+                 ON outbox_dead_letter(protocol, failed_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_dead_letter_failed_at
+                 ON outbox_dead_letter(failed_at);",
             )
             .map_err(|e| GatewayError::Io(format!("init outbox schema: {}", e)))?;
         // S13: 兼容旧库——添加 protocol 列。SQLite 在列已存在时返回 "duplicate column name" 错误，
@@ -332,6 +403,260 @@ impl OutboxStore {
             )
             .map_err(|e| GatewayError::Queue(format!("outbox record_attempt: {}", e)))?;
         Ok(())
+    }
+
+    /// 把 outbox 行**移入**死信表（同一事务：插入死信 + 删除 outbox 行）。
+    ///
+    /// 为什么需要：4xx / 重试用尽意味着这批数据永远送不出去，但「送不出去」
+    /// 不等于「用户不要了」——绝大多数是接收端配置错误（路径、鉴权、白名单），
+    /// 修好之后这批数据仍然有价值。原实现直接物理删除，等于永久放弃。
+    ///
+    /// 返回 `Ok(false)` 表示 outbox 里已经没有该行（已被并发 ack / 删除），
+    /// 此时不会凭空造出一条死信。
+    pub fn move_to_dead_letter(&mut self, outbox_id: i64, reason: &str) -> GatewayResult<bool> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| GatewayError::Queue(format!("dead-letter tx: {}", e)))?;
+        let now = now_ms();
+        let inserted = tx
+            .execute(
+                "INSERT INTO outbox_dead_letter
+                     (protocol, data_id, data_ids, topic, payload, qos,
+                      created_at, failed_at, attempt_count, reason)
+                 SELECT protocol, data_id, data_ids, topic, payload, qos,
+                        created_at, ?2, attempt_count, ?3
+                   FROM mqtt_outbox WHERE id = ?1",
+                params![outbox_id, now, reason],
+            )
+            .map_err(|e| GatewayError::Queue(format!("dead-letter insert: {}", e)))?;
+        if inserted == 0 {
+            // outbox 行已不存在：事务回滚（无实际写入），不制造死信
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM mqtt_outbox WHERE id = ?1", params![outbox_id])
+            .map_err(|e| GatewayError::Queue(format!("dead-letter delete: {}", e)))?;
+        tx.commit()
+            .map_err(|e| GatewayError::Queue(format!("dead-letter commit: {}", e)))?;
+        Ok(true)
+    }
+
+    /// 分页查询死信（按 failed_at 倒序，最近失败的在最前）。
+    pub fn list_dead_letters(
+        &self,
+        protocol: &str,
+        limit: usize,
+        offset: usize,
+    ) -> GatewayResult<Vec<DeadLetterRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, protocol, data_id, topic, payload, qos,
+                        created_at, failed_at, attempt_count, reason, replayed_at
+                   FROM outbox_dead_letter
+                  WHERE protocol = ?1
+                  ORDER BY failed_at DESC, id DESC
+                  LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(|e| GatewayError::Queue(format!("dead-letter list prepare: {}", e)))?;
+        let rows = stmt
+            .query_map(params![protocol, limit as i64, offset as i64], |row| {
+                let payload: Vec<u8> = row.get(4)?;
+                Ok(DeadLetterRecord {
+                    id: row.get(0)?,
+                    protocol: row.get(1)?,
+                    data_id: row.get(2)?,
+                    topic: row.get(3)?,
+                    // 只回传长度与前 512 字节预览：完整 payload 可能几十 KB，
+                    // 列表接口全量返回会让现场 4G 链路直接卡死。需要原件时走
+                    // 导出/重投，而不是列表。
+                    payload_len: payload.len() as i64,
+                    payload_preview: payload_preview(&payload),
+                    qos: row.get(5)?,
+                    created_at: row.get(6)?,
+                    failed_at: row.get(7)?,
+                    attempt_count: row.get(8)?,
+                    reason: row.get(9)?,
+                    replayed_at: row.get(10)?,
+                })
+            })
+            .map_err(|e| GatewayError::Queue(format!("dead-letter list query: {}", e)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| GatewayError::Queue(format!("dead-letter row: {}", e)))?);
+        }
+        Ok(out)
+    }
+
+    /// 统计死信条数（`protocol` 为 None 时统计全部）。
+    pub fn count_dead_letters(&self, protocol: Option<&str>) -> GatewayResult<i64> {
+        let n: i64 = match protocol {
+            Some(p) => self.conn.query_row(
+                "SELECT COUNT(*) FROM outbox_dead_letter WHERE protocol = ?1",
+                params![p],
+                |r| r.get(0),
+            ),
+            None => self
+                .conn
+                .query_row("SELECT COUNT(*) FROM outbox_dead_letter", [], |r| r.get(0)),
+        }
+        .map_err(|e| GatewayError::Queue(format!("dead-letter count: {}", e)))?;
+        Ok(n)
+    }
+
+    /// 把一条死信**重新投递**：移回 mqtt_outbox（status=0，attempt_count 归零）。
+    ///
+    /// 返回新 outbox 行 id；`Ok(0)` 表示同一 data_id 已有 pending 行
+    /// （唯一索引 `idx_outbox_pending_data_id` 命中），此时原死信行保留不变，
+    /// 避免重投把正在发送的行挤掉或产生重复上报。
+    pub fn replay_dead_letter(&mut self, id: i64) -> GatewayResult<i64> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| GatewayError::Queue(format!("dead-letter replay tx: {}", e)))?;
+        let inserted = tx
+            .execute(
+                "INSERT OR IGNORE INTO mqtt_outbox
+                     (data_id, data_ids, topic, payload, qos, created_at,
+                      last_attempt_at, attempt_count, status, protocol)
+                 SELECT data_id, data_ids, topic, payload, qos, ?2,
+                        NULL, 0, 0, protocol
+                   FROM outbox_dead_letter WHERE id = ?1",
+                params![id, now_ms()],
+            )
+            .map_err(|e| GatewayError::Queue(format!("dead-letter replay insert: {}", e)))?;
+        if inserted == 0 {
+            // 要么死信不存在，要么该 data_id 已有 pending 行。
+            // 两种情况都不应删除死信（前者无事可做，后者需保留原件待下次重投）。
+            return Ok(0);
+        }
+        let new_id = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE outbox_dead_letter SET replayed_at = ?2 WHERE id = ?1",
+            params![id, now_ms()],
+        )
+        .map_err(|e| GatewayError::Queue(format!("dead-letter replay mark: {}", e)))?;
+        tx.execute("DELETE FROM outbox_dead_letter WHERE id = ?1", params![id])
+            .map_err(|e| GatewayError::Queue(format!("dead-letter replay delete: {}", e)))?;
+        tx.commit()
+            .map_err(|e| GatewayError::Queue(format!("dead-letter replay commit: {}", e)))?;
+        Ok(new_id)
+    }
+
+    /// 清理死信：按协议 + 可选「早于某时间戳」过滤。返回删除行数。
+    ///
+    /// 死信表若无 retention 会无限增长（客户端点长期错误时每天都会新增），
+    /// 而 outbox 库所在的 /var/lib 分区通常不大，因此必须能被定期清理。
+    pub fn purge_dead_letters(
+        &mut self,
+        protocol: Option<&str>,
+        older_than_ms: Option<i64>,
+    ) -> GatewayResult<usize> {
+        let n = match (protocol, older_than_ms) {
+            (Some(p), Some(ts)) => self.conn.execute(
+                "DELETE FROM outbox_dead_letter WHERE protocol = ?1 AND failed_at < ?2",
+                params![p, ts],
+            ),
+            (Some(p), None) => self.conn.execute(
+                "DELETE FROM outbox_dead_letter WHERE protocol = ?1",
+                params![p],
+            ),
+            (None, Some(ts)) => self.conn.execute(
+                "DELETE FROM outbox_dead_letter WHERE failed_at < ?1",
+                params![ts],
+            ),
+            (None, None) => self.conn.execute("DELETE FROM outbox_dead_letter", []),
+        }
+        .map_err(|e| GatewayError::Queue(format!("dead-letter purge: {}", e)))?;
+        Ok(n)
+    }
+
+    /// 死信表行数硬上限。
+    ///
+    /// 取值依据：死信与 `mqtt_outbox`（上限 100 万行）不同，它是**异常数据**，
+    /// 正常应为 0；按单行 payload 平均 1~5KB 估算，2 万行约 20~100MB，
+    /// 是现场 /var/lib 分区可承受的量级，同时远大于"一次配置错误导致的积压"
+    /// （典型几百条），不会误删。
+    ///
+    /// 为什么必须有上限：`purge_dead_letters` 需要人主动调用，而现场最常见的
+    /// 情况恰恰是「接收端一直 4xx、没人看界面」——没有上限时死信会持续吃盘，
+    /// 最终把 data_queue.db 也一起写失败，从"数据没送达"升级成"采集全停"。
+    pub const MAX_DEAD_LETTER_ROWS: i64 = 20_000;
+
+    /// 按「最旧优先」把死信裁剪到 `max_rows` 以内，返回删除行数。
+    ///
+    /// 与 `purge_dead_letters` 的分工：那个是人工清理（按协议/时间），
+    /// 这个是**兜底生存保护**（按行数），由维护循环周期调用。
+    /// 裁剪必然意味着「这批数据再也没机会重投」，因此调用方必须记录
+    /// 被裁行数并告警——静默裁剪就等于换了个地方的静默丢数据。
+    pub fn trim_dead_letters(&mut self, max_rows: i64) -> GatewayResult<usize> {
+        let max_rows = max_rows.max(0);
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM outbox_dead_letter", [], |r| r.get(0))
+            .map_err(|e| GatewayError::Queue(format!("dead-letter count: {}", e)))?;
+        if total <= max_rows {
+            return Ok(0);
+        }
+        let excess = total - max_rows;
+        let n = self
+            .conn
+            .execute(
+                "DELETE FROM outbox_dead_letter WHERE id IN (
+                     SELECT id FROM outbox_dead_letter
+                      ORDER BY failed_at ASC, id ASC
+                      LIMIT ?1
+                 )",
+                params![excess],
+            )
+            .map_err(|e| GatewayError::Queue(format!("dead-letter trim: {}", e)))?;
+        Ok(n)
+    }
+
+    /// 批量把「尝试次数已达上限」的 pending 行移入死信表（启动首轮调用）。
+    ///
+    /// 与 `drop_exhausted_pending` 的区别：那个直接物理删除（数据永久消失），
+    /// 这个先落死信再删 outbox，保留可人工介入的副本。webhook 用它替代删除，
+    /// 因为重启后 in-memory 重试计数会清零，这些行不可能再自动重试——
+    /// 但它们仍然可能是「接收端配置错误」造成的，修好后应当可以救回来。
+    ///
+    /// 返回搬移的行数。
+    pub fn move_exhausted_pending_to_dead_letter(
+        &mut self,
+        protocol: &str,
+        max_attempts: u32,
+        reason: &str,
+    ) -> GatewayResult<usize> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| GatewayError::Queue(format!("dead-letter exhausted tx: {}", e)))?;
+        let now = now_ms();
+        // 先把命中的行整体插入死信（同一 WHERE 条件，保证与下一步删除集合一致）
+        let moved = tx
+            .execute(
+                "INSERT INTO outbox_dead_letter
+                     (protocol, data_id, data_ids, topic, payload, qos,
+                      created_at, failed_at, attempt_count, reason)
+                 SELECT protocol, data_id, data_ids, topic, payload, qos,
+                        created_at, ?3, attempt_count, ?4
+                   FROM mqtt_outbox
+                  WHERE status = 0 AND protocol = ?1 AND attempt_count >= ?2",
+                params![protocol, max_attempts as i64, now, reason],
+            )
+            .map_err(|e| GatewayError::Queue(format!("dead-letter exhausted insert: {}", e)))?;
+        if moved == 0 {
+            return Ok(0);
+        }
+        tx.execute(
+            "DELETE FROM mqtt_outbox
+              WHERE status = 0 AND protocol = ?1 AND attempt_count >= ?2",
+            params![protocol, max_attempts as i64],
+        )
+        .map_err(|e| GatewayError::Queue(format!("dead-letter exhausted delete: {}", e)))?;
+        tx.commit()
+            .map_err(|e| GatewayError::Queue(format!("dead-letter exhausted commit: {}", e)))?;
+        Ok(moved)
     }
 
     /// r51-OBX1：删除指定协议中、已超过尝试上限的 pending 行。

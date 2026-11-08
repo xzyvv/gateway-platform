@@ -67,7 +67,7 @@ async fn create_persists_and_reports_not_yet_evaluated() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
@@ -84,7 +84,7 @@ async fn create_persists_and_reports_not_yet_evaluated() {
     assert_eq!(vp["error"], "尚未求值（等待采集数据）");
 
     // 已落盘到内存配置（下次 list 能读到）
-    let (status, body) = call(&app, req("GET", "/api/points/virtual", None)).await;
+    let (status, body) = call(&app, req("GET", "/api/point-tools/virtual", None)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"].as_array().expect("array").len(), 1);
 }
@@ -98,7 +98,7 @@ async fn list_merges_engine_state() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
@@ -117,7 +117,7 @@ async fn list_merges_engine_state() {
     );
     gw.set_virtual_point_states(states);
 
-    let (status, body) = call(&app, req("GET", "/api/points/virtual", None)).await;
+    let (status, body) = call(&app, req("GET", "/api/point-tools/virtual", None)).await;
     assert_eq!(status, StatusCode::OK);
     let vp = &body["data"][0];
     assert_eq!(vp["last_value"], 3230.5);
@@ -133,7 +133,7 @@ async fn list_reports_engine_error_for_broken_formula() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
@@ -151,7 +151,7 @@ async fn list_reports_engine_error_for_broken_formula() {
     );
     gw.set_virtual_point_states(states);
 
-    let (status, body) = call(&app, req("GET", "/api/points/virtual", None)).await;
+    let (status, body) = call(&app, req("GET", "/api/point-tools/virtual", None)).await;
     assert_eq!(status, StatusCode::OK);
     let vp = &body["data"][0];
     assert_eq!(vp["last_value"], serde_json::Value::Null);
@@ -167,7 +167,7 @@ async fn recalc_returns_engine_evaluation() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
@@ -187,7 +187,7 @@ async fn recalc_returns_engine_evaluation() {
 
     let (status, body) = call(
         &app,
-        req("POST", "/api/points/virtual/vp_power/recalc", None),
+        req("POST", "/api/point-tools/virtual/vp_power/recalc", None),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "重算应成功: {}", body);
@@ -202,7 +202,7 @@ async fn recalc_unknown_id_returns_404() {
 
     let (status, body) = call(
         &app,
-        req("POST", "/api/points/virtual/vp_missing/recalc", None),
+        req("POST", "/api/point-tools/virtual/vp_missing/recalc", None),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "未知点应 404: {}", body);
@@ -221,7 +221,7 @@ async fn write_path_triggers_online_reload() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
@@ -253,7 +253,7 @@ async fn update_changes_formula_and_reloads() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
@@ -264,7 +264,7 @@ async fn update_changes_formula_and_reloads() {
         &app,
         req(
             "PUT",
-            "/api/points/virtual/vp_power",
+            "/api/point-tools/virtual/vp_power",
             Some(vp_payload("{voltage} * {current} * 0.85")),
         ),
     )
@@ -286,7 +286,7 @@ async fn update_unknown_id_returns_404() {
         &app,
         req(
             "PUT",
-            "/api/points/virtual/vp_missing",
+            "/api/point-tools/virtual/vp_missing",
             Some(vp_payload("{a} + {b}")),
         ),
     )
@@ -304,17 +304,21 @@ async fn delete_removes_point_and_reloads() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, body) = call(&app, req("DELETE", "/api/points/virtual/vp_power", None)).await;
+    let (status, body) = call(
+        &app,
+        req("DELETE", "/api/point-tools/virtual/vp_power", None),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "删除应成功: {}", body);
 
-    let (status, body) = call(&app, req("GET", "/api/points/virtual", None)).await;
+    let (status, body) = call(&app, req("GET", "/api/point-tools/virtual", None)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         body["data"].as_array().expect("array").is_empty(),
@@ -332,7 +336,11 @@ async fn delete_unknown_id_returns_404() {
     let (state, _gw) = mock_app_state_with_gateway();
     let app = gateway_api::web::build_router(state);
 
-    let (status, body) = call(&app, req("DELETE", "/api/points/virtual/vp_missing", None)).await;
+    let (status, body) = call(
+        &app,
+        req("DELETE", "/api/point-tools/virtual/vp_missing", None),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "未知点应 404: {}", body);
     assert_eq!(body["code"], 4004);
 }
@@ -346,7 +354,7 @@ async fn create_duplicate_id_returns_400() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )
@@ -357,7 +365,7 @@ async fn create_duplicate_id_returns_400() {
         &app,
         req(
             "POST",
-            "/api/points/virtual",
+            "/api/point-tools/virtual",
             Some(vp_payload("{voltage} * {current}")),
         ),
     )

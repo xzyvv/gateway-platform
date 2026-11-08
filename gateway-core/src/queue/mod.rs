@@ -205,6 +205,15 @@ impl DataQueue {
         self.fallback_buffer.lock().len()
     }
 
+    /// 累计因容量上限被物理删除的行数：(总行数, 其中未送达行数)。
+    ///
+    /// 单机网关无异地副本，被淘汰的行不可恢复。供
+    /// ① `spawn_backlog_alarm_monitor` 取增量做告警、
+    /// ② Web API / 前端展示"累计淘汰量"。
+    pub fn evicted_stats(&self) -> (i64, i64) {
+        self.storage.evicted_stats()
+    }
+
     /// 使用指定存储后端创建并启动队列。
     pub fn with_storage(storage: Arc<dyn QueueStorage>) -> GatewayResult<Self> {
         let (tx, rx) = mpsc::channel::<QueueCommand>(10000);
@@ -567,8 +576,34 @@ impl DataQueue {
             let has_north_consumer = has_north_consumer.clone();
             async move {
                 let mut last = QueueHealth::Ok;
+                // 淘汰累计值的观测基线。初始化为启动时的已淘汰行数：
+                // 进程内计数重启归零，因此基线必然为 0，但仍用实际值而非硬编码，
+                // 以便将来把计数持久化后本逻辑无需修改。
+                let mut last_evicted = queue.evicted_stats().0.max(0);
                 loop {
                     tokio::time::sleep(BACKLOG_ALARM_INTERVAL).await;
+                    // ---- 优先判定「已发生的淘汰」 ----
+                    //
+                    // 健康等级告警是**边沿触发**（只在等级跃迁时发一次），而容量淘汰
+                    // 是**持续发生**的：一旦进入 CapacityPressure，后续每一轮仍在删数据，
+                    // 却因为这个 `backlog_alarm_edge` 不再产生任何新告警——现场表现为
+                    // 「数据一直在丢，界面一直安静」。单机网关没有异地副本，这些行
+                    // 删掉就永远没了，所以淘汰增量必须独立于等级判定单独观测。
+                    let (evicted_total, evicted_undelivered) = queue.evicted_stats();
+                    let evicted_total = evicted_total.max(0);
+                    if evicted_total > last_evicted {
+                        let delta = evicted_total - last_evicted;
+                        last_evicted = evicted_total;
+                        queue.metrics.lock().inc_queue_eviction_alarm_trigger();
+                        tracing::error!(
+                            "queue capacity eviction: {} rows deleted this round ({} undelivered total, {} evicted total), \
+                             hard limit {} rows — data is permanently lost, check northbound connectivity or lower the collect interval",
+                            delta,
+                            evicted_undelivered.max(0),
+                            evicted_total,
+                            MAX_QUEUE_ROWS
+                        );
+                    }
                     let len = queue.len().await;
                     // 运行期求值：消费者可随时启停，判定必须每轮刷新
                     let has_consumer = has_north_consumer();

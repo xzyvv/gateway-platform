@@ -5,7 +5,7 @@
  * - GET  /api/devices/control/writable -> listWritablePoints
  * - GET  /api/devices/control/commands -> listCommands
  *
- * 写操作已统一走 `writePoints`（@/api/points 的 `POST /api/points/write`，B2 单一入口），
+ * 写操作已统一走 `writePoints`（@/api/points 的 `POST /api/point-tools/write`，B2 单一入口），
  * 本模块不再提供 `sendCommand` 这类第二写入口。
  */
 import { request } from './index'

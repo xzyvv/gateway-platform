@@ -54,15 +54,15 @@ describe('pointsOps 虚拟点位契约', () => {
     requestMock.mockReset()
   })
 
-  // 锁定列表契约：GET /api/points/virtual
-  it('虚拟点位列表走 GET /api/points/virtual，字段转换为 camelCase', async () => {
+  // 锁定列表契约：GET /api/point-tools/virtual
+  it('虚拟点位列表走 GET /api/point-tools/virtual，字段转换为 camelCase', async () => {
     requestMock.mockResolvedValue([virtualRow()])
 
     const rows = await listVirtualPointsView()
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('GET')
-    expect(cfg.url).toBe('/api/points/virtual')
+    expect(cfg.url).toBe('/api/point-tools/virtual')
     expect(rows[0]).toEqual({
       id: 'vp1',
       name: '虚拟压力',
@@ -78,49 +78,49 @@ describe('pointsOps 虚拟点位契约', () => {
   })
 
   // 锁定创建契约：POST 同路径 + 请求体原样透传
-  it('创建虚拟点位走 POST /api/points/virtual，请求体原样透传', async () => {
+  it('创建虚拟点位走 POST /api/point-tools/virtual，请求体原样透传', async () => {
     requestMock.mockResolvedValue(virtualRow())
 
     await createVirtualPointView({ id: 'vp1', name: '虚拟压力', device_id: 'dev-1', formula: 'a + b' })
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/virtual')
+    expect(cfg.url).toBe('/api/point-tools/virtual')
     expect(cfg.data).toEqual({ id: 'vp1', name: '虚拟压力', device_id: 'dev-1', formula: 'a + b' })
   })
 
-  // 锁定更新契约：PUT /api/points/virtual/:id（id 进路径）
-  it('更新虚拟点位走 PUT /api/points/virtual/:id', async () => {
+  // 锁定更新契约：PUT /api/point-tools/virtual/:id（id 进路径）
+  it('更新虚拟点位走 PUT /api/point-tools/virtual/:id', async () => {
     requestMock.mockResolvedValue(virtualRow({ name: '新名' }))
 
     await updateVirtualPointView('vp1', { name: '新名', formula: 'a + b' })
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('PUT')
-    expect(cfg.url).toBe('/api/points/virtual/vp1')
+    expect(cfg.url).toBe('/api/point-tools/virtual/vp1')
     expect(cfg.data).toEqual({ name: '新名', formula: 'a + b' })
   })
 
-  // 锁定删除契约：DELETE /api/points/virtual/:id，且 id 做 URL 编码
-  it('删除虚拟点位走 DELETE /api/points/virtual/:id，id 做 URL 编码', async () => {
+  // 锁定删除契约：DELETE /api/point-tools/virtual/:id，且 id 做 URL 编码
+  it('删除虚拟点位走 DELETE /api/point-tools/virtual/:id，id 做 URL 编码', async () => {
     requestMock.mockResolvedValue(undefined)
 
     await deleteVirtualPoint('vp/1')
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('DELETE')
-    expect(cfg.url).toBe('/api/points/virtual/vp%2F1')
+    expect(cfg.url).toBe('/api/point-tools/virtual/vp%2F1')
   })
 
-  // 锁定重算契约：POST /api/points/virtual/:id/recalc，返回值压缩为 { value, error }
-  it('重算虚拟点位走 POST /api/points/virtual/:id/recalc，只回传 value/error', async () => {
+  // 锁定重算契约：POST /api/point-tools/virtual/:id/recalc，返回值压缩为 { value, error }
+  it('重算虚拟点位走 POST /api/point-tools/virtual/:id/recalc，只回传 value/error', async () => {
     requestMock.mockResolvedValue(virtualRow({ last_value: 42, error: null }))
 
     const res = await recalcVirtualPointView('vp1')
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/virtual/vp1/recalc')
+    expect(cfg.url).toBe('/api/point-tools/virtual/vp1/recalc')
     expect(res).toEqual({ value: 42, error: undefined })
     expect(res.error).toBeUndefined()
   })
@@ -141,15 +141,15 @@ describe('pointsOps 批量查找替换契约', () => {
     requestMock.mockReset()
   })
 
-  // 锁定搜索契约：POST /api/points/find-replace/search，请求体 { keyword, scope }
-  it('查找走 POST /api/points/find-replace/search，请求体为 { keyword, scope }', async () => {
+  // 锁定搜索契约：POST /api/point-tools/find-replace/search，请求体 { keyword, scope }
+  it('查找走 POST /api/point-tools/find-replace/search，请求体为 { keyword, scope }', async () => {
     requestMock.mockResolvedValue([])
 
     await findReplaceSearchView('40001', 'address')
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/find-replace/search')
+    expect(cfg.url).toBe('/api/point-tools/find-replace/search')
     expect(cfg.data).toEqual({ keyword: '40001', scope: 'address' })
   })
 
@@ -173,8 +173,8 @@ describe('pointsOps 批量查找替换契约', () => {
     })
   })
 
-  // 锁定应用契约：POST /api/points/find-replace/apply，只提交 selected=true 的 id
-  it('应用替换走 POST /api/points/find-replace/apply，只提交 selected 的 id', async () => {
+  // 锁定应用契约：POST /api/point-tools/find-replace/apply，只提交 selected=true 的 id
+  it('应用替换走 POST /api/point-tools/find-replace/apply，只提交 selected 的 id', async () => {
     requestMock.mockResolvedValue({ updated: 2 })
 
     const res = await findReplaceApplyView(
@@ -189,7 +189,7 @@ describe('pointsOps 批量查找替换契约', () => {
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/find-replace/apply')
+    expect(cfg.url).toBe('/api/point-tools/find-replace/apply')
     expect(cfg.data).toEqual({ ids: ['p1'], field: 'address', from: '40001', to: '40002' })
     // 后端返回 updated，视图层改名为 count
     expect(res).toEqual({ count: 2 })
@@ -201,8 +201,8 @@ describe('pointsOps 批量偏移契约', () => {
     requestMock.mockReset()
   })
 
-  // 锁定列表契约：GET /api/points/offset
-  it('偏移列表走 GET /api/points/offset，data_type → type', async () => {
+  // 锁定列表契约：GET /api/point-tools/offset
+  it('偏移列表走 GET /api/point-tools/offset，data_type → type', async () => {
     const raw: OffsetPointView[] = [
       { id: 'p1', name: 'PT01', old_addr: 40001, new_addr: 40002, data_type: 'u16', selected: false },
     ]
@@ -212,7 +212,7 @@ describe('pointsOps 批量偏移契约', () => {
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('GET')
-    expect(cfg.url).toBe('/api/points/offset')
+    expect(cfg.url).toBe('/api/point-tools/offset')
     expect(rows[0]).toEqual({
       id: 'p1',
       name: 'PT01',
@@ -223,8 +223,8 @@ describe('pointsOps 批量偏移契约', () => {
     })
   })
 
-  // 锁定应用契约：POST /api/points/offset/apply，请求体 { ids, offset }，只提交 selected 的 id
-  it('应用偏移走 POST /api/points/offset/apply，请求体为 { ids, offset }', async () => {
+  // 锁定应用契约：POST /api/point-tools/offset/apply，请求体 { ids, offset }，只提交 selected 的 id
+  it('应用偏移走 POST /api/point-tools/offset/apply，请求体为 { ids, offset }', async () => {
     requestMock.mockResolvedValue({ updated: 1 })
 
     const res = await applyOffsetView(
@@ -237,7 +237,7 @@ describe('pointsOps 批量偏移契约', () => {
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/offset/apply')
+    expect(cfg.url).toBe('/api/point-tools/offset/apply')
     expect(cfg.data).toEqual({ ids: ['p1'], offset: 10 })
     expect(res).toEqual({ updated: 1 })
   })
@@ -248,17 +248,17 @@ describe('pointsOps 批量克隆契约', () => {
     requestMock.mockReset()
   })
 
-  // 锁定源/目标设备列表契约：两者共用同一端点 GET /api/points/clone/devices
-  it('源设备与目标设备列表共用 GET /api/points/clone/devices', async () => {
+  // 锁定源/目标设备列表契约：两者共用同一端点 GET /api/point-tools/clone/devices
+  it('源设备与目标设备列表共用 GET /api/point-tools/clone/devices', async () => {
     requestMock.mockResolvedValue([])
 
     await listCloneSourcesView()
-    expect(firstCallConfig().url).toBe('/api/points/clone/devices')
+    expect(firstCallConfig().url).toBe('/api/point-tools/clone/devices')
 
     requestMock.mockReset()
     requestMock.mockResolvedValue([])
     await listCloneTargetsView()
-    expect(firstCallConfig().url).toBe('/api/points/clone/devices')
+    expect(firstCallConfig().url).toBe('/api/point-tools/clone/devices')
   })
 
   // 锁定视图映射：源视图 points 恒为空数组（后端未提供点位预览），目标视图 selected 恒为 false
@@ -275,8 +275,8 @@ describe('pointsOps 批量克隆契约', () => {
     expect(targets[0]).toEqual({ deviceId: 'dev-1', deviceName: '温度计', selected: false, pointCount: 3 })
   })
 
-  // 锁定克隆应用契约：POST /api/points/clone/apply，请求体字段名为 source_device_id/target_device_ids/name_suffix
-  it('应用克隆走 POST /api/points/clone/apply，请求体用 snake_case 字段名', async () => {
+  // 锁定克隆应用契约：POST /api/point-tools/clone/apply，请求体字段名为 source_device_id/target_device_ids/name_suffix
+  it('应用克隆走 POST /api/point-tools/clone/apply，请求体用 snake_case 字段名', async () => {
     requestMock.mockResolvedValue({ total: 1, targets: ['dev-2'] })
 
     const res = await cloneApplyView(
@@ -290,7 +290,7 @@ describe('pointsOps 批量克隆契约', () => {
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/clone/apply')
+    expect(cfg.url).toBe('/api/point-tools/clone/apply')
     expect(cfg.data).toEqual({
       source_device_id: 'dev-1',
       target_device_ids: ['dev-2'],

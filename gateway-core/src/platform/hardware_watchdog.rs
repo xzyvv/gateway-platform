@@ -396,21 +396,18 @@ mod tests {
     /// 写失败分支可测：只读句柄写入必然失败（跨平台成立）。
     #[test]
     fn hw_write_reports_failure_on_readonly_handle() {
-        let dir = std::env::temp_dir().join("gw-hw-wd-test");
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let path = dir.join("ro.bin");
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("ro.bin");
         std::fs::write(&path, b"x").expect("write file");
         let mut ro = std::fs::File::open(&path).expect("open read-only");
         assert_eq!(hw_write(Some(&mut ro), b"\0"), HwWriteOutcome::Failed);
-        let _ = std::fs::remove_file(&path);
     }
 
     /// 写成功分支可测：可写句柄写入并 flush 成功。
     #[test]
     fn hw_write_reports_ok_on_writable_handle() {
-        let dir = std::env::temp_dir().join("gw-hw-wd-test");
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let path = dir.join("rw.bin");
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("rw.bin");
         let mut rw = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -418,7 +415,6 @@ mod tests {
             .open(&path)
             .expect("open writable");
         assert_eq!(hw_write(Some(&mut rw), b"\0"), HwWriteOutcome::Ok);
-        let _ = std::fs::remove_file(&path);
     }
 
     /// 无设备分支：无 fd 时不写、不报错。

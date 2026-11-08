@@ -1,12 +1,11 @@
-//! 点位运维 API（virtual / find-replace / offset / clone）
+//! 点位运维 API（虚拟点位 / 地址偏移 / 克隆 / 查找替换）handler 库
 //!
 //! 虚拟点位：持久化在 GatewayConfig.virtual_points，公式派生
 //! 批量操作：直接修改 PointConfig 并触发热重载
 //!
-//! 路由：见 [points_ops_routes]（位于子模块 `routes`）
+//! **本子域不再注册路由**：`/api/points*` 的唯一注册点是
+//! `web/api/points/routes.rs`（同一前缀只能有一个注册点，否则改端点要在多个文件里翻）。
 
 mod handlers;
-mod routes;
 
 pub(crate) use handlers::*;
-pub(crate) use routes::points_ops_routes;

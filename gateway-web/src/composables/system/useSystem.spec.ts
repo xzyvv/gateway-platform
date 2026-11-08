@@ -18,7 +18,7 @@ const m = vi.hoisted(() => ({
   confirmAction: vi.fn(),
   notify: vi.fn(),
   setUrl: vi.fn(),
-  retryAllDeadLetters: vi.fn(),
+  retryAllNotify: vi.fn(),
   buildDiagnosticReport: vi.fn(),
   downloadDiagnosticReport: vi.fn(),
   buildBackup: vi.fn(),
@@ -76,16 +76,16 @@ vi.mock('@/composables/uplink/useWebhook', async () => {
   return {
     useWebhook: () => {
       const webhookUrl = ref('')
-      const deadLetterQueue = ref<Array<Record<string, unknown>>>([])
+      const notifyRetryQueue = ref<Array<Record<string, unknown>>>([])
       return {
         webhookUrl,
-        deadLetterQueue,
+        notifyRetryQueue,
         setUrl: m.setUrl,
         isEnabled: () => !!webhookUrl.value,
         notify: m.notify,
-        retryAllDeadLetters: m.retryAllDeadLetters,
-        clearDeadLetters: vi.fn(),
-        retryDeadLetter: vi.fn(),
+        retryAllNotify: m.retryAllNotify,
+        clearNotifyQueue: vi.fn(),
+        retryNotify: vi.fn(),
       }
     },
   }

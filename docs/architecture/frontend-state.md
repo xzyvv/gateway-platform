@@ -61,7 +61,7 @@ ESLint 规则会 warn 新增的模块级 ref，防止无意中引入新的全局
 | `useDashboardLayout` | `sections` | 仪表盘布局用户偏好，跨组件共享，localStorage 持久化 |
 | `useSessions` | `sessions` | 登录会话列表跨页面共享（路由守卫 + 管理页），localStorage 持久化 |
 | `useRequestLog` | `logs`, `paused` | 全局请求日志，拦截器写入 + 面板读取，不绑定页面生命周期 |
-| `useWebhook` | `webhookUrl`, `deadLetterQueue` | Webhook 配置跨页面共享（设置页 + 通知触发），localStorage 持久化 |
+| `useWebhook` | `webhookUrl`, `notifyRetryQueue` | Webhook 配置跨页面共享（设置页 + 通知触发），localStorage 持久化；队列仅限本机浏览器通知，非设备端死信 |
 
 > 后续如需 DevTools 追踪或 SSR 兼容，可逐步迁移到 Pinia store。
 

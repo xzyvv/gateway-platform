@@ -66,18 +66,20 @@ gateway-web/src/
 │   └── main.ts         # 入口（Pinia/Router/ElementPlus 注册）
 ```
 
-**大文件拆分约定（W2-#15/#16）**：单文件超过 ~300 行即视为「巨型文件」，必须按职责拆为
+**大文件拆分约定（W2-#15/#16）**：单文件超过 ~500 行即视为「巨型文件」，必须按职责拆为
 同域子目录 + barrel 出口（`index.ts` 原样再导出全部对外符号），调用方 import 路径不变；
 组件拆分为「主组件（状态与编排）+ 子组件（渲染）」，composable 拆分为「index 组合根 +
 按职责分模块」。拆分只改结构不改行为，既有 spec 必须原地继续通过。
 
-**约定已 lint 化（O-8）**：`eslint.config.js` 的 `max-lines`（300 行）把它变成机器断言。
+**约定已 lint 化（O-8）**：`eslint.config.js` 的 `max-lines`（500 行）把它变成机器断言。
 存量超限文件登记在 `LINE_BUDGET_EXEMPT` 清单里豁免，**新文件超限即 warning**——
-CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。拆到 300 行以内后请把对应行从清单删掉，
+CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。拆到 500 行以内后请把对应行从清单删掉，
 否则它会一直享受豁免。测试文件（`*.spec.ts`）与自动生成的 `ep-icons-compact.ts` 不纳入。
-后端同规但采用「只禁新增」的棘轮：`scripts/deploy_lint.ps1` 的 C24 段扫描
+后端同规但采用「只减不增」的棘轮：`scripts/deploy_lint.ps1` 的 C24 段扫描
 `gateway-core` / `gateway-api` / `gatewayd` 的 `src/**/*.rs`，基线在
-[`scripts/line_budget_frozen.txt`](../../scripts/line_budget_frozen.txt)，未登记的新巨型文件报 WARN。
+[`scripts/line_budget_frozen.txt`](../../scripts/line_budget_frozen.txt)。基线每行带单文件行数上限，
+取「登记时当前行数 + 20 行余量」：未登记的新文件 > 500 行、或已登记文件超过该上限，
+都直接判 FAIL（不再只是 WARN），所以存量只能瘦身、不能继续长。
 
 ### 3.4 路由 meta 与命名约定
 

@@ -59,6 +59,6 @@ describe('remoteControl 远程控制契约', () => {
     expect(cfg.url).toBe('/api/devices/control/commands')
   })
 
-  // 写操作已统一到 @/api/points 的 writePoints（POST /api/points/write，B2 单一入口），
+  // 写操作已统一到 @/api/points 的 writePoints（POST /api/point-tools/write，B2 单一入口），
   // 本模块只保留只读端点契约，写入契约见 points.spec.ts。
 })

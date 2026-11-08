@@ -39,6 +39,17 @@ pub struct QueuePersistMetrics {
     ///         下次正常启动恢复 sqlite 文件模式后重新正常工作。
     /// Prometheus 告警：`rate(gateway_outbox_degraded_total[5m]) > 0` 即报。
     pub outbox_degraded: AtomicU64,
+
+    /// 因队列容量上限被**淘汰**（物理删除）的总行数。
+    ///
+    /// 与 `persist_dropped` 的区别：那是「写库失败被 fallback 吸收后丢弃」，
+    /// 这是「写库成功但为腾空间主动删最旧行」。两者都是真实数据丢失，
+    /// 但成因不同——前者说明存储层故障，后者说明**容量规划/上行链路长期不畅**。
+    /// 单机网关无异地副本，本计数是唯一能证明「丢过多少」的凭据，
+    /// 因此必须计入指标与健康口径，而不是只打一行 warn 日志。
+    pub evicted_rows: AtomicU64,
+    /// 上述淘汰中**未送达**（delivered=0）的行数——这部分是彻底的计费/审计数据丢失。
+    pub evicted_undelivered_rows: AtomicU64,
 }
 
 impl QueuePersistMetrics {
@@ -100,6 +111,19 @@ impl QueuePersistMetrics {
              # HELP gateway_sqlite_db_size_bytes Current SQLite main database file size in bytes\n\
              # TYPE gateway_sqlite_db_size_bytes gauge\n\
              gateway_sqlite_db_size_bytes {db_size}"
+        );
+        let evicted = self.evicted_rows.load(std::sync::atomic::Ordering::Relaxed);
+        let evicted_undelivered = self
+            .evicted_undelivered_rows
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_queue_evicted_rows_total Rows physically deleted to enforce the queue capacity limit\n\
+             # TYPE gateway_queue_evicted_rows_total counter\n\
+             gateway_queue_evicted_rows_total {evicted}\n\
+             # HELP gateway_queue_evicted_undelivered_rows_total Evicted rows that were never delivered northbound (permanent data loss)\n\
+             # TYPE gateway_queue_evicted_undelivered_rows_total counter\n\
+             gateway_queue_evicted_undelivered_rows_total {evicted_undelivered}"
         );
     }
 }

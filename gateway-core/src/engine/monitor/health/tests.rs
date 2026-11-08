@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine::ports::DiskHealthSink;
+use tempfile::TempDir;
 
 /// 假磁盘端口：记录最近一次 `set_disk_ok` 的取值与 `flush_fallback` 的调用次数。
 ///
@@ -32,18 +33,10 @@ impl DiskHealthSink for FakeDiskSink {
     }
 }
 
-fn temp_db_path() -> String {
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!(
-        "{}/disk_history_test_{}_{}.db",
-        std::env::temp_dir().to_string_lossy(),
-        pid,
-        nanos
-    )
+fn temp_db_path() -> (TempDir, String) {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("disk_history.db");
+    (dir, path.to_string_lossy().into_owned())
 }
 
 fn sleep_ms(ms: u64) {
@@ -54,19 +47,18 @@ fn sleep_ms(ms: u64) {
 /// 连接必须设置 busy_timeout，否则遇 SQLITE_BUSY 立即失败 → 磁盘采样偶发丢失。
 #[test]
 fn test_conn_sets_busy_timeout() {
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     let store = DiskHistoryStore::new(10, &path).unwrap();
     let conn = store.open_db().expect("should succeed");
     let timeout: i64 = conn
         .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
         .expect("should succeed");
     assert_eq!(timeout, 5000, "busy_timeout 应为 5000ms");
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn test_push_and_list() {
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     let store = DiskHistoryStore::new(100, &path).unwrap();
     store.push(80.5);
     sleep_ms(2);
@@ -75,12 +67,11 @@ fn test_push_and_list() {
     assert_eq!(samples.len(), 2);
     assert!((samples[0].free_pct - 80.5).abs() < 1e-6);
     assert!((samples[1].free_pct - 75.0).abs() < 1e-6);
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn test_persistence_across_instances() {
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     {
         let store = DiskHistoryStore::new(100, &path).unwrap();
         store.push(60.0);
@@ -92,12 +83,11 @@ fn test_persistence_across_instances() {
     assert_eq!(samples.len(), 2);
     assert!((samples[0].free_pct - 60.0).abs() < 1e-6);
     assert!((samples[1].free_pct - 55.5).abs() < 1e-6);
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn test_capacity_ring_buffer() {
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     // max is clamped to min 10
     let store = DiskHistoryStore::new(10, &path).unwrap();
     for i in 0..15u8 {
@@ -113,12 +103,11 @@ fn test_capacity_ring_buffer() {
         .query_row("SELECT COUNT(*) FROM disk_history", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 10);
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn test_ordering_ascending() {
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     let store = DiskHistoryStore::new(100, &path).unwrap();
     store.push(10.0);
     sleep_ms(5);
@@ -129,12 +118,11 @@ fn test_ordering_ascending() {
     assert_eq!(samples.len(), 3);
     assert!(samples[0].ts < samples[1].ts);
     assert!(samples[1].ts < samples[2].ts);
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn test_min_max_clamped_to_10() {
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     // max=3 should be clamped to 10
     let store = DiskHistoryStore::new(3, &path).unwrap();
     for i in 0..15u8 {
@@ -143,12 +131,11 @@ fn test_min_max_clamped_to_10() {
     }
     let samples = store.list();
     assert_eq!(samples.len(), 10);
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn test_db_recovery_respects_max() {
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     // first instance max=100, write 15 samples
     {
         let store = DiskHistoryStore::new(100, &path).unwrap();
@@ -163,7 +150,6 @@ fn test_db_recovery_respects_max() {
     assert_eq!(samples.len(), 10);
     assert!((samples[0].free_pct - 5.0).abs() < 1e-6);
     assert!((samples[9].free_pct - 14.0).abs() < 1e-6);
-    let _ = std::fs::remove_file(&path);
 }
 
 // ============================================================
@@ -340,7 +326,7 @@ async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
     // 故意先置为 false（模拟「开机时磁盘是满的」这一最坏状态）
     let sink = FakeDiskSink::new(false);
 
-    let path = temp_db_path();
+    let (_dir, path) = temp_db_path();
     let history = Arc::new(DiskHistoryStore::new(10, &path).unwrap());
     let status = Arc::new(DiskStatus::new());
     let metrics = Arc::new(Metrics::new());
@@ -377,7 +363,6 @@ async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
         !expected_ok,
         "压力态必须与首轮实测一致（free={free}%）"
     );
-    let _ = std::fs::remove_file(&path);
 }
 
 /// 磁盘检查路径不存在时必须向上回退到最近的存在目录，而不是直接失败。
@@ -389,15 +374,8 @@ async fn p2_disk_monitor_checks_immediately_before_first_sleep() {
 #[test]
 fn p2_disk_check_path_missing_falls_back_to_existing_ancestor() {
     // 造一个「父目录存在、目标目录不存在」的路径
-    let base = std::env::temp_dir().join(format!(
-        "gw_disk_anc_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let missing = base.join("not-created-yet");
+    let base = tempfile::tempdir().expect("create temp dir");
+    let missing = base.path().join("not-created-yet");
     assert!(
         !missing.is_dir(),
         "前置条件：目标目录必须不存在，否则本用例无效"
@@ -417,7 +395,8 @@ fn p2_disk_check_path_missing_falls_back_to_existing_ancestor() {
     assert!(free > 0.0, "回退后应读到真实剩余百分比，实际 {free}");
 
     // 对存在的路径，回退逻辑不应改变结果
-    let base_free = check_disk_space(base.to_string_lossy().as_ref()).expect("存在的目录必须可查");
+    let base_free =
+        check_disk_space(base.path().to_string_lossy().as_ref()).expect("存在的目录必须可查");
     assert!(
         (base_free - free).abs() < 1.0,
         "存在目录与不存在的子路径应落在同一分区（{base_free} vs {free}）"

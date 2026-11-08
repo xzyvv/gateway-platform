@@ -1,9 +1,6 @@
 use super::*;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
-
-// 测试用唯一目录计数器，避免并行测试冲突
-static COUNTER: AtomicU32 = AtomicU32::new(0);
+use tempfile::TempDir;
 
 /// 环境变量是进程级全局状态：`GATEWAY_REQUIRE_EXTERNAL_CERT` 会影响
 /// `get_or_create()`。凡调用 `get_or_create` 的测试都必须持有此锁，
@@ -44,23 +41,16 @@ impl Drop for EnvVarGuard {
     }
 }
 
-/// 每个用例独占一个临时目录（进程号 + 进程内自增序号）。
-///
-/// 旧实现只带进程内计数器（`gw-cert-test-{n}`），跨进程仍会撞路径：两个测试
-/// 二进制并发时（例如同机并行跑多个 crate 的测试）会用同一个目录，且开头
-/// `remove_dir_all` 会互删对方的证书/私钥，表现为与被测逻辑无关的偶发失败。
-/// 加入进程号后跨进程也不冲突。
-fn temp_dir() -> PathBuf {
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("gw-cert-test-{}-{}", std::process::id(), n));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+/// 每个用例独占一个临时目录，`TempDir` 在用例结束时统一清理。
+fn temp_dir() -> (TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().to_path_buf();
+    (dir, path)
 }
 
 #[test]
 fn test_generate_and_load() {
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"))
         .with_cn("Test Gateway")
         .with_san_hosts(vec!["localhost".to_string(), "127.0.0.1".to_string()]);
@@ -85,7 +75,7 @@ fn test_get_or_create_creates_then_loads() {
     // 走 get_or_create：必须与改写环境变量的用例串行，且确保生成开关未被外部置位
     let _env = env_guard();
     let _var = EnvVarGuard::clear("GATEWAY_REQUIRE_EXTERNAL_CERT");
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
     // 第一次：文件不存在 → 生成
@@ -100,7 +90,7 @@ fn test_get_or_create_creates_then_loads() {
 
 #[test]
 fn test_cert_is_valid_x509() {
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
     let pair = mgr.generate().unwrap();
 
@@ -111,7 +101,7 @@ fn test_cert_is_valid_x509() {
 
 #[test]
 fn test_load_nonexistent_fails() {
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("nope.crt"), dir.join("nope.key"));
     assert!(mgr.load().is_err());
 }
@@ -122,7 +112,7 @@ fn test_load_nonexistent_fails() {
 /// 在 load() 时检测公钥不一致 → 立即 Err 阻断启动。
 #[test]
 fn test_load_mismatched_cert_key_fails() {
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
 
     // 生成 A 的 cert + key，写盘
     let a_crt = dir.join("a.crt");
@@ -162,7 +152,7 @@ fn test_load_mismatched_cert_key_fails() {
 /// 任意中间步骤失败都必须不留下半成品文件（要么两个都在，要么两个都不在）。
 #[test]
 fn test_generate_writes_key_first_then_cert() {
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
     let pair = mgr.generate().expect("generate");
@@ -180,7 +170,7 @@ fn test_generate_writes_key_first_then_cert() {
 /// 本测试确保正常路径下两个文件同时落盘。
 #[test]
 fn test_generate_atomic_on_happy_path() {
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let cert_path = dir.join("gw.crt");
     let key_path = dir.join("gw.key");
     assert!(!cert_path.exists());
@@ -203,7 +193,7 @@ fn test_generate_then_get_or_create_loads_successfully() {
     // 走 get_or_create：与其他改写环境变量的用例串行
     let _env = env_guard();
     let _var = EnvVarGuard::clear("GATEWAY_REQUIRE_EXTERNAL_CERT");
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
     let _ = mgr.generate().expect("generate");
@@ -219,7 +209,7 @@ fn test_generate_then_get_or_create_loads_successfully() {
 fn p2_require_external_cert_refuses_self_signed_generation() {
     let _env = env_guard();
     let _var = EnvVarGuard::set("GATEWAY_REQUIRE_EXTERNAL_CERT", "1");
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
     let err = match mgr.get_or_create() {
@@ -247,7 +237,7 @@ fn p2_require_external_cert_refuses_self_signed_generation() {
 fn p2_incomplete_pair_refuses_generation_and_keeps_existing_file() {
     let _env = env_guard();
     let _var = EnvVarGuard::clear("GATEWAY_REQUIRE_EXTERNAL_CERT");
-    let dir = temp_dir();
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
     // 场景 A：只有 cert（key 丢失）
@@ -309,8 +299,7 @@ fn p2_incomplete_pair_refuses_generation_and_keeps_existing_file() {
 /// 上传路径必须沿用 generate() 的落盘保护：私钥 0600、内容与入参一致。
 #[test]
 fn install_pair_writes_files_with_protected_key() {
-    let dir = std::env::temp_dir().join(format!("gw-install-pair-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
     let pair =
         generate_self_signed("gw", &["localhost".to_string()], 2024, 2035).expect("generate pair");
@@ -335,14 +324,12 @@ fn install_pair_writes_files_with_protected_key() {
             .mode();
         assert_eq!(mode & 0o777, 0o600, "私钥必须是 0600，实际: {:o}", mode);
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// ECDSA 配对失配：必须拒绝并回滚到旧内容（不能留下新 cert + 旧 key）。
 #[test]
 fn install_pair_rejects_mismatch_and_rolls_back() {
-    let dir = std::env::temp_dir().join(format!("gw-install-mismatch-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
 
     let first =
@@ -371,14 +358,12 @@ fn install_pair_rejects_mismatch_and_rolls_back() {
         first.key_pem.as_bytes(),
         "失配后必须回滚旧私钥"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 非法 PEM：在动盘之前就拒绝，旧文件保持原样。
 #[test]
 fn install_pair_rejects_garbage_without_touching_files() {
-    let dir = std::env::temp_dir().join(format!("gw-install-garbage-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let (_dir, dir) = temp_dir();
     let mgr = CertManager::new(dir.join("gw.crt"), dir.join("gw.key"));
     let pair =
         generate_self_signed("gw", &["localhost".to_string()], 2024, 2035).expect("generate pair");
@@ -396,5 +381,4 @@ fn install_pair_rejects_garbage_without_touching_files() {
         std::fs::read(mgr.key_path()).expect("read key"),
         pair.key_pem.as_bytes()
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

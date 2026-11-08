@@ -160,7 +160,7 @@ test('点位读写：读取回显 → 写入二次确认 → 写入结果回显'
       quality: 'Good',
     })
   })
-  await page.route('**/api/points/write', async (route) => {
+  await page.route('**/api/point-tools/write', async (route) => {
     captured.body = route.request().postDataJSON() as typeof captured.body
     await fulfillJson(route, {
       status: 'ok',

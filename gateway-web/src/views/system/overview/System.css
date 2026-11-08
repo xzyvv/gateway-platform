@@ -119,7 +119,6 @@
   font-weight: 500;
   color: var(--text-regular);
 }
-.dlq-actions { display: flex; gap: 8px; }
 .diag-tip { font-size: 0.8125rem; color: var(--text-secondary); margin: 0 0 12px; line-height: 1.6; }
 /* 主按钮组之后的补充说明：与上方说明拉开层次，不重复主文案的强调色 */
 .diag-tip-sub { font-size: 0.75rem; margin: 8px 0 0; opacity: 0.85; }

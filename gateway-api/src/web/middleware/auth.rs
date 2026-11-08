@@ -302,7 +302,13 @@ fn required_write_scope(path: &str) -> Option<&'static str> {
         || path.starts_with("/api/sim_consumer")
     {
         Some("config:write")
-    } else if path.starts_with("/api/points") {
+    } else if path.starts_with("/api/points")
+        || path.starts_with("/api/point-tools")
+        || path.starts_with("/api/point-trash")
+    {
+        // 点位工具（批量写 / 虚拟点位 / 偏移 / 克隆 / 查找替换）与回收站都属点位域。
+        // 必须显式列出：未归类的路径会落到「任一 *:write 均可写」的兜底分支，
+        // 那等于把 `devices:write` 密钥也放进来改点位数据。
         Some("points:write")
     } else if path.starts_with("/api/devices")
         || path.starts_with("/api/device-groups")
@@ -710,11 +716,17 @@ mod tests {
     fn write_scope_is_domain_isolated() {
         let points = vec!["points:write".to_string()];
         assert!(key_can_write(&points, "/api/points"));
-        assert!(key_can_write(&points, "/api/points/batch"));
+        assert!(key_can_write(&points, "/api/point-tools/batch"));
+        assert!(key_can_write(&points, "/api/point-tools/write"));
+        assert!(key_can_write(&points, "/api/point-trash/p-1"));
         assert!(!key_can_write(&points, "/api/config"));
         assert!(!key_can_write(&points, "/api/buses"));
         assert!(!key_can_write(&points, "/api/devices"));
         assert!(!key_can_write(&points, "/api/access/api-keys"));
+        // 反向：devices 域密钥不得借「未归类兜底」写点位工具
+        let devices = vec!["devices:write".to_string()];
+        assert!(!key_can_write(&devices, "/api/point-tools/batch"));
+        assert!(!key_can_write(&devices, "/api/point-trash/p-1"));
     }
 
     #[test]

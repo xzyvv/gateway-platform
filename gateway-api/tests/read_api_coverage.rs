@@ -368,7 +368,7 @@ async fn diagnostics_logs_ws_rejects_plain_get() {
 async fn points_offset_and_clone_devices() {
     let (_state, app) = state_with_device().await;
 
-    let body = call(&app, "GET", "/api/points/offset", None).await;
+    let body = call(&app, "GET", "/api/point-tools/offset", None).await;
     assert_eq!(body["code"], 0, "{body}");
     let list = body["data"].as_array().expect("offset 应为数组");
     assert_eq!(list.len(), 1, "{body}");
@@ -376,7 +376,7 @@ async fn points_offset_and_clone_devices() {
     assert_eq!(list[0]["old_addr"], 10);
     assert_eq!(list[0]["new_addr"], 10);
 
-    let body = call(&app, "GET", "/api/points/clone/devices", None).await;
+    let body = call(&app, "GET", "/api/point-tools/clone/devices", None).await;
     assert_eq!(body["code"], 0, "{body}");
     let list = body["data"].as_array().expect("clone devices 应为数组");
     assert_eq!(list.len(), 1, "{body}");

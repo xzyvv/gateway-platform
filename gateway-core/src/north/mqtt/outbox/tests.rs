@@ -1,8 +1,10 @@
+use super::preview::PREVIEW_BYTES;
 use super::*;
+use tempfile::TempDir;
 
 #[test]
 fn outbox_persist_ack_replay() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
 
@@ -41,7 +43,7 @@ fn outbox_persist_ack_replay() {
 
 #[test]
 fn outbox_replay_paged() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_paged.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..5 {
@@ -78,7 +80,7 @@ fn outbox_replay_paged() {
 
 #[test]
 fn outbox_persist_batch_test() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_batch.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     let msgs: Vec<OutgoingMsg> = (0..5)
@@ -105,7 +107,7 @@ fn outbox_persist_batch_test() {
 /// Bug C4: outbox 按 protocol 隔离取数——MQTT replay 不得取到 http 消息，反之亦然。
 #[test]
 fn outbox_replay_isolates_protocol() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_protocol.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     store
@@ -150,7 +152,7 @@ fn outbox_replay_isolates_protocol() {
 /// 这是 replay 启动路径——首次 replay 必然没有 cursor。
 #[test]
 fn r67_outbox_replay_cursor_load_missing_returns_zero() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("cursor_load_missing.db");
     let store = OutboxStore::open(&path).expect("should succeed");
     let v = store.load_replay_cursor("mqtt");
@@ -160,7 +162,7 @@ fn r67_outbox_replay_cursor_load_missing_returns_zero() {
 /// r67-OBX1：save 后 load 必须读到刚写入的值——基本 round-trip。
 #[test]
 fn r67_outbox_replay_cursor_save_load_roundtrip() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("cursor_roundtrip.db");
     let store = OutboxStore::open(&path).expect("should succeed");
     store.save_replay_cursor("mqtt", 123);
@@ -183,7 +185,7 @@ fn r67_outbox_replay_cursor_save_load_roundtrip() {
 /// 推进点。
 #[test]
 fn r67_outbox_replay_cursor_persists_across_restart() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("cursor_restart.db");
     // 进程 1：写入 cursor
     {
@@ -205,7 +207,7 @@ fn r67_outbox_replay_cursor_persists_across_restart() {
 /// 遇到 SQLITE_BUSY 立即失败丢消息。
 #[test]
 fn outbox_open_sets_busy_timeout() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_busy.db");
     let store = OutboxStore::open(&path).expect("should succeed");
     let timeout: i64 = store
@@ -215,26 +217,17 @@ fn outbox_open_sets_busy_timeout() {
     assert_eq!(timeout, 5000, "busy_timeout 应为 5000ms");
 }
 
-fn tempdir() -> std::path::PathBuf {
-    // r38-OBX：同一毫秒内并行运行的测试会生成同名目录 → 共享同一 DB 文件相互污染
-    // （并行 cargo test 下偶发失败）。追加进程内自增序号保证唯一。
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "outbox-test-{}-{}",
-        now_ms(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&p).expect("should succeed");
-    p
+fn tempdir() -> (TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().to_path_buf();
+    (dir, path)
 }
 
 /// r27-OBX1：enforce_pending_limit 必须按 protocol 隔离删除最旧的 pending。
 /// 关键约束：MQTT 维护不能误删 HTTP 消息（HTTP 消息的持久副本只有这一张表）。
 #[test]
 fn enforce_pending_limit_isolates_protocol() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_limit.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     // 灌入 5 条 mqtt + 3 条 http
@@ -299,7 +292,7 @@ fn enforce_pending_limit_isolates_protocol() {
 /// r78-OBX1：mark_acked_by_data_id 命中行（mqtt protocol）必须 status=1。
 #[test]
 fn r78_mark_acked_by_data_id_with_protocol_marks_target_row() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r78_mark_ok.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     store
@@ -328,7 +321,7 @@ fn r78_mark_acked_by_data_id_with_protocol_marks_target_row() {
 /// 之下不会跨协议，但 API 仍按 protocol 过滤，避免 API 与意图不符）。
 #[test]
 fn r78_mark_acked_by_data_id_wrong_protocol_no_op() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r78_mark_wrong.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     store
@@ -360,7 +353,7 @@ fn r78_mark_acked_by_data_id_wrong_protocol_no_op() {
 /// r78-OBX1：remove_by_data_id 命中行必须物理删除。
 #[test]
 fn r78_remove_by_data_id_with_protocol_removes_target_row() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r78_remove_ok.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     store
@@ -388,7 +381,7 @@ fn r78_remove_by_data_id_with_protocol_removes_target_row() {
 /// r78-OBX1：remove_by_data_id 传错 protocol 时不应删除行。
 #[test]
 fn r78_remove_by_data_id_wrong_protocol_no_op() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r78_remove_wrong.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     store
@@ -428,7 +421,7 @@ fn r78_remove_by_data_id_wrong_protocol_no_op() {
 fn n1_open_fails_degrades_to_memory_and_still_works() {
     // 构造无法 create 的路径：把"已存在的文件"作为父目录，sqlite 无法在该
     // 「目录」下再创建 db 文件（实际是父路径不是目录 → open 失败）。
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let blocking_file = dir.join("not_a_dir");
     std::fs::write(&blocking_file, b"x").expect("create blocking file");
     let impossible_path = blocking_file.join("outbox.db");
@@ -471,7 +464,7 @@ fn n1_open_fails_degrades_to_memory_and_still_works() {
 /// Bug-N1：正常文件路径 open 时不降级——mode = Sqlite，is_degraded = false。
 #[test]
 fn n1_normal_open_uses_sqlite_mode() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("ok.db");
     let store = OutboxStore::open(&path).expect("normal open ok");
     assert!(!store.is_degraded(), "正常文件 open 必须不降级");
@@ -493,7 +486,7 @@ fn n1_normal_open_uses_sqlite_mode() {
 /// 旧实现会按 id 升序删 3 条（id=1,2,3），**永久丢 id=3**。
 #[test]
 fn r76_enforce_pending_limit_respects_replay_cursor() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r76_cursor.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..5 {
@@ -573,7 +566,7 @@ fn r76_enforce_pending_limit_respects_replay_cursor() {
 /// 修复后只能删 2 条 id=3,4。验证修法差异。
 #[test]
 fn r76_enforce_pending_limit_old_behavior_would_drop_cursor_protected_rows() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r76_old_behavior.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..5 {
@@ -618,7 +611,7 @@ fn r76_enforce_pending_limit_old_behavior_would_drop_cursor_protected_rows() {
 /// r76-OBX1：cursor=0（无保护）必须等同旧行为——保证向后兼容。
 #[test]
 fn r76_enforce_pending_limit_cursor_zero_matches_legacy() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r76_cursor_zero.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..5 {
@@ -665,7 +658,7 @@ fn r76_enforce_pending_limit_cursor_zero_matches_legacy() {
 /// 验证宽限内行被保留，**不**超 limit 时仍删 0。
 #[test]
 fn r71_enforce_pending_limit_grace_window_protects_recent_attempts() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_grace.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..5 {
@@ -704,7 +697,7 @@ fn r71_enforce_pending_limit_grace_window_protects_recent_attempts() {
 /// 手工 `last_attempt_at` 调早到 1 小时前。
 #[test]
 fn r71_enforce_pending_limit_grace_expired_allows_deletion() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_grace_expired.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..5 {
@@ -751,7 +744,7 @@ fn r71_enforce_pending_limit_grace_expired_allows_deletion() {
 /// 这是「grace_ms 可作细粒度旋钮」的反向证据。
 #[test]
 fn r71_enforce_pending_limit_grace_zero_acts_like_none() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_grace_zero.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..5 {
@@ -795,7 +788,7 @@ fn r71_enforce_pending_limit_grace_zero_acts_like_none() {
 /// r27-OBX1 边界：enforce_pending_limit 不应因为内部 commit 失败而破坏 SQLite 状态。
 #[test]
 fn enforce_pending_limit_under_limit_returns_zero() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_under.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..3 {
@@ -820,7 +813,7 @@ fn enforce_pending_limit_under_limit_returns_zero() {
 /// None=全部合计；Some(p)=按协议过滤。
 #[test]
 fn pending_count_filters_by_protocol() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_count.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     // 2 mqtt + 3 http
@@ -881,7 +874,7 @@ fn pending_count_filters_by_protocol() {
 /// 重复发也仅是 broker 侧重复；丢数据是更严重的事故）。
 #[test]
 fn r75_replay_cursor_falls_back_to_page_anchor_on_mid_page_failure() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r75_midpage.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..3 {
@@ -935,7 +928,7 @@ fn r75_replay_cursor_falls_back_to_page_anchor_on_mid_page_failure() {
 /// 未来若有人误把回退改成「拨到 break 行的 oid」，本测试**会失败**提示。
 #[test]
 fn r75_replay_cursor_old_behavior_would_skip_failed_row() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r75_old_behavior.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..3 {
@@ -969,7 +962,7 @@ fn r75_replay_cursor_old_behavior_would_skip_failed_row() {
 /// 验证修法未破坏「全成功」场景。
 #[test]
 fn r75_replay_cursor_advances_normally_on_full_success() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("r75_success.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     for i in 0..3 {
@@ -1019,7 +1012,7 @@ async fn outbox_ack_targets_existing_row_when_duplicate() {
     use std::sync::Arc;
     use tokio::sync::Mutex as AsyncMutex;
 
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("dup_ack.db");
     // 预置一条 pending 行，模拟 publish.rs 的同步兜底 persist 路径（绕过写入器直接落库）
     {
@@ -1064,7 +1057,7 @@ async fn outbox_flushes_during_continuous_traffic() {
     use std::sync::Arc;
     use tokio::sync::Mutex as AsyncMutex;
 
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("flush_traffic.db");
     let outbox = Arc::new(AsyncMutex::new(
         OutboxStore::open(&path).expect("should succeed"),
@@ -1108,7 +1101,7 @@ async fn outbox_flushes_during_continuous_traffic() {
 /// 清理「已用尽重试」的死信，避免故障端点下同一行被无限重试。
 #[test]
 fn r51_drop_exhausted_pending_deletes_by_attempt_count() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_drop_exhausted.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
 
@@ -1154,7 +1147,7 @@ fn r51_drop_exhausted_pending_deletes_by_attempt_count() {
 /// 协议当前未使用此 API，但 schema 共享，约束必须成立以备未来扩展）。
 #[test]
 fn r51_drop_exhausted_pending_isolates_protocol() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_drop_isolate.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
 
@@ -1193,7 +1186,7 @@ fn r51_drop_exhausted_pending_isolates_protocol() {
 /// r51-OBX1 边界：attempt_count 未达上限时不应被误删。
 #[test]
 fn r51_drop_exhausted_pending_under_limit_no_op() {
-    let dir = tempdir();
+    let (_dir, dir) = tempdir();
     let path = dir.join("test_drop_under.db");
     let mut store = OutboxStore::open(&path).expect("should succeed");
     let id = store
@@ -1212,4 +1205,256 @@ fn r51_drop_exhausted_pending_under_limit_no_op() {
     let dropped = store.drop_exhausted_pending("http", 5).expect("drop");
     assert_eq!(dropped, 0, "未达上限的 pending 行不应被删除");
     assert_eq!(store.pending_count(Some("http")).expect("ok"), 1);
+}
+
+// ===== 死信队列（#3：不可投递批次保留 + 查询 + 重投）=====
+
+fn persist_for(store: &mut OutboxStore, data_id: i64, protocol: &str, payload: Vec<u8>) -> i64 {
+    store
+        .persist(&OutgoingMsg {
+            data_id,
+            data_ids: vec![data_id],
+            topic: format!("{protocol}://t/{data_id}"),
+            payload,
+            qos: 1,
+            protocol: protocol.to_string(),
+        })
+        .expect("persist")
+}
+
+/// 移入死信：outbox 行消失、死信表出现完整副本（含 payload 长度与原因）。
+#[test]
+fn dead_letter_move_keeps_payload_copy() {
+    let (_dir, dir) = tempdir();
+    let path = dir.join("test_dl_move.db");
+    let mut store = OutboxStore::open(&path).expect("open");
+    let id = persist_for(&mut store, 7, "http", vec![b'A'; 600]);
+
+    assert!(store.move_to_dead_letter(id, "http_404").expect("move"));
+    assert_eq!(
+        store.pending_count(None).expect("count"),
+        0,
+        "outbox 行应被移除"
+    );
+    assert_eq!(store.count_dead_letters(Some("http")).expect("count"), 1);
+
+    let rows = store.list_dead_letters("http", 10, 0).expect("list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].data_id, 7);
+    assert_eq!(rows[0].reason, "http_404");
+    assert_eq!(rows[0].payload_len, 600);
+    // 预览截断到 512 字节，避免列表接口把大 payload 全量吐给前端
+    assert_eq!(rows[0].payload_preview.len(), 512);
+    assert!(rows[0].replayed_at.is_none());
+}
+
+/// 行已被并发 ack/删除时不得凭空造死信。
+#[test]
+fn dead_letter_move_missing_row_is_noop() {
+    let (_dir, dir) = tempdir();
+    let path = dir.join("test_dl_missing.db");
+    let mut store = OutboxStore::open(&path).expect("open");
+    assert!(!store.move_to_dead_letter(9999, "gone").expect("move"));
+    assert_eq!(store.count_dead_letters(None).expect("count"), 0);
+}
+
+/// 重投：回到 outbox 且 attempt_count 归零，死信行被消费掉。
+#[test]
+fn dead_letter_replay_requeues_to_outbox() {
+    let (_dir, dir) = tempdir();
+    let path = dir.join("test_dl_replay.db");
+    let mut store = OutboxStore::open(&path).expect("open");
+    let id = persist_for(&mut store, 11, "http", vec![1, 2, 3]);
+    // 模拟重试用尽的历史（否则"归零"无从验证）
+    store.record_attempt(id).expect("attempt");
+    store.record_attempt(id).expect("attempt");
+    store
+        .move_to_dead_letter(id, "retry_exhausted")
+        .expect("move");
+    let dl_id = store.list_dead_letters("http", 1, 0).expect("list")[0].id;
+    assert_eq!(
+        store.list_dead_letters("http", 1, 0).expect("list")[0].attempt_count,
+        2
+    );
+
+    let new_id = store.replay_dead_letter(dl_id).expect("replay");
+    assert!(new_id > 0);
+    assert_eq!(store.count_dead_letters(Some("http")).expect("count"), 0);
+    // 注意 `replay_pending()` 固定按 mqtt 协议取数，这里必须显式指定 http
+    let pending = store
+        .replay_pending_batch("http", 0, i64::MAX)
+        .expect("pending");
+    assert_eq!(pending.len(), 1);
+    let (_, msg) = &pending[0];
+    assert_eq!(msg.data_id, 11);
+    assert_eq!(msg.payload, vec![1, 2, 3]);
+}
+
+/// 同一 data_id 已有在途 pending 行时，重投必须拒绝且**保留死信**，
+/// 否则会挤掉正在发送的行或造成重复上报。
+#[test]
+fn dead_letter_replay_blocked_by_pending_duplicate() {
+    let (_dir, dir) = tempdir();
+    let path = dir.join("test_dl_dup.db");
+    let mut store = OutboxStore::open(&path).expect("open");
+    let id = persist_for(&mut store, 21, "http", vec![9]);
+    store.move_to_dead_letter(id, "http_400").expect("move");
+    let dl_id = store.list_dead_letters("http", 1, 0).expect("list")[0].id;
+    // 同 data_id 重新入队（模拟运维手工补录/新一轮上报在途）
+    persist_for(&mut store, 21, "http", vec![9]);
+
+    assert_eq!(store.replay_dead_letter(dl_id).expect("replay"), 0);
+    assert_eq!(
+        store.count_dead_letters(Some("http")).expect("count"),
+        1,
+        "死信必须保留，待下次重投"
+    );
+    assert_eq!(store.pending_count(None).expect("count"), 1);
+}
+
+/// 清理：按协议与时间戳两个维度过滤，不得越界删除。
+#[test]
+fn dead_letter_purge_filters_by_protocol_and_age() {
+    let (_dir, dir) = tempdir();
+    let path = dir.join("test_dl_purge.db");
+    let mut store = OutboxStore::open(&path).expect("open");
+    for (data_id, protocol) in [(1, "http"), (2, "http"), (3, "mqtt")] {
+        let id = persist_for(&mut store, data_id, protocol, vec![0]);
+        store.move_to_dead_letter(id, "x").expect("move");
+    }
+    assert_eq!(store.count_dead_letters(None).expect("count"), 3);
+
+    // 仅清 http
+    assert_eq!(
+        store.purge_dead_letters(Some("http"), None).expect("purge"),
+        2
+    );
+    assert_eq!(store.count_dead_letters(Some("mqtt")).expect("count"), 1);
+    // 未来时间戳清全部
+    let future = now_ms() + 60_000;
+    assert_eq!(
+        store.purge_dead_letters(None, Some(future)).expect("purge"),
+        1
+    );
+    assert_eq!(store.count_dead_letters(None).expect("count"), 0);
+}
+
+/// 启动首轮批量搬移：只搬「尝试次数达上限的 pending」，未达上限的留在 outbox。
+#[test]
+fn dead_letter_move_exhausted_pending_batch() {
+    let (_dir, dir) = tempdir();
+    let path = dir.join("test_dl_exhausted.db");
+    let mut store = OutboxStore::open(&path).expect("open");
+    let exhausted = persist_for(&mut store, 31, "http", vec![1]);
+    let alive = persist_for(&mut store, 32, "http", vec![2]);
+    for _ in 0..5 {
+        store.record_attempt(exhausted).expect("attempt");
+    }
+    store.record_attempt(alive).expect("attempt");
+
+    let moved = store
+        .move_exhausted_pending_to_dead_letter("http", 5, "retry_exhausted")
+        .expect("move batch");
+    assert_eq!(moved, 1);
+    assert_eq!(store.pending_count(Some("http")).expect("count"), 1);
+    let rows = store.list_dead_letters("http", 10, 0).expect("list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].data_id, 31);
+    assert_eq!(rows[0].attempt_count, 5);
+}
+
+/// 行数上限兜底：按「最旧优先」裁剪，保留最新，未超限时不动。
+#[test]
+fn dead_letter_trim_keeps_newest_rows() {
+    let (_dir, dir) = tempdir();
+    let path = dir.join("test_dl_trim.db");
+    let mut store = OutboxStore::open(&path).expect("open");
+    for data_id in 1..=5 {
+        let id = persist_for(&mut store, data_id, "http", vec![0]);
+        store.move_to_dead_letter(id, "x").expect("move");
+    }
+
+    assert_eq!(store.trim_dead_letters(2).expect("trim"), 3);
+    let rows = store.list_dead_letters("http", 10, 0).expect("list");
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter().all(|r| r.data_id >= 4),
+        "应保留最新的两条，实际: {:?}",
+        rows.iter().map(|r| r.data_id).collect::<Vec<_>>()
+    );
+
+    assert_eq!(store.trim_dead_letters(10).expect("trim"), 0);
+    assert_eq!(store.trim_dead_letters(0).expect("trim"), 2);
+    assert_eq!(store.count_dead_letters(None).expect("count"), 0);
+}
+
+/// 上限常量必须显著小于主队列上限：死信是异常数据，不该被允许长成第二个队列表。
+///
+/// 用 `const { }` 块让断言在编译期求值——常量边界写错时直接编译失败，
+/// 而不是要等这条测试跑到才暴露（clippy `assertions_on_constants`）。
+#[test]
+fn dead_letter_cap_is_sane() {
+    const {
+        assert!(OutboxStore::MAX_DEAD_LETTER_ROWS > 0);
+        assert!(OutboxStore::MAX_DEAD_LETTER_ROWS <= 100_000);
+    }
+}
+
+// ===== D5：payload 预览不得把二进制渲染成乱码 =====
+
+/// 文本 payload 原样返回（不截断时不做任何加工）。
+#[test]
+fn d5_payload_preview_keeps_text_as_is() {
+    assert_eq!(payload_preview(b"{\"t\":25}"), "{\"t\":25}");
+    assert_eq!(payload_preview(b""), "");
+}
+
+/// 二进制 payload 必须转 hex：旧实现用 `from_utf8_lossy`，现场看到的是一串
+/// `�`——既认不出魔数也看不出类型，等于没有预览。
+#[test]
+fn d5_payload_preview_hexes_binary_instead_of_replacement_chars() {
+    // gzip 魔数 + 大量 0x00：合法 UTF-8 前缀只有 1 字节，整体必须降级为 hex
+    let mut payload = vec![0u8; 302];
+    payload[..4].copy_from_slice(&[0x1f, 0x8b, 0x08, 0x00]);
+    let p = payload_preview(&payload);
+    assert!(
+        p.starts_with("0x1f8b0800"),
+        "二进制预览必须以 hex 呈现: {p}"
+    );
+    assert!(
+        !p.contains('\u{FFFD}'),
+        "二进制预览不得出现替换字符（旧实现的乱码）: {p}"
+    );
+    // 二进制只展示前 128 字节，并标注真实总长
+    assert!(p.contains("302 bytes"), "必须标注真实长度: {p}");
+    assert_eq!(
+        p.len(),
+        2 + 128 * 2 + " (302 bytes, hex)".len(),
+        "hex 部分只取前 128 字节: {p}"
+    );
+}
+
+/// 截断正好落在多字节字符中间属于「边界截断」，不是二进制数据：
+/// 应保留前面可读的文本，而不是把整段降级成 hex。
+#[test]
+fn d5_payload_preview_truncation_mid_char_keeps_readable_prefix() {
+    let mut payload = vec![b'A'; PREVIEW_BYTES - 1];
+    payload.extend_from_slice("中".as_bytes()); // 3 字节，最后一个被截掉
+    assert!(payload.len() > PREVIEW_BYTES);
+    let p = payload_preview(&payload);
+    assert!(
+        p.chars().all(|c| c == 'A'),
+        "截断在字符中间时应保留可读前缀，不得降级为 hex: {p}"
+    );
+    assert_eq!(p.len(), PREVIEW_BYTES - 1);
+}
+
+/// 合法 UTF-8 超长文本：按 512 字节截断，且不得切出半个字符。
+#[test]
+fn d5_payload_preview_truncates_long_text_at_char_boundary() {
+    let text = "中".repeat(PREVIEW_BYTES); // 每字符 3 字节，远超上限
+    let p = payload_preview(text.as_bytes());
+    assert!(p.len() <= PREVIEW_BYTES);
+    assert!(text.starts_with(&p), "截断必须落在字符边界上");
+    assert!(!p.contains('\u{FFFD}'));
 }

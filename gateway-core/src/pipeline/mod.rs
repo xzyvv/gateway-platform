@@ -264,6 +264,14 @@ impl ProcessingPipeline {
         self.north_tx.lock().take();
     }
 
+    /// 北向队列发送端的可观测句柄（Web 层读积压/背压用）。
+    ///
+    /// 返回克隆而非借用，避免把内部锁的生命周期暴露给调用方；
+    /// 发送端克隆共享同一队列与计数器，读取开销只有几个原子 load。
+    pub fn north_sender(&self) -> Option<crate::north::NorthSender> {
+        self.north_tx.lock().clone()
+    }
+
     /// 处理一批数据，返回需要入队的数据点
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self, batch), fields(n_in = batch.items.len())))]
     async fn process_batch(&self, batch: CollectedBatch) -> Vec<DataPoint> {

@@ -67,3 +67,7 @@ encryption = ["gateway-core/encryption", "gateway-api/encryption"]
 tracing-otlp = ["gateway-core/tracing-otlp", "gateway-api/tracing-otlp"]
 ## 远程诊断只读 Shell（默认关闭）：转发至 gateway-core / gateway-api
 remote-shell = ["gateway-core/remote-shell", "gateway-api/remote-shell"]
+
+[dev-dependencies]
+# 单元测试：临时数据库目录（bootstrap::helpers::assemble 基线版本回归）
+tempfile = { workspace = true }

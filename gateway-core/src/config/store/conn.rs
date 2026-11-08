@@ -57,26 +57,18 @@ impl SharedConn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
-    fn temp_db(tag: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "gw-shared-conn-{}-{}-{}",
-            tag,
-            std::process::id(),
-            nanos
-        ));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir.join("t.db")
+    fn temp_db() -> (TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("t.db");
+        (dir, path)
     }
 
     /// 长驻连接必须设置 WAL + busy_timeout（与原每次 open 的语义保持一致）
     #[test]
     fn open_sets_wal_and_busy_timeout() {
-        let db = temp_db("pragma");
+        let (_dir, db) = temp_db();
         let shared = SharedConn::open(&db, "open test db").expect("open");
         let conn = shared.get();
         let journal: String = conn
@@ -87,13 +79,12 @@ mod tests {
             .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
             .expect("read busy_timeout");
         assert_eq!(timeout, 5000);
-        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 
     /// 同一连接跨多次调用复用：写入在后续调用中可见（证明没有每次重开）
     #[test]
     fn connection_is_reused_across_calls() {
-        let db = temp_db("reuse");
+        let (_dir, db) = temp_db();
         let shared = SharedConn::open(&db, "open test db").expect("open");
         {
             let conn = shared.get();
@@ -107,17 +98,14 @@ mod tests {
             .query_row("SELECT v FROM t", [], |r| r.get(0))
             .expect("select from reused connection");
         assert_eq!(v, 42);
-        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 
     /// 打开失败的上下文要能定位到具体 Store
     #[test]
     fn open_error_mentions_context() {
         // 目录不存在 → 打开必然失败
-        let bad = std::env::temp_dir()
-            .join("gw-shared-conn-no-such-dir")
-            .join("nested")
-            .join("t.db");
+        let _dir = tempfile::tempdir().expect("create temp dir");
+        let bad = _dir.path().join("nested").join("t.db");
         let err = SharedConn::open(&bad, "open api key db")
             .err()
             .expect("should fail");

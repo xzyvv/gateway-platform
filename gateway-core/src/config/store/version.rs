@@ -195,16 +195,8 @@ mod tests {
     /// 磁盘历史三处共享并发写，未设超时会在 SQLITE_BUSY 时立即失败，导致快照偶发丢失。
     #[test]
     fn version_store_conn_sets_busy_timeout() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let mut dir = std::env::temp_dir();
-        dir.push(format!(
-            "version-store-test-{}-{}",
-            std::process::id(),
-            SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).expect("should succeed");
-        let db = dir.join("versions.db");
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db = dir.path().join("versions.db");
 
         let store = ConfigVersionStore::new(db.to_str().expect("utf8")).expect("should succeed");
         let conn = store.conn();

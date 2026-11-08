@@ -36,6 +36,19 @@
       </el-col>
     </el-row>
 
+    <!-- 容量淘汰：与「队列存量」正交。存量说"现在积压多少"，淘汰说"已经删掉多少"。
+         删掉的不可恢复，且上行恢复后存量会归零——只存量一个指标会让用户
+         误以为一切正常，所以单独用 error 级提示占位。 -->
+    <el-alert
+      v-if="evictedRows > 0"
+      type="error"
+      show-icon
+      :closable="false"
+      class="evicted-alert"
+      :title="`队列容量已淘汰 ${evictedRows} 行数据，不可恢复`"
+      :description="`其中 ${evictedUndeliveredRows} 行从未上传。淘汰发生在队列触达硬上限时（多为上行通道长期不通）。请尽快排查 MQTT / Webhook 连通性，并考虑通过「历史数据 → 导出」做外部归档。`"
+    />
+
     <!-- 磁盘水位：分级告警的可见落点。剩余空间掉到 25%/15%/10% 会依次进入
          预警/严重/阻断档；此处把档位与实际余量摆在一行，让现场不用去翻曲线图
          就能判断"还有多少天要动手"。 -->
@@ -118,6 +131,15 @@ const statusMeta = computed(() => {
 
 /** 队列存量 ≥ 预警阈值时标黄；具体分级以后端 problems 为准，这里只做视觉提示 */
 const queueBad = computed(() => summary.value.queue_len >= QUEUE_BACKLOG_WARN)
+
+/**
+ * 已发生的容量淘汰行数（不可恢复）。
+ *
+ * 与 queue_len 正交：上行恢复后 queue_len 会回落到 0，但淘汰过的数据
+ * 永远回不来。旧后端不返回该字段，这里按 0 处理以保持兼容。
+ */
+const evictedRows = computed(() => summary.value.queue_evicted_rows ?? 0)
+const evictedUndeliveredRows = computed(() => summary.value.queue_evicted_undelivered_rows ?? 0)
 
 const componentType = (v: string) =>
   v === 'ok' ? ('success' as const) : v === 'down' ? ('danger' as const) : ('warning' as const)
@@ -203,6 +225,8 @@ onMounted(() => {
 .mcard .v { font-size: 1.35rem; font-weight: 600; margin-top: 2px; }
 .mcard .v.bad { color: var(--text-danger); }
 .mcard .v.warn { color: var(--text-warning); }
+/* 容量淘汰是"已发生的数据丢失"，视觉上要与磁盘预警区分开 */
+.evicted-alert { margin-top: 12px; }
 .section-card { margin-bottom: 16px; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .generated { margin-left: auto; color: var(--text-placeholder); font-size: 0.78rem; }

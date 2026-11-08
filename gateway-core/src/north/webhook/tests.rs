@@ -521,7 +521,7 @@ async fn p7_send_once_increments_publish_metrics() {
 
     let outcome2 = wh2.send_once(&mk_msg(err_url)).await;
     assert!(
-        matches!(outcome2, super::SendOutcome::Retriable),
+        matches!(outcome2, super::SendOutcome::Retriable(_)),
         "P7: 5xx 必须判定为 Retriable"
     );
     assert_eq!(

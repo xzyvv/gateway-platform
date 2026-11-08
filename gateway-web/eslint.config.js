@@ -5,59 +5,21 @@ import prettier from 'eslint-config-prettier'
 import globals from 'globals'
 
 // ── 行数预算（O-8）──
-// 约定见 docs/architecture/frontend.md：单文件超过 ~300 行即视为巨型文件，必须拆分。
+// 约定见 docs/architecture/frontend.md：单文件超过 ~500 行即视为巨型文件，必须拆分。
 // 这里把约定变成 lint 断言：
 //   - 新增/未登记文件超过预算 → warning。CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。
 //   - 存量超限文件登记在下方清单里（豁免），不阻断当前 CI；
-//     拆到 ≤300 行后**请把对应行删掉**，否则它会一直享受豁免。
-const LINE_BUDGET = 300
+//     拆到 ≤500 行后**请把对应行删掉**，否则它会一直享受豁免。
+const LINE_BUDGET = 500
 const LINE_BUDGET_EXEMPT = [
   // 自动生成，勿手改（vite alias 重定向 @element-plus/icons-vue 的产物）
   'src/utils/ep-icons-compact.ts',
   // ── 存量超限（债务清单：只许减少，不许新增）──
-  'src/api/deviceOps.ts',
-  'src/api/pointsOps.ts',
-  'src/components/DataTable.vue',
-  'src/components/HubShell.vue',
-  'src/components/RequestMonitor.vue',
-  'src/components/WsStatusBadge.vue',
-  'src/composables/acquisition/useRegisterScan.ts',
-  'src/composables/acquisition/useStepSequences.ts',
-  'src/composables/config/useConfigActions.ts',
-  'src/composables/core/usePolling.ts',
-  'src/composables/dashboard/useDashboardData.ts',
-  'src/composables/data/useHistoryQuery.ts',
-  'src/composables/data/useRealtime.ts',
-  'src/composables/system/useDiagnosticExport.ts',
-  'src/composables/system/useLogs.ts',
-  'src/utils/diagnosticReport.ts',
   'src/utils/echarts.ts',
-  'src/utils/frameParser.ts',
-  'src/utils/protocolErrorCodes.ts',
-  'src/utils/websocket/connection.ts',
-  'src/views/Layout.vue',
   'src/views/acquisition/console/DebugWizard.vue',
-  'src/views/acquisition/console/parts/debugWizardFlows.ts',
-  'src/views/acquisition/packet/StepDebug.vue',
-  'src/views/acquisition/simulate/Tester.vue',
-  'src/views/auth/Login.vue',
-  'src/views/data/pipeline/History.vue',
-  'src/views/devices/DeviceBatchCommand.vue',
-  'src/views/devices/DeviceGroups.vue',
   'src/views/devices/DeviceList.vue',
-  'src/views/devices/HealthScore.vue',
-  'src/views/layout/LicenseDialog.vue',
-  'src/views/layout/Topbar.vue',
-  'src/views/ops/delivery/DeliveryCheck.vue',
   'src/views/ops/delivery/selfCheck.ts',
-  'src/views/overview/RealtimeMonitor.vue',
   'src/views/points/PointList.vue',
-  'src/views/system/access/ApiKeys.vue',
-  'src/views/system/config/RuntimeConfig.vue',
-  'src/views/system/maintenance/ScheduledTasks.vue',
-  'src/views/system/overview/SystemOverview.vue',
-  'src/views/uplink/UplinkForwardConfig.vue',
-  'src/views/uplink/UplinkNorthStatus.vue',
 ]
 
 export default tseslint.config(

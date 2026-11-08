@@ -6,14 +6,19 @@ const m = vi.hoisted(() => ({
   refreshAudit: vi.fn(),
   saveWebhook: vi.fn(),
   testWebhook: vi.fn(),
-  retryAllDlq: vi.fn(),
+  retryAllNotify: vi.fn(),
   revokeSession: vi.fn(),
   syncNtp: vi.fn(),
   genDiagnostic: vi.fn(),
   doBackup: vi.fn(),
   onRestoreFile: vi.fn(),
-  clearDeadLetters: vi.fn(),
-  retryDeadLetter: vi.fn(),
+  clearNotifyQueue: vi.fn(),
+  retryNotify: vi.fn(),
+  // 设备端死信 API
+  listDeadLetters: vi.fn(),
+  replayDeadLetter: vi.fn(),
+  purgeDeadLetters: vi.fn(),
+  confirmAction: vi.fn(),
   push: vi.fn(),
   // 可变夹具：部分用例按需覆盖
   webhookUrl: '',
@@ -32,6 +37,14 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ query: {}, params: {} }),
 }))
 
+vi.mock('@/api/deadLetter', () => ({
+  listDeadLetters: (o: unknown) => m.listDeadLetters(o),
+  replayDeadLetter: (id: number) => m.replayDeadLetter(id),
+  purgeDeadLetters: (olderThanMs?: number) => m.purgeDeadLetters(olderThanMs),
+}))
+
+vi.mock('@/utils/confirm', () => ({ confirmAction: (o: unknown) => m.confirmAction(o) }))
+
 vi.mock('@/composables/system/useSystem', async () => {
   const { ref, reactive, computed } = await import('vue')
   return {
@@ -40,14 +53,14 @@ vi.mock('@/composables/system/useSystem', async () => {
       refreshAudit: m.refreshAudit,
       webhook: {
         isEnabled: () => !!m.webhookUrl,
-        deadLetterQueue: ref(m.dlq),
-        clearDeadLetters: m.clearDeadLetters,
-        retryDeadLetter: m.retryDeadLetter,
+        notifyRetryQueue: ref(m.dlq),
+        clearNotifyQueue: m.clearNotifyQueue,
+        retryNotify: m.retryNotify,
       },
       webhookUrl: ref(m.webhookUrl),
       saveWebhook: m.saveWebhook,
       testWebhook: m.testWebhook,
-      retryAllDlq: m.retryAllDlq,
+      retryAllNotify: m.retryAllNotify,
       sessionList: ref(m.sessions),
       revokeSession: m.revokeSession,
       status: reactive({ online_devices: 1, queue_length: 2, cpu_usage: 3, mem_usage: 4 }),
@@ -97,6 +110,10 @@ describe('SystemOverview.vue', () => {
     m.auditEntries = []
     m.healthComponents = {}
     m.healthProblems = []
+    m.listDeadLetters.mockResolvedValue({ protocol: 'http', total: 0, items: [] })
+    m.replayDeadLetter.mockResolvedValue({ id: 1, outbox_id: 88, requeued: true })
+    m.purgeDeadLetters.mockResolvedValue({ deleted: 0 })
+    m.confirmAction.mockResolvedValue(true)
   })
 
   it('默认"运行状态"tab 渲染系统信息 / NTP / 运行指标', async () => {
@@ -176,7 +193,7 @@ describe('SystemOverview.vue', () => {
     wrapper.unmount()
   })
 
-  it('"通知与会话"tab：上行转发监控只保留指向「上行服务状态」的入口，并支持死信队列重发', async () => {
+  it('"通知与会话"tab：上行转发监控只保留入口，本机通知队列可全部重发', async () => {
     m.dlq = [{ id: 'q1', payload: { event: 'cfg_saved', message: 'msg' }, retryCount: 1, lastError: 'err' }]
     const wrapper = mount(SystemOverview)
     await flushPromises()
@@ -184,6 +201,9 @@ describe('SystemOverview.vue', () => {
     const text = wrapper.text()
     expect(text).toContain('上行转发监控')
     expect(text).toContain('上行服务状态')
+    // 原「Webhook 死信队列」已更名为本机通知重试队列，并标注仅本机
+    expect(text).toContain('通知重试队列（本机浏览器）')
+    expect(text).toContain('仅本机')
 
     const goBtn = wrapper.findAll('button').find((b) => b.text().includes('打开上行服务状态'))
     expect(goBtn).toBeTruthy()
@@ -193,7 +213,76 @@ describe('SystemOverview.vue', () => {
     const retryAll = wrapper.findAll('button').find((b) => b.text().includes('全部重发'))
     expect(retryAll!.attributes('disabled')).toBeUndefined()
     await retryAll!.trigger('click')
-    expect(m.retryAllDlq).toHaveBeenCalledTimes(1)
+    expect(m.retryAllNotify).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('"通知与会话"tab：设备端死信展示真实未送达数据，支持重投与确认后清理', async () => {
+    m.listDeadLetters.mockResolvedValue({
+      protocol: 'http',
+      total: 2,
+      items: [{
+        id: 7,
+        protocol: 'http',
+        data_id: 101,
+        topic: 'http://x',
+        payload_len: 512,
+        payload_preview: '{"a":1}',
+        qos: 1,
+        created_at: 1700000000000,
+        failed_at: 1700000000000,
+        attempt_count: 5,
+        reason: 'http_404',
+        replayed_at: null,
+      }],
+    })
+    const wrapper = mount(SystemOverview)
+    await flushPromises()
+    await gotoTab(wrapper, 1)
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('设备端死信（未送达数据）')
+    expect(text).toContain('2 条')
+    expect(text).toContain('http_404')
+    expect(text).toContain('{"a":1}')
+    expect(m.listDeadLetters).toHaveBeenCalledWith({ limit: 50, offset: 0 })
+
+    const replayBtn = wrapper.findAll('button').find((b) => b.text() === '重投')
+    expect(replayBtn).toBeTruthy()
+    await replayBtn!.trigger('click')
+    await flushPromises()
+    expect(m.replayDeadLetter).toHaveBeenCalledWith(7)
+
+    const purgeBtn = wrapper.findAll('button').find((b) => b.text().includes('清理'))
+    await purgeBtn!.trigger('click')
+    await flushPromises()
+    expect(m.confirmAction).toHaveBeenCalledTimes(1)
+    expect(m.purgeDeadLetters).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('"通知与会话"tab：设备端死信为空时显示「无未送达数据」', async () => {
+    const wrapper = mount(SystemOverview)
+    await flushPromises()
+    await gotoTab(wrapper, 1)
+    await flushPromises()
+    expect(wrapper.text()).toContain('无未送达数据')
+    wrapper.unmount()
+  })
+
+  it('"通知与会话"tab：死信库 503 时显示「无法确认」，不能渲染成 0 条', async () => {
+    m.listDeadLetters.mockRejectedValue({ response: { status: 503 } })
+    const wrapper = mount(SystemOverview)
+    await flushPromises()
+    await gotoTab(wrapper, 1)
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('死信库不可用，无法确认是否存在未送达数据')
+    expect(text).toContain('状态未知')
+    // 关键：503 不能退化成空表/0 条
+    expect(text).not.toContain('无未送达数据')
     wrapper.unmount()
   })
 

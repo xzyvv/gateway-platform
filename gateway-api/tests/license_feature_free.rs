@@ -45,7 +45,7 @@ async fn test_debug_routes_open_for_core_tier() {
     // 抽样原 §10 6 个 feature gate 的代表性路由（step-debug 后端已删除：
     // 前端单步调试直调 packet-editor/send，此处用 packet-editor 路由替代抽样）
     let paths = [
-        "/api/points/clone/sources",                  // batch-cmd（§10 pro）
+        "/api/point-tools/clone/sources",             // batch-cmd（§10 pro）
         "/api/diagnostics/bus-load",                  // perf-monitor（§10 pro）
         "/api/protocol-tools/register-scan",          // protocol-scan（§10 standard）
         "/api/protocol-tools/simulator/status",       // slave-sim（§10 ultra）

@@ -378,7 +378,7 @@ async fn api_key_with_write_scope_can_write() {
         &app,
         req(
             "POST",
-            "/api/points/find-replace/search",
+            "/api/point-tools/find-replace/search",
             Some(serde_json::json!({ "keyword": "不存在", "scope": "all" })),
             Some(&key),
         ),

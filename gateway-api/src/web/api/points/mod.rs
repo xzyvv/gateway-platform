@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::web::types::{ApiError, ApiResponse, AppState};
 
-/// 点位批量请求体（统一入口 `POST /api/points/batch`）
+/// 点位批量请求体（统一入口 `POST /api/point-tools/batch`）
 ///
 /// R3 合并：原 `/api/points/batch`（裸数组 upsert）与 `/api/points/batch/edit`
 /// （增/改/删）合并为同一端点，按请求体形状分派：
@@ -44,7 +44,7 @@ pub enum PointsBatchAction {
     },
 }
 
-/// 点位写入请求体（唯一写入口 `POST /api/points/write`）
+/// 点位写入请求体（唯一写入口 `POST /api/point-tools/write`）
 ///
 /// 契约：`{ "writes": [ { "id": "<point_id>", "value": <f64> } ] }`。
 /// 条目字段沿用既有批写接口的 `id`（前端无需改字段名），同时接受

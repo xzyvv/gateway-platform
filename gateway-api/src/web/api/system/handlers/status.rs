@@ -45,6 +45,25 @@ pub(crate) struct ComponentSnapshot {
     pub disk_level: DiskLevel,
     /// 最近一次检测到的磁盘剩余百分比（未检测过时为 None）。
     pub disk_free_pct: Option<f64>,
+    /// 累计因队列容量上限被物理删除的行数（进程内累计，重启归零）。
+    ///
+    /// 单机网关无异地副本，被淘汰的行不可恢复。此前只打 debug 日志，
+    /// 现场表现为「数据一直在丢，界面一直安静」；现作为健康快照的一部分
+    /// 对外暴露，供 `/health/ready`、`/api/health/report` 与前端红标使用。
+    pub evicted_rows: i64,
+    /// 上述淘汰中未送达（delivered=0）的行数 —— 彻底的数据丢失。
+    pub evicted_undelivered_rows: i64,
+    /// 死信表当前行数（Webhook 上报被永久拒绝 / 重试用尽、已保留但未送达的批次）。
+    ///
+    /// 与 `evicted_rows` 的区别：淘汰是**已销毁**，死信是**仍保留、可重投**，
+    /// 因此这里只报 warning，不报 critical；但绝不能不报 —— 静默积压等于换个
+    /// 名字的静默丢数据。
+    pub dead_letter_rows: i64,
+    /// 死信库是否可用（outbox 库打不开时为 false）。
+    ///
+    /// 必须与 `dead_letter_rows == 0` 区分：不可用时行数无意义，
+    /// 报「0 条」会让现场误判成「没有未送达数据」。
+    pub dead_letter_available: bool,
 }
 
 pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapshot {
@@ -111,6 +130,24 @@ pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapsh
         },
     );
 
+    // 容量淘汰：真的删了数据就必须让用户看见。
+    //
+    // 注意**不能**把它塞进 `components`：`all_ok` 由 components 全 ok 判定，
+    // 而淘汰是「本进程生命周期内曾经发生」的事实，一旦发生过就永远为真，
+    // 会让 `/health/ready` 永久停在 degraded —— systemd / 探针会把一个
+    // 历史事件误判为当前不健康，进而反复重启。因此只作为独立字段暴露，
+    // 由前端红标与告警规则消费，不参与就绪判定。
+    let (evicted_rows, evicted_undelivered_rows) = state.south.queue.evicted_stats();
+
+    // 死信：查询失败不代表 0 条，用 available 区分「没有」与「查不到」。
+    let dead_letter = &state.north.dead_letter;
+    let dead_letter_available = dead_letter.available();
+    let dead_letter_rows = if dead_letter_available {
+        dead_letter.count(None).await.unwrap_or(0).max(0)
+    } else {
+        0
+    };
+
     ComponentSnapshot {
         components,
         queue_len,
@@ -120,6 +157,10 @@ pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapsh
         has_north_consumer,
         disk_level,
         disk_free_pct,
+        evicted_rows: evicted_rows.max(0),
+        evicted_undelivered_rows: evicted_undelivered_rows.max(0),
+        dead_letter_rows,
+        dead_letter_available,
     }
 }
 
@@ -251,7 +292,11 @@ pub(crate) async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoR
 pub(crate) async fn get_metrics(
     state: axum::extract::State<std::sync::Arc<crate::web::types::AppState>>,
 ) -> impl IntoResponse {
-    let body = state.platform.metrics.prometheus_export();
+    let mut body = state.platform.metrics.prometheus_export();
+    // 北向第 5 层：积压/背压/已投递批数。抓取时读发送端原子量，无采样任务。
+    if let Some(tx) = state.north.north_feed.as_ref() {
+        body.push_str(&tx.stats().prometheus_lines());
+    }
     (
         [(
             axum::http::header::CONTENT_TYPE,
@@ -452,6 +497,17 @@ pub(crate) struct HealthProblemInput<'a> {
     pub disk_level: DiskLevel,
     /// 最近一次检测到的磁盘剩余百分比（未检测过时为 None）。
     pub disk_free_pct: Option<f64>,
+    /// 本进程生命周期内因容量上限被物理删除的行数（0 = 未发生）。
+    ///
+    /// 与 `queue_len` 是正交维度：队列长度回答「现在积压多少」，
+    /// 本字段回答「已经删掉了多少」——后者不可恢复，必须单独报为问题。
+    pub queue_evicted_rows: i64,
+    /// 上述淘汰中未送达的行数。
+    pub queue_evicted_undelivered_rows: i64,
+    /// 死信表当前行数（已保留但未送达的批次）。
+    pub dead_letter_rows: i64,
+    /// 死信库是否可用（false = 无法确认是否存在未送达数据）。
+    pub dead_letter_available: bool,
 }
 
 fn health_problem(level: &str, code: &str, message: String, hint: &str) -> serde_json::Value {
@@ -476,6 +532,47 @@ pub(crate) fn build_health_problems(input: &HealthProblemInput<'_>) -> Vec<serde
             "MQTT_DISCONNECTED",
             "MQTT 未连接：采集到的数据无法上传".to_string(),
             "检查 broker 地址 / 端口 / 网络与凭据（系统设置 → 北向通道）",
+        ));
+    }
+
+    // 容量淘汰：已经删掉的数据不可恢复，严重度高于是「积压」。
+    //
+    // 放在 queue_health 判定之前：等级告警是**边沿触发**，进入 CapacityPressure
+    // 只报一次；而淘汰会持续发生，且队列长度可能在淘汰后又回落（上行恢复），
+    // 此时 queue_health 已回到 Ok，但数据确实丢过。单机网关无异地副本，
+    // 这条必须独立于等级判定存在。
+    if input.queue_evicted_rows > 0 {
+        problems.push(health_problem(
+            "critical",
+            "QUEUE_DATA_EVICTED",
+            format!(
+                "队列容量上限已淘汰 {} 行数据（其中 {} 行从未上传），这些数据**不可恢复**",
+                input.queue_evicted_rows, input.queue_evicted_undelivered_rows
+            ),
+            "立即确认上行通道（MQTT/Webhook）是否长期不通；如需长期留存，请降低采集频率或调低 license storage_days 以外的留存需求，并尽快通过 GET /api/history/export 做外部归档",
+        ));
+    }
+
+    // 死信：数据没送达，但**仍保留可重投** → warning（区别于上面不可恢复的 critical）。
+    //
+    // `available == false` 单独一条问题：此时「0 条」毫无意义，直接说"查不到"，
+    // 否则现场会把查询失败当成"没有未送达数据"。
+    if !input.dead_letter_available {
+        problems.push(health_problem(
+            "warning",
+            "DEAD_LETTER_UNAVAILABLE",
+            "死信库不可用：无法确认是否存在未送达数据".to_string(),
+            "检查 outbox 数据库路径与磁盘状态；北向上报本身不受影响，但异常批次无法查询/重投",
+        ));
+    } else if input.dead_letter_rows > 0 {
+        problems.push(health_problem(
+            "warning",
+            "DEAD_LETTER_PENDING",
+            format!(
+                "有 {} 条数据在死信队列中：Webhook 上报被对端永久拒绝或重试用尽，数据已保留但尚未送达",
+                input.dead_letter_rows
+            ),
+            "确认 webhook 接收端地址/鉴权/白名单是否变更；修好后在「系统总览 › 设备端死信」逐条重投，或调用 POST /api/north/dead-letters/{id}/replay",
         ));
     }
 
@@ -700,6 +797,10 @@ pub(crate) async fn get_health_report(State(state): State<Arc<AppState>>) -> imp
         buses: &buses,
         disk_level: snap.disk_level,
         disk_free_pct: snap.disk_free_pct,
+        queue_evicted_rows: snap.evicted_rows,
+        queue_evicted_undelivered_rows: snap.evicted_undelivered_rows,
+        dead_letter_rows: snap.dead_letter_rows,
+        dead_letter_available: snap.dead_letter_available,
     });
 
     // 综合状态：critical > degraded > ok。组件非 ok 也算 degraded，
@@ -757,6 +858,16 @@ pub(crate) async fn get_health_report(State(state): State<Arc<AppState>>) -> imp
             "online_devices": device_online.len(),
             "bus_count": cfg.buses.len(),
             "queue_len": snap.queue_len,
+            // 容量淘汰：本进程生命周期内被物理删除的行数（不可恢复）。
+            // 与 queue_len 是两个维度——queue_len 说「现在积压多少」，
+            // 这两个说「已经丢了多少」，后者才是真正需要客户处置的信号。
+            "queue_evicted_rows": snap.evicted_rows,
+            "queue_evicted_undelivered_rows": snap.evicted_undelivered_rows,
+            "queue_data_loss": snap.evicted_rows > 0,
+            // 死信：数据已保留但未送达（可重投）。与上面不可恢复的淘汰分开给，
+            // 前端据此区分「红了但能救」与「红了救不回来」。
+            "dead_letter_rows": snap.dead_letter_rows,
+            "dead_letter_available": snap.dead_letter_available,
             "total_reads": total_reads,
             "success_rate": success_rate,
             // 磁盘水位分级（ok / warn / critical / blocking）+ 实际余量。
@@ -775,197 +886,4 @@ pub(crate) async fn get_health_report(State(state): State<Arc<AppState>>) -> imp
 }
 
 #[cfg(test)]
-mod health_report_tests {
-    use super::*;
-
-    fn bus(name: &str, total: usize, online: usize, reads: u64, rate: Option<f64>) -> BusHealth {
-        BusHealth {
-            bus: name.to_string(),
-            protocol: "modbus".to_string(),
-            total_devices: total,
-            online_devices: online,
-            total_reads: reads,
-            success: reads,
-            success_rate: rate,
-            avg_latency_ms: None,
-            timeout_rate: None,
-            last_error_code: None,
-            reconnect_count: 0,
-        }
-    }
-
-    fn codes(input: &HealthProblemInput<'_>) -> Vec<String> {
-        build_health_problems(input)
-            .iter()
-            .map(|p| p["code"].as_str().unwrap_or_default().to_string())
-            .collect()
-    }
-
-    #[test]
-    fn healthy_gateway_has_no_problems() {
-        let buses = vec![bus("/dev/ttyS1", 2, 2, 100, Some(99.5))];
-        let input = HealthProblemInput {
-            mqtt_configured: true,
-            mqtt_connected: true,
-            has_north_consumer: true,
-            queue_len: 10,
-            ota_state: "Idle",
-            buses: &buses,
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        assert!(codes(&input).is_empty());
-    }
-
-    #[test]
-    fn mqtt_disconnected_is_critical() {
-        let input = HealthProblemInput {
-            mqtt_configured: true,
-            mqtt_connected: false,
-            has_north_consumer: true,
-            queue_len: 0,
-            ota_state: "Idle",
-            buses: &[],
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        assert!(codes(&input).contains(&"MQTT_DISCONNECTED".to_string()));
-    }
-
-    #[test]
-    fn all_devices_offline_is_critical() {
-        let buses = vec![bus("/dev/ttyS1", 3, 0, 50, Some(0.0))];
-        let input = HealthProblemInput {
-            mqtt_configured: false,
-            mqtt_connected: false,
-            has_north_consumer: false,
-            queue_len: 0,
-            ota_state: "Idle",
-            buses: &buses,
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        assert!(codes(&input).contains(&"BUS_ALL_OFFLINE".to_string()));
-    }
-
-    #[test]
-    fn partial_offline_is_warning_and_low_rate_skipped_when_sample_small() {
-        let buses = vec![bus("/dev/ttyS1", 3, 2, 5, Some(10.0))];
-        let input = HealthProblemInput {
-            mqtt_configured: false,
-            mqtt_connected: false,
-            has_north_consumer: false,
-            queue_len: 0,
-            ota_state: "Idle",
-            buses: &buses,
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        let got = codes(&input);
-        assert!(got.contains(&"BUS_PARTIAL_OFFLINE".to_string()));
-        // 只有 5 次采集，成功率再低也不下结论
-        assert!(!got.contains(&"BUS_LOW_SUCCESS_RATE".to_string()));
-    }
-
-    #[test]
-    fn empty_bus_does_not_report_offline() {
-        // 配了总线但没有任何设备点位落在上面：不能报"全部离线"
-        let buses = vec![bus("/dev/ttyS2", 0, 0, 0, None)];
-        let input = HealthProblemInput {
-            mqtt_configured: false,
-            mqtt_connected: false,
-            has_north_consumer: false,
-            queue_len: 0,
-            ota_state: "Idle",
-            buses: &buses,
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        assert!(!codes(&input).contains(&"BUS_ALL_OFFLINE".to_string()));
-    }
-
-    /// P0-1 回归：同一队列长度（直连调试的 14.9 万条）在有无北向消费者时
-    /// 必须给出不同结论——无消费者只是本地历史存量（warning），
-    /// 有消费者才是背压（critical）。
-    #[test]
-    fn queue_problem_uses_single_health_verdict() {
-        // 无消费者 + 149_668 条：warning，且不是背压
-        let no_consumer = HealthProblemInput {
-            mqtt_configured: false,
-            mqtt_connected: true,
-            has_north_consumer: false,
-            queue_len: 149_668,
-            ota_state: "Idle",
-            buses: &[],
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        let got = codes(&no_consumer);
-        assert!(got.contains(&"QUEUE_LOCAL_HISTORY".to_string()));
-        assert!(!got.contains(&"QUEUE_BACKPRESSURE".to_string()));
-
-        // 有消费者 + 同一长度：critical 背压
-        let with_consumer = HealthProblemInput {
-            mqtt_configured: true,
-            mqtt_connected: true,
-            has_north_consumer: true,
-            queue_len: 149_668,
-            ota_state: "Idle",
-            buses: &[],
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        let got = codes(&with_consumer);
-        assert!(got.contains(&"QUEUE_BACKPRESSURE".to_string()));
-    }
-
-    /// 语义拆分回归：内置模拟消费者**没有 MQTT 客户端**，但它照样 dequeue → ack
-    /// 队列。因此队列等级判定必须看 `has_north_consumer`，不能看 `mqtt_configured`
-    /// ——否则「有消费者在消费」会被误判成「本地历史存量」。
-    #[test]
-    fn sim_consumer_without_mqtt_still_counts_as_consumer() {
-        let input = HealthProblemInput {
-            mqtt_configured: false,
-            mqtt_connected: false,
-            // 模拟消费者在跑，但没配 MQTT
-            has_north_consumer: true,
-            queue_len: 149_668,
-            ota_state: "Idle",
-            buses: &[],
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        let got = codes(&input);
-        assert!(
-            got.contains(&"QUEUE_BACKPRESSURE".to_string()),
-            "有消费者时必须是背压: {:?}",
-            got
-        );
-        assert!(
-            !got.contains(&"QUEUE_LOCAL_HISTORY".to_string()),
-            "有消费者时不得报本地历史存量: {:?}",
-            got
-        );
-        // 没配 MQTT 就不该报 MQTT 断开
-        assert!(!got.contains(&"MQTT_DISCONNECTED".to_string()));
-    }
-
-    /// 反向回归：MQTT 客户端存在但队列无消费者时（MQTT publish 循环尚未起，
-    /// 或已被停用），存量仍是本地历史语义——两个语义各自独立生效。
-    #[test]
-    fn mqtt_configured_without_consumer_keeps_local_history_semantics() {
-        let input = HealthProblemInput {
-            mqtt_configured: true,
-            mqtt_connected: true,
-            has_north_consumer: false,
-            queue_len: 149_668,
-            ota_state: "Idle",
-            buses: &[],
-            disk_level: DiskLevel::Ok,
-            disk_free_pct: Some(50.0),
-        };
-        let got = codes(&input);
-        assert!(got.contains(&"QUEUE_LOCAL_HISTORY".to_string()));
-        assert!(!got.contains(&"QUEUE_BACKPRESSURE".to_string()));
-    }
-}
+mod tests;

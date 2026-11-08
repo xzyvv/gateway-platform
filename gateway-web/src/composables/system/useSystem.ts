@@ -24,7 +24,7 @@ import { statusTagType, type TagType } from '@/utils/statusType'
  * 把 System.vue 中的所有状态（status/version/ntp/metrics/loading/auditEntries/
  * sessionList/webhookUrl/diagLoading/backupLoading/lastBackup）、computed（metricsHtml/
  * nowTime/metricsText）、格式化函数、所有按钮操作（refresh/syncNtp/saveWebhook/testWebhook/
- * genDiagnostic/doBackup/onRestoreFile/revokeSession/retryAllDlq）集中到一个
+ * genDiagnostic/doBackup/onRestoreFile/revokeSession/retryAllNotify）集中到一个
  * composable，主组件只剩 template。
  */
 export function useSystem() {
@@ -56,8 +56,9 @@ export function useSystem() {
       ElMessage.warning('发送失败，请检查 URL')
     }
   }
-  async function retryAllDlq() {
-    const r = await webhook.retryAllDeadLetters()
+  /** 重发本机通知重试队列（非设备端死信） */
+  async function retryAllNotify() {
+    const r = await webhook.retryAllNotify()
     ElMessage.success(`重发完成：成功 ${r.ok}，失败 ${r.fail}`)
   }
 
@@ -255,7 +256,7 @@ export function useSystem() {
     // audit（后端日志，只读）
     auditEntries, refreshAudit,
     // webhook
-    webhook, webhookUrl, saveWebhook, testWebhook, retryAllDlq,
+    webhook, webhookUrl, saveWebhook, testWebhook, retryAllNotify,
     // sessions
     sessionList, revokeSession,
     // status / version / ntp / metrics

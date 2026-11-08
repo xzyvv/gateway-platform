@@ -112,7 +112,7 @@ GitHub Actions 直接调用它（不在 `ci.yml` 里内联同一串命令），�
 | 前端类型 | `npm run type-check` | vue-tsc |
 | 前端单测 | `npm run test:coverage` | vitest + 覆盖率阈值（**默认全量口径**，新增无测试文件同样计入） |
 | 包体积 | `npm run check:bundle` | 前端产物体积预算 |
-| API 面 | `python scripts/gen_api_surface.py --check` | 新增/删除端点需同步快照 |
+| API 面 | `python scripts/gen_api_surface.py --check` | 新增/删除端点需同步快照；同一 URL 前缀只能有一个 `routes.rs` 注册点（前缀归属校验） |
 | ts-rs 绑定 | `npm run types:check` | Rust 导出的 TS 类型需同步 |
 | 仓库健康度 | `pwsh scripts/check_repo_health.ps1` | 仓库卫生 |
 

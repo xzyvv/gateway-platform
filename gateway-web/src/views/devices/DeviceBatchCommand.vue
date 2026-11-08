@@ -323,7 +323,7 @@ async function runRead(): Promise<BatchItemResult[]> {
   )
 }
 
-/** 批量写入：一次 POST /api/points/write，后端按条目数分派（≥2 条按总线分组下发） */
+/** 批量写入：一次 POST /api/point-tools/write，后端按条目数分派（≥2 条按总线分组下发） */
 async function runWrite(): Promise<BatchItemResult[]> {
   const value = Number(writeValue.value)
   if (!Number.isFinite(value)) throw new Error('写入值必须是数字')

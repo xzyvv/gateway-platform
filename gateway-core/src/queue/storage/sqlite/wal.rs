@@ -190,7 +190,7 @@ mod tests {
     fn check_wal_size_small_file_silent() {
         let metrics = Arc::new(Metrics::new());
         let mut conn = Connection::open_in_memory().expect("open in-memory");
-        let dir = tempdir_unique();
+        let (_dir, dir) = tempdir_unique();
         let wal = dir.join("test.db-wal");
         std::fs::write(&wal, b"x").expect("write");
         let before_warn = metrics
@@ -212,7 +212,6 @@ mod tests {
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(before_warn, after_warn, "1B file should not warn");
         assert_eq!(before_ckpt, after_ckpt, "1B file should not checkpoint");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// r42-Q2 回归：WAL 路径必须是主库路径 + "-wal"（字符串后缀），
@@ -239,7 +238,7 @@ mod tests {
     /// r42-Q3 回归：启动备份必须先 checkpoint，否则漏掉 -wal 中已提交但未落主库的行。
     #[test]
     fn r42_backup_db_consistent_includes_wal_rows() {
-        let dir = tempdir_unique();
+        let (_dir, dir) = tempdir_unique();
         let db = dir.join("q.db");
         let bak = dir.join("q.db.bak");
         let mut conn = Connection::open(&db).expect("open db");
@@ -255,17 +254,11 @@ mod tests {
             .query_row("SELECT x FROM t", [], |r| r.get(0))
             .expect("read row from backup");
         assert_eq!(v, 7, "备份必须包含 -wal 中已提交的行");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn tempdir_unique() -> std::path::PathBuf {
-        let base = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let p = base.join(format!("gateway-wal-test-{}", nanos));
-        std::fs::create_dir_all(&p).expect("mkdir");
-        p
+    fn tempdir_unique() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().to_path_buf();
+        (dir, path)
     }
 }

@@ -170,7 +170,7 @@ impl Metrics {
 
     /// 记录一次点位写入结果（下行写入口调用）。
     ///
-    /// 调用点：`POST /api/points/write`（第 1 期冗余收口后统一为单入口）、
+    /// 调用点：`POST /api/point-tools/write`（第 1 期冗余收口后统一为单入口）、
     /// `POST /api/devices/control/send`、`POST /api/io/:index`。
     /// 写失败此前在运行指标上完全不可见（Dashboard 的 write_error 恒 0），
     /// 现场无法区分「没人下发」与「下发了但全失败」。
@@ -225,6 +225,117 @@ impl Metrics {
         self.alarm
             .disk_triggers_total
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 记录一次队列容量淘汰告警（`spawn_backlog_alarm_monitor` 观测到淘汰增量时调用）。
+    ///
+    /// 不与 `inc_alarm_trigger` 混用：那个是"测点越限"，累加 `daily_alerts`；
+    /// 淘汰是"网关主动删了数据"，性质完全不同，混入会让「今日告警」口径失真。
+    pub fn inc_queue_eviction_alarm_trigger(&self) {
+        self.alarm
+            .queue_eviction_triggers_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 记录队列因容量上限淘汰的行数（`enforce_queue_limit` 实际删除后调用）。
+    ///
+    /// `rows` 为本次物理删除的行数，`undelivered` 为其中 `delivered=0` 的条数。
+    /// 单机网关没有异地副本，这个累计值就是"到底丢了多少数据"的唯一凭据，
+    /// 因此除了打日志，必须同时进指标（Prometheus）与健康口径（前端红标）。
+    pub fn add_queue_evicted(&self, rows: i64, undelivered: i64) {
+        if rows > 0 {
+            self.queue_persist
+                .evicted_rows
+                .fetch_add(rows as u64, Ordering::Relaxed);
+        }
+        if undelivered > 0 {
+            self.queue_persist
+                .evicted_undelivered_rows
+                .fetch_add(undelivered as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// 刷新死信表当前行数（gauge）。由 webhook 维护循环周期调用。
+    pub fn set_dead_letter_rows(&self, rows: i64) {
+        self.alarm
+            .dead_letter_rows
+            .store(rows.max(0) as u64, Ordering::Relaxed);
+    }
+
+    /// 记录搬入死信表的行数（`move_to_dead_letter` / 批量搬移成功后调用）。
+    pub fn add_dead_letter_moved(&self, rows: i64) {
+        if rows > 0 {
+            self.alarm
+                .dead_letter_moved_total
+                .fetch_add(rows as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// 记录因行数上限被永久裁剪的死信行数。
+    pub fn add_dead_letter_trimmed(&self, rows: i64) {
+        if rows > 0 {
+            self.alarm
+                .dead_letter_trimmed_total
+                .fetch_add(rows as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// 记录一次自动裁剪：累计条数 + 「上次裁剪时间/条数」快照。
+    ///
+    /// 裁剪是后台自动行为、没有操作人，审计只能靠「何时丢了、丢了多少」这两个
+    /// 事实回溯；累计值回答不了"上次是什么时候"，因此单独存一份快照。
+    pub fn record_dead_letter_trim(&self, rows: i64) {
+        if rows <= 0 {
+            return;
+        }
+        self.add_dead_letter_trimmed(rows);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.alarm
+            .dead_letter_last_trim_ms
+            .store(now_ms, Ordering::Relaxed);
+        self.alarm
+            .dead_letter_last_trim_rows
+            .store(rows as u64, Ordering::Relaxed);
+    }
+
+    /// 人工重投成功一次。
+    pub fn inc_dead_letter_replay(&self) {
+        self.alarm
+            .dead_letter_replay_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 重投未生效（API 409）一次。
+    pub fn inc_dead_letter_replay_conflict(&self) {
+        self.alarm
+            .dead_letter_replay_conflict_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 人工清理删除的死信条数。
+    pub fn add_dead_letter_purged(&self, rows: u64) {
+        if rows > 0 {
+            self.alarm
+                .dead_letter_purged_total
+                .fetch_add(rows, Ordering::Relaxed);
+        }
+    }
+
+    /// 自动裁剪的累计条数、上次裁剪时间（ms）、上次裁剪条数。
+    ///
+    /// 供死信查询接口随列表一起返回，让界面能提示"表已被自动裁剪过"——
+    /// 否则运维只看到一张"正常"的表，不知道更早的数据已经没了。
+    pub fn dead_letter_trim_stats(&self) -> (u64, u64, u64) {
+        (
+            self.alarm.dead_letter_trimmed_total.load(Ordering::Relaxed),
+            self.alarm.dead_letter_last_trim_ms.load(Ordering::Relaxed),
+            self.alarm
+                .dead_letter_last_trim_rows
+                .load(Ordering::Relaxed),
+        )
     }
 
     /// 记录内置模拟消费者成功消费的条数（`SimConsumer` 记账时调用）。

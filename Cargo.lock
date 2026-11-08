@@ -1985,6 +1985,7 @@ dependencies = [
  "gateway-api",
  "gateway-core",
  "parking_lot",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

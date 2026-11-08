@@ -223,22 +223,14 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use tempfile::TempDir;
 
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_store() -> (QualityRuleStore, PathBuf) {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "quality_rule_store_test_{}_{}",
-            std::process::id(),
-            n
-        ));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let db = dir.join("test.db");
+    fn temp_store() -> (QualityRuleStore, TempDir) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db = dir.path().join("test.db");
         (
             QualityRuleStore::new(db.to_str().expect("utf8")).expect("new"),
-            db,
+            dir,
         )
     }
 
@@ -261,7 +253,7 @@ mod tests {
     /// CRUD 往返：创建 → 列出 → 更新 → 删除，字段（含可选数值）完整保留。
     #[test]
     fn rule_crud_roundtrip() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         let created = store.create_rule(sample_rule()).expect("create");
         assert!(created.id.starts_with("qr_"), "id 应为 qr_ 前缀");
         assert!(created.created_at > 0);
@@ -296,14 +288,12 @@ mod tests {
         assert!(store.delete_rule(&created.id).expect("delete"));
         assert!(store.list_rules().expect("list").is_empty());
         assert!(!store.delete_rule("qr_nonexistent").expect("delete none"));
-
-        let _ = std::fs::remove_file(&db);
     }
 
     /// enabled 过滤：仅启用规则的快照入口不返回停用规则。
     #[test]
     fn enabled_filter() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         let a = store.create_rule(sample_rule()).expect("create a");
         let mut b = sample_rule();
         b.name = "停用规则".into();
@@ -314,7 +304,5 @@ mod tests {
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].id, a.id);
         assert!(enabled.iter().all(|r| r.id != b.id));
-
-        let _ = std::fs::remove_file(&db);
     }
 }

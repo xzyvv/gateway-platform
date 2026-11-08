@@ -46,6 +46,31 @@ struct NorthFeedStats {
 pub struct NorthFeedStatsSnapshot {
     pub sent_batches: u64,
     pub backpressure_events: u64,
+    /// 队列容量（可容纳的批数）。
+    pub capacity: usize,
+    /// 当前积压批数（`capacity - 剩余槽位`）：判断「上游投递快于下游消费」的直接依据。
+    pub pending_batches: usize,
+}
+
+impl NorthFeedStatsSnapshot {
+    /// 转成 Prometheus 文本片段。
+    ///
+    /// 抓取时实时计算（`/apin` 直接读发送端计数器），不需要后台采样任务：
+    /// 采样任务在停机时还得额外收口，而这里的读取本身是无锁原子操作。
+    pub fn prometheus_lines(&self) -> String {
+        format!(
+            "# HELP gateway_north_feed_pending_batches North feed queue depth (batches)\n\
+             # TYPE gateway_north_feed_pending_batches gauge\n\
+             gateway_north_feed_pending_batches {}\n\
+             # TYPE gateway_north_feed_capacity_batches gauge\n\
+             gateway_north_feed_capacity_batches {}\n\
+             # TYPE gateway_north_feed_sent_batches_total counter\n\
+             gateway_north_feed_sent_batches_total {}\n\
+             # TYPE gateway_north_feed_backpressure_events_total counter\n\
+             gateway_north_feed_backpressure_events_total {}\n",
+            self.pending_batches, self.capacity, self.sent_batches, self.backpressure_events
+        )
+    }
 }
 
 impl NorthSender {
@@ -76,9 +101,13 @@ impl NorthSender {
 
     /// 统计快照。
     pub fn stats(&self) -> NorthFeedStatsSnapshot {
+        let capacity = self.tx.max_capacity();
+        let remaining = self.tx.capacity();
         NorthFeedStatsSnapshot {
             sent_batches: self.stats.sent_batches.load(Ordering::Relaxed),
             backpressure_events: self.stats.backpressure_events.load(Ordering::Relaxed),
+            capacity,
+            pending_batches: capacity.saturating_sub(remaining),
         }
     }
 
@@ -158,11 +187,43 @@ mod tests {
 
         let tx = producer.await.expect("producer 任务 panic");
         assert_eq!(received.len() as u64, total, "背压期间不得丢批");
+        let stats = tx.stats();
         assert!(
-            tx.stats().backpressure_events > 0,
+            stats.backpressure_events > 0,
             "容量 1 + 慢消费应至少触发一次背压"
         );
-        assert_eq!(tx.stats().sent_batches, total);
+        assert_eq!(stats.sent_batches, total);
+        // 消费端取空后积压应归零，容量等于构造时传入的值。
+        assert_eq!(stats.capacity, 1);
+        assert_eq!(stats.pending_batches, 0, "全部消费后不得残留积压");
+    }
+
+    /// Prometheus 输出必须带齐 4 个指标名与当前值（Grafana 依赖固定名字）。
+    #[test]
+    fn prometheus_lines_expose_all_counters() {
+        let snapshot = NorthFeedStatsSnapshot {
+            sent_batches: 3,
+            backpressure_events: 2,
+            capacity: 10,
+            pending_batches: 4,
+        };
+        let text = snapshot.prometheus_lines();
+        assert!(
+            text.contains("gateway_north_feed_pending_batches 4"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gateway_north_feed_capacity_batches 10"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gateway_north_feed_sent_batches_total 3"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gateway_north_feed_backpressure_events_total 2"),
+            "{text}"
+        );
     }
 
     /// 接收端 drop 后 send 返回错误（供 pipeline 在停机窗口记录告警）。

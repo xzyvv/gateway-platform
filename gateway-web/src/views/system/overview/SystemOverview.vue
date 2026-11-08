@@ -144,24 +144,16 @@
           </div>
         </el-card>
 
-        <el-card shadow="never" class="section-card">
-          <template #header>
-            <SectionHeader title="Webhook 死信队列" icon="Bell">
-              <template #extra>
-                <el-tag type="danger" effect="dark" round size="small">{{ webhook.deadLetterQueue.value.length }} 条</el-tag>
-              </template>
-            </SectionHeader>
-          </template>
-          <div class="dlq-actions">
-            <el-button size="small" type="primary" :disabled="!webhook.deadLetterQueue.value.length" @click="retryAllDlq">
-              <el-icon><Promotion /></el-icon> 全部重发
-            </el-button>
-            <el-button size="small" type="danger" :disabled="!webhook.deadLetterQueue.value.length" @click="webhook.clearDeadLetters()">
-              <el-icon><Delete /></el-icon> 清空
-            </el-button>
-          </div>
-          <DataTable :data="dlqRows" :columns="dlqColumns" row-key="id" stripe style="margin-top: 10px" empty-text="暂无死信队列数据" />
-        </el-card>
+        <!-- 设备端真实死信：数据在网关本地，换电脑仍然存在（与下方本机通知队列严格区分） -->
+        <DeviceDeadLetterPanel />
+
+        <!-- 本机浏览器通知重试项：不是设备数据死信，不随设备迁移 -->
+        <LocalNotifyQueuePanel
+          :items="notifyQueueRows"
+          @retry="webhook.retryNotify"
+          @retry-all="retryAllNotify"
+          @clear="webhook.clearNotifyQueue()"
+        />
 
         <el-card shadow="never" class="section-card">
           <template #header>
@@ -280,6 +272,8 @@ import { formatDateTime } from '@/utils/datetime'
 import HealthStatus from '@/views/overview/HealthStatus.vue'
 import HealthProblemList from '@/views/ops/health/HealthProblemList.vue'
 import HealthConclusionBar from '@/components/HealthConclusionBar.vue'
+import DeviceDeadLetterPanel from '@/views/uplink/components/DeviceDeadLetterPanel.vue'
+import LocalNotifyQueuePanel from './components/LocalNotifyQueuePanel.vue'
 
 const activeTab = ref('status')
 
@@ -295,7 +289,7 @@ function goNorthStatus() {
 
 const {
   auditEntries, refreshAudit,
-  webhook, webhookUrl, saveWebhook, testWebhook, retryAllDlq,
+  webhook, webhookUrl, saveWebhook, testWebhook, retryAllNotify,
   sessionList, revokeSession,
   status, version, ntp, loading,
   healthRows, healthProblems, healthLoading, healthOverallStatus,
@@ -315,28 +309,10 @@ const auditColumns: ColumnDef<AuditLogEntry>[] = [
 ]
 
 /**
- * 死信队列行类型：QueuedEvent 未从 useWebhook 导出，这里按列所需字段结构性声明，
- * 避免泛型 T 推断不一致；`webhook.deadLetterQueue.value` 表达式保持原样。
+ * 本机通知重试队列（localStorage）：只做展示，重试/清空仍由 useWebhook 负责。
+ * 与设备端死信（DeviceDeadLetterPanel）是两件不同的事，勿混用文案。
  */
-interface DlqRow {
-  id: string
-  payload: { event: string; message: string }
-  retryCount: number
-  lastError?: string
-}
-const dlqRows = computed(() => webhook.deadLetterQueue.value as DlqRow[])
-
-// 表格统一走 DataTable：三张表行数均有限，默认走 el-table，超阈值自动切虚拟滚动
-const dlqColumns: ColumnDef<DlqRow>[] = [
-  { key: 'payload.event', title: '事件', width: 140, cell: (row) => row.payload.event },
-  { key: 'payload.message', title: '消息', minWidth: 200, ellipsis: true, cell: (row) => row.payload.message },
-  { key: 'retryCount', title: '重试次数', width: 90 },
-  { key: 'lastError', title: '错误', minWidth: 160, ellipsis: true },
-  actionColumn<DlqRow>({
-    width: 90,
-    cell: (row) => h(ElButton, { size: 'small', type: 'primary', link: true, onClick: () => webhook.retryDeadLetter(row.id) }, () => '重发'),
-  }),
-]
+const notifyQueueRows = computed(() => webhook.notifyRetryQueue.value)
 
 const sessionColumns: ColumnDef<LoginSession>[] = [
   { key: 'loginAt', title: '登录时间', width: 170, cell: (row) => formatDateTime(row.loginAt) },

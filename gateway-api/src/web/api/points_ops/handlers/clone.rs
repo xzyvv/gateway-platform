@@ -4,7 +4,7 @@
 //!
 //! D-02：原 `GET /api/points/clone/sources` 与 `/clone/targets` 逐行等价
 //! （同一份设备列表、同一份 point_count 统计，仅响应类型名不同），
-//! 已合并为单一 `GET /api/points/clone/devices`；前端源/目标两个下拉共用同一名单。
+//! 已合并为单一 `GET /api/point-tools/clone/devices`；前端源/目标两个下拉共用同一名单。
 
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ pub(crate) struct CloneApplyRequest {
     pub name_suffix: String,
 }
 
-/// GET /api/points/clone/devices — 克隆源/目标设备名单
+/// GET /api/point-tools/clone/devices — 克隆源/目标设备名单
 pub(crate) async fn clone_devices(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<CloneDevice>>>, ApiError> {

@@ -6,7 +6,7 @@
 //! 与 Modbus/DLT645/CJT188 不同：GPIO 不需要 BusManager，
 //! 直接通过 `platform::gpio` 访问 gpiochip。bootstrap 在 `init_collectors`
 //! 中按 bus_name 单独构造注册（复用 `Collector::write` 后，点位写 API /
-//! `/api/points/write` 按总线名查到的就是本采集器，DO 写由此闭环）。
+//! `/api/point-tools/write` 按总线名查到的就是本采集器，DO 写由此闭环）。
 //!
 //! # 地址约定
 //!

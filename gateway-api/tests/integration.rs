@@ -133,7 +133,7 @@ mod ts_bindings_e2e {
 // ============================================================
 // 通过 mock_state 构造 AppState（4 个关键字段注入 mock），
 // 调用 web::build_router 构造路由，用 tower::ServiceExt::oneshot 发请求。
-// 验证：写入路由（POST /api/points/batch）未携带 token 时返回 401。
+// 验证：写入路由（POST /api/point-tools/batch）未携带 token 时返回 401。
 
 mod auth_integration {
     use super::common::mock_state::mock_app_state;
@@ -149,7 +149,7 @@ mod auth_integration {
         let app = build_router(state);
         let req = Request::builder()
             .method("POST")
-            .uri("/api/points/batch")
+            .uri("/api/point-tools/batch")
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(req).await.unwrap();
@@ -164,7 +164,7 @@ mod auth_integration {
         let app = build_router(state.clone());
         let req = Request::builder()
             .method("POST")
-            .uri("/api/points/batch")
+            .uri("/api/point-tools/batch")
             .header("authorization", "Bearer test-token-0123456789abcdef")
             .body(Body::empty())
             .unwrap();
@@ -183,7 +183,7 @@ mod auth_integration {
         let app = build_router(state);
         let req = Request::builder()
             .method("POST")
-            .uri("/api/points/batch")
+            .uri("/api/point-tools/batch")
             .header("authorization", "Bearer wrong-token-xxxxxxxxxxxx")
             .body(Body::empty())
             .unwrap();
@@ -214,7 +214,8 @@ mod find_replace_failure {
     #[tokio::test]
     async fn apply_reports_error_when_config_cannot_be_saved() {
         // 造一个「父路径为普通文件」的非法配置路径：写盘必然失败
-        let blocker = std::env::temp_dir().join("gateway_find_replace_blocker");
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let blocker = tmp.path().join("not_a_dir");
         std::fs::write(&blocker, b"not a directory").unwrap();
         let bad_path = blocker.join("config.json");
 
@@ -227,7 +228,7 @@ mod find_replace_failure {
 
         let req = Request::builder()
             .method("POST")
-            .uri("/api/points/find-replace/apply")
+            .uri("/api/point-tools/find-replace/apply")
             .header("authorization", "Bearer test-token-0123456789abcdef")
             .header("content-type", "application/json")
             .body(Body::from(
@@ -603,7 +604,7 @@ mod validation_integration {
         }]);
         let req = Request::builder()
             .method("POST")
-            .uri("/api/points/batch")
+            .uri("/api/point-tools/batch")
             .header("authorization", "Bearer test-token-0123456789abcdef")
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
@@ -923,10 +924,10 @@ mod readonly_routes_e2e {
 }
 
 // ============================================================
-// 点位写接口（POST /api/points/write）集成测试
+// 点位写接口（POST /api/point-tools/write）集成测试
 // ============================================================
-// 第 1 期冗余收口：原 `POST /api/points/:id/write` 与 `POST /api/points/write-batch`
-// 已删除，写入统一走 `POST /api/points/write`（1 条走单写、≥2 条走批写）。
+// 第 1 期冗余收口：原 `POST /api/points/:id/write` 与 `POST /api/point-tools/write-batch`
+// 已删除，写入统一走 `POST /api/point-tools/write`（1 条走单写、≥2 条走批写）。
 // 须验证：写路由鉴权 fail-closed、点位/collector 不存在返回 404、
 // 写成功返回 {status:"ok"}、写失败返回 code=5101、并落审计 point.write。
 
@@ -971,7 +972,7 @@ mod point_write_integration {
     fn write_req(point_id: &str, value: f64, token: Option<&str>) -> Request<Body> {
         let mut builder = Request::builder()
             .method("POST")
-            .uri("/api/points/write")
+            .uri("/api/point-tools/write")
             .header("content-type", "application/json");
         if let Some(t) = token {
             builder = builder.header("authorization", t);
@@ -1111,7 +1112,7 @@ mod point_write_integration {
         let app = build_router(state);
         let req = Request::builder()
             .method("POST")
-            .uri("/api/points/write")
+            .uri("/api/point-tools/write")
             .header("content-type", "application/json")
             .header("authorization", TOKEN)
             .body(Body::from(
@@ -1323,15 +1324,15 @@ mod config_backup_integration {
 }
 
 // ============================================================
-// 批量写点位（POST /api/points/write，≥2 条走批写分支）集成测试
+// 批量写点位（POST /api/point-tools/write，≥2 条走批写分支）集成测试
 // ============================================================
 // 决策表 #1：Modbus FC15/FC16 多点写入口的 API 层。按 bus 分组调用
 // Collector::write_multi（支持批量写的协议减少事务数，其余走默认逐点扇出）。
 // 须验证：写路由鉴权 fail-closed、空 writes 返回 400、全成功/部分失败/全失败
 // 三种 status、results 与入参逐位对应、以及成功项落审计 point.write。
 //
-// 第 1 期冗余收口：原 `POST /api/points/write-batch` 已删除，批写统一走
-// `POST /api/points/write`（≥2 条自动走批写分支）。故本模块所有请求
+// 第 1 期冗余收口：原 `POST /api/point-tools/write-batch` 已删除，批写统一走
+// `POST /api/point-tools/write`（≥2 条自动走批写分支）。故本模块所有请求
 // 均提交 ≥2 条 writes，确保进入批写语义。
 
 mod point_write_multi_integration {
@@ -1372,7 +1373,7 @@ mod point_write_multi_integration {
     fn batch_req(body: &str, token: Option<&str>) -> Request<Body> {
         let mut b = Request::builder()
             .method("POST")
-            .uri("/api/points/write")
+            .uri("/api/point-tools/write")
             .header("content-type", "application/json");
         if let Some(t) = token {
             b = b.header("authorization", t);
@@ -1655,7 +1656,7 @@ mod point_trash_integration {
         // 2) 列表
         let res = app
             .clone()
-            .oneshot(req("GET", "/api/points/trash", Some(TOKEN), None))
+            .oneshot(req("GET", "/api/point-trash", Some(TOKEN), None))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -1748,7 +1749,7 @@ mod point_trash_integration {
         // 单条彻底删除
         let res = app
             .clone()
-            .oneshot(req("DELETE", "/api/points/trash/p1", Some(TOKEN), None))
+            .oneshot(req("DELETE", "/api/point-trash/p1", Some(TOKEN), None))
             .await
             .unwrap();
         assert_eq!(body_json(res).await["code"], 0);
@@ -1763,7 +1764,7 @@ mod point_trash_integration {
         // 彻底删除不存在的条目 → 4004
         let res = app
             .clone()
-            .oneshot(req("DELETE", "/api/points/trash/nope", Some(TOKEN), None))
+            .oneshot(req("DELETE", "/api/point-trash/nope", Some(TOKEN), None))
             .await
             .unwrap();
         assert_eq!(body_json(res).await["code"], 4004);
@@ -1771,7 +1772,7 @@ mod point_trash_integration {
         // 清空回收站
         let res = app
             .clone()
-            .oneshot(req("DELETE", "/api/points/trash", Some(TOKEN), None))
+            .oneshot(req("DELETE", "/api/point-trash", Some(TOKEN), None))
             .await
             .unwrap();
         assert_eq!(body_json(res).await["code"], 0);
@@ -1788,14 +1789,14 @@ mod point_trash_integration {
         let res = app
             .oneshot(req(
                 "POST",
-                "/api/points/batch",
+                "/api/point-tools/batch",
                 Some(TOKEN),
                 Some(r#"{"action":"edit","delete":["p1"]}"#),
             ))
             .await
             .unwrap();
         let v = body_json(res).await;
-        // R3：/api/points/batch 已合并 batch/edit，edit 分支仍走统一 ApiResponse 信封
+        // R3：/api/point-tools/batch 已合并 batch/edit，edit 分支仍走统一 ApiResponse 信封
         assert_eq!(v["data"]["deleted"], 1, "deleted 计数语义不变, got {v}");
 
         let cfg = state.config.load_full().as_ref().clone();
@@ -1829,7 +1830,7 @@ mod point_trash_integration {
 
         let app = build_router(state);
         let res = app
-            .oneshot(req("GET", "/api/points/trash", Some(TOKEN), None))
+            .oneshot(req("GET", "/api/point-trash", Some(TOKEN), None))
             .await
             .unwrap();
         let v = body_json(res).await;
@@ -1842,13 +1843,110 @@ mod point_trash_integration {
         assert_eq!(ids, vec!["new", "mid", "old"]);
     }
 
+    /// 回归：点位 id 恰好为 `trash` 时，`DELETE /api/points/trash` 必须删除该点位，
+    /// 而不是命中「清空回收站」——静态段 `trash` 与参数段 `:id` 的遮蔽曾导致
+    /// 「想删一个点位，结果把回收站清空」。
+    ///
+    /// 修复方式：回收站接口整体迁到 `/api/point-trash*`，`/api/points` 下不再有
+    /// `trash` 静态段，`:id` 对任意 id 一致生效。
+    #[tokio::test]
+    async fn delete_point_with_id_trash_does_not_purge_trash() {
+        let state = mock_app_state();
+        let mut cfg = state.config.load_full().as_ref().clone();
+        cfg.points = vec![test_point("trash"), test_point("p2")];
+        // 回收站里预置一条无关记录：若被清空，说明命中了「清空回收站」处理器。
+        // 时间必须落在 TTL（30 天）内，否则会被 push_trash 的过期清理顺手删掉，
+        // 让本用例失去区分力。
+        let recent_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        cfg.point_trash = Some(vec![PointTrashEntry {
+            point: test_point("keep"),
+            deleted_at_ms: recent_ms - 1_000,
+        }]);
+        state.config.store(Arc::new(cfg));
+        let app = build_router(state.clone());
+
+        let res = app
+            .oneshot(req("DELETE", "/api/points/trash", Some(TOKEN), None))
+            .await
+            .unwrap();
+        assert_eq!(body_json(res).await["code"], 0);
+
+        let cfg = state.config.load_full().as_ref().clone();
+        assert_eq!(
+            cfg.points.len(),
+            1,
+            "只应删除 id=trash 的点位: {:?}",
+            cfg.points
+        );
+        assert_eq!(cfg.points[0].id, "p2");
+        let ids: Vec<&str> = cfg
+            .point_trash
+            .as_ref()
+            .expect("回收站应仍存在")
+            .iter()
+            .map(|e| e.point.id.as_str())
+            .collect();
+        assert!(ids.contains(&"keep"), "原有回收站条目不能被清空: {ids:?}");
+        assert!(ids.contains(&"trash"), "被删除的点位应进入回收站: {ids:?}");
+    }
+
+    /// 回归：点位 id 恰好叫保留字（`write`/`batch`/`virtual`/`offset`/`clone`/
+    /// `find-replace`）时仍能被删除。
+    ///
+    /// 迁移前这些词都是 `/api/points` 下的静态段，而 matchit **静态段优先且不回落**：
+    /// `DELETE /api/point-tools/virtual` 会命中虚拟点位节点并返回 405；`clone` 更糟——
+    /// 该节点只是路径前缀（只有 `clone/devices`、`clone/apply` 两个子路由），
+    /// 请求直接 404。两种结果都意味着这批点位在管理端「删不掉」。
+    ///
+    /// 修复方式：工具端点整体迁到 `/api/point-tools/*`，`/api/points` 下除 `:id` 外
+    /// 不再注册任何静态段（理由见 `web/api/points/routes.rs` 文件头）。
+    #[tokio::test]
+    async fn point_ids_shadowed_by_static_segments_are_deletable() {
+        for id in [
+            "write",
+            "batch",
+            "virtual",
+            "offset",
+            "clone",
+            "find-replace",
+        ] {
+            let state = mock_app_state();
+            store_points(&state, vec![test_point(id), test_point("p2")]);
+            let app = build_router(state.clone());
+
+            let res = app
+                .oneshot(req(
+                    "DELETE",
+                    &format!("/api/points/{id}"),
+                    Some(TOKEN),
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "id={id} 的删除请求被静态段遮蔽（期望 200，实际 {}）",
+                res.status()
+            );
+            assert_eq!(body_json(res).await["code"], 0, "id={id} 删除失败");
+
+            let cfg = state.config.load_full().as_ref().clone();
+            let left: Vec<&str> = cfg.points.iter().map(|p| p.id.as_str()).collect();
+            assert_eq!(left, vec!["p2"], "id={id} 删除后应只剩 p2");
+        }
+    }
+
     /// 回收站写路由必须要求 token（fail-closed）
     #[tokio::test]
     async fn trash_write_routes_require_token() {
         let app = build_router(mock_app_state());
         for (method, uri) in [
-            ("DELETE", "/api/points/trash"),
-            ("DELETE", "/api/points/trash/p1"),
+            ("DELETE", "/api/point-trash"),
+            ("DELETE", "/api/point-trash/p1"),
             ("POST", "/api/points/p1/restore"),
         ] {
             let res = app

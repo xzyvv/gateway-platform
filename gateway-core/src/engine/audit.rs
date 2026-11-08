@@ -353,17 +353,12 @@ fn read_tail_lines(path: &PathBuf, max_bytes: u64) -> std::io::Result<Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use tempfile::TempDir;
 
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_log_path() -> PathBuf {
-        let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!(
-            "gateway_audit_test_{}_{}.log",
-            std::process::id(),
-            n
-        ))
+    fn temp_log_path() -> (TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("audit.log");
+        (dir, path)
     }
 
     /// 回归（读后写竞态）：`log()` 只把日志异步入队，`list()` 却直接读文件。
@@ -372,8 +367,7 @@ mod tests {
     /// 修复后 `list()` 读文件前先同步落盘，故哨兵必然可见。
     #[test]
     fn list_sees_entry_logged_immediately_before_query() {
-        let path = temp_log_path();
-        let _ = std::fs::remove_file(&path);
+        let (_dir, path) = temp_log_path();
         let log = AuditLog::new(path.clone());
 
         // 先灌入一批记录制造写入积压（异步入队远快于逐条落盘）。
@@ -398,7 +392,6 @@ mod tests {
             .expect("list audit log");
 
         drop(log);
-        let _ = std::fs::remove_file(&path);
         assert_eq!(
             entries.len(),
             1,
@@ -416,8 +409,7 @@ mod tests {
     /// 3. 过滤查询仍能找到"在尾部范围内"的记录
     #[test]
     fn list_truncates_when_file_exceeds_max_read_bytes() {
-        let path = temp_log_path();
-        let _ = std::fs::remove_file(&path);
+        let (_dir, path) = temp_log_path();
 
         // 直接写入大文件：~6_000 行 × ~1.8 KB ≈ 10.8 MiB，超过 8 MiB 上限
         // 用单一 record 字符串足够大以确保每行 KB 级
@@ -472,15 +464,12 @@ mod tests {
             total,
             MAX_READ_BYTES
         );
-
-        let _ = std::fs::remove_file(&path);
     }
 
     /// r22-AUDIT1 边界：文件不存在时 `list()` 不应返回错误。
     #[test]
     fn list_returns_empty_when_file_missing() {
-        let path = temp_log_path();
-        let _ = std::fs::remove_file(&path);
+        let (_dir, path) = temp_log_path();
         let log = AuditLog::new(path.clone());
 
         let entries = log
@@ -495,7 +484,6 @@ mod tests {
             .expect("list audit log");
 
         drop(log);
-        let _ = std::fs::remove_file(&path);
         assert!(entries.is_empty(), "文件不存在时 list 应返回空 vec");
     }
 }

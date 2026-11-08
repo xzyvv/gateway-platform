@@ -366,11 +366,9 @@ async fn p15_replay_success_converges_queue_and_outbox() {
     let ids: Vec<i64> = batch.iter().map(|i| i.id).collect();
 
     // outbox 中存有同一批数据（崩溃前 persist 已落盘）
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("mqtt-replay-converge-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    let dir = tempfile::tempdir().expect("create temp dir");
     let outbox = Arc::new(AsyncMutex::new(
-        OutboxStore::open(&dir.join("t.db")).expect("open outbox"),
+        OutboxStore::open(&dir.path().join("t.db")).expect("open outbox"),
     ));
     let oid = outbox
         .lock()
@@ -397,8 +395,6 @@ async fn p15_replay_success_converges_queue_and_outbox() {
         0,
         "outbox record must be acked"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===== r47-MQTT1：outbox 确认/删除命令必须经 channel 入队以保留 pre-ack 跟踪 =====
@@ -416,11 +412,9 @@ async fn p15_replay_success_converges_queue_and_outbox() {
 async fn r47_direct_ack_before_persist_flush_leaves_stale_pending() {
     use tokio::sync::Mutex as AsyncMutex;
 
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("mqtt-r47-stale-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    let dir = tempfile::tempdir().expect("create temp dir");
     let outbox = Arc::new(AsyncMutex::new(
-        OutboxStore::open(&dir.join("t.db")).expect("open outbox"),
+        OutboxStore::open(&dir.path().join("t.db")).expect("open outbox"),
     ));
     let msg = OutgoingMsg {
         data_id: 42,
@@ -442,8 +436,6 @@ async fn r47_direct_ack_before_persist_flush_leaves_stale_pending() {
         "绕过 channel 的 ack 未生效，persist 后留下陈旧 pending（缺陷复现）"
     );
     drop(store);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 修复后：Ack 经 channel 入队，`outbox_writer_loop` 用 pre-ack 标志在 flush 时
@@ -452,11 +444,9 @@ async fn r47_direct_ack_before_persist_flush_leaves_stale_pending() {
 async fn r47_ack_through_channel_prevents_stale_pending() {
     use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("mqtt-r47-channel-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    let dir = tempfile::tempdir().expect("create temp dir");
     let outbox = Arc::new(AsyncMutex::new(
-        OutboxStore::open(&dir.join("t.db")).expect("open outbox"),
+        OutboxStore::open(&dir.path().join("t.db")).expect("open outbox"),
     ));
 
     let (tx, rx) = mpsc::channel::<OutboxCmd>(256);
@@ -487,8 +477,6 @@ async fn r47_ack_through_channel_prevents_stale_pending() {
         0,
         "经 channel 的 ack 必须被 pre-ack 跟踪并随 flush 一并确认，无陈旧 pending"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 队列行已不存在时（数据此前已被 publish_batch 通道 ack），
@@ -500,11 +488,9 @@ async fn p15_replay_converge_is_idempotent_when_queue_rows_gone() {
 
     let queue = Arc::new(DataQueue::new_memory().expect("memory queue"));
 
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("mqtt-replay-converge-idem-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    let dir = tempfile::tempdir().expect("create temp dir");
     let outbox = Arc::new(AsyncMutex::new(
-        OutboxStore::open(&dir.join("t.db")).expect("open outbox"),
+        OutboxStore::open(&dir.path().join("t.db")).expect("open outbox"),
     ));
     let oid = outbox
         .lock()
@@ -527,8 +513,6 @@ async fn p15_replay_converge_is_idempotent_when_queue_rows_gone() {
         0,
         "outbox record must be acked even when queue rows absent"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===== r48-MQTT1：stop() 的 notify_waiters() 丢失唤醒竞态 =====

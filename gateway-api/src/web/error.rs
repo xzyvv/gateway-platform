@@ -57,6 +57,18 @@ impl ApiError {
             message: msg.into(),
         }
     }
+    /// 依赖能力当前不可用（如 outbox 库未打开 → 死信队列无法查询）。
+    ///
+    /// 与 `internal` 的区别：503 表达「服务暂时不具备该能力，重试/排查依赖后
+    /// 可能恢复」，而不是「服务端逻辑出错」。**必须与「查询结果为空」区分开**：
+    /// 对死信这类端点，返回空列表会让运维误判为「没有丢过数据」。
+    pub fn service_unavailable(msg: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: 5003,
+            message: msg.into(),
+        }
+    }
     /// License 未导入（无授权文件时的配额/能力拒绝）
     ///
     /// v2.0 语义：没有 license 文件时按「开源版兜底配额」运行

@@ -427,6 +427,7 @@ fn validate_template(t: &DeviceTemplate) -> GatewayResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     /// 构造最小可工作的 DeviceTemplate（含一个 point "temp"）用于 expand_device 测试。
     ///
@@ -478,25 +479,21 @@ mod tests {
     }
 
     /// 构造 TemplateManager（含一个内置模板 "tpl"）用于 expand_devices 测试。
-    fn build_mgr() -> TemplateManager {
-        let dir = std::env::temp_dir().join(format!(
-            "gateway_tpl_test_{}_{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).expect("create tmp");
+    fn build_mgr() -> (TempDir, TemplateManager) {
+        let dir = tempfile::tempdir().expect("create temp dir");
         std::fs::write(
-            dir.join("tpl.json"),
+            dir.path().join("tpl.json"),
             serde_json::to_string(&build_template()).expect("serialize template"),
         )
         .expect("write template");
-        TemplateManager::new(dir.to_str().unwrap(), "")
+        let mgr = TemplateManager::new(dir.path().to_str().unwrap(), "");
+        (dir, mgr)
     }
 
     /// r26-TPL1：两个 device.name 不同时，expand_devices 应正常返回。
     #[test]
     fn expand_devices_accepts_unique_names() {
-        let mgr = build_mgr();
+        let (_dir, mgr) = build_mgr();
         let devs = vec![build_device("pump_a", "1"), build_device("pump_b", "2")];
         let points = mgr.expand_devices(&devs).expect("unique names ok");
         let ids: Vec<&str> = points.iter().map(|p| p.id.as_str()).collect();
@@ -506,7 +503,7 @@ mod tests {
     /// r26-TPL1：两个 device.name 重复时，expand_devices 必须 fail-fast 返回 Err。
     #[test]
     fn expand_devices_rejects_duplicate_device_name() {
-        let mgr = build_mgr();
+        let (_dir, mgr) = build_mgr();
         let devs = vec![build_device("dup", "1"), build_device("dup", "2")];
         let err = mgr
             .expand_devices(&devs)
@@ -525,7 +522,7 @@ mod tests {
     /// 故借用 HashSet 重复插入模拟一次逻辑路径——直接测 expand_devices 的 HashSet 检查逻辑。
     #[test]
     fn expand_devices_returns_unique_points() {
-        let mgr = build_mgr();
+        let (_dir, mgr) = build_mgr();
         let devs = vec![build_device("only", "1")];
         let points = mgr.expand_devices(&devs).expect("ok");
         let mut seen = HashSet::new();
@@ -539,7 +536,7 @@ mod tests {
     /// 最终拿到空串 → 前端按设备聚合「最后成功采集 / 通信质量」全部落空。
     #[test]
     fn expand_devices_sets_owning_device_id() {
-        let mgr = build_mgr();
+        let (_dir, mgr) = build_mgr();
         let mut a = build_device("dev-a", "1");
         a.id = "dev-a".into();
         let mut b = build_device("dev-b", "2");
@@ -566,12 +563,7 @@ mod tests {
     #[cfg(feature = "iec104")]
     #[test]
     fn expand_iec104_uses_point_ioa_as_address() {
-        let dir = std::env::temp_dir().join(format!(
-            "gateway_tpl_iec104_test_{}_{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).expect("create tmp");
+        let dir = tempfile::tempdir().expect("create temp dir");
 
         let mut tpl = build_template();
         tpl.protocol = "iec104".into();
@@ -588,19 +580,17 @@ mod tests {
             },
         ];
         std::fs::write(
-            dir.join("tpl.json"),
+            dir.path().join("tpl.json"),
             serde_json::to_string(&tpl).expect("serialize template"),
         )
         .expect("write template");
 
-        let mgr = TemplateManager::new(dir.to_str().unwrap(), "");
+        let mgr = TemplateManager::new(dir.path().to_str().unwrap(), "");
         let mut dev = build_device("station", "1");
         dev.protocol = "iec104".into();
         let points = mgr.expand_devices(&[dev]).expect("iec104 模板应能展开");
         let addresses: Vec<&str> = points.iter().map(|p| p.address.as_str()).collect();
         assert_eq!(addresses, vec!["1001", "1002"]);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// byte_order 校验：大写四字码（ABCD 等）按约定大写，必须能通过。
@@ -631,21 +621,14 @@ mod tests {
     /// 模板加载容忍 UTF-8 BOM（现场用记事本编辑后的常见产物）。
     #[test]
     fn load_template_tolerates_utf8_bom() {
-        let dir = std::env::temp_dir().join(format!(
-            "gateway_tpl_bom_test_{}_{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).expect("create tmp");
+        let dir = tempfile::tempdir().expect("create temp dir");
         let mut json = String::from("\u{feff}");
         json.push_str(&serde_json::to_string(&build_template()).expect("serialize template"));
-        std::fs::write(dir.join("tpl.json"), json).expect("write bom template");
+        std::fs::write(dir.path().join("tpl.json"), json).expect("write bom template");
 
-        let mgr = TemplateManager::new(dir.to_str().unwrap(), "");
+        let mgr = TemplateManager::new(dir.path().to_str().unwrap(), "");
         let devs = vec![build_device("bom_dev", "1")];
         let points = mgr.expand_devices(&devs).expect("BOM 模板应能加载");
         assert_eq!(points[0].id, "bom_dev_temp");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

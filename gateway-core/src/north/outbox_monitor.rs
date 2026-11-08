@@ -122,18 +122,12 @@ mod tests {
     use super::*;
     use crate::north::mqtt::OutgoingMsg;
     use std::sync::atomic::Ordering;
+    use tempfile::TempDir;
 
-    fn tempdir() -> PathBuf {
-        use std::sync::atomic::AtomicU64;
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "outbox-monitor-test-{}-{}",
-            std::process::id(),
-            SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&p).expect("should succeed");
-        p
+    fn tempdir() -> (TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().to_path_buf();
+        (dir, path)
     }
 
     /// P8 契约：`gateway_outbox_pending` 必须反映真实积压（而非恒 0）。
@@ -143,7 +137,7 @@ mod tests {
     /// 因此能同时看到 mqtt / http / kafka 三段的积压。
     #[test]
     fn p8_pending_gauge_reflects_real_backlog() {
-        let dir = tempdir();
+        let (_dir, dir) = tempdir();
         let path = dir.join("outbox.db");
 
         // 模拟三个协议各自写入待发消息
@@ -192,7 +186,7 @@ mod tests {
     /// P8 契约：ack 之后积压必须回落（否则 gauge 只会单调增长，变成假告警源）。
     #[test]
     fn p8_pending_gauge_falls_back_after_ack() {
-        let dir = tempdir();
+        let (_dir, dir) = tempdir();
         let path = dir.join("outbox_ack.db");
         let mut writer = OutboxStore::open(&path).expect("should succeed");
         let id = writer

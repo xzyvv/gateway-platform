@@ -10,6 +10,7 @@ use super::shell::{
 };
 use super::tail::{tail_consumable, tail_resume_offset};
 use super::TAIL_MAX_LOOKBACK;
+use tempfile::TempDir;
 
 #[cfg(feature = "remote-shell")]
 fn args(list: &[&str]) -> Vec<String> {
@@ -217,7 +218,7 @@ fn archive_path_rejects_traversal() {
 
 #[test]
 fn list_log_archives_reads_real_directory() {
-    let dir = make_temp_dir("archives");
+    let (_dir, dir) = make_temp_dir();
     let base = dir.join("gateway.log");
     std::fs::write(dir.join("gateway.log.2020-01-01"), b"old\n").unwrap();
     std::fs::write(dir.join("gateway.log.2020-01-02"), b"newer\n").unwrap();
@@ -239,17 +240,11 @@ fn list_log_archives_reads_real_directory() {
     std::fs::remove_file(&base).unwrap();
     let newest = newest_log_file(&base.to_string_lossy()).expect("dated file must be found");
     assert!(newest.to_string_lossy().ends_with("2020-01-02"));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 创建独立临时目录（测试并行时互不干扰）
-fn make_temp_dir(tag: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("gateway-diag-{tag}-{nanos}"));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+fn make_temp_dir() -> (TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().to_path_buf();
+    (dir, path)
 }

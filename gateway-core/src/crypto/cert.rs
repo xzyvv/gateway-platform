@@ -655,9 +655,8 @@ mod s05_tests {
     #[test]
     fn check_expiry_self_signed_returns_positive_days() {
         // 用临时目录避开空路径问题。
-        let tmp = std::env::temp_dir().join(format!("s05-cert-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let mgr = CertManager::new(tmp.join("c.pem"), tmp.join("c.key"));
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let mgr = CertManager::new(tmp.path().join("c.pem"), tmp.path().join("c.key"));
         let pair = mgr.generate().expect("generate self-signed");
         let days = mgr
             .check_expiry_days(&pair.cert_pem)
@@ -675,7 +674,6 @@ mod s05_tests {
             "self-signed cert should have <=3730 days, got {}",
             days
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// S05: 证书剩余天数应映射到正确的 severity 档位。

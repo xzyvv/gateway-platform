@@ -11,6 +11,37 @@ fn test_export_contains_alias_metrics() {
     assert!(out.contains("gateway_errors_total"));
 }
 
+/// #5/#6：死信处置链路（重投 / 重投冲突 / 主动清理 / 自动裁剪）必须有指标。
+///
+/// 这几个数字此前只存在于 handler 的 200/409 响应里，Grafana 上完全不可见：
+/// 「有人一直点重投但一直失败」和「后台正在悄悄裁剪数据」都无法被发现。
+#[test]
+fn test_export_contains_dead_letter_disposal_metrics() {
+    let m = Metrics::new();
+    m.inc_dead_letter_replay();
+    m.inc_dead_letter_replay_conflict();
+    m.add_dead_letter_purged(5);
+    m.record_dead_letter_trim(9);
+    let out = m.prometheus_export();
+    assert!(out.contains("gateway_dead_letter_replay_total 1"), "{out}");
+    assert!(
+        out.contains("gateway_dead_letter_replay_conflict_total 1"),
+        "{out}"
+    );
+    assert!(out.contains("gateway_dead_letter_purged_total 5"), "{out}");
+    assert!(out.contains("gateway_dead_letter_trimmed_total 9"), "{out}");
+    assert!(
+        out.contains("gateway_dead_letter_last_trim_rows 9"),
+        "{out}"
+    );
+    // 时间戳是 gauge，必须落在「当下附近」而不是 0（0 表示从未裁剪）
+    let ts = m.dead_letter_trim_stats().1;
+    assert!(
+        ts > 1_600_000_000_000,
+        "last_trim_ms 必须写入真实时间: {ts}"
+    );
+}
+
 /// 回归：`queue_persist` 子结构的 render 此前从未被 `prometheus_export` 调用，
 /// 导致队列持久化 / WAL / outbox 降级指标在 `/api/metrics` 上完全不可见。
 #[test]

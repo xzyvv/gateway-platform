@@ -162,10 +162,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         }
     );
 
-    // Q16: 设备/测点 CRUD + 配置导入导出 + 热重载路由组
-    let config_crud_routes = api::config_routes(state.clone());
+    // Q16: 配置域路由组（/api/config*、/api/project/*、/api/buses/*）
+    let config_routes = api::config_routes(state.clone());
 
-    // 合并：健康检查 + 各业务子域路由（每域自带鉴权分层）+ Q16 CRUD
+    // 合并：健康检查 + 各业务子域路由（每域自带鉴权分层）+ Q16 配置域
+    //
+    // 路由按「URL 前缀唯一注册点」组织（见 `api/mod.rs` 的命名空间地图）：
+    // `/api/devices*` 只在 `api::devices_routes`、`/api/points*` 只在
+    // `api::points_routes`。`device_ops` / `points_ops` 已无独立路由组。
     let app = Router::new()
         .merge(health_routes)
         .merge(api::auth_routes(state.clone()))
@@ -176,10 +180,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(api::realtime_routes(state.clone()))
         .merge(api::license_routes(state.clone()))
         .merge(api::devices_routes(state.clone()))
-        .merge(config_crud_routes)
+        .merge(config_routes)
         .merge(api::uplink_routes(state.clone()))
-        .merge(api::device_ops_routes(state.clone()))
-        .merge(api::points_ops_routes(state.clone()))
         .merge(api::diagnostics_routes(state.clone()))
         .merge(api::access_routes(state.clone()))
         .merge(api::protocol_tools_routes(state.clone()))

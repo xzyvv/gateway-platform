@@ -8,13 +8,17 @@ import {
 } from '@/utils/urlSafety'
 
 /**
- * 变更通知 / Webhook — 带重试 + 死信队列
+ * 变更通知 / Webhook — 带重试 + 通知重试队列（本机浏览器）
  * - 发送失败按指数退避自动重试（3 次）
- * - 仍失败的事件进入死信队列，可手动重发
- * - URL 与死信队列均持久化到 localStorage
+ * - 仍失败的通知进入「通知重试队列」，可手动重发
+ * - URL 与通知重试队列均持久化到 localStorage
+ *
+ * 注意：本文件里的队列是**本机浏览器缓存**，只记录「这台电脑发出的通知」。
+ * 它**不是设备端数据死信**：不进网关数据库、不随设备迁移、换台电脑就是空的。
+ * 设备端未送达的数据请走 `@/api/deadLetter`（GET /api/north/dead-letters）。
  */
 const STORAGE_KEY = 'gw_webhook_url'
-const DLQ_KEY = 'gw_webhook_dlq'
+const NOTIFY_QUEUE_KEY = 'gw_webhook_notify_queue'
 
 export interface WebhookEvent {
   event: string
@@ -31,23 +35,23 @@ interface QueuedEvent {
 }
 
 const MAX_RETRY = 3
-const MAX_DLQ = 50
+const MAX_NOTIFY_QUEUE = 50
 
 function readUrl(): string {
   try { return scopedGet(STORAGE_KEY) || '' } catch { return '' }
 }
 
-function readDlq(): QueuedEvent[] {
+function readNotifyQueue(): QueuedEvent[] {
   try {
-    const raw = scopedGet(DLQ_KEY)
+    const raw = scopedGet(NOTIFY_QUEUE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    // 过滤脏数据：缺 id 或 payload 一律丢弃，避免 retryDeadLetter 找不到/出错
+    // 过滤脏数据：缺 id 或 payload 一律丢弃，避免 retryNotify 找不到/出错
     return parsed.filter((q: unknown): q is QueuedEvent =>
       !!q && typeof q === 'object' && typeof (q as QueuedEvent).id === 'string' &&
       !!(q as QueuedEvent).payload && typeof (q as QueuedEvent).payload === 'object'
-    ).slice(-MAX_DLQ)
+    ).slice(-MAX_NOTIFY_QUEUE)
   } catch { return [] }
 }
 
@@ -56,13 +60,13 @@ function readDlq(): QueuedEvent[] {
 // eslint-disable-next-line no-restricted-syntax
 const webhookUrl = ref(readUrl())
 // eslint-disable-next-line no-restricted-syntax
-const deadLetterQueue = ref<QueuedEvent[]>(readDlq())
+const notifyRetryQueue = ref<QueuedEvent[]>(readNotifyQueue())
 
 watch(webhookUrl, (v) => {
   try { scopedSet(STORAGE_KEY, v) } catch { /* ignore */ }
 })
-watch(deadLetterQueue, (v) => {
-  try { scopedSet(DLQ_KEY, JSON.stringify(v)) } catch { /* ignore */ }
+watch(notifyRetryQueue, (v) => {
+  try { scopedSet(NOTIFY_QUEUE_KEY, JSON.stringify(v)) } catch { /* ignore */ }
 }, { deep: true })
 
 function delay(ms: number) {
@@ -116,7 +120,7 @@ export function useWebhook() {
     })
   }
 
-  /** 发送通知，失败自动重试，全部失败后入死信队列 */
+  /** 发送通知，失败自动重试，全部失败后进入本机通知重试队列 */
   async function notify(event: string, message: string, data?: Record<string, unknown>): Promise<void> {
     if (!webhookUrl.value) return
     const payload: WebhookEvent = { event, message, timestamp: Date.now(), ...(data ? { data } : {}) }
@@ -134,21 +138,21 @@ export function useWebhook() {
         }
       }
     }
-    // 入死信队列（截断到 MAX_DLQ，丢弃最旧的避免撑爆 localStorage）
-    deadLetterQueue.value.push({ id, payload, retryCount: MAX_RETRY, lastError: lastErr })
-    if (deadLetterQueue.value.length > MAX_DLQ) {
-      deadLetterQueue.value.splice(0, deadLetterQueue.value.length - MAX_DLQ)
+    // 入通知重试队列（截断到 MAX_NOTIFY_QUEUE，丢弃最旧的避免撑爆 localStorage）
+    notifyRetryQueue.value.push({ id, payload, retryCount: MAX_RETRY, lastError: lastErr })
+    if (notifyRetryQueue.value.length > MAX_NOTIFY_QUEUE) {
+      notifyRetryQueue.value.splice(0, notifyRetryQueue.value.length - MAX_NOTIFY_QUEUE)
     }
   }
 
-  /** 重发单个死信事件 */
-  async function retryDeadLetter(id: string): Promise<boolean> {
-    const idx = deadLetterQueue.value.findIndex((q) => q.id === id)
+  /** 重发单个通知 */
+  async function retryNotify(id: string): Promise<boolean> {
+    const idx = notifyRetryQueue.value.findIndex((q) => q.id === id)
     if (idx < 0) return false
-    const item = deadLetterQueue.value[idx]!
+    const item = notifyRetryQueue.value[idx]!
     try {
       await sendOnce(item.payload)
-      deadLetterQueue.value.splice(idx, 1)
+      notifyRetryQueue.value.splice(idx, 1)
       return true
     } catch (e) {
       item.retryCount++
@@ -157,34 +161,32 @@ export function useWebhook() {
     }
   }
 
-  /** 重发全部死信 */
-  async function retryAllDeadLetters(): Promise<{ ok: number; fail: number }> {
+  /** 重发全部通知 */
+  async function retryAllNotify(): Promise<{ ok: number; fail: number }> {
     let ok = 0
     let fail = 0
-    for (const item of [...deadLetterQueue.value]) {
-      if (await retryDeadLetter(item.id)) ok++
+    for (const item of [...notifyRetryQueue.value]) {
+      if (await retryNotify(item.id)) ok++
       else fail++
     }
     return { ok, fail }
   }
 
-  /** 清空死信队列 */
-  function clearDeadLetters() {
-    deadLetterQueue.value = []
+  /** 清空通知重试队列（仅本机浏览器，不影响设备端死信） */
+  function clearNotifyQueue() {
+    notifyRetryQueue.value = []
   }
 
   return {
     // state
     webhookUrl,
-    deadLetterQueue,
+    notifyRetryQueue,
     // methods
     setUrl,
     isEnabled,
     notify,
-    retryDeadLetter,
-    retryAllDeadLetters,
-    clearDeadLetters,
+    retryNotify,
+    retryAllNotify,
+    clearNotifyQueue,
   }
 }
-
-

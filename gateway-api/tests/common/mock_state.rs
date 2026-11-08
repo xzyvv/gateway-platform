@@ -602,6 +602,8 @@ fn build_mock_state_with_devices(
                 let (_north_tx, north_rx) = gateway_core::north::NorthFeed::channel(1);
                 gateway_core::north::ConversionManager::new(north_rx)
             },
+            // 测试态不装配处理管道，`/apin` 不输出北向队列指标。
+            north_feed: None,
             // 模拟消费者：mock 态给一个**未启动**的实例（运行态由 API 控制）。
             // enabled=true 表示「配置意图为启用」，与 running=false 的实际
             // 运行态并存——状态接口须同时体现二者。
@@ -615,6 +617,8 @@ fn build_mock_state_with_devices(
                 },
                 Some(Arc::new(Metrics::new())),
             ),
+            // 测试态不接真实 outbox 库：死信接口按「不可用」返回，验证 503 分支。
+            dead_letter: Arc::new(gateway_api::web::traits::NoopDeadLetter),
         },
         south: SouthRefs {
             scheduler: if !devices.is_empty() {

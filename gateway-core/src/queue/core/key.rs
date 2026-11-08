@@ -170,35 +170,19 @@ fn set_file_permissions(_path: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
-    /// 每个用例独占一个临时目录（进程号 + 进程内自增序号）。
-    ///
-    /// 旧实现按用例名固定路径（`%TEMP%\gw-key-test-{name}`），并在取用前
-    /// `remove_dir_all` 重建目录。两个测试二进制并发时（例如同机并行跑多个
-    /// crate 的测试，或同一 crate 起了两个 cargo test）会互相删除 / 抢占
-    /// keyfile，报 `create db keyfile failed: 文件存在 (os error 80)`，
-    /// 表现为与被测逻辑无关的偶发失败。加入进程号与序号后，跨进程、跨用例
-    /// 都不会撞路径。
-    fn tmp_dir(name: &str) -> PathBuf {
-        use std::sync::atomic::AtomicU32;
-        use std::sync::atomic::Ordering;
-        static SEQ: AtomicU32 = AtomicU32::new(0);
-        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "gw-key-test-{}-{}-{}",
-            name,
-            std::process::id(),
-            seq
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
+    /// 每个用例独占一个临时目录，`TempDir` 在用例结束时统一清理。
+    fn tmp_dir() -> (TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().to_path_buf();
+        (dir, path)
     }
 
     /// 首次生成：keyfile 存在、长度 32 字节。
     #[test]
     fn generates_keyfile_with_expected_length() {
-        let dir = tmp_dir("gen");
+        let (_dir, dir) = tmp_dir();
         let db = dir.join("data.db");
         let bytes = ensure_key_bytes(&db).expect("ensure_key_bytes");
         assert_eq!(bytes.len(), KEY_LEN);
@@ -208,24 +192,22 @@ mod tests {
             std::fs::metadata(&keyfile).expect("stat").len(),
             KEY_LEN as u64
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 二次调用返回同一密钥（幂等，不能每次启动都换密钥）。
     #[test]
     fn returns_same_key_on_second_call() {
-        let dir = tmp_dir("idem");
+        let (_dir, dir) = tmp_dir();
         let db = dir.join("data.db");
         let first = ensure_key_bytes(&db).expect("first");
         let second = ensure_key_bytes(&db).expect("second");
         assert_eq!(first, second);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 损坏的 keyfile（长度不符）必须报错，而不是拿它去开库。
     #[test]
     fn rejects_corrupted_keyfile() {
-        let dir = tmp_dir("corrupt");
+        let (_dir, dir) = tmp_dir();
         let db = dir.join("data.db");
         std::fs::write(keyfile_path(&db), b"short").expect("write corrupt keyfile");
         let err = ensure_key_bytes(&db).expect_err("corrupted keyfile must be rejected");
@@ -235,18 +217,16 @@ mod tests {
             "error must say corrupted: {}",
             msg
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 空 keyfile（磁盘写满等场景）必须报错，
     /// 否则 `PRAGMA key = ''` 会让数据库「打不开也不报错」。
     #[test]
     fn rejects_empty_keyfile() {
-        let dir = tmp_dir("empty");
+        let (_dir, dir) = tmp_dir();
         let db = dir.join("data.db");
         std::fs::write(keyfile_path(&db), b"").expect("write empty keyfile");
         assert!(ensure_key_bytes(&db).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 长度校验是纯函数：边界值（31/32/33）行为明确。
@@ -264,7 +244,7 @@ mod tests {
     #[test]
     fn keyfile_is_owner_only_on_unix() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tmp_dir("perm");
+        let (_dir, dir) = tmp_dir();
         let db = dir.join("data.db");
         ensure_key_bytes(&db).expect("ensure_key_bytes");
         let mode = std::fs::metadata(keyfile_path(&db))
@@ -277,6 +257,5 @@ mod tests {
             "keyfile mode must be 0600, got {:o}",
             mode & 0o777
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

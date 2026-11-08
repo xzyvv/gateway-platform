@@ -66,7 +66,7 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | 文档 | 说明 |
 |---|---|
 | [`docs/functional-review-and-next-phase.md`](functional-review-and-next-phase.md) | 上一阶段功能评审结论：实测体量基线、三因子价值评估、去留决策与各轮落地记录 |
-| [`docs/functional-inventory-and-next-roadmap.md`](functional-inventory-and-next-roadmap.md) | 全量功能清单（后端 18 路由组 / 前端 10 Hub）+ SKU 与授权分层现状 + 下一阶段路线图（§4 行动项、§5 验收口径） |
+| [`docs/functional-inventory-and-next-roadmap.md`](functional-inventory-and-next-roadmap.md) | 全量功能清单（后端 16 路由组 / 前端 10 Hub）+ SKU 与授权分层现状 + 下一阶段路线图（§4 行动项、§5 验收口径） |
 
 ## 设计文档（`docs/design/`）
 

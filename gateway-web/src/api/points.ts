@@ -44,7 +44,7 @@ export function deletePoint(id: string): Promise<{ status: string }> {
 /**
  * 回收站条目：被软删除的点位快照 + 删除时间（毫秒时间戳）。
  *
- * 该结构仅用于 `/api/points/trash` 的响应包装，不是后端 ts-rs 导出的领域类型，
+ * 该结构仅用于 `/api/point-trash` 的响应包装，不是后端 ts-rs 导出的领域类型，
  * 因此定义在本模块而非 `api/types.ts`（后者只放生成类型与全局共享类型）。
  */
 export interface PointTrashEntry {
@@ -52,9 +52,15 @@ export interface PointTrashEntry {
   deleted_at_ms: number
 }
 
-/** 获取回收站点位列表（按 deleted_at_ms 倒序） */
+/**
+ * 获取回收站点位列表（按 deleted_at_ms 倒序）。
+ *
+ * 注意前缀是 `/api/point-trash` 而不是 `/api/points/trash`：后者会与
+ * `DELETE /api/points/:id` 的静态段遮蔽（id 恰好为 `trash` 的点位会被路由到
+ * 「清空回收站」）。改动前先看后端 `api/points/routes.rs` 的说明。
+ */
 export function listPointTrash(): Promise<PointTrashEntry[]> {
-  return request<PointTrashEntry[]>({ url: '/api/points/trash', method: 'GET' })
+  return request<PointTrashEntry[]>({ url: '/api/point-trash', method: 'GET' })
 }
 
 /**
@@ -69,23 +75,23 @@ export function restorePoint(id: string): Promise<null> {
 
 /** 彻底删除回收站中的单个点位（不可恢复） */
 export function purgeTrashPoint(id: string): Promise<null> {
-  return request<null>({ url: `/api/points/trash/${id}`, method: 'DELETE' })
+  return request<null>({ url: `/api/point-trash/${id}`, method: 'DELETE' })
 }
 
 /** 清空回收站（不可恢复） */
 export function purgeAllTrash(): Promise<null> {
-  return request<null>({ url: '/api/points/trash', method: 'DELETE' })
+  return request<null>({ url: '/api/point-trash', method: 'DELETE' })
 }
 
 /** 批量导入点位 */
 export function batchImportPoints(points: PointConfig[]): Promise<{ status: string }> {
-  return request({ url: '/api/points/batch', method: 'POST', data: points })
+  return request({ url: '/api/point-tools/batch', method: 'POST', data: points })
 }
 
 /**
  * 批量编辑点位（增/改/删）。
  *
- * R3：后端已把 `/api/points/batch/edit` 合并进 `/api/points/batch`，
+ * R3：后端已把 `/api/point-tools/batch/edit` 合并进 `/api/point-tools/batch`，
  * 通过 `action: 'edit'` 判别分支，故此处不再单独请求旧端点。
  */
 export function batchEditPoints(data: {
@@ -94,7 +100,7 @@ export function batchEditPoints(data: {
   delete: string[]
 }): Promise<{ status: string }> {
   return request({
-    url: '/api/points/batch',
+    url: '/api/point-tools/batch',
     method: 'POST',
     data: { action: 'edit', ...data },
   })
@@ -117,7 +123,7 @@ export interface PointWriteEntry {
 }
 
 /**
- * 写入单项结果，与后端统一写入口 `POST /api/points/write` 的 `results` 元素对齐。
+ * 写入单项结果，与后端统一写入口 `POST /api/point-tools/write` 的 `results` 元素对齐。
  * `results` 与入参**等长且逐位对应**；单点失败不影响其余点位。
  */
 export interface BatchWriteResultItem {
@@ -140,7 +146,7 @@ export interface WritePointsResponse {
 /**
  * 点位写入统一入口（B2）
  *
- * `POST /api/points/write`，请求体 `{ writes: [{ id, value }] }`。
+ * `POST /api/point-tools/write`，请求体 `{ writes: [{ id, value }] }`。
  * 前端只传数组，单/批分发由后端决定：
  * - 1 条走单写业务（查点 / writable 白名单 / 审计与远程控制完全一致；
  *   写失败返回业务码 5101，由 axios 拦截器 reject，调用方走错误分支）；
@@ -149,5 +155,5 @@ export interface WritePointsResponse {
  * 三个写入口页（点位读写测试、远程控制、批量命令）统一调用本函数。
  */
 export function writePoints(writes: PointWriteEntry[]): Promise<WritePointsResponse> {
-  return request({ url: '/api/points/write', method: 'POST', data: { writes } })
+  return request({ url: '/api/point-tools/write', method: 'POST', data: { writes } })
 }

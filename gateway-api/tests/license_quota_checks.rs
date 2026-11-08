@@ -534,7 +534,7 @@ async fn test_batch_import_points_over_quota_returns_4021() {
     let resp = app
         .oneshot(req_with_token(
             "POST",
-            "/api/points/batch",
+            "/api/point-tools/batch",
             serde_json::to_value(&points).unwrap(),
         ))
         .await
@@ -562,7 +562,7 @@ async fn test_batch_import_points_under_quota_not_rejected() {
     let resp = app
         .oneshot(req_with_token(
             "POST",
-            "/api/points/batch",
+            "/api/point-tools/batch",
             serde_json::to_value(&points).unwrap(),
         ))
         .await

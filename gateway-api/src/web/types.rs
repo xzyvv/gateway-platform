@@ -91,6 +91,16 @@ pub struct NorthRefs {
     /// **恒为 Some**（即便配置未启用）——它是一个可运行时启停的组件，
     /// 「是否存在消费者」以 `is_running()` 的实际运行态为准，而不是配置意图。
     pub sim_consumer: Arc<SimConsumer>,
+    /// 北向专用队列发送端（第 5 层）：`/apin` 从这里读积压/背压计数。
+    ///
+    /// `None` 仅出现在测试或降级装配（无处理管道）场景，此时不输出相关指标。
+    pub north_feed: Option<gateway_core::north::NorthSender>,
+    /// 死信队列（Webhook 不可投递批次）。
+    ///
+    /// 打不开 outbox 库时用 [`crate::web::traits::NoopDeadLetter`] 占位，
+    /// 让北向故障不至于把整个 Web 面拖挂——死信查询是运维辅助功能，
+    /// 不该成为网关启动的硬依赖。
+    pub dead_letter: Arc<dyn crate::web::traits::DeadLetterTrait>,
 }
 
 impl NorthRefs {
@@ -412,6 +422,8 @@ mod export_ts {
         crate::web::types::RunStatus::export_all_to(out).expect("RunStatus");
         crate::web::types::OtaStatus::export_all_to(out).expect("OtaStatus");
         crate::web::types::SimConsumerStatus::export_all_to(out).expect("SimConsumerStatus");
+        // D3：死信 DTO（列表响应里嵌 `DeadLetterDto[]`）
+        crate::web::traits::DeadLetterDto::export_all_to(out).expect("DeadLetterDto");
         gateway_core::south::protocol::registry::ProtocolCapabilities::export_all_to(out)
             .expect("ProtocolCapabilities");
         // F-11：调度时序端点响应体（含嵌套 TimelineGroup/Sample/Overlap）

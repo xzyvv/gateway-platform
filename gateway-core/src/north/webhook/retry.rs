@@ -27,14 +27,26 @@ pub(super) const MAX_WEBHOOK_ATTEMPTS: u32 = 8;
 /// 磁盘被耗尽、`replay_pending_batch` 的分页查询越来越慢（现场表现为「越跑越卡」）。
 pub(super) const MAX_WEBHOOK_PENDING: i64 = 100_000;
 
+/// 死信维护（刷新 gauge + 按行数上限裁剪）的周期。
+///
+/// 不放在每个 tick：一次全表 COUNT 在 2 万行量级约几毫秒，但没必要按秒做；
+/// 60s 的可见性延迟对"人工处置"这个场景完全够用，也不会与上报节拍抢 SQLite 写锁。
+pub(super) const DEAD_LETTER_MAINT_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Bug 171: webhook 单条发送结果分类。
+///
+/// D6：`Retriable` / `Permanent` 自带**本条消息**的失败原因，而不是让调用方
+/// 事后去共享槽 `WebhookClient::last_error` 反查。那个槽的语义是「最近一次
+/// 发送错误」、同时还供 `health()` 使用；靠「发送完立刻读」的隐式时序取原因，
+/// 一旦同批次或并发路径插入另一次发送，死信 reason 就会写成**别的消息**的错误
+/// （例如 A 实际 401，却因为 B 先返回 500 被记成 `http status 500`）。
 pub(super) enum SendOutcome {
     /// 2xx：发送成功，ack 删除。
     Ack,
     /// 可重试：网络错误 / 408 / 425 / 429 / 5xx，保留并按退避重发。
-    Retriable,
-    /// 永久失败：其余 4xx，重发无意义，记 error 后移除。
-    Permanent,
+    Retriable(String),
+    /// 永久失败：其余 4xx / 配置类 transport 错误，重发无意义，移入死信表。
+    Permanent(String),
 }
 
 /// Bug 171: 判断 HTTP 状态码是否值得重试。

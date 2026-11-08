@@ -3,8 +3,8 @@
 //! 配置域共享库（`config_versions.db`）承载 `config_versions` / `api_access_logs`
 //! / `disk_history` / `uplink_test_history` 四张表，它们都有行数 retention，但
 //! SQLite 默认（`auto_vacuum=NONE`）不会把 `DELETE` 释放的页还给文件系统 →
-//! 行数受控、**文件却只增不减**。队列主库（`data_queue.db`）已在自身 maintenance
-//! 里做了同样处理；这里补齐配置库这条链：
+//! 行数受控、**文件却只增不减**。队列主库（`data_queue.db`）走同一套逻辑，
+//! 公共实现收口在 [`crate::support::sqlite_maintenance`]；这里只管配置库这条链：
 //!
 //! 1. 启动时把 `auto_vacuum` 切到 `INCREMENTAL`（已有库必须跑一次 `VACUUM`
 //!    才会写进库头，这是 SQLite 的语义）；
@@ -17,9 +17,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
+#[cfg(test)]
 use rusqlite::Connection;
 
 use crate::engine::metrics::Metrics;
+use crate::support::sqlite_maintenance::{
+    ensure_incremental_auto_vacuum as shared_ensure_auto_vacuum, file_size_and_freelist,
+    open_short_lived, run_incremental_vacuum,
+};
 
 /// 维护/采样周期（秒）。与磁盘监控的 30s 周期错开，避免同一时刻集中抢 IO。
 const MAINTENANCE_INTERVAL_SECS: u64 = 60;
@@ -36,80 +41,29 @@ const AGG_ROW_COUNT_EVERY: u64 = 5;
 /// 降采样聚合表名（与队列侧 retention 使用同一张表）。
 const AGG_TABLE: &str = "data_queue_aggregated";
 
-/// 打开维护用连接：短生命周期，用完即关，不与 Store 的长驻连接争用。
-fn open(path: &Path, ctx: &str) -> Option<Connection> {
-    let conn = match Connection::open(path) {
-        Ok(conn) => conn,
-        Err(e) => {
-            tracing::warn!("{}: 打开 {} 失败: {}", ctx, path.display(), e);
-            return None;
-        }
-    };
-    if let Err(e) = conn.execute_batch("PRAGMA busy_timeout=5000;") {
-        tracing::warn!("{}: 设置 busy_timeout 失败: {}", ctx, e);
-    }
-    Some(conn)
-}
-
 /// 开启配置库的增量 vacuum（幂等）。
 ///
-/// - 新建库：设置后立即写入库头，`VACUUM` 代价可忽略；
-/// - 已有库：必须跑一次全量 `VACUUM` 才生效（仅设置 pragma 不够）。
-///
+/// 具体语义与队列主库共用 [`crate::support::sqlite_maintenance`]，
+/// 这里只负责打开短生命周期连接。
 /// 失败不阻断启动：磁盘不足/库被占用时降级为「本次运行不回收」，下次启动重试。
 pub fn ensure_incremental_auto_vacuum(db_path: &Path) {
-    let Some(conn) = open(db_path, "config db auto_vacuum") else {
+    let Some(conn) = open_short_lived(db_path, "配置库") else {
         return;
     };
-    let mode: i64 = conn
-        .pragma_query_value(None, "auto_vacuum", |row| row.get(0))
-        .unwrap_or(0);
-    if mode == 2 {
-        return;
-    }
-    if let Err(e) = conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;") {
-        tracing::warn!("配置库开启 incremental auto_vacuum 失败: {}", e);
-        return;
-    }
-    let started = std::time::Instant::now();
-    match conn.execute_batch("VACUUM;") {
-        Ok(()) => tracing::info!(
-            "配置库 auto_vacuum 已切换为 INCREMENTAL（VACUUM 耗时 {:?}）",
-            started.elapsed()
-        ),
-        Err(e) => tracing::warn!(
-            "为配置库启用 incremental auto_vacuum 执行 VACUUM 失败（本次运行不回收空闲页）: {}",
-            e
-        ),
-    }
+    shared_ensure_auto_vacuum(&conn, "配置库");
 }
 
 /// 回收配置库空闲页（`auto_vacuum=NONE` 时为空操作，不会报错）。
 fn reclaim_config_db(db_path: &Path, pages: i64) {
-    let Some(conn) = open(db_path, "config db vacuum") else {
+    let Some(conn) = open_short_lived(db_path, "配置库") else {
         return;
     };
-    if let Err(e) = conn.execute_batch(&format!("PRAGMA incremental_vacuum({});", pages)) {
-        tracing::warn!("配置库 incremental_vacuum 失败: {}", e);
-    }
-}
-
-/// 读取库文件大小（字节）与空闲页数。
-///
-/// 文件大小取主库文件（不含 `-wal`）：WAL 有 autocheckpoint 兜底，长期稳定在
-/// 数 MB，跟踪主库文件更能反映「回收是否生效」。
-fn db_stats(db_path: &Path) -> Option<(i64, i64)> {
-    let size = std::fs::metadata(db_path).ok()?.len() as i64;
-    let conn = open(db_path, "db stats")?;
-    let freelist: i64 = conn
-        .query_row("PRAGMA freelist_count", [], |row| row.get(0))
-        .ok()?;
-    Some((size, freelist))
+    run_incremental_vacuum(&conn, pages, "配置库");
 }
 
 /// 统计聚合表行数（表不存在时返回 None，不告警）。
 fn aggregated_rows(db_path: &Path) -> Option<i64> {
-    let conn = open(db_path, "aggregated rows")?;
+    let conn = open_short_lived(db_path, "配置库 aggregated rows")?;
     conn.query_row(&format!("SELECT COUNT(*) FROM {}", AGG_TABLE), [], |row| {
         row.get(0)
     })
@@ -138,11 +92,15 @@ pub fn spawn_storage_maintenance(queue_db: String, config_db: String, metrics: A
                 let _ = tokio::task::spawn_blocking(move || {
                     let config_path = Path::new(&c);
                     reclaim_config_db(config_path, CONFIG_DB_VACUUM_PAGES);
-                    if let Some((size, freelist)) = db_stats(config_path) {
+                    if let Some((size, freelist)) =
+                        file_size_and_freelist(config_path, "配置库 stats")
+                    {
                         m.set_config_db_stats(size, freelist);
                     }
                     let queue_path = Path::new(&q);
-                    if let Some((size, freelist)) = db_stats(queue_path) {
+                    if let Some((size, freelist)) =
+                        file_size_and_freelist(queue_path, "队列主库 stats")
+                    {
                         m.set_queue_db_stats(size, freelist);
                     }
                     if count_agg {
@@ -224,7 +182,7 @@ mod tests {
             .expect("seed");
         }
 
-        let (size, freelist) = db_stats(&path).expect("stats");
+        let (size, freelist) = file_size_and_freelist(&path, "测试库").expect("stats");
         assert!(size > 0, "库文件大小必须 > 0");
         assert!(freelist >= 0, "空闲页数必须可读");
         assert_eq!(aggregated_rows(&path), Some(2));

@@ -2,8 +2,8 @@
 //!
 //! 覆盖 `docs/api-surface.md` 中此前无测试的 5 个写端点：
 //! - PUT  /api/points/:id              编辑点位（字段校验 + 归属设备继承）
-//! - POST /api/points/offset/apply     批量地址偏移（只影响选中点位、下界钳制）
-//! - POST /api/points/clone/apply      跨设备克隆点位（重命名 + 跳过已存在）
+//! - POST /api/point-tools/offset/apply     批量地址偏移（只影响选中点位、下界钳制）
+//! - POST /api/point-tools/clone/apply      跨设备克隆点位（重命名 + 跳过已存在）
 //! - POST /api/buses/:name/pause       暂停总线采集
 //! - POST /api/buses/:name/resume      恢复总线采集
 
@@ -206,7 +206,7 @@ async fn point_offset_apply_touches_only_selected_and_clamps_at_zero() {
     let body = call(
         &app,
         "POST",
-        "/api/points/offset/apply",
+        "/api/point-tools/offset/apply",
         Some(json!({ "ids": ["p1"], "offset": 10 })),
     )
     .await;
@@ -222,7 +222,7 @@ async fn point_offset_apply_touches_only_selected_and_clamps_at_zero() {
     let body = call(
         &app,
         "POST",
-        "/api/points/offset/apply",
+        "/api/point-tools/offset/apply",
         Some(json!({ "ids": ["p1"], "offset": -20 })),
     )
     .await;
@@ -246,7 +246,7 @@ async fn point_clone_apply_copies_to_target_and_skips_existing() {
     let body = call(
         &app,
         "POST",
-        "/api/points/clone/apply",
+        "/api/point-tools/clone/apply",
         Some(json!({
             "source_device_id": "dev1",
             "target_device_ids": ["dev2"],
@@ -271,7 +271,7 @@ async fn point_clone_apply_copies_to_target_and_skips_existing() {
     let body = call(
         &app,
         "POST",
-        "/api/points/clone/apply",
+        "/api/point-tools/clone/apply",
         Some(json!({
             "source_device_id": "dev1",
             "target_device_ids": ["dev2"],
@@ -286,7 +286,7 @@ async fn point_clone_apply_copies_to_target_and_skips_existing() {
     let body = call(
         &app,
         "POST",
-        "/api/points/clone/apply",
+        "/api/point-tools/clone/apply",
         Some(json!({
             "source_device_id": "dev1",
             "target_device_ids": ["ghost-dev"],

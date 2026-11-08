@@ -1,4 +1,4 @@
-//! B2 点位写入统一入口（POST /api/points/write）集成测试
+//! B2 点位写入统一入口（POST /api/point-tools/write）集成测试
 //!
 //! 契约：请求体 `{ "writes": [ { "id": "<point_id>", "value": <f64> } ] }`
 //! （`id` / `point_id` 等价）。
@@ -48,7 +48,7 @@ fn store(state: &Arc<AppState>, p: PointConfig) {
 fn write_req(body: &str, token: Option<&str>) -> Request<Body> {
     let mut b = Request::builder()
         .method("POST")
-        .uri("/api/points/write")
+        .uri("/api/point-tools/write")
         .header("content-type", "application/json");
     if let Some(t) = token {
         b = b.header("authorization", t);
@@ -93,7 +93,7 @@ async fn unified_write_with_readonly_api_key_returns_403() {
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/api/points/write")
+        .uri("/api/point-tools/write")
         .header("content-type", "application/json")
         .header("x-api-token", key)
         .body(Body::from(r#"{"writes":[{"id":"p1","value":1.0}]}"#))

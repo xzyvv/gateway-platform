@@ -9,20 +9,27 @@
 //!
 //! ## REST 命名空间地图（改端点先看这里，别全仓 grep）
 //!
-//! 同一 URL 前缀被多个子域各管一段，属历史演进结果。下表是**唯一权威索引**，
-//! 新增端点时挂到语义所属的子域，并在该子域 `routes.rs` 顶部路由清单里登记。
+//! **硬约束：一个 URL 前缀只能有一个 `routes.rs` 注册点。**
+//! 历史上同一前缀被多个子域各管一段（`/api/devices*` 由 config/device_ops/devices 三家分治），
+//! 改一个端点要在三个文件里翻、grep 路径会命中多份，认知负担高且容易改漏。
+//! 现已按「前缀」收口：路由入口看下表，实现文件由 handler 名引用。
 //!
-//! | 前缀 | 承担子域（`web/api/<子域>/routes.rs`） |
-//! |---|---|
-//! | `/api/devices*` | `config`：设备 CRUD、设备下点位；`device_ops`：健康/影子/资产/拓扑/质量/退避/控制；`devices`：IO、设备模板 |
-//! | `/api/points*` | `config`：点位 CRUD、回收站；`points`：即时读写、批量读写；`points_ops`：虚拟点位、地址偏移、克隆、查找替换 |
-//! | `/api/config*` | `system`：读取/写入/版本/回滚/diff；`config`：备份、导入、重载、校验 |
-//! | `/api/templates` | `devices`：设备模板（原寄居 `history`，已迁回设备域） |
-//! | `/api/quality*` | `quality`：数据质量规则 CRUD（落库并安装到处理管道） |
+//! | 前缀 | 唯一注册点（`web/api/<子域>/routes.rs`） | handler 分布 |
+//! |---|---|---|
+//! | `/api/devices*` | `devices` | `devices`(IO/拓扑/质量)、`device_ops`(健康/影子/资产/分组)、`config`(设备 CRUD) |
+//! | `/api/points*`、`/api/point-tools*`、`/api/point-trash*` | `points` | `points`(即时读写)、`points_ops`(虚拟/偏移/克隆/替换)、`config`(点位 CRUD/回收站) |
+//! | `/api/config*` | `config` | `config`(导入/重载/校验/版本)、`system`(整份读写的 handler) |
+//! | `/api/diagnostics*` | `diagnostics` | `diagnostics`、`realtime`(日志流/exec) |
+//! | `/api/io/*`、`/api/templates` | `devices` | `devices` |
+//! | `/api/project/*`、`/api/buses/*` | `config` | `config` |
+//! | 其余单前缀 | 同名子域 | 同子域 |
 //!
-//! 鉴权**不在本层统一注入**：各子域各自 `route_layer`，同一前缀的不同段可能落在
-//! 不同策略（写类 `require_auth` / 读类 `require_auth_if_anon_disabled`）。
-//! 新增路由必须显式挑选一个，不要假设前缀已有统一保护。
+//! 新增端点：挂到**该前缀**的注册点（不是实现所在子域），并在该 `routes.rs` 顶部
+//! 路由清单里登记。`device_ops` / `points_ops` 已无 `routes.rs`，只是 handler 库。
+//!
+//! 鉴权**不在本层统一注入**：各注册点内部按子 Router 各自 `route_layer`
+//! （写类 `require_auth` / 读类 `require_auth_if_anon_disabled`）。同一前缀的不同段
+//! 可能落在不同策略，新增路由必须显式挑选一个，不要假设前缀已有统一保护。
 
 pub mod access;
 mod audit;
@@ -56,7 +63,9 @@ pub(crate) use license::*;
 pub(crate) use diagnostics::diagnostics_routes;
 pub(crate) use history::*;
 pub(crate) use points::*;
-pub(crate) use points_ops::points_ops_routes;
+// `device_ops` / `points_ops` 只提供 handler（无 routes.rs），路由入口在
+// `devices` / `points`，故只需全量重导出 handler。
+pub(crate) use points_ops::*;
 pub(crate) use protocol_tools::protocol_tools_routes;
 pub(crate) use quality::quality_routes;
 pub(crate) use realtime::*;

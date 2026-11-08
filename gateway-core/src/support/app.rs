@@ -495,7 +495,7 @@ impl Gateway {
 
     /// 北向写回入口：校验 `writable` 白名单后下发到南向采集器。
     ///
-    /// 与 Web 写入口（`POST /api/points/write`）共用同一白名单语义，区别只在
+    /// 与 Web 写入口（`POST /api/point-tools/write`）共用同一白名单语义，区别只在
     /// 调用来源与审计记录（审计由调用方按 `source` 落盘）。写结果指标
     /// `point_write_total/failures` 在此统一记账，避免每个北向通道各写一份。
     pub async fn write_point(&self, id: &str, value: f64) -> GatewayResult<()> {

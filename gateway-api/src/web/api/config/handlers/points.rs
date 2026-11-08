@@ -5,9 +5,9 @@
 //! - POST   /api/devices/:id/points -> create_point
 //! - PUT    /api/points/:id         -> update_point
 //! - DELETE /api/points/:id         -> delete_point（软删除，进回收站）
-//! - GET    /api/points/trash       -> list_point_trash
-//! - DELETE /api/points/trash       -> purge_all_point_trash
-//! - DELETE /api/points/trash/:id   -> purge_point
+//! - GET    /api/point-trash       -> list_point_trash
+//! - DELETE /api/point-trash       -> purge_all_point_trash
+//! - DELETE /api/point-trash/:id   -> purge_point
 //! - POST   /api/points/:id/restore -> restore_point
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -349,7 +349,7 @@ pub async fn restore_point(
     Ok(ApiResponse::ok(point))
 }
 
-/// GET /api/points/trash — 列出回收站（按删除时间倒序）
+/// GET /api/point-trash — 列出回收站（按删除时间倒序）
 pub async fn list_point_trash(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<PointTrashEntry>>>, ApiError> {
@@ -359,7 +359,7 @@ pub async fn list_point_trash(
     Ok(Json(ApiResponse::ok(trash)))
 }
 
-/// DELETE /api/points/trash/:id — 彻底删除回收站中的单条
+/// DELETE /api/point-trash/:id — 彻底删除回收站中的单条
 pub async fn purge_point(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -390,7 +390,7 @@ pub async fn purge_point(
     Ok(ApiResponse::ok(()))
 }
 
-/// DELETE /api/points/trash — 清空回收站（全部彻底删除）
+/// DELETE /api/point-trash — 清空回收站（全部彻底删除）
 pub async fn purge_all_point_trash(
     State(state): State<Arc<AppState>>,
 ) -> Result<ApiResponse<()>, ApiError> {

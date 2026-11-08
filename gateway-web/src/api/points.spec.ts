@@ -19,17 +19,17 @@ function firstCallConfig(): RequestConfig {
 describe('points 写接口契约', () => {
   beforeEach(() => requestMock.mockReset())
 
-  // B2 统一写入口契约：所有写入（含单点）都走 POST /api/points/write，
+  // B2 统一写入口契约：所有写入（含单点）都走 POST /api/point-tools/write，
   // 请求体固定 { writes: [{ id, value }] }，单/批分发由后端按条数决定。
-  // 防止回退到旧的 /api/points/:id/write 或 /api/points/write-batch 造成双入口。
-  it('单点写也走统一入口 POST /api/points/write，入参为单元素数组', async () => {
+  // 防止回退到旧的 /api/points/:id/write 或 /api/point-tools/write-batch 造成双入口。
+  it('单点写也走统一入口 POST /api/point-tools/write，入参为单元素数组', async () => {
     requestMock.mockResolvedValue({ status: 'ok', total: 1, succeeded: 1, failed: 0, results: [] })
     await writePoints([{ id: 'p1', value: 12.5 }])
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/write')
-    expect(cfg.url).not.toBe('/api/points/write-batch')
+    expect(cfg.url).toBe('/api/point-tools/write')
+    expect(cfg.url).not.toBe('/api/point-tools/write-batch')
     expect(cfg.url).not.toBe('/api/points/p1/write')
     expect(cfg.data).toEqual({ writes: [{ id: 'p1', value: 12.5 }] })
   })
@@ -52,7 +52,7 @@ describe('points 写接口契约', () => {
 
     const cfg = firstCallConfig()
     expect(cfg.method).toBe('POST')
-    expect(cfg.url).toBe('/api/points/write')
+    expect(cfg.url).toBe('/api/point-tools/write')
     expect(cfg.data).toEqual({
       writes: [
         { id: 'p1', value: 1 },

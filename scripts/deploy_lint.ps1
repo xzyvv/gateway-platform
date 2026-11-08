@@ -2108,15 +2108,19 @@ Write-Host ""
 # ── C24  行数预算：不允许新增巨型文件（O-8） ──
 #
 # 前端已经由 eslint 的 max-lines 强制（gateway-web/eslint.config.js）：
-# 未登记的新文件超过 300 行即告警，CI 用 `--max-warnings 0` 跑 lint → 等于阻断。
-# 后端历史上巨型文件较多（105 个），一上来全报会把门禁变成噪音，
-# 所以这里做「只禁新增」的棘轮：
-#   ① 未登记且 > 300 行                → WARN（新债，必须拆）
-#   ② 已登记但已降到 ≤ 300 行          → OK（提示可以从基线移除）
-#   ③ 已登记但文件不存在（改名/搬迁）  → WARN（基线腐烂）
-Write-Host "[C24] 行数预算：不允许新增巨型文件（> 300 行的 Rust 源文件）" -ForegroundColor Cyan
+# 未登记的新文件超过 500 行即告警，CI 用 `--max-warnings 0` 跑 lint → 等于阻断。
+# 后端历史上巨型文件较多，一上来全报会把门禁变成噪音，
+# 所以这里做「只减不增」的棘轮（基线每行带单文件行数上限 = 登记时行数 + 余量）：
+#   ① 未登记且 > 500 行                → FAIL（新债，必须拆）
+#   ② 已登记但超过基线记录的行数       → FAIL（存量只能瘦身，不许继续长）
+#   ③ 已登记但已降到 ≤ 500 行          → OK（提示可以从基线移除）
+#   ④ 已登记但文件不存在（改名/搬迁）  → WARN（基线腐烂）
+Write-Host "[C24] 行数预算：不允许新增巨型文件（> 500 行），且存量只减不增" -ForegroundColor Cyan
 
-$lineBudget = 300
+$lineBudget = 500
+# 基线上限 = 登记时行数 + 该余量（生成基线时用同一数值）。
+# 判定「已瘦身」必须扣掉余量，否则每个文件都会常驻低于上限 20 行而被误报。
+$lineBudgetMargin = 20
 $frozenRel = "scripts/line_budget_frozen.txt"
 $frozenFull = Join-Repo $frozenRel
 $frozen = @{}
@@ -2124,12 +2128,23 @@ if (-not (Test-Path $frozenFull)) {
     Fail ("缺少行数预算基线 " + $frozenRel + " —— 没有基线就无法区分新旧债务")
 }
 else {
+    $malformed = @()
     foreach ($line in [System.IO.File]::ReadAllLines($frozenFull)) {
         $t = $line.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
-        $frozen[$t] = $true
+        # 格式：<仓库相对路径><TAB><行数上限>。只登记路径不给上限，
+        # 等于给这个文件永久豁免——存量可以悄悄长回巨型文件而门禁全绿。
+        $sep = $t.LastIndexOf("`t")
+        if ($sep -le 0) { $malformed += $t; continue }
+        $rel = $t.Substring(0, $sep).Trim()
+        $capText = $t.Substring($sep + 1).Trim()
+        if ($capText -notmatch '^\d+$') { $malformed += $t; continue }
+        $frozen[$rel] = [int]$capText
     }
-    Ok ("行数预算基线已载入：$($frozen.Count) 个已知巨型文件")
+    if ($malformed.Count -gt 0) {
+        Fail ("行数预算基线格式错误 $($malformed.Count) 行（应为 路径<TAB>行数上限）：" + ($malformed -join ", "))
+    }
+    Ok ("行数预算基线已载入：$($frozen.Count) 个已知巨型文件（带单文件上限）")
 }
 
 # 扫描范围：三个后端 crate 的业务源码。
@@ -2152,26 +2167,48 @@ foreach ($crate in @("gateway-core", "gateway-api", "gatewayd")) {
 $newGiants = @($oversized | Where-Object { -not $frozen.ContainsKey($_.Rel) })
 if ($newGiants.Count -gt 0) {
     $detail = ($newGiants | ForEach-Object { "$($_.Rel)($($_.Lines) 行)" }) -join ", "
-    Warn ("新增巨型文件 $($newGiants.Count) 个（> $lineBudget 行）：$detail —— 请拆分；确属必要的登记进 $frozenRel")
+    Fail ("新增巨型文件 $($newGiants.Count) 个（> $lineBudget 行）：$detail —— 请拆分；确属必要的登记进 $frozenRel")
 }
 else {
     Ok "行数预算：没有新增巨型文件"
 }
 
+# 存量棘轮：基线里的文件只能瘦身。少了这条，「已登记」就变成永久豁免。
+$grown = @()
+foreach ($rel in ($frozen.Keys | Sort-Object)) {
+    $full = Join-Repo $rel
+    if (-not (Test-Path $full)) { continue }
+    $n = [System.IO.File]::ReadAllLines($full).Count
+    if ($n -gt $frozen[$rel]) { $grown += "$rel($n 行 > 上限 $($frozen[$rel]) 行)" }
+}
+if ($grown.Count -gt 0) {
+    Fail ("存量巨型文件继续增长 $($grown.Count) 个：" + ($grown -join ", ") + " —— 先拆再提交，不要上调基线")
+}
+else {
+    Ok "行数预算：存量巨型文件未增长"
+}
+
 # 基线核对：拆够了要提示移除，文件没了要提示失效——否则基线会腐烂成一份假账。
 $shrunk = @()
+$tighten = @()
 $stale = @()
 foreach ($rel in ($frozen.Keys | Sort-Object)) {
     $full = Join-Repo $rel
     if (-not (Test-Path $full)) { $stale += $rel; continue }
     $n = [System.IO.File]::ReadAllLines($full).Count
     if ($n -le $lineBudget) { $shrunk += "$rel($n 行)" }
+    elseif ($n -lt ($frozen[$rel] - $lineBudgetMargin)) {
+        $tighten += "$rel(上限 $($frozen[$rel]) → 当前 $n 行)"
+    }
 }
 if ($stale.Count -gt 0) {
     Warn ("行数预算基线条目失效 $($stale.Count) 个（文件不存在）：" + ($stale -join ", "))
 }
 if ($shrunk.Count -gt 0) {
     Ok ("行数预算：$($shrunk.Count) 个文件已降到 $lineBudget 行以内，可从基线移除：" + ($shrunk -join ", "))
+}
+if ($tighten.Count -gt 0) {
+    Ok ("行数预算：$($tighten.Count) 个文件已瘦身，可把基线上限下调到当前行数：" + ($tighten -join ", "))
 }
 
 Write-Host ""

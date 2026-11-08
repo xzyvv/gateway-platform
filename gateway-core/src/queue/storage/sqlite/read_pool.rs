@@ -62,23 +62,12 @@ impl ReadPool {
 mod tests {
     use super::*;
 
-    fn tempdir_unique() -> std::path::PathBuf {
-        let base = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let p = base.join(format!("gateway-readpool-test-{}", nanos));
-        std::fs::create_dir_all(&p).expect("mkdir");
-        p
-    }
-
     /// r42-Q1 回归：只读池连接必须设置 busy_timeout，避免 checkpoint / WAL 恢复
     /// 窗口内的瞬时 SQLITE_BUSY 把 /api/history 查询直接打成错误。
     #[test]
     fn r42_read_pool_conn_sets_busy_timeout() {
-        let dir = tempdir_unique();
-        let db = dir.join("q.db");
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db = dir.path().join("q.db");
         // 只读打开不存在的文件会失败（池为空），先建库
         Connection::open(&db).expect("create db file");
         let pool = ReadPool::new(1, &db, "");
@@ -88,6 +77,5 @@ mod tests {
             .expect("read busy_timeout");
         assert_eq!(timeout, 5000, "只读池连接应设置 busy_timeout=5000");
         pool.release(conn);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

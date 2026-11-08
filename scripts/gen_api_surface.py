@@ -16,7 +16,13 @@
 ``.route_layer(from_fn_with_state(..., <鉴权中间件>))``。
 新增/删除路由而未重新生成本文件时，CI 会因输出差异而失败。
 
-退出码：0 成功/一致；1 校验不一致（或解析异常）；2 文件缺失。
+**前缀归属守护**（`check_prefix_ownership`）：`/api/<seg>` 这个前缀只允许出现在
+一个 ``routes.rs`` 里。历史上 `/api/devices*` 由 config / device_ops / devices 三家
+分治、`/api/points*` 由三家分治，改一个端点要在多个文件里翻、同一路径的鉴权分层
+容易漏改；收口后靠本检查防止再长回去。确实需要多子域共管时，登记到
+``MULTI_OWNER_ALLOWED`` 并写明理由（不允许静默放过）。
+
+退出码：0 成功/一致；1 校验不一致、前缀多归属或解析异常；2 文件缺失。
 """
 
 from __future__ import annotations
@@ -49,19 +55,17 @@ AUTH_LABEL = {
 GROUP_LABELS = {
     "health": "健康检查（探针，内联于 `web/mod.rs`）",
     "auth": "认证与会话",
-    "system": "系统与配置",
+    "system": "系统（状态 / OTA / NTP / 指标 / 证书 / 看门狗 / 上行）",
     "audit": "审计日志",
     "history": "历史数据",
-    "points": "点位值读写",
+    "points": "点位域（CRUD / 回收站 / 即时读写 / 虚拟点位 / 批量）",
     "realtime": "实时数据 / WebSocket",
     "license": "授权",
-    "devices": "IO 控制与设备模板",
-    "config": "设备 / 点位 CRUD 与配置导入导出",
+    "devices": "设备域（CRUD / 运维 / IO / 模板）",
+    "config": "配置域（config / project / buses）",
     "uplink": "上行配置与上送测试",
     "users": "用户管理",
-    "device_ops": "设备运维",
-    "points_ops": "点位运维",
-    "diagnostics": "诊断",
+    "diagnostics": "诊断（含日志流 / exec）",
     "access": "访问控制（密钥 / 限流 / 计划任务）",
     "protocol_tools": "协议工具",
     "quality": "数据质量规则",
@@ -154,6 +158,47 @@ def parse_file(source: Path) -> tuple[str, list[tuple[str, str, str, str]]]:
     return fn_name, rows
 
 
+# 确实需要多子域共管同一前缀时的白名单：前缀 -> 理由。
+# 只登记"语义上必须拆"的（例如同一前缀下有不同鉴权级别的子资源），
+# 不允许为了图省事把新路由塞到别的子域。留空表示全部单一归属。
+MULTI_OWNER_ALLOWED: dict[str, str] = {}
+
+
+def _prefix_of(path: str) -> str | None:
+    """取 URL 前缀：`/api/devices/health` -> `/api/devices`，`/health/live` -> `/health`。"""
+    segs = [s for s in path.split("/") if s]
+    if len(segs) < 2:
+        return None
+    return "/" + "/".join(segs[:2]) if segs[0] == "api" else "/" + segs[0]
+
+
+def check_prefix_ownership(
+    groups: list[tuple[str, str, list[tuple[str, str, str, str]]]],
+) -> list[str]:
+    """校验「一个 URL 前缀只能由一个 routes.rs 注册」，返回违规说明。
+
+    返回值非空即视为失败（CI 退出码 1）：前缀被多个子域瓜分时，改端点要在多个
+    文件里翻，且同一路径的鉴权分层容易漏改——这正是 `/api/devices*` /
+    `/api/points*` 收口前的状态。
+    """
+    owners: dict[str, dict[str, int]] = {}
+    for key, _fn_name, rows in groups:
+        for _verb, path, _auth, _handler in rows:
+            prefix = _prefix_of(path)
+            if prefix is None:
+                continue
+            bucket = owners.setdefault(prefix, {})
+            bucket[key] = bucket.get(key, 0) + 1
+
+    violations: list[str] = []
+    for prefix in sorted(owners):
+        mods = owners[prefix]
+        if len(mods) > 1 and prefix not in MULTI_OWNER_ALLOWED:
+            detail = "、".join(f"{mod}({n} 条)" for mod, n in sorted(mods.items()))
+            violations.append(f"{prefix} 由 {len(mods)} 个子域共管：{detail}")
+    return violations
+
+
 def collect() -> tuple[list[tuple[str, str, list[tuple[str, str, str, str]]]], list[str]]:
     """返回 ([(key, 入口函数名, rows)], warnings)。"""
     groups: list[tuple[str, str, list[tuple[str, str, str, str]]]] = []
@@ -239,6 +284,18 @@ def main() -> int:
     groups, warnings = collect()
     for warning in warnings:
         print(f"[warn] {warning}", file=sys.stderr)
+
+    violations = check_prefix_ownership(groups)
+    if violations:
+        print("[error] URL 前缀被多个子域共管（一个前缀只能有一个注册点）：", file=sys.stderr)
+        for item in violations:
+            print(f"  - {item}", file=sys.stderr)
+        print(
+            "  修法：把该前缀的路由全部移到同一个 routes.rs（handler 可留在原处），"
+            "确需共管请登记到 MULTI_OWNER_ALLOWED 并写明理由。",
+            file=sys.stderr,
+        )
+        return 1
 
     content = render(groups)
 

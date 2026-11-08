@@ -2,17 +2,17 @@
  * 点位运维 API（virtual / find-replace / offset / clone）
  *
  * 路由：
- * - GET    /api/points/virtual                  -> listVirtualPoints
- * - POST   /api/points/virtual                  -> createVirtualPoint
- * - PUT    /api/points/virtual/:id              -> updateVirtualPoint
- * - DELETE /api/points/virtual/:id              -> deleteVirtualPoint
- * - POST   /api/points/virtual/:id/recalc       -> recalcVirtualPoint
- * - POST   /api/points/find-replace/search      -> findReplaceSearch
- * - POST   /api/points/find-replace/apply       -> findReplaceApply
- * - GET    /api/points/offset                    -> offsetList
- * - POST   /api/points/offset/apply              -> offsetApply
- * - GET    /api/points/clone/devices             -> cloneDevices
- * - POST   /api/points/clone/apply               -> cloneApply
+ * - GET    /api/point-tools/virtual                  -> listVirtualPoints
+ * - POST   /api/point-tools/virtual                  -> createVirtualPoint
+ * - PUT    /api/point-tools/virtual/:id              -> updateVirtualPoint
+ * - DELETE /api/point-tools/virtual/:id              -> deleteVirtualPoint
+ * - POST   /api/point-tools/virtual/:id/recalc       -> recalcVirtualPoint
+ * - POST   /api/point-tools/find-replace/search      -> findReplaceSearch
+ * - POST   /api/point-tools/find-replace/apply       -> findReplaceApply
+ * - GET    /api/point-tools/offset                    -> offsetList
+ * - POST   /api/point-tools/offset/apply              -> offsetApply
+ * - GET    /api/point-tools/clone/devices             -> cloneDevices
+ * - POST   /api/point-tools/clone/apply               -> cloneApply
  *
  * 后端实现：[../../../gateway-api/src/web/api/api_points_ops/]
  * 类型由 ts-rs 生成。
@@ -38,16 +38,16 @@ export interface VirtualPointPayload {
 
 // render 层统一用下面的 *View 适配函数；raw 版仅在文件内部使用（deleteVirtualPoint 例外，供页面直接调用）
 function listVirtualPoints(): Promise<VirtualPointView[]> {
-  return request<VirtualPointView[]>({ url: '/api/points/virtual', method: 'GET' })
+  return request<VirtualPointView[]>({ url: '/api/point-tools/virtual', method: 'GET' })
 }
 
 function createVirtualPoint(payload: VirtualPointPayload): Promise<VirtualPointView> {
-  return request<VirtualPointView>({ url: '/api/points/virtual', method: 'POST', data: payload })
+  return request<VirtualPointView>({ url: '/api/point-tools/virtual', method: 'POST', data: payload })
 }
 
 function updateVirtualPoint(id: string, payload: VirtualPointPayload): Promise<VirtualPointView> {
   return request<VirtualPointView>({
-    url: `/api/points/virtual/${encodeURIComponent(id)}`,
+    url: `/api/point-tools/virtual/${encodeURIComponent(id)}`,
     method: 'PUT',
     data: payload,
   })
@@ -55,14 +55,14 @@ function updateVirtualPoint(id: string, payload: VirtualPointPayload): Promise<V
 
 export function deleteVirtualPoint(id: string): Promise<void> {
   return request<void>({
-    url: `/api/points/virtual/${encodeURIComponent(id)}`,
+    url: `/api/point-tools/virtual/${encodeURIComponent(id)}`,
     method: 'DELETE',
   })
 }
 
 function recalcVirtualPoint(id: string): Promise<VirtualPointView> {
   return request<VirtualPointView>({
-    url: `/api/points/virtual/${encodeURIComponent(id)}/recalc`,
+    url: `/api/point-tools/virtual/${encodeURIComponent(id)}/recalc`,
     method: 'POST',
   })
 }
@@ -87,7 +87,7 @@ export interface FindReplaceApplyRequest {
 
 function findReplaceSearch(payload: FindReplaceSearchRequest): Promise<SearchResult[]> {
   return request<SearchResult[]>({
-    url: '/api/points/find-replace/search',
+    url: '/api/point-tools/find-replace/search',
     method: 'POST',
     data: payload,
   })
@@ -95,7 +95,7 @@ function findReplaceSearch(payload: FindReplaceSearchRequest): Promise<SearchRes
 
 function findReplaceApply(payload: FindReplaceApplyRequest): Promise<{ updated: number }> {
   return request<{ updated: number }>({
-    url: '/api/points/find-replace/apply',
+    url: '/api/point-tools/find-replace/apply',
     method: 'POST',
     data: payload,
   })
@@ -106,12 +106,12 @@ function findReplaceApply(payload: FindReplaceApplyRequest): Promise<{ updated: 
 // ============================================================================
 
 function offsetList(): Promise<OffsetPointView[]> {
-  return request<OffsetPointView[]>({ url: '/api/points/offset', method: 'GET' })
+  return request<OffsetPointView[]>({ url: '/api/point-tools/offset', method: 'GET' })
 }
 
 function offsetApply(ids: string[], offset: number): Promise<{ updated: number }> {
   return request<{ updated: number }>({
-    url: '/api/points/offset/apply',
+    url: '/api/point-tools/offset/apply',
     method: 'POST',
     data: { ids, offset },
   })
@@ -123,7 +123,7 @@ function offsetApply(ids: string[], offset: number): Promise<{ updated: number }
 
 // D-02：源/目标设备名单是同一份数据（后端两份实现逐行等价），已合并为一个端点
 function cloneDevices(): Promise<CloneDevice[]> {
-  return request<CloneDevice[]>({ url: '/api/points/clone/devices', method: 'GET' })
+  return request<CloneDevice[]>({ url: '/api/point-tools/clone/devices', method: 'GET' })
 }
 
 function cloneApply(
@@ -132,7 +132,7 @@ function cloneApply(
   nameSuffix = '',
 ): Promise<{ total: number; targets: string[] }> {
   return request<{ total: number; targets: string[] }>({
-    url: '/api/points/clone/apply',
+    url: '/api/point-tools/clone/apply',
     method: 'POST',
     data: {
       source_device_id: sourceDeviceId,

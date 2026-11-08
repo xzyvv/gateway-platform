@@ -307,9 +307,8 @@ async fn test_get_license_includes_machine() {
 
 #[tokio::test]
 async fn test_import_rejects_garbage_with_readable_message() {
-    let tmp = std::env::temp_dir().join(format!("lic_import_bad_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let state = state_with_test_key_issuer(&tmp);
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let state = state_with_test_key_issuer(tmp.path());
     let app = gateway_api::web::build_router(state);
 
     let resp = app
@@ -326,18 +325,16 @@ async fn test_import_rejects_garbage_with_readable_message() {
     );
     // 拒绝导入不得落盘
     assert!(
-        !tmp.join("license.lic").exists(),
+        !tmp.path().join("license.lic").exists(),
         "无效文件不应写入授权路径"
     );
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[tokio::test]
 async fn test_import_accepts_signed_license() {
     use gateway_core::license::issuer_support;
-    let tmp = std::env::temp_dir().join(format!("lic_import_ok_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let state = state_with_test_key_issuer(&tmp);
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let state = state_with_test_key_issuer(tmp.path());
     // 用 manager 的真实本机指纹构造 payload（签名/指纹自洽）
     let fp = state.platform.license.machine();
     let payload = serde_json::json!({
@@ -369,8 +366,10 @@ async fn test_import_accepts_signed_license() {
     assert_eq!(v["tier"], serde_json::json!("pro"));
     assert_eq!(v["license_id"], serde_json::json!("LIC-TEST-0001"));
     // 文件已落盘到授权路径
-    assert!(tmp.join("license.lic").exists(), "授权文件应写入配置路径");
-    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        tmp.path().join("license.lic").exists(),
+        "授权文件应写入配置路径"
+    );
 }
 
 // ===== 导入低档位 license：存量配置超限告警 =====
@@ -467,9 +466,8 @@ fn quota_exceeded_entries(
 /// ③ 审计日志留下 `license.quota_exceeded` 痕迹。
 #[tokio::test]
 async fn test_import_low_tier_license_flags_existing_config_over_quota() {
-    let tmp = std::env::temp_dir().join(format!("lic_import_low_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let state = state_with_test_key_issuer(&tmp);
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let state = state_with_test_key_issuer(tmp.path());
 
     // 存量配置：2000 个点位，远超低档 license 的 100 点上限
     state.config.store(Arc::new(config_with_n_points(2000)));
@@ -506,16 +504,13 @@ async fn test_import_low_tier_license_flags_existing_config_over_quota() {
         "审计 detail 应列出超限项，实际: {}",
         entries[0].detail
     );
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// 反例：存量配置未超配额时，导入**不得**产生超限审计（避免噪音告警）
 #[tokio::test]
 async fn test_import_license_within_quota_emits_no_exceeded_audit() {
-    let tmp = std::env::temp_dir().join(format!("lic_import_ok_quota_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let state = state_with_test_key_issuer(&tmp);
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let state = state_with_test_key_issuer(tmp.path());
 
     // 存量配置 2000 点位，新档位给 10000 点 → 不超限
     state.config.store(Arc::new(config_with_n_points(2000)));
@@ -538,6 +533,4 @@ async fn test_import_license_within_quota_emits_no_exceeded_audit() {
         "未超配额时不应写 license.quota_exceeded 审计，实际: {:?}",
         entries
     );
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }

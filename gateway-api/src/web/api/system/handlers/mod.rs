@@ -5,6 +5,7 @@ pub(crate) use super::*;
 
 pub mod certificates;
 pub mod config;
+pub mod dead_letter;
 pub mod status;
 pub mod watchdog;
 pub mod webhook;
@@ -12,6 +13,7 @@ pub mod webhook;
 // 将 config/status 子模块的 handler 函数提升到 handlers 命名空间
 pub(crate) use certificates::*;
 pub(crate) use config::*;
+pub(crate) use dead_letter::*;
 pub(crate) use status::*;
 pub(crate) use watchdog::*;
 pub(crate) use webhook::*;

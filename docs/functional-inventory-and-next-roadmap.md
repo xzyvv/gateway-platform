@@ -27,44 +27,45 @@
 
 ## 1. 完整功能清单（复评后的代码事实）
 
-### 1.1 体量基线（实测刷新于 2026-11-04）
+### 1.1 体量基线（实测刷新于 2026-11-04；端点与后端单测于 2026-11-08 复核）
 
 | 项 | 数量 | 依据 |
 |---|---|---|
 | Rust 源文件（core+api+gatewayd，含 tests/） | 468（其中非测试文件 367） | `Get-ChildItem -Recurse *.rs`（排除 target） |
-| HTTP 端点 | 18 路由组 / 141 唯一路径 / **169**「方法+路径」 | [docs/api-surface.md](api-surface.md)（脚本生成，CI 校验） |
+| HTTP 端点 | 16 路由组 / 144 唯一路径 / **173**「方法+路径」 | [docs/api-surface.md](api-surface.md)（脚本生成，CI 校验） |
 | 前端页面组件（.vue） | 199 | `Get-ChildItem -Recurse *.vue` |
 | 前端 Hub / 页签 | 10 个 Hub / 72 个页签 | `views/**/*Hub.vue` 的 `tabs` 数组逐个数 |
 | 南向协议族 | 12（+ common/registry/skeleton 三个基础设施模块） | `gateway-core/src/south/protocol/` |
-| Rust 单元测试 | 1246（core lib，另 1 ignored）+ 245（api lib）+ 3（license-issuer） | `cargo test --lib` 三段汇总 |
+| Rust 单元测试 | 1504（core lib，另 1 ignored）+ 270（api lib）+ 3（license-issuer） | `cargo test --lib` 三段汇总 |
 | 集成 / 契约测试文件 | 22 个（`gateway-api/tests/*.rs`） | 目录实测 |
-| 前端单测 | 220 个 `*.spec.ts`（src 216 + e2e 4；vitest 实际收集 **216 文件 / 1996 用例**） | `Get-ChildItem -Recurse *.spec.ts` + CI 实测 |
+| 前端单测 | 221 个 `*.spec.ts`（src 217 + e2e 4；vitest 实际收集 **217 文件 / 2040 用例**） | `Get-ChildItem -Recurse *.spec.ts` + CI 实测 |
 | Playwright E2E | 4 套 / 16 用例（smoke、write-flows、routes-deep、debug-paths） | `gateway-web/e2e/` |
 | chaos 故障场景 | **47** 个真路径恢复场景 | `gateway-core/tests/chaos/scenarios.rs` |
 | 覆盖率门禁 | 分目录阈值"只许上调、不许下调" | `gateway-web/vitest.config.ts`:83–104 |
 
-### 1.2 后端功能域（18 组 / 169 端点，B3 后变化见右列）
+### 1.2 后端功能域（16 组 / 173 端点，口径与 `api-surface.md` 一致）
+
+> 下表的分组 = 路由注册点（`*_routes` 函数），不是业务概念分组；端点数为
+> 「方法 + 路径」条数，与 [api-surface.md](api-surface.md) 的统计逐行一致。
 
 | 路由组 | 端点 | 主要能力 | 定位归属 | B3 后变化 |
 |---|---|---|---|---|
-| `protocol_tools` | 30 | 调试向导、地址映射、寄存器扫描、从站扫描、参数探测、报文捕获/编辑/回放、单步调试、从站模拟、协议转换 | **现场调试核心** | **由 Modbus-only 改为注册表能力位驱动** |
-| `system` | 27 | 网关信息、看门狗、计划任务、OTA、证书、日志归档、蜂窝、GPIO、运行时参数 | 支撑 | — |
-| `config` | 21 | 设备/点位 CRUD、回收站、总线暂停恢复、导入导出、重载、校验、**版本历史/对比/回滚** | **参数配置核心** | — |
-| `device_ops` | 18 | 设备健康评分、影子快照、批量命令、远程控制、设备发现 | **现场干预核心** | — |
+| `protocol_tools` | 31 | 调试向导、地址映射、寄存器扫描、从站扫描、参数探测、报文捕获/编辑/回放、单步调试、从站模拟、协议转换 | **现场调试核心** | **由 Modbus-only 改为注册表能力位驱动** |
+| `devices` | 29 | 设备/点位 CRUD、设备分组、资产、健康评分、影子快照、点位质量与退避、批量命令、远程控制、拓扑、IO 控制、设备模板 | **现场干预核心** | 设备/点位 CRUD 由 `config` 归入本组 |
+| `system` | 23 | 运行状态、健康报告、看门狗、计划任务、OTA、NTP、证书、指标、蜂窝、透传会话、**死信查询/重投/清理** | 支撑 | **新增死信三端点（#3）** |
+| `points` | 20 | 点位即时读写、回收站、批量编辑/复制/查找替换/地址偏移、虚拟点位 | **批量工程作业** | 工具端点迁至 `/api/point-tools/*`，避免与点位 id 冲突 |
+| `config` | 16 | 配置快照/导入导出/校验/重载、**版本历史/对比/回滚**、总线暂停恢复、项目导入导出 | **参数配置核心** | 设备/点位 CRUD 已归入 `devices`/`points` |
 | `access` | 15 | API 密钥、限流规则/统计/日志 | 支撑（公网暴露时才高） | — |
-| `diagnostics` | 11 | 总线负载、采集诊断、统计、调度时间线、网关自诊断、日志下载 | **诊断核心** | — |
-| `points_ops` | 11 | 点位批量编辑/复制/查找替换/地址偏移、虚拟点位 | **批量工程作业** | — |
+| `diagnostics` | 13 | 总线负载、采集诊断、统计、调度时间线、网关自诊断、日志下载/归档 | **诊断核心** | — |
 | `uplink` | 8 | 上行配置、状态、透传会话、上送测试 | 配置 + 调试 | — |
-| `devices` | 5 | IO 控制、设备模板 | 配置 | — |
 | `quality` | 4 | 数据质量规则 | 支撑 | — |
 | `auth` | 3 | 登录、会话、令牌 | 基础设施 | — |
-| `points` | 3 | 立即读、写点 | **现场调试核心** | 写值路径统一为 `usePointWrite` |
-| `realtime` | 3 | 实时数据 / WebSocket | 支撑 | — |
 | `sim_consumer` | 3 | 上行兜底消费者（启停/状态） | 支撑（队列排障） | — |
 | `health` | 2 | live/ready 探针 | 基础设施 | — |
 | `history` | 2 | 历史数据查询 | 支撑 | — |
 | `license` | 2 | 许可证状态与签发 | 商业必需 | — |
 | `audit` | 1 | 配置审计 | 支撑 | — |
+| `realtime` | 1 | 实时数据 / WebSocket | 支撑 | — |
 
 ### 1.3 前端功能清单（10 Hub / 72 页签，定位归属复核）
 
@@ -247,7 +248,13 @@
 - 数据流水 7 个页签：现场判障工具，不是分析需求；
 - `unwrap` 616 处 / `panic!` 52 处：无证据表明生产路径可触发，无证据表明是债；
 - Rust 核心不重构：无债证据，重构只引入回归；
-- 不为覆盖率数字刷测试：覆盖率 job 出报告不设阈值是对的（**但口径要修，见 C1.4**）。
+- 不为覆盖率数字刷测试：覆盖率 job 出报告不设阈值是对的（**但口径要修，见 C1.4**）；
+- **不按 URL 前缀搬 handler 目录**（2026-11-08 评估后放弃）：`routes.rs` 注册点已按前缀唯一
+  （由 `gen_api_surface.py` 的 `check_prefix_ownership` 守护），故障源已消除；搬目录只改
+  "实现文件放哪"，无功能收益，且 `config/handlers/{devices,points}.rs` 通过 `use super::*`
+  依赖 `apply_reload` 等共享辅助，属"搬家 + 解耦"两件事；另外 `now_ms()` 在
+  `config/handlers/points.rs` 与 `device_ops/handlers/health.rs` 各有一份 `pub(crate)`，
+  合域会直接编译失败。命名空间地图见 `gateway-api/src/web/api/mod.rs` 顶部表格。
 
 ---
 
@@ -255,7 +262,7 @@
 
 前提判断：**功能面冻结 + 债务 0 + 冗余 0** ⇒ 再投入"优化/砍功能/重构"是负收益；
 剩余风险全部集中在"**功能在真实故障与真实交付场景下是否可靠**"。因此主线 C 的排序是：
-**先补验证（C1）→ 再补最后的硬缺口（C2）→ 最后沉淀现场知识（C3）**。
+**先补验证（C1）→ 再补最后的硬缺口（C2）→ 最后沉淀现场知识（C3）→ 真机验收（C4，等硬件）**。
 
 ### C1. 验证补强（3–4 天，价值最高 / 成本中）★ 本阶段主体
 
@@ -290,6 +297,18 @@
   ✅ 已落地：`useDiagnosticExport.ts` 的 `exportBundle` 一次产出
   `config.snapshot.json` / `gateway.log` / `health.json` / `north.json`。
 
+### C4. 真机验收（⏳ 阻塞于硬件，代码侧已就绪）
+
+> 这三条**不是新功能**，是对已交付能力的现场确认。本机/CI 无法替代：
+> 需要真实设备、真实断电、真实外部端点。未完成前不应对外宣称
+> "断电不丢 / 死信可重投 / 淘汰可见"已验收。
+
+| 子项 | 做什么 | 验收判据 | 阻塞 |
+|---|---|---|---|
+| **C4.1 outbox FULL 持久化与断电续传** | 接真实 broker 造积压 → 在积压状态下**直接断电**（非正常关机）→ 上电 → 恢复 broker | ①重启后 `select count(*) from outbox` 与断电前一致（WAL 已 fsync，无回滚丢失）；②恢复后消息按 `id` 顺序送达，broker 侧无重复 `data_id`；③`/api/north/status` 队列长度单调降到 0 | 真实设备 + 可控断电 |
+| **C4.2 Webhook 4xx 死信全链路** | 让 webhook 指向固定返回 404 的端点造若干批次 → 修好端点 → 界面重投 | ①死信列表 `reason` 是具体状态码（如 `http_404`，不是共享槽串台）；②二进制 payload 的 `payload_preview` 显示 `0x…` 且无 `�`；③重投成功后该行消失、`gateway_dead_letter_replay_total` +N；④对已消失 id 重投返回 409 且 `..._replay_conflict_total` +1；⑤清理后 `..._purged_total` 增加 | 可控非 2xx 外部端点 |
+| **C4.3 断网积压 → 容量淘汰 → 告警可见** | 断开上行持续采集直至触发容量淘汰 → 恢复上行让队列消化到 0 | ①队列长度回落后 `/api/system/health` 仍报 `QUEUE_DATA_EVICTED`（含未上传行数）；②`gateway_queue_evicted_rows` / `_undelivered_rows` 与 sqlite 计数一致；③前端健康页可见该条；④无淘汰时**不得**出现该条（防告警疲劳） | 真实断网 + 满速采集 |
+
 ### 排序（价值 ÷ 成本）
 
 | 序 | 项 | 价值 | 成本 | 依赖 | 状态 |
@@ -303,10 +322,11 @@
 | 7 | R1/R2 入口收敛 | 中低 | 小 | 无 | ✅ 已落地 |
 | 8 | ~~B1 多网关批量下发~~ | — | 大 | — | ❌ **降级为不做**（见下） |
 | 9 | ~~B6 万点位 soak~~ | — | 大 | 规模驱动 | ❌ 暂缓 |
+| 10 | **C4 真机验收（3 条）** | 高 | 外部依赖 | 硬件 / 外部端点 | ⏳ **等硬件，唯一未关闭的代码外事项** |
 
 > **本阶段 C1/C2/C3 已全部落地**（C1.1–C1.5 + C2 + C3）。下文 §5 的验收口径即当前实际状态。
-> 尚未关闭的开放项集中在一类：**体积优化**（§1.4 结尾的「行业 SKU 尚未切 opcua client-only」），
-> 需先确认现场是否依赖北向 UA Server。
+> 尚未关闭的开放项只有两类：① **C4 真机验收**（等硬件，见上）；
+> ② **体积优化**（§1.4 结尾的「行业 SKU 尚未切 opcua client-only」），需先确认现场是否依赖北向 UA Server。
 > 此前列为开放项的 IEC104「未建点位按 IOA 直读」调试端点已关闭——
 > `POST /api/protocol-tools/iec104/ioa-read` 已落地（见
 > [api-protocol-tools.md](api-protocol-tools.md) §4）。

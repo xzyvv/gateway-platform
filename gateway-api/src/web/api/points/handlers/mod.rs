@@ -10,7 +10,7 @@ use crate::web::api::config::{now_ms, push_trash};
 
 /// 点位批量操作（统一入口）
 ///
-/// 路由：`POST /api/points/batch`
+/// 路由：`POST /api/point-tools/batch`
 /// - 裸数组 `[{...}]`：批量 upsert（同 id 覆盖），兼容旧调用；
 /// - `{"action":"upsert","points":[...]}`：同上；
 /// - `{"action":"edit","add":[...],"update":[...],"delete":["id"]}`：批量增/改/删。
@@ -157,7 +157,7 @@ pub async fn point_read_now(
 
 /// B2 统一写入口
 ///
-/// 路由：`POST /api/points/write`（鉴权与其它写路由一致，见 routes.rs）。
+/// 路由：`POST /api/point-tools/write`（鉴权与其它写路由一致，见 routes.rs）。
 ///
 /// 请求体契约：`{ "writes": [ { "id": "<point_id>", "value": <f64> } ] }`
 /// （`id` 亦可写作 `point_id`，两者等价）。`writes` 为空 → 400。

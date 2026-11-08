@@ -4,7 +4,9 @@ set -euo pipefail
 # ────────────────────────────────────────────────────────────
 # 工业网关部署后验证脚本
 # 用法: sudo bash verify-deploy.sh [--port 8080] [--token xxx] [--build-info path] [--report path]
+#                                  [--retention-signed]
 #       --port/--host 省略时自动读 /etc/gateway/config.json 的 web.listen_addr
+#       --retention-signed  数据留存边界已由客户签字确认（不放行则检查单打「未签字」并计 WARN）
 #
 # 在目标 Linux 上跑完 install.sh 后执行。
 # 覆盖：systemd 服务（含开机自启）/ 环境变量 / 配置可解析性 / 时区 / 二进制兼容性 /
@@ -21,6 +23,10 @@ HOST=""
 BUILD_INFO="$SCRIPT_DIR/out/BUILD-INFO.txt"
 # 交付检查单：随安装包一起留档，验收时直接勾选签字
 REPORT="$SCRIPT_DIR/out/delivery-checklist-$(date +%Y%m%d-%H%M%S).md"
+# 数据留存边界是单机形态下的**必答项**：客户未签字确认「无异地副本」之前不得验收。
+# 这里不用交互式提示（现场常由脚本批量执行），而是用显式开关记录签字事实：
+# 不传 --retention-signed 时检查单会打成「未签字」并在清单里给一条 WARN。
+RETENTION_SIGNED=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port)  PORT="$2"; shift 2 ;;
@@ -32,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --build-info=*) BUILD_INFO="${1#*=}"; shift ;;
     --report) REPORT="$2"; shift 2 ;;
     --report=*) REPORT="${1#*=}"; shift ;;
+    --retention-signed) RETENTION_SIGNED=1; shift ;;
     *) shift ;;
   esac
 done
@@ -146,25 +153,41 @@ write_report() {
       i=$((i + 1))
     done
     echo ""
-    echo "## 数据留存与恢复边界（请客户确认并签字）"
+    echo "## 数据留存与恢复边界（**必答项**，未逐项勾选并签字不得验收）"
     echo ""
-    echo "本产品为**单机工业边缘网关**（无云平台、无双机热备），以下为形态边界，非缺陷："
+    echo "本产品为**单机工业边缘网关**（无云平台、无双机热备），以下为形态边界，**不是缺陷**："
     echo ""
-    echo "1. 历史数据的**唯一副本**在本机 \`data_queue.db\`，**无异地副本**。"
-    echo "   设备磁盘物理损坏或整机丢失时，该时段历史数据**不可恢复**。"
-    echo "2. 同盘备份 \`data_queue.db.bak\` 可恢复 **SQLite 文件逻辑损坏**，"
-    echo "   **不可**恢复磁盘物理损坏或整机丢失。"
-    echo "3. 本产品**不做**：双机热备 / 高可用 / 集群 / 多租户 / 异地备份 / 云平台。"
-    echo "4. 需审计留存的场景，唯一出路是定期用 \`GET /api/history/export\` 导出到"
-    echo "   **网关之外**的介质；落回本机不构成任何冗余。"
+    echo "> 请逐项勾选。任一项未勾选，即视为客户尚未理解数据留存风险，不得进入验收。"
+    echo ""
+    echo "- [ ] 1. 历史数据的**唯一副本**在本机 \`${DB_PATH}\`，**无异地副本**。"
+    echo "         设备磁盘物理损坏或整机丢失时，该时段历史数据**不可恢复**。"
+    echo "- [ ] 2. 同盘备份 \`${DB_BAK}\` 可恢复 **SQLite 文件逻辑损坏**，"
+    echo "         **不可**恢复磁盘物理损坏或整机丢失。"
+    echo "- [ ] 3. 本产品**不做**：双机热备 / 高可用 / 集群 / 多租户 / 异地备份 / 云平台。"
+    echo "- [ ] 4. 队列容量触顶时会按 FIFO 淘汰**最旧未送达**数据；磁盘剩余空间不足时会暂停入库。"
+    echo "         客户已知悉并接受该淘汰策略。"
+    echo "- [ ] 5. 需审计留存的场景，唯一出路是定期用 \`GET /api/history/export\` 导出到"
+    echo "         **网关之外**的介质；落回本机不构成任何冗余。"
+    echo ""
+    echo "本机实况（由脚本探测，供勾选时核对）："
+    echo ""
+    echo "| 数据留存项 | 实测结论 |"
+    echo "|---|---|"
+    echo "| 数据队列库 | \`${DB_PATH}\`（${RET_DB_SIZE}） |"
+    echo "| 同盘备份 | ${RET_BAK_LINE} |"
+    echo "| 备份可恢复范围 | ${RET_BAK_SCOPE} |"
+    echo "| 数据分区剩余 | ${RET_FREE_LINE} |"
+    if [ "$RETENTION_SIGNED" -eq 1 ]; then
+      echo "| 签字状态 | ✅ 已签字确认 |"
+    else
+      echo "| 签字状态 | ❌ **未签字**（本次以 WARN 计入清单） |"
+    fi
+    echo ""
+    echo "客户确认：☐ 已逐项阅读并接受上述 5 条边界"
+    echo ""
+    echo "签字：________________　职务：________________　日期：____________"
     echo ""
     echo "详见 \`docs/architecture/data-flow.md\` §7.3 与 \`docs/architecture/constraints.md\` §11。"
-    echo ""
-    echo "| 数据留存项 | 结论 |"
-    echo "|---|---|"
-    echo "| 数据队列库 | ${DB_PATH:-（未取到）} |"
-    echo "| 同盘备份 | ${DB_BAK:-（未取到）} |"
-    echo "| 边界确认 | ☐ 已理解并接受上述边界　签字：__________　日期：__________ |"
     echo ""
     echo "## 处置建议"
     echo ""
@@ -190,6 +213,15 @@ write_report() {
       echo "ss -ltnp | grep gatewayd"
       echo "curl -v $API/health/live"
       echo '```'
+    fi
+    # 签字是独立于技术检查的验收闸门：技术上全过也不等于可以交付，
+    # 因为「数据无异地副本」这件事只能靠客户书面确认来闭环。
+    if [ "$RETENTION_SIGNED" -eq 0 ]; then
+      echo ""
+      echo "---"
+      echo "**⚠️ 交付闸门未放行**：数据留存边界（上方 5 条）尚未签字确认。"
+      echo "该项与技术检查结果无关，技术全 PASS 也不能跳过。"
+      echo "客户签字后执行 \`sudo bash verify-deploy.sh --retention-signed\` 重新生成本检查单。"
     fi
   } > "$REPORT"
   echo ""
@@ -460,29 +492,45 @@ if svc_env_set "GATEWAY_DB_PATH"; then
 fi
 # 备份文件由代码 with_extension("db.bak") 派生：data_queue.db → data_queue.db.bak
 DB_BAK="${DB_PATH%.*}.db.bak"
+# 报告段落要用到的事实，先全部留空再按实际探测结果填充，
+# 避免「探测失败时报告里沿用上一次循环的脏值」。
+RET_DB_SIZE="（未取到）"
+RET_BAK_LINE="未找到"
+RET_BAK_SCOPE="（未取到）"
+RET_FREE_MB=""
+RET_FREE_LINE="（未取到）"
+RET_STATE="unknown"
 if [ ! -f "$DB_PATH" ]; then
   warn "数据队列库 $DB_PATH 不存在 —— 若尚未采集过数据属正常；若无数据且已上线，请检查 GATEWAY_DB_PATH 是否被误配"
 else
   DB_SIZE=$(du -h "$DB_PATH" 2>/dev/null | awk '{print $1}' || echo "?")
+  RET_DB_SIZE="$DB_SIZE"
+  RET_STATE="present"
   ok "数据队列库存在：$DB_PATH（$DB_SIZE）"
   # 同盘备份：能救 SQLite 逻辑损坏，救不回磁盘物理损坏 —— 这条区别必须让客户知道
   if [ -f "$DB_BAK" ]; then
     BAK_SIZE=$(du -h "$DB_BAK" 2>/dev/null | awk '{print $1}' || echo "?")
     ok "备份文件存在：$DB_BAK（$BAK_SIZE）"
+    RET_BAK_LINE="存在（$BAK_SIZE）"
     DB_DIR_PATH=$(dirname "$DB_PATH")
     BAK_DIR_PATH=$(dirname "$DB_BAK")
     if [ "$DB_DIR_PATH" = "$BAK_DIR_PATH" ]; then
       warn "备份与主库位于同一分区（$DB_DIR_PATH）：可恢复 SQLite 逻辑损坏，**不可**恢复磁盘物理损坏或整机丢失；需审计留存的客户应定期用 GET /api/history/export 导出到网关之外"
+      RET_BAK_SCOPE="仅逻辑损坏（与主库同分区，无冗余）"
     else
       ok "备份与主库不在同一分区（$BAK_DIR_PATH vs $DB_DIR_PATH）"
+      RET_BAK_SCOPE="仅逻辑损坏（跨分区，仍非异地副本）"
     fi
   else
     warn "未找到备份文件 $DB_BAK —— 启动时若主库逻辑损坏将无法自动恢复；网关会在首次写入后生成该备份"
+    RET_BAK_SCOPE="无备份文件"
   fi
   # 数据分区剩余空间：队列满了会 FIFO 丢最旧数据，磁盘满会触发退避
   DB_PART=$(df -P "$DB_PATH" 2>/dev/null | tail -1 | awk '{print $4}' || echo "")
   if [ -n "$DB_PART" ] && [ "$DB_PART" -gt 0 ] 2>/dev/null; then
     DB_FREE_MB=$((DB_PART / 1024))
+    RET_FREE_MB="$DB_FREE_MB"
+    RET_FREE_LINE="${DB_FREE_MB} MB"
     if [ "$DB_FREE_MB" -lt 512 ]; then
       warn "数据分区剩余空间仅 ${DB_FREE_MB}MB —— 队列满后会按 FIFO 丢弃最旧数据，磁盘满还会触发退避；请清理或扩容"
     else
@@ -491,6 +539,13 @@ else
   else
     info "未能取到 $DB_PATH 所在分区剩余空间，跳过空间检查"
   fi
+fi
+# 必答项：单机形态下「无异地副本」是产品边界，必须由客户书面确认，
+# 否则事后任何一次数据丢失都会变成责任争议。未签字一律按 WARN 计入清单。
+if [ "$RETENTION_SIGNED" -eq 1 ]; then
+  ok "数据留存边界已由客户签字确认（--retention-signed）"
+else
+  warn "数据留存边界【必答项】尚未签字确认 —— 单机网关历史数据无异地副本，验收前必须由客户在检查单上逐项勾选并签字；确认后可用 --retention-signed 重新生成本检查单"
 fi
 
 # ── 2. 端口监听 ──
@@ -684,8 +739,8 @@ if [ -n "$TOKEN" ]; then
 
   # 点位：没有全局 GET /api/points（点位按设备挂载：GET /api/devices/:id/points），
   # 这里用全局可用的回收站列表做契约探针——原来打 /api/points 恒 404，会让每次交付都判 FAIL。
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/points/trash" 2>/dev/null || echo "000")
-  [ "$CODE" = "200" ] && ok "GET /api/points/trash → 200" || fail "GET /api/points/trash → $CODE"
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/point-trash" 2>/dev/null || echo "000")
+  [ "$CODE" = "200" ] && ok "GET /api/point-trash → 200" || fail "GET /api/point-trash → $CODE"
 
   CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$API/api/io/status" 2>/dev/null || echo "000")
   if [ "$CODE" = "200" ]; then

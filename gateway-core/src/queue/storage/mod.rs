@@ -137,6 +137,17 @@ pub trait QueueStorage: Send + Sync {
     /// 当前 in_flight 数量。
     fn in_flight_count(&self) -> i64;
 
+    /// 累计因容量上限被物理删除的行数：(总行数, 其中未送达行数)。
+    ///
+    /// 单机网关没有异地副本，被淘汰的行**不可恢复**——这个累计值是
+    /// "到底丢了多少数据"的唯一凭据，因此必须能对外暴露（告警 / 前端展示 / 指标），
+    /// 不能只停留在日志里。
+    ///
+    /// 默认 (0, 0)：内存/测试后端不做容量淘汰。
+    fn evicted_stats(&self) -> (i64, i64) {
+        (0, 0)
+    }
+
     /// 历史查询：按 point_id + 时间范围 [start, end] 查询，limit 裁剪。
     fn history_query(
         &self,

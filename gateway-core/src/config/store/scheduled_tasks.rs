@@ -302,22 +302,14 @@ fn db_err(ctx: &str, e: rusqlite::Error) -> crate::engine::error::GatewayError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use tempfile::TempDir;
 
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_store() -> (ScheduledTaskStore, PathBuf) {
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "sched_task_store_test_{}_{}",
-            std::process::id(),
-            n
-        ));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let db = dir.join("test.db");
+    fn temp_store() -> (ScheduledTaskStore, TempDir) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let db = dir.path().join("test.db");
         (
             ScheduledTaskStore::new(db.to_str().expect("utf8")).expect("new"),
-            db,
+            dir,
         )
     }
 
@@ -340,7 +332,7 @@ mod tests {
 
     #[test]
     fn task_crud_and_run_record() {
-        let (store, db) = temp_store();
+        let (store, _dir) = temp_store();
         let created = store.create(sample_task()).expect("create");
         assert!(created.id.starts_with("st_"));
         assert_eq!(created.run_count, 0);
@@ -388,6 +380,5 @@ mod tests {
 
         assert!(store.delete(&created.id).expect("delete"));
         assert!(store.list().expect("list").is_empty());
-        let _ = std::fs::remove_file(&db);
     }
 }

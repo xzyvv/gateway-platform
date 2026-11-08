@@ -128,6 +128,18 @@ export interface HealthReport {
     disk_level: 'ok' | 'warn' | 'critical' | 'blocking'
     /** 最近一次检测到的磁盘剩余百分比；从未检测过时为 null */
     disk_free_pct: number | null
+    /**
+     * 本进程生命周期内因队列容量上限被物理删除的行数（不可恢复）。
+     *
+     * 与 `queue_len` 正交：`queue_len` 回答「现在积压多少」，
+     * 本字段回答「已经删掉了多少」。单机网关无异地副本，删掉即永久丢失。
+     * 旧后端不返回该字段，故为可选。
+     */
+    queue_evicted_rows?: number
+    /** 上述淘汰中从未上传的行数（彻底的数据丢失） */
+    queue_evicted_undelivered_rows?: number
+    /** 是否发生过容量淘汰（等价于 queue_evicted_rows > 0，后端直出便于前端判定） */
+    queue_data_loss?: boolean
     /** 各档阈值（百分比），前端据此渲染「还差多少」 */
     disk_thresholds: {
       warn: number
