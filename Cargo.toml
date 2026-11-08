@@ -89,7 +89,7 @@ opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.29"
 opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
 # 基准测试：cargo bench --workspace（criterion 输出统计 + HTML 报告）
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # ===== Windows 平台 API =====
 # 网卡枚举（GetAdaptersAddresses / GetIfTable2）需要 struct 布局与系统 ABI 严格一致，
