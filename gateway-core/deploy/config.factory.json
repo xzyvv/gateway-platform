@@ -1,6 +1,6 @@
 {
   "_comment": "出厂完整配置模板（P3-1b）。与 gateway-core/config.json.example 的区别：那份是「配置片段示例」，缺 buses/points/mqtt 等必填段，网关加载会失败；本文件是一份**完整可加载**的 config.json，可直接作为 /etc/gateway/config.json 的初值。install.sh 在包内找不到 config.json 且存在本文件时会自动用它落盘（web.api_token 留空 → 启动时随机生成并打印到 journalctl）。",
-  "_comment_how_to_use": "1) 复制为 config.json；2) 按现场改 buses[].port_name（建议用 serial-rules.sh 生成的 /dev/gateway-serialN）、points、mqtt.broker；3) 需要固定 API token / 登录密码时填 web.api_token 与 web.password_hash（可用 gatewayd 的密码哈希工具生成），留空则由程序在启动时随机生成并告警。",
+  "_comment_how_to_use": "1) 复制为 config.json；2) 按现场改 buses[].port_name（建议用 serial-rules.sh 生成的 /dev/gateway-serialN）、points、mqtt.broker；3) 需要固定 API token 时填 web.api_token（留空则由程序在启动时随机生成并打印到 journalctl）；4) 需要 LAN 访问时按 web 段注释里的顺序先改密再放开监听地址。",
   "_comment_license": "license 段随包给出四档配额（v2.1 口径：配额只管点位，四档仅 max_points 不同）。license 文件未带 quota 时按此处 tier 查表；license 文件不存在时用 absent_quota（开源版体验）。",
   "schema_version": 1,
 
@@ -68,11 +68,12 @@
   },
 
   "web": {
-    "_comment": "listen_addr 默认对全网卡可见（现场通常需要 LAN 访问）；api_token 留空时启动随机生成并打印到 journalctl，password_hash 留空表示默认 admin/admin（启动会告警），投运前务必二者都设。",
-    "listen_addr": "0.0.0.0:8080",
+    "_comment": "listen_addr 默认 127.0.0.1:8080（仅本机可访问，网关能正常启动）。api_token 留空时启动随机生成并打印到 journalctl；password_hash 留空表示默认凭据 admin/admin，仅在回环监听下可用。要开放车间 LAN 访问必须先把 password_hash 设成非空 PBKDF2 串（pbkdf2$<iter>$<salt_b64>$<hash_b64>），否则 security_violations() 判定为硬性违规，网关直接拒绝启动（不是告警）。推荐顺序：保持回环监听先登录 → POST /api/auth/password 改密（哈希自动写回 config.json）→ 再把 listen_addr 改成 0.0.0.0:8080 并重启；改密后可把 allow_default_token 置 false。",
+    "listen_addr": "127.0.0.1:8080",
     "api_token": "",
     "username": "admin",
     "password_hash": "",
+    "allow_default_token": true,
     "allow_anon_read": false,
     "realtime_buffer": 1024
   },

@@ -1630,6 +1630,10 @@ else {
         $factory = $factoryText | ConvertFrom-Json -ErrorAction Stop
         Ok "$factoryRel 是合法 JSON"
     }
+#
+# 另加一道**可启动性**断言：模板的 web 组合不得触发启动期 fail-closed。
+# 「能加载」与「能启动」是两件事——历史上模板正因为两者混淆，
+# 让走 install.sh 兜底路径装机的网关开箱即被拒绝启动。
     catch {
         Fail "$factoryRel 不是合法 JSON（$($_.Exception.Message)）—— 交付方在设备上复制过去会直接起不来"
     }
@@ -1715,6 +1719,51 @@ elseif ($buildSh -match '(?m)^\s*cp\s+[^\n]*config\.factory\.json[^\n]*"\$OUT/')
 else {
     Fail "build-release.sh 没有把 $factoryRel 拷进 `$OUT —— 交付包里只有片段示例，现场拿不到可加载的初值"
 }
+
+        # ★ 出厂模板必须**能启动**，而不只是能被加载。
+        #
+        # 历史事故：模板写死 listen_addr=0.0.0.0:8080 + 空 password_hash，
+        # 而 bootstrap 的 fail-closed 判定是「绑定所有网卡 + 默认凭据 = 硬性违规 →
+        # 拒绝启动」。走 install.sh 兜底路径装机的网关开箱起不来，模板注释却写着
+        # 「启动会告警」。Rust 侧已有单测（factory_template_in_package_is_loadable）
+        # 用 WebConfig::security_violations() 钉住同一判据；这里再钉一道静态检查，
+        # 目的是**改坏了当场就能看到**，不必等 cargo test。
+        $factoryListen = ""
+        if ($null -ne $factory.PSObject.Properties["web"] -and
+            $null -ne $factory.web.PSObject.Properties["listen_addr"]) {
+            $factoryListen = [string]$factory.web.listen_addr
+        }
+        $factoryPw = ""
+        if ($null -ne $factory.PSObject.Properties["web"] -and
+            $null -ne $factory.web.PSObject.Properties["password_hash"]) {
+            $factoryPw = [string]$factory.web.password_hash
+        }
+        $bindsAll = ($factoryListen.StartsWith("0.0.0.0") -or $factoryListen.StartsWith("[::]"))
+        if ($bindsAll -and [string]::IsNullOrEmpty($factoryPw)) {
+            Fail "$factoryRel 的 web 组合为 listen_addr=$factoryListen + 空 password_hash —— 这会触发启动期 fail-closed（网关直接拒绝启动，不是告警）。出厂模板必须先能起来，LAN 访问由现场改密后再放开"
+        }
+        elseif ($bindsAll) {
+            Ok "$factoryRel 的 web 组合不触发 fail-closed（全网卡监听 + 已设 password_hash）"
+        }
+        else {
+            Ok "$factoryRel 的 web 组合不触发 fail-closed（listen_addr=$factoryListen，回环监听）"
+        }
+
+        # password_hash 留空时必须显式保留 allow_default_token=true，
+        # 否则 bootstrap 的另一条 bail（无密码可用）同样会让网关起不来。
+        if ([string]::IsNullOrEmpty($factoryPw)) {
+            $factoryAllowDefault = $null
+            if ($null -ne $factory.PSObject.Properties["web"] -and
+                $null -ne $factory.web.PSObject.Properties["allow_default_token"]) {
+                $factoryAllowDefault = $factory.web.allow_default_token
+            }
+            if ($factoryAllowDefault -ne $true) {
+                Fail "$factoryRel 的 password_hash 为空但 allow_default_token 不为 true —— 模板会让网关因「无密码可用」拒绝启动"
+            }
+            else {
+                Ok "$factoryRel 保留 allow_default_token=true（password_hash 为空时的必要条件）"
+            }
+        }
 
 # 安装链路：install.sh 在包内没有现场 config.json 时要能用模板兜底落盘，
 # 且必须保证「包内 config.json（现场定制）优先于模板」。

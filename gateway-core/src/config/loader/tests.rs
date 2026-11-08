@@ -558,6 +558,30 @@ fn factory_template_in_package_is_loadable() {
         "出厂模板的 web.listen_addr 不能为空"
     );
 
+    // ★ 模板必须**能启动**，而不只是能被加载。
+    //
+    // 历史事故：出厂模板写死 `listen_addr=0.0.0.0:8080` + 空 `password_hash`，
+    // 而 bootstrap 的 fail-closed 判定是「绑定所有网卡 + 默认凭据 = 硬性违规 →
+    // 拒绝启动」。两者叠加的结果是：走 install.sh 兜底路径装机的网关**开箱起不来**，
+    // 而模板注释还写着「启动会告警」。本用例只测「能加载」，完全测不到这一点；
+    // CI 的 deploy-smoke 又自带一份 127.0.0.1 配置，绕开了出厂模板，CI 全绿也发现不了。
+    //
+    // 这里直接用生产代码的同一判定函数（WebConfig::security_violations），
+    // 把「模板组合不得触发启动期拒绝」钉死在 CI 里。
+    let violations = web.security_violations();
+    assert!(
+        violations.is_empty(),
+        "出厂模板的 web 组合会触发启动期 fail-closed（网关直接拒绝启动）：{}",
+        violations.join("; ")
+    );
+    // 兜底：模板必须显式允许默认凭据，否则 assemble 的另一条 bail
+    // （password_hash 为空 && allow_default_token=false）同样会让网关起不来。
+    assert!(
+        web.allow_default_token,
+        "出厂模板必须保留 allow_default_token=true：模板的 password_hash 留空，\
+         若同时禁掉默认凭据，bootstrap 会因「无密码可用」拒绝启动"
+    );
+
     // license 段：四档配额齐全（v2.1 口径：配额只管点位，四档仅 max_points 不同）
     let license = cfg.license.as_ref().expect("出厂模板必须包含 license 段");
     let quotas = license

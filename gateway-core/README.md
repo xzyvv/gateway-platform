@@ -147,12 +147,17 @@ sudo systemctl start gateway
     "publish_interval": 60
   },
   "web": {
-    "listen_addr": "0.0.0.0:8080",
+    "listen_addr": "127.0.0.1:8080",
     "api_token": "your-32-char-token-here!!!",
     "allow_anon_read": false
   }
 }
 ```
+
+> `web.listen_addr` 默认回环（仅本机可访问）。要开放车间 LAN 需改成 `0.0.0.0:8080`，
+> **但必须同时设置 `web.password_hash`**，否则触发 fail-closed 拒绝启动。
+> 顺序：先保持回环 → 登录后 `POST /api/auth/password` 改密（哈希写回 config.json）
+> → 再放开监听地址。
 
 ## 现场配置手册
 

@@ -21,13 +21,15 @@ gateway-platform/
 
 ```bash
 cd gateway-core
-cargo run --release -p gatewayd   # 默认监听 0.0.0.0:8080
+cargo run --release -p gatewayd   # 默认监听 127.0.0.1:8080
 ```
 
 > 二进制由 `gatewayd` crate 提供；在 `gateway-core/` 目录运行可让默认 `./config.json`
 > 解析到 `gateway-core/config.json`（历史 dev 约定）。也可在仓库根直接 `cargo run -p gatewayd`。
 
-启动前需配置 `web.api_token`（≥16 字符），未配置则 Web 服务拒绝启动（fail-closed）。
+`web.api_token` 留空时启动自动生成并打印到 journalctl（无需手工配置）。
+`web.listen_addr` 默认 `127.0.0.1:8080`（仅本机可访问）；改成 `0.0.0.0:8080` 开放 LAN 时
+**必须同时设置 `web.password_hash`**，否则触发 fail-closed，网关直接拒绝启动。
 
 ### 2. 启动前端（开发模式）
 

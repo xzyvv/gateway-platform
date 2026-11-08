@@ -292,6 +292,10 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
             echo "    投运前请按现场改：buses[].port_name（建议用 serial-rules.sh 生成的稳定名）、"
             echo "    points（示例点位 demo_modbus_1 仅用于开箱验链路）、mqtt.broker。"
             echo "    web.api_token 留空 → 启动时随机生成并打印在 journalctl 日志。"
+            echo "    web.listen_addr 默认 127.0.0.1:8080（仅本机可访问）。要开放车间 LAN："
+            echo "    先用 admin/admin 登录 → POST /api/auth/password 改密（哈希写回 config.json）"
+            echo "    → 再把 web.listen_addr 改成 0.0.0.0:8080 并重启。"
+            echo "    ⚠ 未设 password_hash 就改成 0.0.0.0 会触发 fail-closed，网关拒绝启动。"
         else
             echo "  ⚠ 未提供 config.json：gatewayd 将以安全默认值启动"
             echo "    （仅监听 127.0.0.1:8080，api_token 自动生成并打印在 journalctl 日志）"
