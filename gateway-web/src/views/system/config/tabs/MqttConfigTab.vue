@@ -12,6 +12,14 @@
     <el-form-item label="Topic">
       <el-input v-model="mqtt.topic" placeholder="gateway/data" />
     </el-form-item>
+    <el-form-item label="告警 Topic">
+      <!-- 告警 Topic 由数据 Topic 派生，只读展示，避免对接方猜测订阅地址 -->
+      <div class="derived-topics">
+        <el-input :model-value="alarmTopic" readonly placeholder="点位报警/恢复" />
+        <el-input :model-value="systemAlarmTopic" readonly placeholder="系统（磁盘）告警" />
+        <div class="derived-hint">由数据 Topic 派生，不可单独配置</div>
+      </div>
+    </el-form-item>
     <el-form-item label="QoS 等级">
       <el-select v-model="mqtt.qos" style="width: 100%">
         <el-option :value="0" label="0 - 最多一次" />
@@ -61,6 +69,20 @@
         <el-form-item label="续传限速（条/秒）">
           <el-input-number v-model="mqtt.resume_rate_limit" :min="0" placeholder="0=不限速" />
         </el-form-item>
+        <el-form-item label="重连退避">
+          <!-- 逐档秒数是调优项，前端只给三个预设；现场特殊需求仍可直接改 config.json -->
+          <div class="backoff-field">
+            <el-select v-model="backoffPreset" style="width: 100%">
+              <el-option value="standard" label="标准（2/4/8/16/32/60 秒，抖动 40%）" />
+              <el-option value="fast" label="快速（1/1/2/3/5/10 秒，抖动 20%）" />
+              <el-option value="conservative" label="保守（5/15/30/60/120/300 秒，抖动 50%）" />
+              <el-option value="custom" label="自定义（配置文件档位，选此项不改写）" />
+            </el-select>
+            <div class="backoff-hint">
+              当前：{{ backoff.seconds.join(' / ') }} 秒，抖动 {{ Math.round(backoff.jitter_ratio * 100) }}%
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="Payload 模板">
           <el-input v-model="mqtt.payload_template" type="textarea" :rows="3" placeholder="留空=默认 JSON 格式" />
         </el-form-item>
@@ -80,6 +102,19 @@ const mqtt = defineModel<MqttConfig>({ required: true })
 const advancedOpen = ref<string[]>([])
 
 /**
+ * 点位报警/恢复主题（后端 `format!("{}/alarm", topic)`）。
+ *
+ * 刻意不做斜杠归一化：后端是直接字符串拼接，展示必须与真实下发主题一致，
+ * 否则用户按这里显示的地址去订阅会收不到消息。
+ */
+const alarmTopic = computed(() => (mqtt.value?.topic ? `${mqtt.value.topic}/alarm` : ''))
+
+/** 系统告警主题（后端 `{topic}/system/alarm`，当前用于磁盘告警） */
+const systemAlarmTopic = computed(() =>
+  mqtt.value?.topic ? `${mqtt.value.topic}/system/alarm` : '',
+)
+
+/**
  * 压缩方式的代理值：下拉里用空串表示「不压缩」，写回配置时还原为后端约定的 null。
  * 清空（clearable）同样落到 ''，统一转成 null，避免保存出空字符串。
  */
@@ -88,6 +123,54 @@ const compressionProxy = computed<string>({
   set: (v) => {
     if (!mqtt.value) return
     mqtt.value.compression = v === '' ? null : v
+  },
+})
+
+/**
+ * 重连退避预设。
+ *
+ * 标准档与后端 `default_reconnect_backoff()` 完全一致（2/4/8/16/32/60 秒 + 40% 抖动），
+ * 保证「不动这个下拉」不会改变升级前的重连节奏。
+ */
+type BackoffPreset = 'standard' | 'fast' | 'conservative' | 'custom'
+type Backoff = MqttConfig['reconnect_backoff']
+
+const BACKOFF_PRESETS: Record<Exclude<BackoffPreset, 'custom'>, Backoff> = {
+  standard: { seconds: [2, 4, 8, 16, 32, 60], jitter_ratio: 0.4 },
+  fast: { seconds: [1, 1, 2, 3, 5, 10], jitter_ratio: 0.2 },
+  conservative: { seconds: [5, 15, 30, 60, 120, 300], jitter_ratio: 0.5 },
+}
+
+/** 当前生效的退避参数（配置缺失时按标准档展示） */
+const backoff = computed<Backoff>(() => mqtt.value?.reconnect_backoff ?? BACKOFF_PRESETS.standard)
+
+const BACKOFF_LABELS: Record<BackoffPreset, string> = {
+  standard: '标准',
+  fast: '快速',
+  conservative: '保守',
+  custom: '自定义',
+}
+
+function sameBackoff(a: Backoff, b: Backoff) {
+  return (
+    a.seconds.length === b.seconds.length &&
+    a.seconds.every((s, i) => s === b.seconds[i]) &&
+    Math.abs(a.jitter_ratio - b.jitter_ratio) < 1e-9
+  )
+}
+
+const backoffPreset = computed<BackoffPreset>({
+  get: () => {
+    const cur = backoff.value
+    const hit = (Object.keys(BACKOFF_PRESETS) as Array<keyof typeof BACKOFF_PRESETS>)
+      .find((k) => sameBackoff(cur, BACKOFF_PRESETS[k]))
+    return hit ?? 'custom'
+  },
+  set: (preset) => {
+    // 「自定义」只是展示态：选中时不改写配置，避免覆盖现场手调的档位
+    if (preset === 'custom' || !mqtt.value) return
+    const p = BACKOFF_PRESETS[preset]
+    mqtt.value.reconnect_backoff = { seconds: [...p.seconds], jitter_ratio: p.jitter_ratio }
   },
 })
 
@@ -102,6 +185,7 @@ const advancedSummary = computed(() => {
     `心跳 ${fmt(m.keep_alive, 's')}`,
     `ACK ${fmt(m.ack_timeout_secs, 's')}`,
     `压缩 ${m.compression || '不压缩'}`,
+    `退避 ${BACKOFF_LABELS[backoffPreset.value]}`,
   ]
   if (m.resume_rate_limit) parts.push(`限速 ${m.resume_rate_limit} 条/秒`)
   if (m.payload_template) parts.push('自定义 Payload')
@@ -128,6 +212,27 @@ const advancedSummary = computed(() => {
   font-weight: 600;
 }
 .mqtt-advanced-summary {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.derived-topics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.derived-topics :deep(.el-input__inner) {
+  color: var(--text-secondary);
+}
+.derived-hint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.backoff-field {
+  width: 100%;
+}
+.backoff-hint {
+  margin-top: 4px;
   font-size: 0.75rem;
   color: var(--text-secondary);
 }

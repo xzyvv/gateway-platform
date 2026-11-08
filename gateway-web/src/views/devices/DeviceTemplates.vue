@@ -28,6 +28,10 @@
         <el-form-item label="描述"><el-input v-model="form.description" /></el-form-item>
         <el-form-item label="总线"><el-input v-model="form.bus" placeholder="/dev/ttyUSB0" /></el-form-item>
         <el-form-item label="协议"><ProtocolSelector v-model="form.protocol" /></el-form-item>
+        <el-form-item label="默认采集周期">
+          <el-input-number v-model="form.defaultInterval" :min="1" :max="3600" controls-position="right" />
+          <span class="tpl-hint">秒；设备未单独配置采集周期时使用该值</span>
+        </el-form-item>
         <el-form-item label="点位列表">
           <div class="point-list">
             <div v-for="(p, i) in form.points" :key="i" class="point-row">
@@ -101,6 +105,8 @@ function emptyPoint(): FormPoint {
 function emptyForm() {
   return {
     name: '', description: '', bus: '/dev/ttyUSB0', protocol: 'modbus',
+    /** 模板默认采集周期（秒）：设备未显式配置 interval 时按此值展开 */
+    defaultInterval: 1,
     points: [emptyPoint()] as FormPoint[],
   }
 }
@@ -159,6 +165,8 @@ function openEdit(t: DeviceTemplate) {
   form.description = String(t.description ?? '')
   form.bus = String(t.bus ?? '/dev/ttyUSB0')
   form.protocol = t.protocol || 'modbus'
+  // 默认采集周期：后端字段为 default_interval，历史模板可能缺失 → 兜底 1 秒
+  form.defaultInterval = Number(t.default_interval ?? 1)
   form.points = (Array.isArray(t.points) ? t.points : []).map((p) => ({
     name: String(p.name ?? ''),
     address: String(p.address ?? p.default_address ?? ''),
@@ -186,7 +194,7 @@ async function save() {
       vendor: '',
       model: '',
       protocol: form.protocol,
-      default_interval: 1,
+      default_interval: form.defaultInterval,
       points: form.points.map((p) => {
         const addr = p.address.trim() === '' ? undefined : Number(p.address)
         return {
@@ -240,4 +248,5 @@ onMounted(load)
 .top-bar { display: flex; gap: 8px; margin-bottom: 12px; }
 .point-list { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .point-row { display: flex; gap: 6px; align-items: center; }
+.tpl-hint { margin-left: 10px; color: var(--text-secondary); font-size: 0.75rem; }
 </style>

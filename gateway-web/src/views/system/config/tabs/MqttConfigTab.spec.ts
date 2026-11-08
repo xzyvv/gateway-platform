@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import MqttConfigTab from './MqttConfigTab.vue'
+import { ElSelect } from 'element-plus'
 import type { MqttConfig } from '@/api/types'
 
 function makeMqtt(over: Partial<MqttConfig> = {}): MqttConfig {
@@ -49,6 +50,7 @@ describe('MqttConfigTab.vue 高级参数分组', () => {
     expect(wrapper.text()).toContain('心跳 60s')
     expect(wrapper.text()).toContain('ACK 10s')
     expect(wrapper.text()).toContain('压缩 不压缩')
+    expect(wrapper.text()).toContain('退避 标准')
 
     const wrap = wrapper.find('.el-collapse-item__wrap')
     expect(wrap.exists()).toBe(true)
@@ -64,9 +66,57 @@ describe('MqttConfigTab.vue 高级参数分组', () => {
     const wrap = wrapper.find('.el-collapse-item__wrap')
     expect(wrap.isVisible(), '点击标题后高级参数应展开').toBe(true)
     const text = wrapper.text()
-    for (const label of ['心跳间隔（秒）', 'ACK 超时（秒）', '压缩方式', '压缩阈值（字节）', '续传限速（条/秒）', 'Payload 模板']) {
+    for (const label of ['心跳间隔（秒）', 'ACK 超时（秒）', '压缩方式', '压缩阈值（字节）', '续传限速（条/秒）', '重连退避', 'Payload 模板']) {
       expect(text, `高级字段缺失：${label}`).toContain(label)
     }
+    wrapper.unmount()
+  })
+
+  it('告警 Topic 由数据 Topic 派生，只读展示且不可编辑', () => {
+    const wrapper = mountTab()
+    const inputs = wrapper.findAll('.derived-topics input')
+    expect(inputs.map((i) => (i.element as HTMLInputElement).value))
+      .toEqual(['gateway/data/alarm', 'gateway/data/system/alarm'])
+    for (const i of inputs) expect(i.attributes('readonly')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('展示值与后端派生规则逐字一致（不做斜杠归一化）', () => {
+    const wrapper = mountTab(makeMqtt({ topic: 'gw/data/' }))
+    const inputs = wrapper.findAll('.derived-topics input')
+    // 后端是 format!("{}/alarm", topic) 直接拼接，展示必须同源，否则用户订阅不到
+    expect(inputs.map((i) => (i.element as HTMLInputElement).value))
+      .toEqual(['gw/data//alarm', 'gw/data//system/alarm'])
+    wrapper.unmount()
+  })
+
+  it('重连退避提供三个预设，选择后写回对应档位', async () => {
+    const mqtt = makeMqtt()
+    const wrapper = mountTab(mqtt)
+    const select = wrapper.find('.backoff-field').findComponent(ElSelect)
+    // 默认配置（后端 default_reconnect_backoff）识别为「标准」
+    expect(select.props('modelValue')).toBe('standard')
+
+    select.vm.$emit('update:modelValue', 'fast')
+    await nextTick()
+    expect(mqtt.reconnect_backoff).toEqual({ seconds: [1, 1, 2, 3, 5, 10], jitter_ratio: 0.2 })
+    expect(wrapper.find('.backoff-hint').text()).toContain('1 / 1 / 2 / 3 / 5 / 10')
+
+    select.vm.$emit('update:modelValue', 'conservative')
+    await nextTick()
+    expect(mqtt.reconnect_backoff).toEqual({ seconds: [5, 15, 30, 60, 120, 300], jitter_ratio: 0.5 })
+    wrapper.unmount()
+  })
+
+  it('非预设档位显示为「自定义」，选中它不改写现有配置', async () => {
+    const mqtt = makeMqtt({ reconnect_backoff: { seconds: [3, 7, 20], jitter_ratio: 0 } })
+    const wrapper = mountTab(mqtt)
+    const select = wrapper.find('.backoff-field').findComponent(ElSelect)
+    expect(select.props('modelValue')).toBe('custom')
+
+    select.vm.$emit('update:modelValue', 'custom')
+    await nextTick()
+    expect(mqtt.reconnect_backoff).toEqual({ seconds: [3, 7, 20], jitter_ratio: 0 })
     wrapper.unmount()
   })
 

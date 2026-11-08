@@ -34,6 +34,7 @@ export function usePoints() {
     devices: state.devices, points: state.points, runtimePoints: state.runtimePoints,
     mergedPoints: state.mergedPoints, loading: state.loading, loadError: state.loadError,
     selectedDevice: state.selectedDevice, currentDeviceName: state.currentDeviceName,
+    northInterval: state.northInterval,
     selection: state.selection,
     // single point
     pointForm: form.pointForm, pointFormRef: form.pointFormRef, pointRules: form.pointRules,

@@ -147,6 +147,20 @@
         <el-form-item label="地址偏移" prop="address_num">
           <el-input-number v-model="pointForm.address_num" :min="0" controls-position="right" style="width: 100%" />
         </el-form-item>
+        <el-form-item label="采集周期" prop="interval">
+          <!-- 上界跟随北向上报周期；已有大周期点位保留原值（编辑不应静默改频率） -->
+          <div class="point-pair">
+            <el-input-number
+              v-model="pointForm.interval"
+              :min="1"
+              :max="Math.max(intervalMax, pointForm.interval)"
+              controls-position="right"
+              style="width: 100%"
+            />
+            <span style="color: var(--text-secondary); font-size: 0.75rem">秒</span>
+          </div>
+          <div class="point-inherit-hint">必须小于北向上报周期（当前 {{ northInterval }} 秒）；上报周期在「系统配置 → MQTT」中修改。</div>
+        </el-form-item>
         <el-form-item label="允许写入" prop="writable">
           <el-switch v-model="pointForm.writable" />
           <span style="margin-left: 8px; color: var(--text-secondary); font-size: 0.75rem">开启后该点位可在「点位读写」页面写入，也可通过「远程控制」下发；关闭（默认）则拒绝一切写入</span>
@@ -239,7 +253,7 @@ function goDevices() { router.push("/devices") }
 
 const {
   devices, points, mergedPoints, loading, loadError, selectedDevice, currentDeviceName,
-  selection,
+  northInterval, selection,
   pointForm, pointFormRef, pointRules, formMode, submitting, showForm,
   showCopy, showBatchEdit, showGen,
   protocolLabel,
@@ -247,6 +261,12 @@ const {
   readPoint, removePoint, batchDelete,
   openCreate, openEdit, resetForm, submitPoint, toggleWritable, savePointField,
 } = usePoints()
+
+/**
+ * 采集周期输入框上界：必须小于北向上报周期（后端 validate_cycle_conflict）。
+ * 下限取 1，避免上报周期被配成 1s 时算不出合法区间。
+ */
+const intervalMax = computed(() => Math.max(1, northInterval.value - 1))
 
 // 模板用字符串 ref="pointFormRef" 反向绑定该 Ref，脚本侧没有直接读取点（校验发生在
 // Composable 的 submitPoint 内）。noUnusedLocals 不把字符串 ref 计入「已使用」，故显式取值。

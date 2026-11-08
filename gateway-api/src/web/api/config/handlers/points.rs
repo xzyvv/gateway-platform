@@ -181,10 +181,15 @@ pub async fn update_point(
             "scale 不能为 0（会使采集值恒等于 offset；如需 1:1 透传请省略或设为 1.0）",
         ));
     }
-    if payload.interval >= 60 {
+    // 采集周期必须小于北向上报周期：与 GatewayConfig::validate_cycle_conflict 同源。
+    // 不再硬编码 60s——北向周期本身可配，硬编码会导致「把上报周期改大后仍按 60 拦截」。
+    if cfg.mqtt.enabled && payload.interval >= cfg.mqtt.publish_interval {
         return Ok(ApiResponse::err(
             4002,
-            "采集周期必须小于北向上送周期（60s）",
+            format!(
+                "采集周期必须小于北向上报周期（当前 {}s）",
+                cfg.mqtt.publish_interval
+            ),
         ));
     }
     // Bug 109: 复用 VALID_PROTOCOLS 常量，避免与 update_device 不同步。
@@ -408,7 +413,7 @@ pub async fn purge_all_point_trash(
 }
 
 /// 测点创建请求校验（create_point 用）
-fn validate_point(payload: &PointPayload, _cfg: &GatewayConfig) -> GatewayResult<()> {
+fn validate_point(payload: &PointPayload, cfg: &GatewayConfig) -> GatewayResult<()> {
     if payload.protocol.is_empty() {
         return Err(GatewayError::Config("protocol 不能为空".into()));
     }
@@ -422,13 +427,13 @@ fn validate_point(payload: &PointPayload, _cfg: &GatewayConfig) -> GatewayResult
     if payload.interval == 0 {
         return Err(GatewayError::Config("interval 必须大于 0".into()));
     }
-    // Bug 39 同源校验：新增路径须与 update_point 一致地拒绝 interval >= 60
-    // （"采集周期必须小于北向上送周期"）。旧实现只在 update_point 校验，导致
-    // 可经 create_point 落库一个「能建、不能改」的非法测点，绕开该规则。
-    if payload.interval >= 60 {
-        return Err(GatewayError::Config(
-            "采集周期必须小于北向上送周期（60s）".into(),
-        ));
+    // 采集周期必须小于北向上报周期：与 update_point / validate_cycle_conflict 三处同源。
+    // 旧实现硬编码 60s，与可配置的 mqtt.publish_interval 脱节，现按实际配置判定。
+    if cfg.mqtt.enabled && payload.interval >= cfg.mqtt.publish_interval {
+        return Err(GatewayError::Config(format!(
+            "采集周期必须小于北向上报周期（当前 {}s）",
+            cfg.mqtt.publish_interval
+        )));
     }
     // Bug 228: 显式 scale=0 会让采集值恒等于 offset（读路径 raw*scale+offset），
     // 且与写路径 reverse_convert（把 0 当作"不缩放"）语义相反，必须拒绝而非静默归零。
@@ -534,16 +539,19 @@ mod tests {
     }
 
     /// r43-CFG2 回归：create_point 的校验须与 update_point 一致——
-    /// interval >= 60 必须被拒，否则可经新增路径落库「能建、不能改」的非法测点。
+    /// 采集周期 >= 北向上报周期必须被拒，否则可经新增路径落库「能建、不能改」的非法测点。
     #[test]
-    fn validate_point_rejects_interval_ge_60() {
-        let cfg = GatewayConfig::default();
+    fn validate_point_rejects_interval_not_below_north_period() {
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = true;
+        cfg.mqtt.publish_interval = 60;
+
         let mut p60 = payload_with_scale(None);
         p60.interval = 60;
         let err = validate_point(&p60, &cfg).expect_err("interval=60 应被拒绝");
         assert!(
             err.message().contains("60"),
-            "错误信息应指向北向上送周期 60s，实际: {}",
+            "错误信息应指向当前北向上报周期，实际: {}",
             err.message()
         );
 
@@ -555,10 +563,46 @@ mod tests {
         );
     }
 
+    /// 北向上报周期可配：上界必须跟随配置，而不是硬编码 60。
+    #[test]
+    fn validate_point_interval_bound_follows_mqtt_publish_interval() {
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = true;
+        cfg.mqtt.publish_interval = 300;
+
+        let mut p299 = payload_with_scale(None);
+        p299.interval = 299;
+        assert!(
+            validate_point(&p299, &cfg).is_ok(),
+            "上报周期 300s 时采集周期 299s 应通过"
+        );
+
+        let mut p300 = payload_with_scale(None);
+        p300.interval = 300;
+        assert!(
+            validate_point(&p300, &cfg).is_err(),
+            "采集周期等于上报周期仍应被拒绝"
+        );
+    }
+
+    /// MQTT 关闭时无「上报周期」可比，长采集周期应放行（历史 60s 硬限属于误伤）。
+    #[test]
+    fn validate_point_allows_long_interval_when_mqtt_disabled() {
+        let cfg = GatewayConfig::default();
+        let mut p600 = payload_with_scale(None);
+        p600.interval = 600;
+        assert!(
+            validate_point(&p600, &cfg).is_ok(),
+            "MQTT 未启用时不应限制采集周期上界"
+        );
+    }
+
     /// interval=59（边界内侧）必须通过，避免把上界误设成保守值。
     #[test]
-    fn validate_point_accepts_interval_just_below_60() {
-        let cfg = GatewayConfig::default();
+    fn validate_point_accepts_interval_just_below_north_period() {
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = true;
+        cfg.mqtt.publish_interval = 60;
         let mut p59 = payload_with_scale(None);
         p59.interval = 59;
         assert!(validate_point(&p59, &cfg).is_ok(), "interval=59 应通过");

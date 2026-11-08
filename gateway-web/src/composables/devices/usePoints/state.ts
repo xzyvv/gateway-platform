@@ -2,6 +2,7 @@ import { computed, onUnmounted, ref } from 'vue'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 import type { PointQuality } from '@/api/dataQuality'
 import type { PointRow, PointsState } from './types'
+import { FALLBACK_NORTH_INTERVAL } from './validation'
 
 /**
  * 点位页共享状态
@@ -21,6 +22,8 @@ export function createPointsState(): PointsState {
   const selectedDevice = ref('')
   // 多选
   const selection = ref<PointConfig[]>([])
+  /** 北向上报周期（秒）：进页后由 query.loadDevices 从配置中心刷新 */
+  const northInterval = ref(FALLBACK_NORTH_INTERVAL)
 
   // dialog visibility helpers
   const showCopy = ref(false)
@@ -89,6 +92,7 @@ export function createPointsState(): PointsState {
     loadError,
     selectedDevice,
     selection,
+    northInterval,
     currentDeviceName,
     mergedPoints,
     showCopy,

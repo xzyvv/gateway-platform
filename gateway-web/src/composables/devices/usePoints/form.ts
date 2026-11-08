@@ -48,8 +48,9 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
     if (dev) {
       pointForm.bus = dev.bus
       pointForm.protocol = dev.protocol
-      // Bug W4: 创建点位必须携带合法 interval（后端必填且 1..=59），默认继承设备周期。
-      pointForm.interval = clampInterval(dev.interval)
+      // Bug W4: 创建点位必须携带合法 interval（后端必填）。
+      // 默认继承设备周期，但要收敛到「小于北向上报周期」，否则后端必然拒绝。
+      pointForm.interval = clampInterval(dev.interval, state.northInterval.value)
     }
   }
 
@@ -71,6 +72,8 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
     pointForm.slave_id = row.slave_id ?? 1
     pointForm.address_num = row.address_num ?? 0
     // Bug W4: 编辑时保留该点位原有采集周期（后端 PUT 会无条件覆盖 interval）。
+    // 这里不按北向周期设上界：历史配置可能存在大周期点位，编辑其它字段不应
+    // 把用户的 300s 静默改成 59s；合法性由用户显式改周期时再收敛。
     pointForm.interval = clampInterval(row.interval)
     // S11: 回填写入白名单标记
     pointForm.writable = row.writable ?? false
@@ -131,7 +134,7 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
         address: pointForm.address,
         slave_id: pointForm.slave_id,
         address_num: pointForm.address_num,
-        interval: clampInterval(pointForm.interval),
+        interval: clampInterval(pointForm.interval, state.northInterval.value),
         device_id: selectedDevice.value,
         // S11: 随表单提交写入白名单标记
         writable: pointForm.writable,

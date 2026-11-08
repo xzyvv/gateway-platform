@@ -1,10 +1,12 @@
 import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
+import { getConfig } from '@/api/config'
 import { fetchPointQualities } from '@/composables/data/usePointQuality'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import type { PointQuality } from '@/api/dataQuality'
 import type { PointConfig } from '@/api/types'
 import type { PointsState } from './types'
+import { FALLBACK_NORTH_INTERVAL } from './validation'
 
 /** 设备列表加载失败时的兜底文案 */
 const DEVICE_LOAD_ERROR = '无法获取设备列表'
@@ -16,7 +18,26 @@ const DEVICE_LOAD_ERROR = '无法获取设备列表'
  * 点位请求带序号守卫，避免快速切换设备时旧响应覆盖新设备的清单。
  */
 export function createPointQuery(state: PointsState) {
-  const { devices, points, runtimePoints, loading, loadError, selectedDevice, selection } = state
+  const { devices, points, runtimePoints, loading, loadError, selectedDevice, selection, northInterval } = state
+
+  /**
+   * 读取北向上报周期：点位采集周期必须小于它（后端 validate_cycle_conflict）。
+   *
+   * 失败或 MQTT 未启用时保持兜底值 60s——该值只用于表单提示与新建点位的收敛，
+   * 读不到不应该阻塞设备/点位列表。
+   */
+  async function loadNorthInterval() {
+    try {
+      const cfg = await getConfig()
+      if (state.isUnmounted()) return
+      northInterval.value =
+        cfg.mqtt?.enabled && cfg.mqtt.publish_interval > 0
+          ? cfg.mqtt.publish_interval
+          : FALLBACK_NORTH_INTERVAL
+    } catch {
+      // 无配置读取权限或网关暂时不可达：沿用兜底值
+    }
+  }
 
   // 多选
   function onSelectionChange(rows: PointConfig[]) {
@@ -24,6 +45,8 @@ export function createPointQuery(state: PointsState) {
   }
 
   async function loadDevices() {
+    // 北向周期与设备列表并行拉取：慢/失败都不阻塞列表
+    void loadNorthInterval()
     try {
       // 运行时点位快照（含模板展开）与设备列表并行；快照失败不阻塞，只少模板行
       const [data, rtPts] = await Promise.all([

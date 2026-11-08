@@ -87,6 +87,13 @@ export interface PointsState {
   selectedDevice: Ref<string>
   /** 表格多选 */
   selection: Ref<PointConfig[]>
+  /**
+   * 北向上报周期（秒）：点位采集周期必须小于它。
+   *
+   * 进页时从 `/api/config` 读取 mqtt.publish_interval；MQTT 未启用或读取失败时
+   * 退回 FALLBACK_NORTH_INTERVAL（60），仅用于表单提示与新建点位的取值收敛。
+   */
+  northInterval: Ref<number>
   /** 当前设备名（未选中时为 —） */
   currentDeviceName: ComputedRef<string>
   /** 展示用点位 = 配置点位 + 模板展开的运行时点位 */

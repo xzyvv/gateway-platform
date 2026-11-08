@@ -47,6 +47,7 @@ import DeviceTemplates from './DeviceTemplates.vue'
 import DataTable from '@/components/DataTable.vue'
 import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
 import type { DeviceTemplate } from '@/api/templates'
+import { ElInputNumber } from 'element-plus'
 
 const DialogStub = {
   name: 'ElDialog',
@@ -56,7 +57,7 @@ const DialogStub = {
 
 const TPL: DeviceTemplate[] = [
   {
-    name: 'tpl-a', vendor: '', model: '', protocol: 'modbus', default_interval: 1,
+    name: 'tpl-a', vendor: '', model: '', protocol: 'modbus', default_interval: 5,
     description: '水表模板', bus: '/dev/ttyUSB0',
     points: [
       { name: 'p1', address: '0', default_address: 0, data_type: 'float' },
@@ -93,6 +94,12 @@ async function openCreate(wrapper: ReturnType<typeof mountPage>) {
 
 async function setField(wrapper: ReturnType<typeof mountPage>, index: number, value: string) {
   input(wrapper, index).vm.$emit('update:modelValue', value)
+  await settle()
+}
+
+/** 默认采集周期是 ElInputNumber：直接向其发 update:modelValue（内嵌 ElInput 只在失焦时提交） */
+async function setIntervalField(wrapper: ReturnType<typeof mountPage>, value: number) {
+  wrapper.findAllComponents(ElInputNumber)[0]!.vm.$emit('update:modelValue', value)
   await settle()
 }
 
@@ -161,6 +168,8 @@ describe('DeviceTemplates 设备模板', () => {
     await openCreate(wrapper)
     await setField(wrapper, 0, '  水表模板  ')
     await setField(wrapper, 1, '现场水表')
+    // 默认采集周期
+    await setIntervalField(wrapper, 10)
     // 点位行：名称 / 地址
     await setPointField(wrapper, 0, 0, ' 电量 ')
     await setPointField(wrapper, 0, 1, '10')
@@ -177,7 +186,7 @@ describe('DeviceTemplates 设备模板', () => {
       vendor: '',
       model: '',
       protocol: 'modbus',
-      default_interval: 1,
+      default_interval: 10,
     })
     expect(payload.points).toHaveLength(2)
     expect(payload.points[0]).toMatchObject({ name: '电量', default_address: 10, address: '10' })
@@ -192,7 +201,8 @@ describe('DeviceTemplates 设备模板', () => {
     const wrapper = mountPage()
     await openCreate(wrapper)
     await setField(wrapper, 0, 'dup')
-    await setField(wrapper, 3, 'p1')
+    // ElInput 索引 3 是「默认采集周期」的内嵌输入，点位名称在其后（索引 4）
+    await setField(wrapper, 4, 'p1')
 
     await button(wrapper, '创建').trigger('click')
     await settle()
@@ -211,6 +221,8 @@ describe('DeviceTemplates 设备模板', () => {
     expect(input(wrapper, 0).props('modelValue')).toBe('tpl-a')
     expect(input(wrapper, 1).props('modelValue')).toBe('水表模板')
     expect(wrapper.findComponent(ProtocolSelector).props('modelValue')).toBe('modbus')
+    // 默认采集周期回填
+    expect(wrapper.findAllComponents(ElInputNumber)[0]!.props('modelValue')).toBe(5)
 
     await setField(wrapper, 1, '水表模板-改')
     await button(wrapper, '保存').trigger('click')

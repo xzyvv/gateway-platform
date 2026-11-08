@@ -49,7 +49,7 @@ export function createPointBatchImport(state: PointsState, loadPoints: () => Pro
       ...mapPointToTarget(p, target),
       bus: targetDevice.bus,
       protocol: targetDevice.protocol,
-      interval: clampInterval(p.interval),
+      interval: clampInterval(p.interval, state.northInterval.value),
     }))
     importing.value = true
     importProgress.total = payloads.length

@@ -4,9 +4,9 @@ import type { PointConfig } from './types'
 /**
  * 点位新增/编辑请求体，与后端 `PointPayload` 对齐。
  *
- * Bug W4: 后端 `PointPayload.interval` 是必填 `u64`（且校验 1..=59），而前端此前只发
- * 7 个字段并用 `as PointConfig` 强断言掩盖缺失，后端 serde 反序列化直接 422
- * （missing field `interval`），导致新增/编辑点位必然失败。
+ * Bug W4: 后端 `PointPayload.interval` 是必填 `u64`（要求 >= 1，且 MQTT 启用时必须
+ * 小于北向上报周期），而前端此前只发 7 个字段并用 `as PointConfig` 强断言掩盖缺失，
+ * 后端 serde 反序列化直接 422（missing field `interval`），导致新增/编辑点位必然失败。
  * 这里显式声明必填字段，去掉强断言，让 TS 在编译期拦住契约不一致。
  */
 export type PointPayload = Partial<PointConfig> & {

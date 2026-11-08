@@ -20,6 +20,10 @@ vi.mock('@/api/devices', () => ({
 vi.mock('@/api/dataQuality', () => ({
   listPointQuality: vi.fn().mockResolvedValue([]),
 }))
+// 北向上报周期由配置接口提供：点位采集周期必须小于它
+vi.mock('@/api/config', () => ({
+  getConfig: vi.fn().mockResolvedValue({ mqtt: { enabled: true, publish_interval: 60 } }),
+}))
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual<typeof import('element-plus')>('element-plus')
   return {
@@ -31,6 +35,7 @@ vi.mock('element-plus', async () => {
 
 import { usePoints } from './usePoints'
 import { updatePoint, listPoints, deletePoint, restorePoint, createPoint } from '@/api/points'
+import { getConfig } from '@/api/config'
 import { ElMessage, ElButton } from 'element-plus'
 import type { VNode } from 'vue'
 import type { PointConfig, DeviceConfig } from '@/api/types'
@@ -306,6 +311,18 @@ describe('usePoints', () => {
       expect(row.name).toBe('新名')
       expect(listPoints).not.toHaveBeenCalled()
       expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('名称'))
+    })
+
+    it('编辑大周期点位不会被静默改写（不再按 59s 截断）', async () => {
+      vi.mocked(updatePoint).mockResolvedValue(makePoint({ id: 'p1', name: '新名', interval: 300 }))
+      const { points, savePointField } = usePoints()
+      const row = makePoint({ id: 'p1', name: '旧名', interval: 300 })
+      points.value = [row]
+
+      await savePointField(row, { name: '新名' })
+
+      // 旧实现 clampInterval 硬编码上界 59：仅改个名字就把 300s 采集周期改成 59s
+      expect(updatePoint).toHaveBeenCalledWith('p1', expect.objectContaining({ interval: 300 }))
     })
 
     it('失败返回 false、保留原值，并给出可见提示', async () => {
@@ -611,6 +628,33 @@ describe('usePoints', () => {
         data_type: 'u16',
         interval: 59,
       }))
+    })
+
+    it('导入周期的上界跟随北向上报周期，而不是硬编码 59s', async () => {
+      vi.mocked(getConfig).mockResolvedValue({
+        mqtt: { enabled: true, publish_interval: 300 },
+      } as unknown as Awaited<ReturnType<typeof getConfig>>)
+      vi.mocked(createPoint).mockResolvedValue(makePoint())
+
+      const { northInterval, loadDevices, devices, selectedDevice, importText, doImport } = usePoints()
+      // 北向周期在 loadDevices 中异步拉取，等它落定再导入
+      await loadDevices()
+      await vi.waitFor(() => expect(northInterval.value).toBe(300))
+
+      devices.value = [makeDevice()]
+      selectedDevice.value = 'd1'
+      importText.value = JSON.stringify([
+        { id: 'p1', bus: 'bus1', protocol: 'modbus', address: '40001', interval: 120, on_change: false },
+      ])
+
+      await doImport()
+
+      expect(createPoint).toHaveBeenCalledWith('d1', expect.objectContaining({ interval: 120 }))
+
+      // 复位，避免影响后续用例
+      vi.mocked(getConfig).mockResolvedValue({
+        mqtt: { enabled: true, publish_interval: 60 },
+      } as unknown as Awaited<ReturnType<typeof getConfig>>)
     })
 
     it('下一次导入开始时重置 completed/total', async () => {
