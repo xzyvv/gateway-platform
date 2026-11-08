@@ -6,18 +6,29 @@
 //! 本模块验证的是**可观察的加密语义**，而不是「能编译」：
 //! 1. 落盘文件里看不到明文 SQLite 头与表名；
 //! 2. 同一把 keyfile 重新打开能读回数据（密钥持久化正确）；
-//! 3. 换掉 keyfile 后旧数据读不出来（密钥确实是解密前提）。
+//! 3. 换掉 keyfile 后拒绝启动且不改写文件；只有显式打开自愈开关才会重建（旧数据仍不可读）。
 
 #![cfg(feature = "encryption")]
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::engine::metrics::Metrics;
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
 use crate::queue::storage::QueueStorage;
 use crate::queue::storage::SqliteStorage;
+
+/// 环境变量是进程级全局状态：`GATEWAY_QUEUE_REBUILD_ON_CORRUPTION` 会改变
+/// `db_init` 对损坏库的处置分支（拒绝启动 / 删库重建）。凡「修改它」或
+/// 「依赖它未被设置」的用例都必须持有此锁，否则并行执行时会互相污染
+/// （同 `crypto::cert::tests::ENV_LOCK` 的做法）。
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+    // 某个测试 panic 导致锁中毒时继续使用，避免后续测试全部连带失败
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 测试夹具：临时目录 + 队列库路径（keyfile 按约定为 `{db_path}.key`）。
 struct Fixture {
@@ -131,6 +142,7 @@ fn reopen_with_same_keyfile_reads_back_data() {
 /// 现语义见 `db_init::refuse_unusable_db`：默认报错退出，由运维确认后再开自愈。
 #[test]
 fn wrong_keyfile_refuses_to_start_and_keeps_files() {
+    let _guard = env_guard();
     let fx = Fixture::new();
     {
         let storage = fx.open();
@@ -169,6 +181,7 @@ fn wrong_keyfile_refuses_to_start_and_keeps_files() {
 /// 现场确认「库确实不可用」时才会这么用，因此这里同时钉住「仍然不会解密出旧行」。
 #[test]
 fn rebuild_env_restores_self_heal_without_leaking_old_rows() {
+    let _guard = env_guard();
     let fx = Fixture::new();
     {
         let storage = fx.open();
