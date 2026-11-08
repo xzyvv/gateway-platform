@@ -54,7 +54,7 @@ impl DiskStatus {
             pressure: AtomicBool::new(false),
             free_pct: std::sync::atomic::AtomicU64::new(0),
             free_pct_valid: AtomicBool::new(false),
-            level: AtomicU8::new(DiskLevel::Ok as u8),
+            level: AtomicU8::new(DiskLevel::Ok.as_u8()),
         }
     }
 
@@ -92,8 +92,10 @@ impl DiskStatus {
     pub fn record(&self, free_pct: f64, pressure: bool) -> bool {
         self.free_pct.store(free_pct.to_bits(), Ordering::Relaxed);
         self.free_pct_valid.store(true, Ordering::Relaxed);
-        self.level
-            .store(disk_level_from_free_pct(free_pct) as u8, Ordering::Relaxed);
+        self.level.store(
+            disk_level_from_free_pct(free_pct).as_u8(),
+            Ordering::Relaxed,
+        );
         self.pressure.swap(pressure, Ordering::Relaxed) != pressure
     }
 }

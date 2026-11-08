@@ -407,7 +407,7 @@ impl QueueStorage for SqliteStorage {
         //    - 行数上界按库所在分区容量自适应（小 eMMC 不再套用固定 500 万行）。
         if new_tick.is_multiple_of(120) {
             let days = *self.storage_retention_days.lock();
-            let disk_level = self.metrics.disk_level.load(Ordering::Relaxed);
+            let disk_level = self.metrics.disk_level_snapshot();
             // 容量探测放在取 conn 锁之前：statvfs 是系统调用，不应阻塞写路径。
             let disk_total = crate::engine::monitor::health::disk_total_bytes(
                 self.db_path.to_str().unwrap_or_default(),

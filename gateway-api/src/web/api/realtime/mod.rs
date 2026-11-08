@@ -14,8 +14,8 @@ const WS_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Deserialize)]
 pub(crate) struct ExecRequest {
-    // 默认构建（无 remote-shell）下 handler 不使用该字段，仅为保持请求体契约不变。
-    #[cfg_attr(not(feature = "remote-shell"), allow(dead_code))]
+    // 默认构建（无 remote-shell）下不执行命令，但字段必须保留：
+    // 请求体契约与开启该特性的构建一致，删掉会让同一份 JSON 解析结果不同。
     command: String,
 }
 

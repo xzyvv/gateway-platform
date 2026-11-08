@@ -55,12 +55,10 @@ impl SchedulerTrait for MockScheduler {
 ///
 /// 自愈决策依赖 `device_status()` 里的 `bus` / `consecutive_failures` /
 /// `quality`，缺了它执行器永远看不到「串口设备持续失败」这一信号。
-#[allow(dead_code)]
 pub struct MockSchedulerWithDevices {
     devices: Vec<DeviceStatus>,
 }
 
-#[allow(dead_code)]
 impl MockSchedulerWithDevices {
     pub fn new(devices: Vec<DeviceStatus>) -> Self {
         Self { devices }
@@ -80,14 +78,12 @@ impl SchedulerTrait for MockSchedulerWithDevices {
 
 /// 假 collector：read 恒返回 Good 数据点，write 结果可控（默认成功）。
 /// 供点位写集成测试验证 write 成功/失败两条路径（默认 mock 的 collectors 为空表）。
-#[allow(dead_code)]
 pub struct MockCollector {
     bus: String,
     write_ok: bool,
 }
 
 impl MockCollector {
-    #[allow(dead_code)]
     pub fn new(bus: &str) -> Self {
         Self {
             bus: bus.to_string(),
@@ -96,7 +92,6 @@ impl MockCollector {
     }
 
     /// 设置 write 返回结果（false → 返回 Unsupported 错误，模拟写入失败）
-    #[allow(dead_code)]
     pub fn with_write_result(mut self, ok: bool) -> Self {
         self.write_ok = ok;
         self
@@ -136,7 +131,6 @@ impl Collector for MockCollector {
 }
 
 /// 携带可注入 collector 表的 scheduler（按 bus_name 索引）
-#[allow(dead_code)]
 pub struct MockSchedulerWithCollectors {
     collectors: HashMap<String, Arc<dyn Collector>>,
 }
@@ -198,11 +192,7 @@ pub struct MockGateway {
 }
 
 /// 一次 `reset_serial_buses` 调用的入参快照。
-///
-/// `common` 目录按测试目标独立编译，各目标用到的字段不同，
-/// 故整个结构体标注 `dead_code` 豁免。
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ResetSerialCall {
     /// 调用方要求重建的总线名（`Some` = 定向重建，`None` = 全部串口总线）
     pub only: Option<String>,
@@ -229,31 +219,26 @@ impl MockGateway {
     }
 
     /// 注入虚拟点位的求值状态（模拟 core 引擎的真实求值结果）。
-    #[allow(dead_code)]
     pub fn set_virtual_point_states(&self, states: HashMap<String, VirtualPointStateView>) {
         *self.virtual_point_states.lock() = states;
     }
 
     /// 回读历次热重载的分节范围（验证写路径确实触发了在线热重载）。
-    #[allow(dead_code)]
     pub fn reload_scopes(&self) -> Vec<gateway_core::config::ReloadScope> {
         self.reload_scopes.lock().clone()
     }
 
     /// 注入/替换 `debug_bus(name)` 返回的假总线
-    #[allow(dead_code)]
     pub fn set_debug_bus(&self, bus: Arc<dyn gateway_api::web::debug_bus::DebugBusTrait>) {
         *self.debug_bus.lock() = Some(bus);
     }
 
     /// 返回 `reset_serial_buses` 的历史调用记录（自愈定向重建验证用）。
-    #[allow(dead_code)]
     pub fn reset_serial_calls(&self) -> Vec<ResetSerialCall> {
         self.reset_serial_calls.lock().clone()
     }
 
     /// 取出本 mock 的磁盘状态实例（供测试注入磁盘压力信号）。
-    #[allow(dead_code)]
     pub fn disk_status(&self) -> Arc<gateway_core::engine::monitor::health::DiskStatus> {
         self.disk_status.clone()
     }
@@ -406,7 +391,6 @@ pub fn mock_app_state() -> Arc<AppState> {
 ///
 /// 设备创建类测试用：N1 起 create_device 会校验总线存在性，device 的 bus
 /// 必须是配置里真实存在的 port_name。
-#[allow(dead_code)]
 pub fn mock_app_state_with_buses(buses: Vec<BusConfig>) -> Arc<AppState> {
     build_mock_state(None, buses, Arc::new(MockGateway::new()), HashMap::new())
 }
@@ -415,8 +399,6 @@ pub fn mock_app_state_with_buses(buses: Vec<BusConfig>) -> Arc<AppState> {
 ///
 /// 自愈执行器的 `ResetNetwork` 动作需要 `platform.cellular`，此类测试用
 /// 该变体注入一个真实（可禁用 enabled=false 以避免真实拨号）的 CellularManager。
-/// （仅自愈测试目标使用；common 目录按测试目标独立编译，未使用方会误报 dead_code）
-#[allow(dead_code)]
 pub fn mock_app_state_with_cellular(
     cellular: Option<Arc<gateway_core::platform::cellular::CellularManager>>,
 ) -> Arc<AppState> {
@@ -433,7 +415,6 @@ pub fn mock_app_state_with_cellular(
 ///
 /// 一并返回接收端：`mpsc` 发送端在接收端 drop 后 `send` 会失败，
 /// 用例必须持有它直到断言完成。
-#[allow(dead_code)]
 pub fn mock_app_state_with_north_feed(
     capacity: usize,
 ) -> (
@@ -457,7 +438,6 @@ pub fn mock_app_state_with_north_feed(
 /// 同 [`mock_app_state`]，但额外返回 mock gateway 实例。
 ///
 /// 需要向 gateway 侧注入可变状态（如磁盘压力信号）的测试用该变体。
-#[allow(dead_code)]
 pub fn mock_app_state_with_gateway() -> (Arc<AppState>, Arc<MockGateway>) {
     let gateway = Arc::new(MockGateway::new());
     let state = build_mock_state(None, Vec::new(), gateway.clone(), HashMap::new());
@@ -468,7 +448,6 @@ pub fn mock_app_state_with_gateway() -> (Arc<AppState>, Arc<MockGateway>) {
 ///
 /// `buses` 进 `GatewayConfig.buses`，handler 据 `port_name` 查得到总线配置；
 /// `debug_bus` 作为 `GatewayTrait::debug_bus` 的返回值，接住 handler 下发的帧。
-#[allow(dead_code)]
 pub fn mock_app_state_with_debug_bus(
     buses: Vec<BusConfig>,
     debug_bus: Arc<dyn gateway_api::web::debug_bus::DebugBusTrait>,
@@ -482,7 +461,6 @@ pub fn mock_app_state_with_debug_bus(
 ///
 /// 用于验证「采集引擎占用总线时调试下发被拒（bus_busy）」：
 /// collector 的 key 必须等于总线 `port_name`。
-#[allow(dead_code)]
 pub fn mock_app_state_with_debug_bus_and_collectors(
     buses: Vec<BusConfig>,
     debug_bus: Arc<dyn gateway_api::web::debug_bus::DebugBusTrait>,
@@ -497,7 +475,6 @@ pub fn mock_app_state_with_debug_bus_and_collectors(
 ///
 /// 返回 `(AppState, Arc<MockGateway>)`：调用方可读回 `reset_serial_calls()`
 /// 断言自愈只重建了目标总线（而不是全部串口总线）。
-#[allow(dead_code)]
 pub fn mock_app_state_for_self_heal(
     buses: Vec<BusConfig>,
     devices: Vec<DeviceStatus>,
@@ -709,8 +686,6 @@ pub fn mock_license_manager(instance: u64) -> LicenseManager {
 }
 
 /// 构造一个带预设 license 状态的 AppState（替换 platform.license 而非尝试写内部）
-/// （仅 license 相关测试目标使用；common 目录按单元独立编译，未使用方会误报 dead_code）
-#[allow(dead_code)]
 pub fn mock_app_state_with_license(s: gateway_core::license::LicenseState) -> Arc<AppState> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static INSTANCE: AtomicU64 = AtomicU64::new(0);
@@ -726,7 +701,6 @@ pub fn mock_app_state_with_license(s: gateway_core::license::LicenseState) -> Ar
 }
 
 /// 构造指定 LicenseManager 的 AppState（import 签发链路测试用：需测试钥对公钥自洽）
-#[allow(dead_code)]
 pub fn mock_app_state_with_license_manager(
     mgr: Arc<gateway_core::license::LicenseManager>,
 ) -> Arc<AppState> {
@@ -743,7 +717,6 @@ pub fn mock_app_state_with_license_manager(
 /// 供点位写集成测试注入假 collector：默认 [`mock_app_state`] 的 collectors 为空表，
 /// handler 会在定位 collector 处提前 404，无法覆盖 write 成功路径。
 /// key 必须等于 `PointConfig.bus`（handler 按 bus_name 索引）。
-#[allow(dead_code)]
 pub fn mock_app_state_with_collectors(
     collectors: HashMap<String, Arc<dyn Collector>>,
 ) -> Arc<AppState> {

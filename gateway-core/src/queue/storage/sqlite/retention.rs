@@ -23,13 +23,11 @@ use crate::engine::monitor::health::DiskLevel;
 use crate::queue::core::limit::MAX_AGGREGATED_ROWS;
 use rusqlite::{params, Connection};
 
-/// 水位档位阈值直接取自 [`DiskLevel`] 的判别值。
-///
-/// 不写 1/2 字面量：`DiskLevel` 是跨层契约（`metrics.disk_level` 以 `u8` 传递），
-/// 一旦枚举插入新档位或重排，字面量会静默把「严重」当成「预警」用；
-/// 取判别值后编译器能保证这里永远跟随枚举。
-const DISK_LEVEL_WARN: i64 = DiskLevel::Warn as i64;
-const DISK_LEVEL_CRITICAL: i64 = DiskLevel::Critical as i64;
+// 水位联动直接比较 `DiskLevel` 枚举值。
+//
+// 不用数字（1/2）或 as i64 判别值：枚举新增档位或重排时，比较式会跟着
+// 编译期的严重度顺序走，不会把「严重」静默当成「预警」用。跨层传递也已改为
+// `DiskLevel` 本身（`metrics.disk_level_snapshot()`），不再以裸 u8/i64 穿透。
 
 /// 聚合表占用磁盘的预算比例（2%）。
 ///
@@ -52,20 +50,20 @@ const WARN_AGGREGATED_DAYS: u32 = 14;
 /// S-4: retention 清理——删除超过保留期的聚合历史记录 + 行数界 + 水位联动
 ///
 /// - `storage_days`：license 配额中的历史保留天数（`None` = 不限）；
-/// - `disk_level`：当前磁盘水位档位（`DiskLevel as u8`）；
+/// - `disk_level`：当前磁盘水位档位（[`DiskLevel`]，由指标层解码后传入）；
 /// - `disk_total_bytes`：库所在分区总容量（0 表示探测失败，用保守上限）。
 pub(crate) fn run_retention_cleanup(
     conn: &mut Connection,
     storage_days: Option<u32>,
-    disk_level: i64,
+    disk_level: DiskLevel,
     disk_total_bytes: u64,
 ) {
     // 严重/阻断：聚合历史全部丢弃，把空间让给原始队列（断点续传依赖）。
-    if disk_level >= DISK_LEVEL_CRITICAL {
+    if disk_level >= DiskLevel::Critical {
         match conn.execute("DELETE FROM data_queue_aggregated", []) {
             Ok(n) if n > 0 => tracing::warn!(
                 "retention: 磁盘水位 level={}，已清空聚合历史 {} 行，仅保留原始队列",
-                disk_level,
+                disk_level.as_str(),
                 n
             ),
             Ok(_) => {}
@@ -95,8 +93,8 @@ pub(crate) fn run_retention_cleanup(
 }
 
 /// 水位联动后的聚合保留天数：预警时收紧到 [`WARN_AGGREGATED_DAYS`]。
-fn effective_aggregated_days(storage_days: Option<u32>, disk_level: i64) -> Option<u32> {
-    if disk_level < DISK_LEVEL_WARN {
+fn effective_aggregated_days(storage_days: Option<u32>, disk_level: DiskLevel) -> Option<u32> {
+    if disk_level < DiskLevel::Warn {
         return storage_days;
     }
     Some(match storage_days {
@@ -106,9 +104,9 @@ fn effective_aggregated_days(storage_days: Option<u32>, disk_level: i64) -> Opti
 }
 
 /// 当前水位下的聚合表行数上限：按分区容量取 2%，预警时减半。
-fn policy_aggregated_cap(disk_level: i64, disk_total_bytes: u64) -> i64 {
+fn policy_aggregated_cap(disk_level: DiskLevel, disk_total_bytes: u64) -> i64 {
     let cap = adaptive_aggregated_row_cap(disk_total_bytes);
-    if disk_level >= DISK_LEVEL_WARN {
+    if disk_level >= DiskLevel::Warn {
         (cap / 2).max(MIN_AGGREGATED_ROWS)
     } else {
         cap
@@ -189,18 +187,18 @@ mod tests {
     /// 水位预警：保留天数收紧到 14 天、行数上限减半。
     #[test]
     fn warn_level_tightens_days_and_cap() {
-        assert_eq!(effective_aggregated_days(Some(30), 0), Some(30));
-        assert_eq!(effective_aggregated_days(None, 0), None);
+        assert_eq!(effective_aggregated_days(Some(30), DiskLevel::Ok), Some(30));
+        assert_eq!(effective_aggregated_days(None, DiskLevel::Ok), None);
         assert_eq!(
-            effective_aggregated_days(Some(30), DISK_LEVEL_WARN),
+            effective_aggregated_days(Some(30), DiskLevel::Warn),
             Some(14)
         );
-        assert_eq!(effective_aggregated_days(Some(7), DISK_LEVEL_WARN), Some(7));
-        assert_eq!(effective_aggregated_days(None, DISK_LEVEL_WARN), Some(14));
+        assert_eq!(effective_aggregated_days(Some(7), DiskLevel::Warn), Some(7));
+        assert_eq!(effective_aggregated_days(None, DiskLevel::Warn), Some(14));
 
         let gb = 1024u64 * 1024 * 1024;
-        let normal = policy_aggregated_cap(0, 4 * gb);
-        let warn = policy_aggregated_cap(DISK_LEVEL_WARN, 4 * gb);
+        let normal = policy_aggregated_cap(DiskLevel::Ok, 4 * gb);
+        let warn = policy_aggregated_cap(DiskLevel::Warn, 4 * gb);
         assert_eq!(warn, normal / 2, "预警时行数上限必须减半");
     }
 
@@ -208,7 +206,7 @@ mod tests {
     #[test]
     fn critical_level_drops_all_aggregated_rows() {
         let mut conn = seeded(10);
-        run_retention_cleanup(&mut conn, Some(30), DISK_LEVEL_CRITICAL, 0);
+        run_retention_cleanup(&mut conn, Some(30), DiskLevel::Critical, 0);
         assert_eq!(count(&conn), 0, "严重水位必须清空聚合历史");
     }
 
@@ -216,7 +214,7 @@ mod tests {
     #[test]
     fn normal_level_keeps_recent_rows_without_quota() {
         let mut conn = seeded(6);
-        run_retention_cleanup(&mut conn, None, 0, 0);
+        run_retention_cleanup(&mut conn, None, DiskLevel::Ok, 0);
         assert_eq!(count(&conn), 6);
     }
 }

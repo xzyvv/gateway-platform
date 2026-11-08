@@ -87,18 +87,29 @@ fn blocking_level_matches_enqueue_blocking() {
 /// 档位编码往返：数值越大越严重。
 #[test]
 fn level_code_roundtrip_and_ordering() {
-    assert_eq!(DiskLevel::from_u8(DiskLevel::Ok as u8), DiskLevel::Ok);
-    assert_eq!(DiskLevel::from_u8(DiskLevel::Warn as u8), DiskLevel::Warn);
+    assert_eq!(DiskLevel::from_u8(DiskLevel::Ok.as_u8()), DiskLevel::Ok);
+    assert_eq!(DiskLevel::from_u8(DiskLevel::Warn.as_u8()), DiskLevel::Warn);
     assert_eq!(
-        DiskLevel::from_u8(DiskLevel::Critical as u8),
+        DiskLevel::from_u8(DiskLevel::Critical.as_u8()),
         DiskLevel::Critical
     );
     assert_eq!(
-        DiskLevel::from_u8(DiskLevel::Blocking as u8),
+        DiskLevel::from_u8(DiskLevel::Blocking.as_u8()),
         DiskLevel::Blocking
     );
+    // 指标层 i64 与存档位 u8 必须同一套编码
+    for level in [
+        DiskLevel::Ok,
+        DiskLevel::Warn,
+        DiskLevel::Critical,
+        DiskLevel::Blocking,
+    ] {
+        assert_eq!(DiskLevel::from_i64(level.code()), level);
+    }
     // 越界编码按最严重档处理（保守优先）
     assert_eq!(DiskLevel::from_u8(200), DiskLevel::Blocking);
+    assert_eq!(DiskLevel::from_i64(-1), DiskLevel::Blocking);
+    assert_eq!(DiskLevel::from_i64(i64::MAX), DiskLevel::Blocking);
     assert!(DiskLevel::Ok < DiskLevel::Warn);
     assert!(DiskLevel::Warn < DiskLevel::Critical);
     assert!(DiskLevel::Critical < DiskLevel::Blocking);
@@ -161,12 +172,7 @@ fn tick_records_level_into_disk_status() {
     assert_eq!(tick.level, DiskLevel::Warn);
     assert!(tick.ok);
     assert_eq!(status.level(), DiskLevel::Warn);
-    assert_eq!(
-        metrics
-            .disk_level
-            .load(std::sync::atomic::Ordering::Relaxed),
-        1
-    );
+    assert_eq!(metrics.disk_level_snapshot(), DiskLevel::Warn);
 }
 
 /// tick：档位不变时不产生告警（计数不增）。

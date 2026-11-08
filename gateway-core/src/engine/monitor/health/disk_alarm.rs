@@ -99,6 +99,23 @@ impl DiskLevel {
         }
     }
 
+    /// 编码为 `u8`，供 [`super::DiskStatus`] 的 `AtomicU8` 存档位使用。
+    ///
+    /// 与 [`Self::code`] 同源：编码只保留一个真源，调用方不再各自 `as u8`。
+    pub fn as_u8(self) -> u8 {
+        self.code() as u8
+    }
+
+    /// 从指标层 `i64` 还原档位（越界或负值按最严重的 `Blocking` 处理）。
+    ///
+    /// `metrics.disk_level` 以 `i64` 原子量承载 Prometheus gauge 编码，
+    /// 读取侧统一走这里，避免各调用点自己 `as u8` 再转一次。
+    pub fn from_i64(v: i64) -> DiskLevel {
+        u8::try_from(v)
+            .map(DiskLevel::from_u8)
+            .unwrap_or(DiskLevel::Blocking)
+    }
+
     /// 从 `u8` 编码还原档位（越界值按最严重的 `Blocking` 处理，保守优先）。
     ///
     /// 编码约定与枚举声明顺序一致，供 [`super::DiskStatus`] 用单个
@@ -256,7 +273,7 @@ pub fn tick(
     let level = disk_level_from_free_pct(free_pct);
     let ok = super::disk_ok_from_free_pct(free_pct);
     let pressure_changed = disk_status.record(free_pct, !ok);
-    metrics.set_disk_level(level.code());
+    metrics.set_disk_level(level);
     if let Some(event) = disk_alarm_event(prev, level, free_pct) {
         if event.event == "trigger" {
             metrics.inc_disk_alarm_trigger();

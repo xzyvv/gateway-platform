@@ -160,8 +160,10 @@ pub(crate) async fn diagnostics_exec(
 #[cfg(not(feature = "remote-shell"))]
 pub(crate) async fn diagnostics_exec(
     State(_state): State<Arc<AppState>>,
-    Json(_req): Json<ExecRequest>,
+    Json(req): Json<ExecRequest>,
 ) -> Result<axum::http::StatusCode, ApiError> {
+    // 显式消费请求体：字段只为保持 JSON 契约，本构建不执行命令。
+    drop(req.command);
     Err(ApiError::bad_request(
         "remote shell is disabled in this build (rebuild with --features remote-shell)".to_string(),
     ))

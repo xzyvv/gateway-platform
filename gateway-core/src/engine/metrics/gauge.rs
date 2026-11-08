@@ -1,6 +1,7 @@
 //! Gauge 类指标操作（可增可减的仪表盘）
 
 use super::Metrics;
+use crate::engine::monitor::health::DiskLevel;
 use std::sync::atomic::Ordering;
 
 impl Metrics {
@@ -44,13 +45,21 @@ impl Metrics {
         self.disk_pressure.store(pressure, Ordering::Relaxed);
     }
 
-    /// 设置磁盘水位档位（0 = ok / 1 = warn / 2 = critical / 3 = blocking）。
+    /// 设置磁盘水位档位（类型化入口，编码见 [`DiskLevel::code`]）。
     ///
     /// 二值的 `gateway_disk_pressure` 只能在"已阻断"那一刻给出信号，
     /// 现场无法提前判断"离写满还有多远"；分级 gauge 让 Prometheus 能对
     /// `warn` / `critical` 档直接配告警规则。
-    pub fn set_disk_level(&self, level: i64) {
-        self.disk_level.store(level, Ordering::Relaxed);
+    pub fn set_disk_level(&self, level: DiskLevel) {
+        self.disk_level.store(level.code(), Ordering::Relaxed);
+    }
+
+    /// 读取磁盘水位档位快照（解码 `set_disk_level` 写入的 gauge 编码）。
+    ///
+    /// 保留在 `Metrics` 内部编解码，跨层调用方只处理 [`DiskLevel`]，
+    /// 不再各自记住 `0/1/2/3` 的约定。
+    pub fn disk_level_snapshot(&self) -> DiskLevel {
+        DiskLevel::from_i64(self.disk_level.load(Ordering::Relaxed))
     }
 
     /// 设置队列主库占用（文件字节数 + 空闲页数）。

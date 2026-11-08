@@ -96,7 +96,7 @@ impl Metrics {
         out.push_str("# TYPE gateway_disk_level gauge\n");
         out.push_str(&format!(
             "gateway_disk_level {}\n",
-            self.disk_level.load(Ordering::Relaxed)
+            self.disk_level_snapshot().code()
         ));
 
         // 业务库占用：只用「磁盘水位」无法判断删除是否真的释放了空间，
