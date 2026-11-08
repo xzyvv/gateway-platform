@@ -126,6 +126,15 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     // 1.2: 初始化 supervision 基础设施层 metrics（供 spawn_supervised 等内部读取）
     gateway_core::engine::supervision::init(metrics.clone());
 
+    // 配置域共享库（config_versions.db）承载 config_versions / api_access_logs /
+    // disk_history / uplink_test_history 四张表，都有行数 retention，但 SQLite
+    // 默认不会把 DELETE 释放的页还给文件系统 → 文件只增不减。
+    // 在创建任何 Store 长驻连接之前做一次性 auto_vacuum 转换
+    // （已有库需要跑一次 VACUUM），之后由 storage_maintenance 周期回收。
+    gateway_core::engine::monitor::db_maintenance::ensure_incremental_auto_vacuum(
+        std::path::Path::new(gateway_core::support::default_version_db()),
+    );
+
     // ===== Step 2-7: 采集链初始化（logging/watchdog/NTP/GPIO/串口/采集器）=====
     let chain = init_collection_chain(&config, metrics.clone()).await?;
     // ===== Step 8-11: 北向与处理链初始化（队列/证书/MQTT/Pipeline）=====
@@ -188,6 +197,15 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     // 30s 粒度采集，写入 `gateway_process_rss_bytes` gauge（Prometheus 暴露）。
     // 同样走 spawn_supervised：panic 自恢复，不返回 JoinHandle。
     gateway_core::engine::monitor::health::spawn_memory_monitor(metrics.clone());
+
+    // 存储维护：配置库周期 incremental_vacuum + 两个业务库的占用/空闲页采样。
+    // 暴露 gateway_db_size_bytes / gateway_db_freelist_pages / gateway_aggregated_rows，
+    // 让「删除是否真的把空间还给了文件系统」在现场可见。
+    gateway_core::engine::monitor::db_maintenance::spawn_storage_maintenance(
+        gateway_core::support::default_db_path().to_string(),
+        gateway_core::support::default_version_db().to_string(),
+        metrics.clone(),
+    );
 
     // P8：outbox 积压深度采样 → `gateway_outbox_pending` gauge。
     // 该 gauge 此前无任何写入点（恒 0），导致「上行通道堵死」在监控上完全不可见。

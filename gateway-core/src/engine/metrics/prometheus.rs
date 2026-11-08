@@ -99,6 +99,41 @@ impl Metrics {
             self.disk_level.load(Ordering::Relaxed)
         ));
 
+        // 业务库占用：只用「磁盘水位」无法判断删除是否真的释放了空间，
+        // 需要库文件大小 + 空闲页数一起看（空闲页涨、文件不降 = 回收没生效）。
+        out.push_str("# HELP gateway_db_size_bytes SQLite database file size in bytes\n");
+        out.push_str("# TYPE gateway_db_size_bytes gauge\n");
+        out.push_str(&format!(
+            "gateway_db_size_bytes{{db=\"queue\"}} {}\n",
+            self.db_queue_size_bytes.load(Ordering::Relaxed)
+        ));
+        out.push_str(&format!(
+            "gateway_db_size_bytes{{db=\"config\"}} {}\n",
+            self.db_config_size_bytes.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP gateway_db_freelist_pages SQLite freelist pages (reclaimable by incremental_vacuum)\n",
+        );
+        out.push_str("# TYPE gateway_db_freelist_pages gauge\n");
+        out.push_str(&format!(
+            "gateway_db_freelist_pages{{db=\"queue\"}} {}\n",
+            self.db_queue_freelist_pages.load(Ordering::Relaxed)
+        ));
+        out.push_str(&format!(
+            "gateway_db_freelist_pages{{db=\"config\"}} {}\n",
+            self.db_config_freelist_pages.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP gateway_aggregated_rows Rows in data_queue_aggregated (capped by MAX_AGGREGATED_ROWS)\n",
+        );
+        out.push_str("# TYPE gateway_aggregated_rows gauge\n");
+        out.push_str(&format!(
+            "gateway_aggregated_rows {}\n",
+            self.aggregated_rows.load(Ordering::Relaxed)
+        ));
+
         out.push_str(
             "# HELP gateway_mqtt_in_flight MQTT in-flight records (dequeued, not acked)\n",
         );

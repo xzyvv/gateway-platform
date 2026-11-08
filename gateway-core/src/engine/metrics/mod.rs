@@ -134,6 +134,21 @@ pub struct Metrics {
     /// （"是否正在阻断"），改名会破坏既有 dashboard / 告警规则；
     /// 新增分级 gauge 让"还有多少余量"可被 Prometheus 直接观测。
     pub disk_level: AtomicI64,
+    /// 队列主库（`data_queue.db`）文件大小（字节）。
+    /// Prom 命名：`gateway_db_size_bytes{db="queue"}`。
+    pub db_queue_size_bytes: AtomicI64,
+    /// 配置域共享库（`config_versions.db`）文件大小（字节）。
+    /// Prom 命名：`gateway_db_size_bytes{db="config"}`。
+    pub db_config_size_bytes: AtomicI64,
+    /// 队列主库空闲页数（可被 `incremental_vacuum` 回收的页）。
+    /// Prom 命名：`gateway_db_freelist_pages{db="queue"}`。
+    pub db_queue_freelist_pages: AtomicI64,
+    /// 配置域共享库空闲页数。
+    /// Prom 命名：`gateway_db_freelist_pages{db="config"}`。
+    pub db_config_freelist_pages: AtomicI64,
+    /// 降采样聚合表行数（受 `MAX_AGGREGATED_ROWS` 约束）。
+    /// Prom 命名：`gateway_aggregated_rows`。
+    pub aggregated_rows: AtomicI64,
     /// OTA 升级进度（0-100）。注：写入仅来自 `ota` 模块，但语义属于"对外状态"
     /// 而非横切 lifecyle，故留在顶层。
     pub ota_progress: AtomicI64,

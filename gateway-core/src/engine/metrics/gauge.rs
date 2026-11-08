@@ -52,4 +52,28 @@ impl Metrics {
     pub fn set_disk_level(&self, level: i64) {
         self.disk_level.store(level, Ordering::Relaxed);
     }
+
+    /// 设置队列主库占用（文件字节数 + 空闲页数）。
+    ///
+    /// 空闲页持续增长而文件大小不降，说明 incremental_vacuum 没有生效
+    /// （例如 auto_vacuum 转换失败），这是现场唯一可直接判断的信号。
+    pub fn set_queue_db_stats(&self, size_bytes: i64, freelist_pages: i64) {
+        self.db_queue_size_bytes
+            .store(size_bytes, Ordering::Relaxed);
+        self.db_queue_freelist_pages
+            .store(freelist_pages, Ordering::Relaxed);
+    }
+
+    /// 设置配置域共享库占用（文件字节数 + 空闲页数）。
+    pub fn set_config_db_stats(&self, size_bytes: i64, freelist_pages: i64) {
+        self.db_config_size_bytes
+            .store(size_bytes, Ordering::Relaxed);
+        self.db_config_freelist_pages
+            .store(freelist_pages, Ordering::Relaxed);
+    }
+
+    /// 设置降采样聚合表行数（用于确认行数上界淘汰是否在起作用）。
+    pub fn set_aggregated_rows(&self, rows: i64) {
+        self.aggregated_rows.store(rows, Ordering::Relaxed);
+    }
 }
