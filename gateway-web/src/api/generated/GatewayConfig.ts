@@ -13,6 +13,7 @@ import type { NtpConfig } from "./NtpConfig";
 import type { OpcuaConfig } from "./OpcuaConfig";
 import type { PointConfig } from "./PointConfig";
 import type { PointTrashEntry } from "./PointTrashEntry";
+import type { QueueConfig } from "./QueueConfig";
 import type { SelfHealConfig } from "./SelfHealConfig";
 import type { SimConsumerConfig } from "./SimConsumerConfig";
 import type { TelemetryConfig } from "./TelemetryConfig";
@@ -115,4 +116,8 @@ license: LicenseConfig | null,
 /**
  * 自愈执行器配置（默认不启用：opt-in，存量部署零影响）
  */
-self_heal: SelfHealConfig | null, };
+self_heal: SelfHealConfig | null, 
+/**
+ * 队列容量配置（缺省即默认上限；`#[serde(default)]` 保证旧配置零迁移）
+ */
+queue: QueueConfig, };

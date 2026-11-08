@@ -19,6 +19,7 @@ export type { OpcuaUserConfig } from './OpcuaUserConfig';
 export type { OpcUaClientConfig } from './OpcUaClientConfig';
 export type { OtaStatus } from './OtaStatus';
 export type { PointConfig } from './PointConfig';
+export type { QueueConfig } from './QueueConfig';
 export type { RunStatus } from './RunStatus';
 export type { VersionInfo } from './VersionInfo';
 export type { WebConfig } from './WebConfig';

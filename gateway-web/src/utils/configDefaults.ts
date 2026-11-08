@@ -25,6 +25,7 @@ export const KNOWN_GATEWAY_TOP_KEYS = new Set<string>([
   'device_groups', 'device_assets', 'virtual_points',
   'telemetry', 'license',
   'self_heal',
+  'queue',
 ])
 
 // B1: 其余 nullable 节（后端 serde 默认 null）若用户解析的 JSON 漏写，
@@ -38,14 +39,20 @@ export const KNOWN_NULLABLE_KEYS = [
 ] as const
 
 // 后端 WebConfig 的 serde 默认值（web 节缺失时兜底，工厂函数保证每次返回新对象）
+//
+// listen_addr / allow_anon_read 必须与后端 `gateway-core/src/config/web.rs` 的
+// serde 默认值一致：兜底填 `0.0.0.0:8080` 会让「配置里缺 web 段 → 前端补默认值
+// → 保存回写」这条路径产出一份绑定全网卡 + 空 password_hash 的配置，
+// 而这正是 bootstrap 的 fail-closed 硬性违规，保存后网关重启即被拒绝启动。
 export function defaultWeb(): WebConfig {
   return {
     api_token: '',
     username: 'admin',
     password_hash: '',
-    listen_addr: '0.0.0.0:8080',
-    allow_anon_read: true,
+    listen_addr: '127.0.0.1:8080',
+    allow_anon_read: false,
     realtime_buffer: 1024,
+    realtime_max_subscribers: 64,
     ota_signing_key: null,
     rate_limit_per_sec: null,
     cors_origins: null,
@@ -95,5 +102,6 @@ export function createSeedConfig(): ConfigForm {
     telemetry: null,
     license: null,
     self_heal: null,
+    queue: { max_rows: 1_000_000 },
   }
 }

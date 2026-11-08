@@ -32,6 +32,7 @@ mod webhook;
 
 mod groups_assets;
 mod license;
+mod queue;
 mod virtual_point;
 
 // S6: 配置向后兼容回归（crate 内单测，随 `cargo test --lib` 门禁）
@@ -51,6 +52,7 @@ pub use mqtt::MqttConfig;
 pub use ntp::NtpConfig;
 pub use opcua::{OpcuaConfig, OpcuaUserConfig};
 pub use point::{AggregationConfig, DeviceConfig, PointConfig, PointTrashEntry};
+pub use queue::QueueConfig;
 pub use reload_scope::{reload_scope, ReloadScope};
 pub use self_heal::SelfHealConfig;
 pub use shard::expand_includes;
@@ -64,7 +66,10 @@ pub use telemetry::TelemetryConfig;
 pub use template::{DeviceTemplate, TemplateManager};
 pub(crate) use validate::validate_protocol;
 pub use virtual_point::VirtualPoint;
-pub use web::{UserRole, WebConfig, WebUser};
+pub use web::{
+    default_realtime_max_subscribers, UserRole, WebConfig, WebUser, REALTIME_MAX_SUBSCRIBERS_MAX,
+    REALTIME_MAX_SUBSCRIBERS_MIN,
+};
 pub use webhook::WebhookConfig;
 // 校验函数移至 validate.rs，重新导出以兼容子模块 `use super::{validate_*}` 引用
 pub use schema::{export_to_file, validate_value};
@@ -274,6 +279,17 @@ pub struct GatewayConfig {
     #[serde(default)]
     #[validate(nested)]
     pub self_heal: Option<SelfHealConfig>,
+
+    /// 队列容量配置（缺省即默认上限；`#[serde(default)]` 保证旧配置零迁移）
+    #[serde(default)]
+    pub queue: QueueConfig,
+}
+
+impl GatewayConfig {
+    /// 队列表行数硬上限（换算成队列内核使用的 `i64` 口径）。
+    pub fn max_queue_rows(&self) -> i64 {
+        self.queue.max_rows as i64
+    }
 }
 
 impl Default for GatewayConfig {
@@ -300,6 +316,7 @@ impl Default for GatewayConfig {
             telemetry: None,
             license: None,
             self_heal: None,
+            queue: QueueConfig::default(),
         }
     }
 }
@@ -315,6 +332,7 @@ impl Default for WebConfig {
             listen_addr: web::default_listen_addr(),
             allow_anon_read: web::default_allow_anon_read(),
             realtime_buffer: web::default_realtime_buffer(),
+            realtime_max_subscribers: web::default_realtime_max_subscribers(),
             ota_signing_key: None,
             rate_limit_per_sec: None,
             cors_origins: None,

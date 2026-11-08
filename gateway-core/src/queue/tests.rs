@@ -713,21 +713,31 @@ async fn test_value_text_passthrough_in_memory_storage() {
 #[test]
 fn test_queue_health_levels_and_alarm_edge() {
     // 无消费者：存量增长属于预期（本地历史库），不得判为背压
-    assert_eq!(queue_health(12, false), QueueHealth::Ok);
-    assert_eq!(queue_health(BACKLOG_WARN_ROWS, false), QueueHealth::Backlog);
     assert_eq!(
-        queue_health(BACKPRESSURE_ROWS * 2, false),
+        queue_health(12, DEFAULT_MAX_QUEUE_ROWS, false),
+        QueueHealth::Ok
+    );
+    assert_eq!(
+        queue_health(BACKLOG_WARN_ROWS, DEFAULT_MAX_QUEUE_ROWS, false),
+        QueueHealth::Backlog
+    );
+    assert_eq!(
+        queue_health(BACKPRESSURE_ROWS * 2, DEFAULT_MAX_QUEUE_ROWS, false),
         QueueHealth::Backlog,
         "无北向消费者时 20 万行不应判为背压"
     );
     // 有消费者：超过背压阈值即故障
     assert_eq!(
-        queue_health(BACKPRESSURE_ROWS, true),
+        queue_health(BACKPRESSURE_ROWS, DEFAULT_MAX_QUEUE_ROWS, true),
         QueueHealth::Backpressure
     );
     // 逼近硬上限：与消费者无关，均为容量压力
     assert_eq!(
-        queue_health(capacity_pressure_rows(), false),
+        queue_health(
+            capacity_pressure_rows(DEFAULT_MAX_QUEUE_ROWS),
+            DEFAULT_MAX_QUEUE_ROWS,
+            false
+        ),
         QueueHealth::CapacityPressure
     );
     // 就绪判定：预警态不降级（避免直连场景每个轮询都 503），严重态才降级
@@ -752,6 +762,43 @@ fn test_queue_health_levels_and_alarm_edge() {
         backlog_alarm_edge(QueueHealth::Backlog, QueueHealth::Ok),
         Some(QueueHealth::Ok)
     );
+}
+
+/// 配置化回归（P1）：把行数上限改成配置项后，四级水位顺序必须在**任意合法
+/// 上限**下都成立；越界/失序的上限必须被配置校验拒绝，而不是运行期静默错判。
+#[test]
+fn configurable_max_rows_keeps_threshold_order() {
+    for max_rows in [
+        MIN_QUEUE_ROWS,
+        500_000,
+        DEFAULT_MAX_QUEUE_ROWS,
+        MAX_QUEUE_ROWS,
+    ] {
+        assert!(
+            max_rows_errors(max_rows).is_empty(),
+            "合法上限 {max_rows} 不应被拒: {:?}",
+            max_rows_errors(max_rows)
+        );
+        let pressure = capacity_pressure_rows(max_rows);
+        assert!(
+            pressure > BACKPRESSURE_ROWS,
+            "上限 {max_rows} 的容量压力线 {pressure} 必须高于背压线 {BACKPRESSURE_ROWS}"
+        );
+        // 压力线上一点：必须是容量压力（与消费者无关）
+        assert_eq!(
+            queue_health(pressure, max_rows, true),
+            QueueHealth::CapacityPressure
+        );
+        // 压力线下一行：有消费者时回落为背压，说明水位不会越级
+        assert_eq!(
+            queue_health(pressure - 1, max_rows, true),
+            QueueHealth::Backpressure
+        );
+    }
+    // 区间外：低于下界（会把压力线压到背压线以下）/ 高于上界，都必须拒绝
+    assert!(!max_rows_errors(MIN_QUEUE_ROWS - 1).is_empty());
+    assert!(!max_rows_errors(0).is_empty());
+    assert!(!max_rows_errors(MAX_QUEUE_ROWS + 1).is_empty());
 }
 
 // ===== P2-1 / P2-3: 历史查询降采样 + 截断元信息 + 分钟聚合 writer =====

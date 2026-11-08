@@ -132,6 +132,7 @@
     "listen_addr": "127.0.0.1:18090",
     "allow_anon_read": true,
     "realtime_buffer": 1024,
+    "realtime_max_subscribers": 64,
     "ota_signing_key": null,
     "rate_limit_per_sec": null,
     "cors_origins": [],
@@ -151,5 +152,8 @@
   "virtual_points": null,
   "telemetry": null,
   "license": null,
-  "self_heal": null
+  "self_heal": null,
+  "queue": {
+    "max_rows": 1000000
+  }
 }

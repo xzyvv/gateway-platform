@@ -200,6 +200,7 @@ pub(crate) fn prepare_web_config(config: &GatewayConfig) -> Result<WebConfig> {
             listen_addr: "127.0.0.1:8080".to_string(),
             allow_anon_read: false,
             realtime_buffer: 1024,
+            realtime_max_subscribers: gateway_core::config::default_realtime_max_subscribers(),
             ota_signing_key: None,
             rate_limit_per_sec: None,
             cors_origins: None,

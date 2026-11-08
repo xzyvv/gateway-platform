@@ -39,6 +39,14 @@ allow_anon_read: boolean,
  */
 realtime_buffer: number, 
 /**
+ * 实时 WebSocket 并发连接上限（进程级，默认 64）
+ *
+ * 每个连接都会独立序列化广播批次，慢连接还占用有界发送缓冲；无上限时
+ * 页面多开 / 恶意连接可把 CPU 与内存打满。超限在升级前直接 503。
+ * 运行期从 `state.config` 动态读取：改配置后对新连接立即生效，无需重启。
+ */
+realtime_max_subscribers: number, 
+/**
  * OTA 固件签名密钥（HMAC-SHA256，base64 编码）
  * None=不验签（向后兼容 CRC32-only），Some=强制验签
  */

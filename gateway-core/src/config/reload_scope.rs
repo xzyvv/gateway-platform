@@ -43,7 +43,8 @@ impl ReloadScope {
 /// Web 配置中「改了必须重启」的字段判定。
 ///
 /// `api_token` / `username` / `password_hash` / `allow_anon_read` / `allow_default_token` /
-/// `ota_signing_key` / `users` 由鉴权中间件与各 handler 从 `state.config` 动态读取，可即时生效；
+/// `ota_signing_key` / `users` / `realtime_max_subscribers` 由鉴权中间件与各 handler 从
+/// `state.config` 动态读取，可即时生效；
 /// 其余字段在启动期被固化：监听 socket、CORS 中间件、限流器、实时广播缓冲容量。
 fn web_needs_restart(old: Option<&WebConfig>, new: Option<&WebConfig>) -> bool {
     let (old, new) = match (old, new) {
@@ -119,6 +120,12 @@ pub fn reload_scope(old: &GatewayConfig, new: &GatewayConfig) -> ReloadScope {
     if old.sim_consumer != new.sim_consumer {
         scope.restart_required.push("sim_consumer");
     }
+    // 队列行数上限：健康判定每次请求现取配置（立即生效），但存储层淘汰线在
+    // 构造时固定，完整生效需要重启。按「任一消费者未生效即需重启」归入此处，
+    // 避免现场误以为改了上限就已经开始按新线淘汰。
+    if old.queue != new.queue {
+        scope.restart_required.push("queue");
+    }
 
     // 纯元数据：device_groups / device_assets / license / schema_version
     // 无运行时消费者，不列入任一列表（落盘即完成）。
@@ -185,6 +192,31 @@ mod tests {
         let scope = reload_scope(&old, &new);
         assert!(scope.applied.is_empty());
         assert_eq!(scope.restart_required, vec!["sim_consumer"]);
+    }
+
+    /// 队列行数上限：淘汰线在存储层构造时固定，改配置要重启才完整生效。
+    #[test]
+    fn queue_max_rows_change_requires_restart() {
+        let old = base();
+        let mut new = old.clone();
+        new.queue.max_rows = 500_000;
+
+        let scope = reload_scope(&old, &new);
+        assert!(scope.applied.is_empty());
+        assert_eq!(scope.restart_required, vec!["queue"]);
+    }
+
+    /// 实时 WS 并发上限由升级流程现取配置，改完即时对新连接生效。
+    #[test]
+    fn realtime_max_subscribers_change_is_applied_online() {
+        let mut old = base();
+        old.web = Some(WebConfig::default());
+        let mut new = old.clone();
+        new.web.as_mut().unwrap().realtime_max_subscribers = 32;
+
+        let scope = reload_scope(&old, &new);
+        assert_eq!(scope.applied, vec!["web"]);
+        assert!(scope.restart_required.is_empty());
     }
 
     #[test]

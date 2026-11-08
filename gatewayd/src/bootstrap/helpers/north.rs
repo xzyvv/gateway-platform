@@ -94,11 +94,17 @@ pub(crate) async fn init_north_and_processing(
     metrics: Arc<gateway_core::engine::metrics::Metrics>,
 ) -> Result<NorthProcessing> {
     // ===== Step 8: SQLite 队列 =====
+    // 行数上限来自配置项 `queue.max_rows`（已通过 `GatewayConfig::validate_all`
+    // 的范围与水位顺序校验），这里注入存储层的淘汰线。
     let queue = Arc::new(
-        DataQueue::new(default_db_path(), metrics.clone())
+        DataQueue::new_with_limit(default_db_path(), metrics.clone(), config.max_queue_rows())
             .with_context(|| format!("打开 SQLite 队列失败: {}", default_db_path()))?,
     );
-    info!("data queue initialized ({})", default_db_path());
+    info!(
+        "data queue initialized ({}), max_rows={}",
+        default_db_path(),
+        config.max_queue_rows()
+    );
 
     // ===== Step 8b: X.509 设备证书（供 OPC UA + MQTT 双向 TLS 使用）=====
     // S1: 跨平台路径，避免硬编码 Linux 路径

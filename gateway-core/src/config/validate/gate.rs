@@ -147,6 +147,12 @@ impl GatewayConfig {
             errors.extend(msgs);
         }
         errors.extend(self.validate_convert_rules());
+        // 队列行数上限：范围 + 与背压/容量压力阈值的顺序（阈值定义在队列内核）
+        errors.extend(self.queue.semantic_errors());
+        // `web` 是可省略分节，validator 0.18 无法对 `Option<T>` 做嵌套校验
+        if let Some(web) = &self.web {
+            errors.extend(web.config_errors());
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -452,6 +458,49 @@ mod tests {
         cfg.mqtt.broker = broker.to_string();
         cfg.mqtt.tls = tls;
         cfg
+    }
+
+    /// P1 配置化：队列行数上限的范围校验。默认值必须与配置化前一致（100 万），
+    /// 越界值必须在配置期被拒（运行期淘汰线与水位判定都依赖它）。
+    #[test]
+    fn queue_max_rows_range_is_validated() {
+        let cfg = GatewayConfig::default();
+        assert_eq!(cfg.queue.max_rows, 1_000_000, "默认值必须保持不变");
+        cfg.validate_all().expect("默认配置必须合法");
+
+        for bad in [0, 199_999, 50_000_001] {
+            let mut cfg = GatewayConfig::default();
+            cfg.queue.max_rows = bad;
+            let errs = cfg.validate_all().expect_err("越界上限必须被拒");
+            assert!(
+                errs.iter().any(|e| e.contains("queue.max_rows")),
+                "错误信息应指明具体字段: {:?}",
+                errs
+            );
+        }
+    }
+
+    /// P1 配置化：WS 并发连接上限的范围校验。默认值必须保持 64。
+    #[test]
+    fn realtime_max_subscribers_range_is_validated() {
+        let mut cfg = GatewayConfig::default();
+        let mut web: crate::config::WebConfig =
+            serde_json::from_str("{}").expect("WebConfig 全字段都有 serde 默认");
+        assert_eq!(web.realtime_max_subscribers, 64);
+
+        web.realtime_max_subscribers = 0;
+        cfg.web = Some(web);
+        let errs = cfg.validate_all().expect_err("0 个连接必须被拒");
+        assert!(
+            errs.iter().any(|e| e.contains("realtime_max_subscribers")),
+            "错误信息应指明具体字段: {:?}",
+            errs
+        );
+
+        let mut web: crate::config::WebConfig = serde_json::from_str("{}").unwrap();
+        web.realtime_max_subscribers = crate::config::REALTIME_MAX_SUBSCRIBERS_MAX + 1;
+        cfg.web = Some(web);
+        assert!(cfg.validate_all().is_err(), "超过上限必须被拒");
     }
 
     /// `insecure_skip_verify` 未实现，必须在配置期拒绝，而不是只打一行日志。

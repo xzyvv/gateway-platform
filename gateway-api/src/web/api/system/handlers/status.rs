@@ -31,6 +31,8 @@ pub(crate) async fn health_live() -> impl IntoResponse {
 pub(crate) struct ComponentSnapshot {
     pub components: std::collections::BTreeMap<&'static str, &'static str>,
     pub queue_len: usize,
+    /// 当前生效的队列表行数硬上限（配置项 `queue.max_rows`，运行期现取）。
+    pub max_queue_rows: i64,
     pub ota_state: String,
     /// 是否注入了 MQTT 客户端（= 配置里启用了 MQTT）
     pub mqtt_configured: bool,
@@ -87,8 +89,8 @@ pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapsh
     // 队列积压状态（P0-1：唯一口径 = gateway_core::queue::queue_health，经 services 门面）
     //
     // 队列同时充当本地历史库：只有北向消费者（MQTT publish 循环 / 内置模拟消费者）
-    // 会在处理成功后 ack 删除行。没有任何消费者时长度只受 license storage_days
-    // 配额约束，增长属于历史的正常存量而非积压；但「逼近硬上限」与消费者无关，
+    // 会在处理成功后 ack 删除行。没有任何消费者时长度只受历史保留天数
+    // （固定 30 天，与 license 无关）约束，增长属于历史的正常存量而非积压；但「逼近硬上限」与消费者无关，
     // 必须降级。
     // 旧实现在本文件里硬编码 `queue_len < 100_000`，与 watchdog.rs / 告警任务各写
     // 一套阈值，同一队列长度会同时得到 ok / critical / Restarting 三种互斥结论。
@@ -98,7 +100,9 @@ pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapsh
     // 但它照样消费队列。
     let queue_len = state.south.queue.len().await;
     let has_north_consumer = state.north.has_north_consumer();
-    let queue_health = queue_health(queue_len as i64, has_north_consumer);
+    // 行数上限是配置项，运行期现取：改配置后水位判定立即跟着走
+    let max_queue_rows = state.config.config.load().max_queue_rows();
+    let queue_health = queue_health(queue_len as i64, max_queue_rows, has_north_consumer);
     components.insert("queue", queue_health.label());
 
     // OTA 状态：PendingReboot 视为 degraded（切流会丢点）
@@ -151,6 +155,7 @@ pub(crate) async fn collect_components(state: &Arc<AppState>) -> ComponentSnapsh
     ComponentSnapshot {
         components,
         queue_len,
+        max_queue_rows,
         ota_state,
         mqtt_configured,
         mqtt_connected,
@@ -491,6 +496,8 @@ pub(crate) struct HealthProblemInput<'a> {
     /// 却同样会 dequeue → ack 队列，队列存量是「积压」而非「本地历史存量」。
     pub has_north_consumer: bool,
     pub queue_len: usize,
+    /// 当前生效的队列表行数硬上限（配置项 `queue.max_rows`）。
+    pub max_queue_rows: i64,
     pub ota_state: &'a str,
     pub buses: &'a [BusHealth],
     /// 磁盘水位档位（分级告警的唯一真源）。
@@ -549,7 +556,7 @@ pub(crate) fn build_health_problems(input: &HealthProblemInput<'_>) -> Vec<serde
                 "队列容量上限已淘汰 {} 行数据（其中 {} 行从未上传），这些数据**不可恢复**",
                 input.queue_evicted_rows, input.queue_evicted_undelivered_rows
             ),
-            "立即确认上行通道（MQTT/Webhook）是否长期不通；如需长期留存，请降低采集频率或调低 license storage_days 以外的留存需求，并尽快通过 GET /api/history/export 做外部归档",
+            "立即确认上行通道（MQTT/Webhook）是否长期不通；如需降低本地留存，请降低采集频率，并尽快通过 GET /api/history/export 做外部归档（历史保留固定 30 天，与 license 无关）",
         ));
     }
 
@@ -583,7 +590,11 @@ pub(crate) fn build_health_problems(input: &HealthProblemInput<'_>) -> Vec<serde
     // 判定用 `has_north_consumer`（MQTT publish 循环 或 内置模拟消费者），
     // 不是 `mqtt_configured`：只有 MQTT 时两者等价，但模拟消费者没有 MQTT
     // 客户端，用后者会把「有消费者在消费」误判成「本地历史存量」。
-    match queue_health(input.queue_len as i64, input.has_north_consumer) {
+    match queue_health(
+        input.queue_len as i64,
+        input.max_queue_rows,
+        input.has_north_consumer,
+    ) {
         QueueHealth::CapacityPressure => {
             problems.push(health_problem(
                 "critical",
@@ -591,9 +602,9 @@ pub(crate) fn build_health_problems(input: &HealthProblemInput<'_>) -> Vec<serde
                 format!(
                     "队列表 {} 条，已逼近硬上限 {} 条：存储层开始淘汰最旧数据",
                     input.queue_len,
-                    capacity_pressure_rows()
+                    capacity_pressure_rows(input.max_queue_rows)
                 ),
-                "确认上行通道是否长期停滞；如属正常本地历史存量，请调低 license storage_days 或延长采集周期",
+                "确认上行通道是否长期停滞；如属正常本地历史存量，请延长采集周期或归档后降低采集频率",
             ));
         }
         QueueHealth::Backpressure => {
@@ -626,7 +637,7 @@ pub(crate) fn build_health_problems(input: &HealthProblemInput<'_>) -> Vec<serde
                     "队列存量 {} 条（≥ {} 预警阈值）：当前无运行中的北向消费者",
                     input.queue_len, BACKLOG_WARN_ROWS
                 ),
-                "队列作为本地历史库按 storage_days 保留，无需处置；逼近硬上限后会自动淘汰最旧数据",
+                "队列作为本地历史库按 30 天保留（与 license 无关），无需处置；逼近硬上限后会自动淘汰最旧数据",
             ));
         }
         QueueHealth::Ok => {}
@@ -793,6 +804,7 @@ pub(crate) async fn get_health_report(State(state): State<Arc<AppState>>) -> imp
         mqtt_connected: snap.mqtt_connected,
         has_north_consumer: snap.has_north_consumer,
         queue_len: snap.queue_len,
+        max_queue_rows: snap.max_queue_rows,
         ota_state: &snap.ota_state,
         buses: &buses,
         disk_level: snap.disk_level,

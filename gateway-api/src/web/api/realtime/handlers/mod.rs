@@ -1,51 +1,12 @@
 //! 实时 API 处理函数（WebSocket / 诊断）
 
+mod limit;
+
 use super::*;
 use crate::web::types::BusConsumerKind;
 #[cfg(feature = "remote-shell")]
 use axum::response::IntoResponse;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-/// 第 4 层：实时 WS 并发连接上限（进程级）。
-///
-/// 每个连接都会独立序列化广播批次，慢连接还会占用有界发送缓冲；无上限时
-/// 页面多开 / 恶意连接可把 CPU 与内存打满。超限在升级前直接 503，
-/// 避免"先接受再断开"造成客户端重连风暴。
-/// 后续可抽成 `web.realtime_max_subscribers` 配置项。
-const WS_MAX_CONNECTIONS: usize = 64;
-
-/// 当前在线实时 WS 连接数（仅供上限判定，与 `RealtimeBus::subscriber_count`
-/// 不同——后者还包含北向、报警等内部订阅者）。
-static WS_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-/// 实时 WS 连接槽位；Drop 时归还名额。
-struct WsSlot;
-
-impl WsSlot {
-    fn try_acquire() -> Option<Self> {
-        let mut cur = WS_CONNECTION_COUNT.load(Ordering::Acquire);
-        loop {
-            if cur >= WS_MAX_CONNECTIONS {
-                return None;
-            }
-            match WS_CONNECTION_COUNT.compare_exchange_weak(
-                cur,
-                cur + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return Some(Self),
-                Err(actual) => cur = actual,
-            }
-        }
-    }
-}
-
-impl Drop for WsSlot {
-    fn drop(&mut self) {
-        WS_CONNECTION_COUNT.fetch_sub(1, Ordering::AcqRel);
-    }
-}
+use limit::{realtime_max_subscribers, WsSlot};
 
 /// 第 2 层：单连接发送缓冲上限（批）。满载时丢弃当前批（最新值优先），
 /// 避免慢客户端把内存无限撑大。
@@ -271,12 +232,13 @@ pub(crate) async fn realtime_ws(
     let realtime_bus = state.south.realtime_bus.clone();
 
     // 第 4 层：升级前预占连接名额；超限直接 503，不进入 upgrade 流程。
-    let ws_slot = match WsSlot::try_acquire() {
+    let max_subscribers = realtime_max_subscribers(&state);
+    let ws_slot = match WsSlot::try_acquire(max_subscribers) {
         Some(slot) => slot,
         None => {
             tracing::warn!(
                 "realtime ws rejected: connection limit {} reached",
-                WS_MAX_CONNECTIONS
+                max_subscribers
             );
             return ApiError {
                 status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -469,25 +431,4 @@ pub(crate) async fn realtime_ws(
         drop(out_tx);
         let _ = writer.await;
     }).into_response()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ws_slot_enforces_limit_and_releases_on_drop() {
-        let slots: Vec<WsSlot> = (0..WS_MAX_CONNECTIONS)
-            .map(|_| WsSlot::try_acquire().expect("slot within limit"))
-            .collect();
-        assert!(WsSlot::try_acquire().is_none(), "limit must reject extra");
-        assert_eq!(
-            WS_CONNECTION_COUNT.load(Ordering::Acquire),
-            WS_MAX_CONNECTIONS
-        );
-
-        drop(slots);
-        assert_eq!(WS_CONNECTION_COUNT.load(Ordering::Acquire), 0);
-        assert!(WsSlot::try_acquire().is_some(), "slot reusable after drop");
-    }
 }

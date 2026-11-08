@@ -53,8 +53,8 @@ pub(crate) const FALLBACK_MAX_RETRIES: u32 = 5;
 /// `/api/watchdog/services`（queue 服务）必须全部调用 [`queue_health`]，
 /// 阈值只在 [`self::core::limit`] 里定义一次，禁止各页面再硬编码数字。
 pub use self::core::limit::{
-    capacity_pressure_rows, queue_health, QueueHealth, BACKLOG_WARN_ROWS, BACKPRESSURE_ROWS,
-    MAX_QUEUE_ROWS,
+    capacity_pressure_rows, max_rows_errors, queue_health, QueueHealth, BACKLOG_WARN_ROWS,
+    BACKPRESSURE_ROWS, DEFAULT_MAX_QUEUE_ROWS, MAX_QUEUE_ROWS, MIN_QUEUE_ROWS,
 };
 
 /// P0-3：积压采样周期。
@@ -184,6 +184,11 @@ pub struct DataQueue {
     /// 每次 enqueue 都刷屏 "disk full"（实际一条没丢，文案还误导）。
     /// 退出 fallback（磁盘恢复 / unsent 回落）时复位为 false。
     fallback_warned: std::sync::atomic::AtomicBool,
+    /// 队列表行数硬上限（配置项 `queue.max_rows` 的运行期镜像）。
+    ///
+    /// 供积压告警按当前水位判定；由 `new_with_limit` / [`Self::set_max_rows`]
+    /// 写入。用原子而非普通字段：配置热更新时无需重建队列。
+    max_rows: std::sync::atomic::AtomicI64,
 }
 
 impl DataQueue {
@@ -267,6 +272,7 @@ impl DataQueue {
             // #20-2026：storage 句柄用于 enqueue 入口读 unsent_overflow
             storage: storage_for_self,
             fallback_warned: std::sync::atomic::AtomicBool::new(false),
+            max_rows: std::sync::atomic::AtomicI64::new(DEFAULT_MAX_QUEUE_ROWS),
         })
     }
 
@@ -281,13 +287,40 @@ impl DataQueue {
 
     /// 创建 SQLite 后端队列（生产环境，持久化）
     pub fn new(db_path: &str, metrics: Arc<Metrics>) -> GatewayResult<Self> {
-        let storage: Arc<dyn QueueStorage> =
-            Arc::new(SqliteStorage::new(db_path, metrics.clone())?);
+        Self::new_with_limit(db_path, metrics, DEFAULT_MAX_QUEUE_ROWS)
+    }
+
+    /// 创建 SQLite 后端队列，行数上限由配置项 `queue.max_rows` 注入。
+    ///
+    /// 上限在这里同时落到两处：存储层的淘汰线（构造时固定）与告警判定
+    /// （原子字段，可随后用 [`Self::set_max_rows`] 热更新）。
+    pub fn new_with_limit(
+        db_path: &str,
+        metrics: Arc<Metrics>,
+        max_rows: i64,
+    ) -> GatewayResult<Self> {
+        let storage: Arc<dyn QueueStorage> = Arc::new(SqliteStorage::new_with_limit(
+            db_path,
+            metrics.clone(),
+            max_rows,
+        )?);
         let queue = Self::with_storage(storage)?;
+        queue.set_max_rows(max_rows);
         // Bug T6: 把真实 metrics 注入共享句柄，保证 queue_task 写失败 / 丢弃计数
         // 与存储层上报到同一 Metrics 实例（原 `set_metrics` 无调用点）。
         queue.set_metrics(metrics);
         Ok(queue)
+    }
+
+    /// 更新运行期水位判定的行数上限（配置热更新时调用；淘汰线仍在下次重启生效）。
+    pub fn set_max_rows(&self, max_rows: i64) {
+        self.max_rows
+            .store(max_rows.max(1), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 当前生效的队列表行数硬上限。
+    pub fn max_rows(&self) -> i64 {
+        self.max_rows.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 创建内存后端队列（测试 / 轻量场景，无持久化）
@@ -591,6 +624,8 @@ impl DataQueue {
                     // 删掉就永远没了，所以淘汰增量必须独立于等级判定单独观测。
                     let (evicted_total, evicted_undelivered) = queue.evicted_stats();
                     let evicted_total = evicted_total.max(0);
+                    // 每轮现取：配置热更新后文案与判定要跟着走
+                    let max_rows = queue.max_rows();
                     if evicted_total > last_evicted {
                         let delta = evicted_total - last_evicted;
                         last_evicted = evicted_total;
@@ -601,13 +636,13 @@ impl DataQueue {
                             delta,
                             evicted_undelivered.max(0),
                             evicted_total,
-                            MAX_QUEUE_ROWS
+                            max_rows
                         );
                     }
                     let len = queue.len().await;
                     // 运行期求值：消费者可随时启停，判定必须每轮刷新
                     let has_consumer = has_north_consumer();
-                    let now = queue_health(len as i64, has_consumer);
+                    let now = queue_health(len as i64, max_rows, has_consumer);
                     let Some(now) = backlog_alarm_edge(last, now) else {
                         continue;
                     };
@@ -638,7 +673,7 @@ impl DataQueue {
                         _ => format!(
                             "队列 {} 条，已逼近硬上限 {} 条：存储层开始淘汰最旧数据，请检查上行或降低采集频率",
                             len,
-                            MAX_QUEUE_ROWS
+                            max_rows
                         ),
                     };
                     tracing::warn!(

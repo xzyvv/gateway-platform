@@ -131,7 +131,9 @@ pub(crate) async fn list_services(
     // 涵盖 MQTT publish 循环与内置模拟消费者；只看 MQTT 会漏掉后者。
     let queue_len = state.south.queue.len().await;
     let has_north_consumer = state.north.has_north_consumer();
-    let queue_health = crate::web::services::queue_health(queue_len as i64, has_north_consumer);
+    let max_queue_rows = state.config.config.load().max_queue_rows();
+    let queue_health =
+        crate::web::services::queue_health(queue_len as i64, max_queue_rows, has_north_consumer);
     let queue_status = if queue_health.is_ready() {
         ServiceStatus::Running
     } else {

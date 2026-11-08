@@ -2,7 +2,7 @@
 //!
 //! 从原 `queue/limit.rs` 中分离出的 SQL 侧实现：批量 INSERT/DELETE、
 //! in_flight 标记维护、按时间清理旧记录与 WAL checkpoint 截断。
-//! 内核策略常量（[`crate::queue::core::limit::MAX_QUEUE_ROWS`]）保留在内核层，
+//! 内核策略常量（`queue.max_rows` 及其派生阈值）保留在内核层，
 //! 本模块仅负责按其执行 SQL。
 //!
 //! 均为 `SqliteStorage` 的关联函数（以 `conn` 作为参数，加锁由调用方负责）。
@@ -13,7 +13,6 @@ use std::sync::OnceLock;
 use rusqlite::{params, Connection};
 
 use crate::engine::model::DataPoint;
-use crate::queue::core::limit::MAX_QUEUE_ROWS;
 use crate::queue::core::QueuedItem;
 
 use super::sqlite_storage::SqliteStorage;
@@ -77,7 +76,7 @@ pub(super) struct OverflowReport {
     pub ratio: f64,
     /// 是否触发未送达超限（ratio >= UNSENT_OVERFLOW_RATIO AND total > 0）
     pub unsent_overflow: bool,
-    /// 此次 overflow 删除的总行数（0 表示未触发 MAX_QUEUE_ROWS overflow）
+    /// 此次 overflow 删除的总行数（0 表示未触发行数上限 overflow）
     pub deleted: i64,
     /// 其中**未送达**（delivered=0）的行数。这些行仍计入 depth，
     /// 删除后必须由调用方同步扣减 depth，否则 depth 会虚高。
@@ -103,15 +102,15 @@ impl SqliteStorage {
     /// 旧实现删除条件为 `delivered = 1`（只删已 ack 的行），本意是保护未上报的
     /// 计费数据。但在「笔记本网线直连调试、未配北向消费者」这种最常见场景下
     /// `delivered` 永远是 0（没有任何组件会 dequeue → ack），于是：
-    /// - `MAX_QUEUE_ROWS` 到顶时一条都删不掉，队列表只增不减，最终写满磁盘；
-    /// - `license storage_days` 配额（retention）同样删不掉，配额形同虚设。
+    /// - 行数上限到顶时一条都删不掉，队列表只增不减，最终写满磁盘；
+    /// - 历史保留期的 FIFO 清理（retention）同样删不掉，时间上界形同虚设。
     ///
     /// 现改为「未在途」判据：`in_flight = 0` 的行（无论 delivered 0/1）都可按
     /// 最旧优先淘汰。真正"正在发送中、删了会重复/丢包"的只有 `in_flight = 1`，
     /// 这类行仍然受保护（若因在途行过多导致删不到上限，会打 error 日志并让
     /// enqueue 走 fallback，而不是静默无界增长）。
     ///
-    /// 队列因此变为「容量上界（MAX_QUEUE_ROWS）+ 时间上界（storage_days）」双约束。
+    /// 队列因此变为「容量上界（`queue.max_rows`）+ 时间上界（保留 30 天）」双约束。
     ///
     /// #20-2026：未送达行过多时返回 `OverflowReport`，由 `SqliteStorage::enqueue_batch`
     /// 设置 `unsent_overflow` 标志，DataQueue::enqueue 入口据此走 fallback 路径。
@@ -126,11 +125,12 @@ impl SqliteStorage {
     ///   会执行 O(n) 扫描，阻塞入队事务。
     /// - 不修的理由：`enforce_queue_limit` 只在超限时才走 DELETE 分支，
     ///   `idx_queue_ts` 已覆盖 ORDER BY，不是热路径。
-    pub(super) fn enforce_queue_limit(conn: &mut Connection) -> OverflowReport {
-        Self::enforce_queue_limit_with(conn, MAX_QUEUE_ROWS)
+    pub(super) fn enforce_queue_limit(conn: &mut Connection, max_rows: i64) -> OverflowReport {
+        Self::enforce_queue_limit_with(conn, max_rows)
     }
 
-    /// 可注入上限的 `enforce_queue_limit`：`max_rows` 供单测用极小阈值验证淘汰逻辑。
+    /// 可注入上限的 `enforce_queue_limit`（`max_rows` 来自配置项 `queue.max_rows`，
+    /// 单测也会用极小阈值验证淘汰逻辑）。
     fn enforce_queue_limit_with(conn: &mut Connection, max_rows: i64) -> OverflowReport {
         // r30-QL1 (修复)：把 COUNT + DELETE 包入单个 `BEGIN IMMEDIATE` 事务。
         // 旧实现两条 query_row 与 delete 分开执行，期间另一线程可能 INSERT 新行
@@ -479,12 +479,12 @@ impl SqliteStorage {
 
     /// #19: 删除超过保留期的旧记录（**不在途**的行，含未送达）。
     ///
-    /// v2.0 Step 5: 保留时长由 license `storage_days` 配额换算（days × 24h），
-    /// 由调用方传入；None = 配额不限，跳过清理。
+    /// 保留时长按保留天数换算（days × 24h，固定 30 天），由调用方传入；
+    /// None = 不限，跳过清理。
     ///
     /// P0-2 修复：旧实现要求 `delivered = 1`，而直连调试场景（未配北向消费者）
-    /// 永远没有任何行被 ack → `delivered` 恒为 0 → `storage_days` 配额到期也
-    /// 删不掉一行，license 商业约束完全空转，队列表无界增长。
+    /// 永远没有任何行被 ack → `delivered` 恒为 0 → 到期也删不掉一行，
+    /// 时间上界完全空转，队列表无界增长。
     /// 现放宽为 `in_flight = 0`：不在途的行（无论是否已送达）到期即回收；
     /// 只有正在发送中（`in_flight = 1`）的行仍然受保护。删除未送达行时同步
     /// 扣减 depth（depth 语义 = delivered=0 的行数）。
@@ -678,7 +678,7 @@ mod limit_tests {
     }
 
     /// P0-2 回归：未送达行（delivered=0，直连场景的全部行）在超限时同样要被淘汰，
-    /// 否则 `MAX_QUEUE_ROWS` 到顶也一条删不掉 → 队列无界增长。
+    /// 否则行数上限到顶也一条删不掉 → 队列无界增长。
     /// 同时 report 必须精确回报被删的未送达行数，供调用方扣减 depth。
     #[test]
     fn undelivered_rows_pruned_when_over_capacity() {
@@ -789,7 +789,7 @@ mod limit_tests {
         assert_eq!(report.unsent, 0);
     }
 
-    /// P0-2 回归：`storage_days` 配额必须真正生效——超期**未送达**行要被删除，
+    /// P0-2 回归：保留期到点必须真正生效——超期**未送达**行要被删除，
     /// 且 depth 计数同步扣减（旧实现因 `delivered=1` 守卫一条都删不掉）。
     #[test]
     fn retention_prunes_undelivered_old_rows_and_decrements_depth() {

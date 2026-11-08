@@ -537,6 +537,7 @@ fn build_mock_state_with_devices(
         allow_anon_read: true,
         allow_default_token: true,
         realtime_buffer: 1024,
+        realtime_max_subscribers: 64,
         ota_signing_key: None,
         rate_limit_per_sec: None,
         cors_origins: None,
@@ -589,6 +590,12 @@ fn build_mock_state_with_devices(
     // N-14：配置落盘路径改为按实例隔离的临时文件。原实现固定 `dummy_config.json`，
     // 用户/密码类写接口会在测试进程 CWD 留下仓库垃圾文件，且并行测试互相覆盖。
     let config_path = tmp_dir.join("config.json");
+    // 重启 / 热重载类接口会真正读盘（`ConfigLoader::reload`），mock 必须落一份与
+    // 内存一致的配置；否则测试会去读系统临时目录里上一次运行遗留的旧文件，
+    // 并行跑多个测试二进制时还会互相踩。落盘失败不影响不读盘的用例。
+    if let Ok(json) = serde_json::to_vec_pretty(&*config) {
+        let _ = std::fs::write(&config_path, json);
+    }
 
     use gateway_api::web::types::{ConfigRefs, NorthRefs, PlatformRefs, SouthRefs};
     Arc::new(AppState {

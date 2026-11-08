@@ -39,6 +39,14 @@ pub struct WebConfig {
     #[serde(default = "default_realtime_buffer")]
     pub realtime_buffer: usize,
 
+    /// 实时 WebSocket 并发连接上限（进程级，默认 64）
+    ///
+    /// 每个连接都会独立序列化广播批次，慢连接还占用有界发送缓冲；无上限时
+    /// 页面多开 / 恶意连接可把 CPU 与内存打满。超限在升级前直接 503。
+    /// 运行期从 `state.config` 动态读取：改配置后对新连接立即生效，无需重启。
+    #[serde(default = "default_realtime_max_subscribers")]
+    pub realtime_max_subscribers: usize,
+
     /// OTA 固件签名密钥（HMAC-SHA256，base64 编码）
     /// None=不验签（向后兼容 CRC32-only），Some=强制验签
     #[serde(default)]
@@ -100,6 +108,26 @@ impl std::fmt::Debug for WebConfig {
 }
 
 impl WebConfig {
+    /// 字段级校验（validator 派生对 `Option<WebConfig>` 不生效，由
+    /// `GatewayConfig::validate_all` 手动调用）。
+    ///
+    /// 上限必须收敛：WS 连接数直接决定内存与序列化 CPU 占用，配置成
+    /// `usize::MAX` 等于关掉第 4 层保护；下限 1 保证至少允许一个页面。
+    pub fn config_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !(REALTIME_MAX_SUBSCRIBERS_MIN..=REALTIME_MAX_SUBSCRIBERS_MAX)
+            .contains(&self.realtime_max_subscribers)
+        {
+            errors.push(format!(
+                "web.realtime_max_subscribers 必须在 {}..={} 之间，当前 {}",
+                REALTIME_MAX_SUBSCRIBERS_MIN,
+                REALTIME_MAX_SUBSCRIBERS_MAX,
+                self.realtime_max_subscribers
+            ));
+        }
+        errors
+    }
+
     /// 汇总当前配置里"对生产不安全"的默认项
     ///
     /// 这些默认值面向「笔记本直连调试」场景（现场插网线即可访问），
@@ -230,6 +258,18 @@ pub fn default_listen_addr() -> String {
 
 pub fn default_realtime_buffer() -> usize {
     1024
+}
+
+/// 实时 WS 并发连接上限的合法区间（含端点）。
+///
+/// 1024 已经远超单机网关的实际页面数（监控大屏 + 运维几台电脑），再高只会
+/// 放大恶意连接的成本，不带来可用性收益。
+pub const REALTIME_MAX_SUBSCRIBERS_MIN: usize = 1;
+pub const REALTIME_MAX_SUBSCRIBERS_MAX: usize = 1024;
+
+/// 实时 WS 并发连接上限默认值（与配置化前的硬编码一致）。
+pub fn default_realtime_max_subscribers() -> usize {
+    64
 }
 
 pub fn default_web_username() -> String {

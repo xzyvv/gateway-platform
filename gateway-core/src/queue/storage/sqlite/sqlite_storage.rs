@@ -64,11 +64,25 @@ pub struct SqliteStorage {
     evicted_total: Arc<AtomicI64>,
     /// 上述淘汰中未送达（delivered=0）的行数，即彻底的计费/审计数据丢失。
     evicted_undelivered_total: Arc<AtomicI64>,
+    /// 队列表行数硬上限（配置项 `queue.max_rows`）。
+    ///
+    /// 在构造时取一次：它决定淘汰线，运行期改配置只影响健康判定，
+    /// 淘汰线随下次重启生效（避免运行期改上限导致大批量删除抖动）。
+    max_rows: i64,
 }
 
 impl SqliteStorage {
-    /// 创建并初始化 SQLite 存储
+    /// 创建并初始化 SQLite 存储（使用默认行数上限）。
     pub fn new(db_path: &str, metrics: Arc<Metrics>) -> GatewayResult<Self> {
+        Self::new_with_limit(db_path, metrics, crate::queue::DEFAULT_MAX_QUEUE_ROWS)
+    }
+
+    /// 创建并初始化 SQLite 存储，行数上限由配置项 `queue.max_rows` 注入。
+    pub fn new_with_limit(
+        db_path: &str,
+        metrics: Arc<Metrics>,
+        max_rows: i64,
+    ) -> GatewayResult<Self> {
         let db_path = PathBuf::from(db_path);
         let backup_path = db_path.with_extension("db.bak");
 
@@ -95,6 +109,7 @@ impl SqliteStorage {
             unsent_overflow: Arc::new(AtomicBool::new(false)),
             evicted_total: Arc::new(AtomicI64::new(0)),
             evicted_undelivered_total: Arc::new(AtomicI64::new(0)),
+            max_rows,
         })
     }
 
@@ -166,7 +181,7 @@ impl QueueStorage for SqliteStorage {
         if inserted > 0 {
             self.depth.fetch_add(inserted as i64, Ordering::Relaxed);
         }
-        let report = Self::enforce_queue_limit(conn);
+        let report = Self::enforce_queue_limit(conn, self.max_rows);
         // P0-2：overflow 现在也会淘汰**未送达**（delivered=0）行，这些行仍计入
         // depth，必须同步扣减；已送达行在 ack 路径已各自扣过，不再重复扣。
         if report.undelivered_deleted > 0 {
@@ -461,7 +476,7 @@ impl QueueStorage for SqliteStorage {
         // 对同名变量只是「遮蔽」——被遮蔽的绑定不会提前 drop（仍存活至函数作用域
         // 结束），于是二次加锁必然自锁死。表现为调用 `maintenance()` 的单测永久挂起。
         {
-            let report = Self::enforce_queue_limit(&mut guard);
+            let report = Self::enforce_queue_limit(&mut guard, self.max_rows);
             // P0-2：overflow 淘汰的未送达行需同步扣 depth（已送达行 ack 时已扣）。
             if report.undelivered_deleted > 0 {
                 Self::saturating_dec(&self.depth, report.undelivered_deleted);
