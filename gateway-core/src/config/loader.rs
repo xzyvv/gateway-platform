@@ -135,6 +135,7 @@ impl ConfigLoader {
             .map_err(|e| GatewayError::Config(format!("decrypt config secrets failed: {}", e)))?;
         sanitize_legacy_ratios(&mut cfg);
         sanitize_legacy_snapshot_aggregation(&mut cfg);
+        sanitize_legacy_consumer_exclusivity(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!("validate config failed: {}", errs.join("; ")))
         })?;
@@ -222,6 +223,7 @@ impl ConfigLoader {
         })?;
         sanitize_legacy_ratios(&mut cfg);
         sanitize_legacy_snapshot_aggregation(&mut cfg);
+        sanitize_legacy_consumer_exclusivity(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!(
                 "reload validate config failed: {}",
@@ -286,6 +288,25 @@ fn sanitize_legacy_snapshot_aggregation(cfg: &mut GatewayConfig) {
                 agg.window = north;
             }
         }
+    }
+}
+
+/// 存量配置的「双消费者」兜底：`mqtt.enabled` 与 `sim_consumer.enabled` 同时为真时
+/// 关掉模拟消费者。
+///
+/// 两者都是队列的 ack 消费者，同时开启会把同一批数据分流给两个消费者，表现为
+/// 「部分点位数据静默消失」。新增 [`GatewayConfig::validate_consumer_exclusivity`]
+/// 的 fail-fast 校验后，存量配置若同时打开两者会在 `validate_all()` 处阻断加载 ——
+/// 现场表现为**升级后网关起不来**。
+///
+/// 与 [`sanitize_legacy_ratios`] 同一策略：加载/热重载路径降级并留痕（保留 MQTT，
+/// 关掉仅用于排障的模拟消费者），Web 保存路径仍严格拒绝，避免新配置继续写入非法组合。
+fn sanitize_legacy_consumer_exclusivity(cfg: &mut GatewayConfig) {
+    if cfg.mqtt.enabled && cfg.sim_consumer.enabled {
+        tracing::warn!(
+            "mqtt.enabled 与 sim_consumer.enabled 同时为真（两个消费者会分流同一批队列数据导致静默丢数），已按「关闭模拟消费者」加载；磁盘配置文件未改动，请在 Web 侧保存一次以固化（如需使用模拟消费者请先停用 MQTT）"
+        );
+        cfg.sim_consumer.enabled = false;
     }
 }
 

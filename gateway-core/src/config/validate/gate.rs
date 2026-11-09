@@ -146,6 +146,9 @@ impl GatewayConfig {
         if let Err(msgs) = self.validate_snapshot_aggregation() {
             errors.extend(msgs);
         }
+        if let Err(msgs) = self.validate_consumer_exclusivity() {
+            errors.extend(msgs);
+        }
         if let Err(msgs) = self.validate_extended() {
             errors.extend(msgs);
         }
@@ -489,6 +492,26 @@ impl GatewayConfig {
         } else {
             Err(conflicts)
         }
+    }
+
+    /// 校验「模拟消费者」与「MQTT 发布」两个上行消费者互斥。
+    ///
+    /// 两者都是队列的 ack 消费者：同时启用会把同一批队列数据分流给两个消费者，
+    /// 表现为「部分点位数据静默消失」，且没有任何错误日志——现场极难定位。
+    ///
+    /// 运行期已有两道防线（bootstrap 启动时只 warn 不启动 sim_consumer、
+    /// `POST /api/sim_consumer/start` 返回 409），但配置校验层此前是缺口：
+    /// Web 保存路径可以写出一份「两个消费者都开」的配置，直到下次重启才暴露。
+    /// 这里把该组合前移到配置期 fail-fast。
+    pub fn validate_consumer_exclusivity(&self) -> Result<(), Vec<String>> {
+        if self.mqtt.enabled && self.sim_consumer.enabled {
+            return Err(vec![concat!(
+                "sim_consumer.enabled: 与 mqtt.enabled 互斥",
+                "（两个消费者会分流同一批队列数据导致静默丢数），请关闭其中之一"
+            )
+            .to_string()]);
+        }
+        Ok(())
     }
 }
 
@@ -900,5 +923,31 @@ mod tests {
         });
         cfg.validate_snapshot_aggregation()
             .expect("stream 模式无需限制聚合窗口");
+    }
+
+    /// MQTT 与模拟消费者都是队列的 ack 消费者，同时启用会分流数据导致静默丢数，
+    /// 必须在配置期拒绝（此前只有 bootstrap 的 warn 与 API 的 409 两道运行期防线）。
+    #[test]
+    fn consumer_exclusivity_is_rejected_at_config_time() {
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = true;
+        cfg.sim_consumer.enabled = true;
+
+        let errs = cfg
+            .validate_all()
+            .expect_err("mqtt 与 sim_consumer 同时启用必须被拒");
+        assert!(
+            errs.iter().any(|e| e.contains("sim_consumer.enabled")),
+            "错误信息应指明具体字段: {:?}",
+            errs
+        );
+
+        // 两者只开一个都必须放行
+        cfg.sim_consumer.enabled = false;
+        cfg.validate_all().expect("只开 mqtt 应通过校验");
+
+        cfg.mqtt.enabled = false;
+        cfg.sim_consumer.enabled = true;
+        cfg.validate_all().expect("只开 sim_consumer 应通过校验");
     }
 }

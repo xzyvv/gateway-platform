@@ -75,6 +75,61 @@ fn legacy_snapshot_small_aggregation_window_is_raised() {
     );
 }
 
+/// 存量配置若同时打开 mqtt 与 sim_consumer（两个队列 ack 消费者），
+/// 加载路径必须降级（关掉模拟消费者）而不是阻断启动。
+#[test]
+fn legacy_double_consumer_is_sanitized() {
+    let mut cfg = GatewayConfig::default();
+    cfg.mqtt.enabled = true;
+    cfg.sim_consumer.enabled = true;
+
+    assert!(
+        cfg.validate_all().is_err(),
+        "未兜底前该配置必须被判非法（Web 保存路径依赖它）"
+    );
+
+    sanitize_legacy_consumer_exclusivity(&mut cfg);
+    assert!(
+        !cfg.sim_consumer.enabled,
+        "兜底后模拟消费者必须被关闭（保留 MQTT 上行）"
+    );
+    assert!(cfg.mqtt.enabled, "MQTT 必须保留，不受影响");
+    assert!(
+        cfg.validate_all().is_ok(),
+        "兜底后必须通过校验，否则手工改配置会导致升级后网关起不来"
+    );
+
+    // 只开一个消费者时不应被改动
+    cfg.sim_consumer.enabled = true;
+    cfg.mqtt.enabled = false;
+    sanitize_legacy_consumer_exclusivity(&mut cfg);
+    assert!(cfg.sim_consumer.enabled, "仅开模拟消费者时应保持不变");
+}
+
+/// 端到端：磁盘上的存量配置同时打开两个消费者时，`load()` 必须降级加载而不是返回 Err。
+///
+/// 与上面的直接调用用例互补——本用例覆盖 `try_load` 里的接线；若将来漏掉那次调用，
+/// 这里会失败，而不会拖到现场表现为「升级后网关起不来」。
+#[test]
+fn legacy_double_consumer_config_loads_via_loader() {
+    let dir = tempdir().expect("should succeed");
+    let path = dir.path().join("config.json");
+    let loader = ConfigLoader::new(&path);
+
+    let mut cfg = GatewayConfig::default();
+    cfg.mqtt.enabled = true;
+    cfg.sim_consumer.enabled = true;
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&cfg).expect("serialize"),
+    )
+    .expect("write legacy config");
+
+    let loaded = loader.load().expect("双消费者存量配置必须能加载");
+    assert!(!loaded.sim_consumer.enabled, "加载路径应关闭模拟消费者");
+    assert!(loaded.mqtt.enabled, "MQTT 必须保留");
+}
+
 #[test]
 fn save_creates_new_file() {
     let dir = tempdir().expect("should succeed");
@@ -707,6 +762,16 @@ fn factory_template_in_package_is_loadable() {
             entry.tier
         );
     }
+
+    // ★ 模板的「照注释操作」路径也必须合法：模板注释让用户接好 broker 后把
+    // `mqtt.enabled` 改 true，而 `validate_cycle_conflict` 要求点位采集周期
+    // **严格小于** `publish_interval`。两者相等（历史模板 5s / 5s）时，用户照做
+    // 会立刻保存 400、重启也起不来。这里把「开启 MQTT 后模板仍合法」钉死。
+    let mut mqtt_on = cfg.clone();
+    mqtt_on.mqtt.enabled = true;
+    mqtt_on.validate_all().expect(
+        "出厂模板开启 mqtt.enabled 后必须仍通过校验：示例点位采集周期必须 < publish_interval",
+    );
 }
 
 /// reload() 对有效文件的热重载正常路径必须返回磁盘上的最新内容。
