@@ -99,9 +99,13 @@ pub struct MqttConfig {
     #[serde(default)]
     pub compression_threshold: Option<usize>,
 
-    /// 断点续传限速（条/秒）：网络恢复后补发积压数据时的最大速率。
-    /// None=不限速（按 publish_interval 正常补发）。
-    /// 建议 200-1000，防止断网恢复后打爆 broker。
+    /// 上行限速（条/秒），对**全部上行**生效，不只是断网恢复后的补发。
+    ///
+    /// None / 0 = 不限速（默认）：按 `publish_interval` 与积压量自然满发。
+    /// 令牌桶的长期平均速率就是本值，故一旦设置**必须 ≥ 现场写入速率**
+    /// （≈ 点位数 ÷ 最短采集周期）；设小了上行长期慢于采集，队列持续积压
+    /// 直至触发容量淘汰，表现为「部分数据静默丢失」。
+    /// 取值前请按现场规模换算，容量档位见 `docs/容量规划.md` §2.1。
     #[serde(default)]
     pub resume_rate_limit: Option<usize>,
 

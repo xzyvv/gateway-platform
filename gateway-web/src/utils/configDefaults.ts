@@ -65,8 +65,14 @@ export function defaultWeb(): WebConfig {
 }
 
 // 后端 MqttConfig 的 serde 默认值（mqtt 节缺失时兜底，工厂函数保证每次返回新对象）
+//
+// 必须与 `gateway-core/src/config/mqtt.rs` 的 serde 默认值逐项一致：
+// - `topic` 不能是空串——后端 `validate_mqtt_topic` 不受 mqtt.enabled 门控，
+//   「缺 mqtt 段 → 前端补默认值 → 保存回写」会直接 400；
+// - `publish_interval` 与后端不一致时，UI 首屏展示的周期与实际上行周期不符；
+// - `reconnect_backoff` 对齐后端 `default_reconnect_backoff`（2/4/8/16/32/60 + 40% 抖动）。
 export function defaultMqtt(): MqttConfig {
-  return { enabled: false, broker: '', topic: '', publish_interval: 60, qos: 1, keep_alive: 30, ack_timeout_secs: 10, username: null, password: null, compression: null, compression_threshold: null, resume_rate_limit: null, payload_template: null, tls: null, reconnect_backoff: { seconds: [1, 2, 5, 10, 30], jitter_ratio: 0 }, report_mode: 'stream' }
+  return { enabled: false, broker: 'tcp://localhost:1883', topic: 'factory/line1', publish_interval: 5, qos: 1, keep_alive: 30, ack_timeout_secs: 10, username: null, password: null, compression: null, compression_threshold: null, resume_rate_limit: null, payload_template: null, tls: null, reconnect_backoff: { seconds: [2, 4, 8, 16, 32, 60], jitter_ratio: 0.4 }, report_mode: 'stream' }
 }
 
 // 后端 SimConsumerConfig 的 serde 默认值（sim_consumer 节缺失时兜底，工厂函数保证每次返回新对象）
