@@ -189,7 +189,9 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 
 ## 5. 测试计划
 
-**单元（`queue/storage/sqlite/consistency_tests.rs`）**
+状态：单元（1–8）与配套（14–16）已落地并通过门禁；集成（9–11）与端到端（12–13）为计划项，尚未合入测试套件。
+
+**单元（`queue/storage/sqlite/consistency_tests.rs`）—— 已实施**
 1. 同点位 5 行未送达 → `collapse_snapshot` 折叠 4 行（`delivered = 1`），`db_unsent` 剩 1；再出队返回 1 行（id 最大）。
 2. 多点位同时积压 → 每个点位各返回 1 行，`ORDER BY id ASC` 稳定。
 3. `LIMIT` 小于点位数 → 被 `LIMIT` 截断的点位，其最新样本保持未送达（下轮再发）。
@@ -199,16 +201,16 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 7. actor 级（`queue/tests.rs`）：`CollapseSnapshot` 命令回传 `{ superseded, cutoff }`；同一 cutoff 连续出队第二批为空；新样本等下周期。
 8. 慢 ACK 已知边界（`snapshot_slow_ack_can_resend_stale_row_after_newer_delivered`）：旧行 release 后会在更新值之后重发一次，固化 §3.5 口径。
 
-**集成（`north/mqtt`）**
+**集成（`north/mqtt`）—— 待补**
 9. 桩设备 1s 采样、`publish_interval=5`、snapshot → 每周期每点位仅 1 条，`source_ts` 等于该周期最后一拍。
 10. 发布失败 → `release_in_flight` 后同一批次不会「删了又发」；仅当该行已被更新值取代、且更新值已 ACK 时才可能重发一次（§3.5 已知边界）。
 11. 断网重连 replay：被 supersede 的行不出现在补传报文中。
 
-**端到端**
+**端到端 —— 待补**
 12. 8000 点 × 5 样本/周期：出队 p99 < 50ms（本地 SSD 基线），单周期批次数 ≤ 16。
 13. 从 `stream` 切 `snapshot`（配置热重载）后下一周期即生效，无需重启。
 
-**配套（与点位流水线/配置校验）**
+**配套（与点位流水线/配置校验）—— 已实施**
 14. `validate_snapshot_aggregation`：snapshot 下 `aggregation.window < publish_interval` 必须拒绝，`stream` 不限（`snapshot_aggregation_window_must_cover_publish_interval`）。
 15. 质量恢复：Bad/Uncertain → Good 的首个样本强制上行一次，之后恢复常规死区过滤（`test_quality_recovery_forces_upload`）。
 16. `on_change` 单独接入管道时按 `deadband` 判变化（`test_on_change_uses_deadband_threshold`）。
@@ -229,3 +231,22 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 1. snapshot + RBE：**不做连接级实现**。省流量由点位级 `on_change`/`deadband` 承担（样本在 pipeline 即被过滤，snapshot 只折叠残余多值）；纯 RBE 会导致值长期不变时下游无法区分「没变化」与「链路挂了」，需额外心跳机制，收益不抵复杂度。
 2. `batch_target` 口径：**沿用行数**（`pending.clamp(100, 500)`）。snapshot 下每点位单周期仅 1 行，行数与点位数恒等，无需分叉。
 3. `max_age_ms`：**v1 不做**。陈旧性已由 `quality`（Good/Stale/Bad）与 `stale_count` 表达，下游可自行过滤；若现场对「重连后不发老值」有硬要求，再作为独立小改动（选中 SQL 增加 `source_ts >= now - max_age`）补上。
+
+---
+
+## 7. 发布与迁移说明
+
+**默认行为不变**：`report_mode` 缺省仍为 `stream`，未改配置的现场升级后上行行为与升级前一致；无数据库 schema 变更，可直接回滚程序。
+
+**升级后的可见变化**
+
+| 变化 | 影响 | 现场动作 |
+|---|---|---|
+| 配置页「上报模式」下拉 → 4 张「上报策略」卡片（实时/快照/变化/统计） | 入口位置变化；卡片只写 `report_mode`，不新增配置字段 | 无需动作；卡片语义见《点位配置与换算》§9.4 |
+| 新增 `report_mode = snapshot` | 每上报周期每点位只上行最新一行，中间样本不入上行报文（本地历史仍完整） | 按需在 MQTT 页选择；下游需能接受快照语义 |
+| `on_change` 阈值由 `f64::EPSILON` 改为点位 `deadband` | 已勾选「变化才上传」的点位上报量下降（属语义修正） | 若业务依赖逐样本，取消勾选即可 |
+| 质量恢复（Bad/Uncertain → Good）首个样本强制上行 | 设备恢复瞬间会多一条样本，避免云端状态卡在 Bad | 无 |
+| `snapshot` 且 `aggregation.window < publish_interval` | 加载期自动把窗口抬到上报周期并写 `warn!` 日志，**不阻断启动**；Web 保存仍严格拒绝 | 检查启动日志，按需调大窗口 |
+| 新增指标 `gateway_queue_snapshot_superseded_total`、索引 `idx_queue_snapshot` | 云端可采集折叠量；索引只包含 `delivered = 0` 的行 | 无 |
+
+**回滚**：把 `report_mode` 改回 `stream` 即恢复逐样本上行（配置热重载即可生效，无需重启）；索引与指标保留无害。
