@@ -12,7 +12,8 @@
 判定口径（可用命令行参数覆盖）：
   1. 稳定性（绝对值）：采集失败 = 0 且协议解码错误 = 0；
   2. 吞吐回退：本次吞吐 ≥ 基线 × --throughput-ratio（默认 0.8）；
-  3. 延迟回退：本次 p99 ≤ 基线 p99 × --latency-ratio（默认 1.5）；
+  3. 延迟回退：本次 p99 ≤ max(基线 p99 × --latency-ratio（默认 1.5）,
+     --latency-floor-ms（默认 50）)——基线很小时按绝对下限判，避免自然抖动假红；
   4. 长稳泄漏：duration_min ≥ 30 的场景，RSS **尾段**拟合斜率（最后 20 min）
      ≤ --max-rss-mb-per-hour（默认 50 MB/h），且峰值 RSS ≤ 512 MB。
 
@@ -44,6 +45,11 @@ SOAK_MIN_DURATION_MIN = 30
 # 长稳场景的 RSS 峰值硬上限（MB）。斜率只看趋势，峰值兜住绝对占用：
 # 队列库 / 页缓存 / 缓冲池被一次性撑大时，斜率可能已经走平但内存已经过高。
 RSS_PEAK_LIMIT_MB = 512.0
+
+# p99 延迟门禁的绝对下限（ms）。基线 p99 很小时（如 s800 的 10ms），1.5× 的阈值
+# 只有 15ms，而同一场景历史抖动区间是 10~50ms——纯比例阈值必然假红。实际阈值
+# 取「基线 × 比例」与下限中的较大者，下限之内只记录不拦截。
+LATENCY_FLOOR_MS = 50.0
 
 PASS, FAIL, SKIP, NOTE = "PASS", "FAIL", "SKIP", "NOTE"
 
@@ -106,12 +112,15 @@ def judge_scenario(name: str, base: dict, cur: dict, args) -> dict:
         else tp_cur >= tp_base * args.throughput_ratio)
 
     # 3) 延迟：只比 p99——p50 会被采集周期掩盖，p99 才反映尾部长事务与排队。
+    #    阈值 = max(基线 × 比例, 绝对下限)：基线很小时避免被自然抖动打成假红。
     p99_base = (base.get("latency_ms") or {}).get("p99")
     p99_cur = (cur.get("latency_ms") or {}).get("p99")
+    p99_limit = (None if p99_base is None
+                 else max(p99_base * args.latency_ratio, args.latency_floor_ms))
     add("p99 延迟（ms）", fmt(p99_base), f"{fmt(p99_cur)}（{ratio(p99_cur, p99_base)}）",
-        f"≤ 基线 {args.latency_ratio:.1f}×",
-        None if (p99_base is None or p99_cur is None)
-        else p99_cur <= p99_base * args.latency_ratio)
+        f"≤ {fmt(p99_limit, 1)}（基线×{args.latency_ratio:.1f}，下限 {args.latency_floor_ms:.0f}）",
+        None if (p99_limit is None or p99_cur is None)
+        else p99_cur <= p99_limit)
 
     # 4) 长稳：RSS 尾段拟合斜率 + 峰值。短场景只记录数值，不判。
     slope = cur.get("rss_mb_per_hour")
@@ -167,6 +176,9 @@ def main() -> int:
                    help="吞吐门禁：本次 / 基线 的下限（默认 0.80）")
     p.add_argument("--latency-ratio", type=float, default=1.50,
                    help="p99 门禁：本次 / 基线 的上限（默认 1.50）")
+    p.add_argument("--latency-floor-ms", type=float, default=LATENCY_FLOOR_MS,
+                   help=f"p99 门禁的绝对下限 ms，阈值取「基线×比例」与该值较大者"
+                        f"（默认 {LATENCY_FLOOR_MS:.0f}）")
     p.add_argument("--max-rss-mb-per-hour", type=float, default=50.0,
                    help="长稳 RSS 尾段（最后 20 min）斜率上限 MB/h（默认 50）")
     p.add_argument("--out", default=None, help="Markdown 摘要输出路径（同时打印到 stdout）")
