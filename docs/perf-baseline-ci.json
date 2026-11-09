@@ -1,0 +1,157 @@
+{
+  "_comment": "CI 性能基线：与 docs/perf-baseline.md（24 核本机数据）不可混用。由 gateway-core/scripts/perf_compare.py --assemble 生成。",
+  "scenarios": {
+    "s800": {
+      "cpu_count": 4,
+      "platform": "linux",
+      "samples": 36,
+      "points": 800,
+      "slaves": 20,
+      "buses": 4,
+      "tcp_concurrent": 8,
+      "interval_ms": 1000,
+      "duration_min": 3.0,
+      "throughput_pts_per_sec": 799.7458464542256,
+      "round_sec": 1.000317792892456,
+      "period_capped": true,
+      "collect_total": 144000.0,
+      "failures": 0.0,
+      "decode_errors": 0.0,
+      "queue_depth_peak": 33200.0,
+      "latency_ms": {
+        "p50": 7.679,
+        "p95": 20.0,
+        "p99": 44.0
+      },
+      "cpu_pct": {
+        "avg": 1.0253883361880076,
+        "peak": 1.3495824770397669
+      },
+      "sys_cpu_pct": {
+        "avg": 1.620975376982476,
+        "peak": 2.902902902902903
+      },
+      "rss_mb": {
+        "avg": 41.26671006944444,
+        "peak": 48.00390625
+      },
+      "rss_growth_mb": 13.34375,
+      "rss_mb_per_hour": 256.1237608645335,
+      "warnings": []
+    },
+    "s2000": {
+      "cpu_count": 4,
+      "platform": "linux",
+      "samples": 60,
+      "points": 2000,
+      "slaves": 50,
+      "buses": 8,
+      "tcp_concurrent": 8,
+      "interval_ms": 1000,
+      "duration_min": 5.0,
+      "throughput_pts_per_sec": 1999.3087103796947,
+      "round_sec": 1.000345764321796,
+      "period_capped": true,
+      "collect_total": 600000.0,
+      "failures": 0.0,
+      "decode_errors": 0.0,
+      "queue_depth_peak": 60750.0,
+      "latency_ms": {
+        "p50": 30.0,
+        "p95": 48.0,
+        "p99": 49.6
+      },
+      "cpu_pct": {
+        "avg": 2.4974412268359627,
+        "peak": 2.8989888142024958
+      },
+      "sys_cpu_pct": {
+        "avg": 3.7259403439872987,
+        "peak": 4.352176088044022
+      },
+      "rss_mb": {
+        "avg": 58.59739583333333,
+        "peak": 68.9375
+      },
+      "rss_growth_mb": 20.5546875,
+      "rss_mb_per_hour": 225.5561841869347,
+      "warnings": []
+    },
+    "s8000": {
+      "cpu_count": 4,
+      "platform": "linux",
+      "samples": 36,
+      "points": 8000,
+      "slaves": 1,
+      "buses": 8,
+      "tcp_concurrent": 8,
+      "interval_ms": 1000,
+      "duration_min": 3.0,
+      "throughput_pts_per_sec": 7996.489708843142,
+      "round_sec": 1.0004389790126256,
+      "period_capped": true,
+      "collect_total": 1440000.0,
+      "failures": 0.0,
+      "decode_errors": 0.0,
+      "queue_depth_peak": 50000.0,
+      "latency_ms": {
+        "p50": 75.07,
+        "p95": 97.632,
+        "p99": 99.638
+      },
+      "cpu_pct": {
+        "avg": 9.782848320828098,
+        "peak": 9.94567012938113
+      },
+      "sys_cpu_pct": {
+        "avg": 14.149306676288584,
+        "peak": 14.907453726863432
+      },
+      "rss_mb": {
+        "avg": 118.68370225694444,
+        "peak": 126.8359375
+      },
+      "rss_growth_mb": 19.921875,
+      "rss_mb_per_hour": 276.0157979793307,
+      "warnings": []
+    },
+    "soak2000": {
+      "cpu_count": 4,
+      "platform": "linux",
+      "samples": 720,
+      "points": 2000,
+      "slaves": 50,
+      "buses": 8,
+      "tcp_concurrent": 8,
+      "interval_ms": 1000,
+      "duration_min": 60.0,
+      "throughput_pts_per_sec": 1999.6793744416611,
+      "round_sec": 1.0001603384834774,
+      "period_capped": true,
+      "collect_total": 7202000.0,
+      "failures": 0.0,
+      "decode_errors": 0.0,
+      "queue_depth_peak": 1000000.0,
+      "latency_ms": {
+        "p50": 30.0,
+        "p95": 48.0,
+        "p99": 49.6
+      },
+      "cpu_pct": {
+        "avg": 17.474824815209015,
+        "peak": 23.491784632276907
+      },
+      "sys_cpu_pct": {
+        "avg": 18.693371857533545,
+        "peak": 24.674022066198596
+      },
+      "rss_mb": {
+        "avg": 364.48432074652777,
+        "peak": 430.0078125
+      },
+      "rss_growth_mb": 380.73046875,
+      "rss_mb_per_hour": 25.66418736426029,
+      "warnings": []
+    }
+  }
+}
