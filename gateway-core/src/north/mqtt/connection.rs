@@ -114,6 +114,23 @@ impl MqttClient {
             }
         }
 
+        // 静默点判活 Step 1：注册连接级 Last Will。网关掉电/断网/崩溃时由 broker
+        // 代发 retain 的 offline，云端无需依赖网关存活即可判离线；ConnAck 成功后
+        // 由事件循环发布 retain 的 online 覆盖它。优雅停机不发 DISCONNECT，
+        // socket 关闭同样会被 broker 视为异常断开并代发 offline。
+        // topic 由上报 topic 派生（`<topic>/status`），不新增配置字段。
+        let status = crate::north::mqtt::status::status_topic(&config.topic);
+        options.set_last_will(LastWill::new(
+            status.clone(),
+            crate::north::mqtt::status::will_payload(),
+            QoS::AtLeastOnce,
+            true,
+        ));
+        tracing::info!(
+            "mqtt last will registered: topic={} state=offline retain=true",
+            status
+        );
+
         let (client, eventloop) = AsyncClient::new(options, 50);
 
         let shutdown = Arc::new(Notify::new());

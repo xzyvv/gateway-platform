@@ -236,6 +236,7 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
    - 判活的本质是「采集侧是否还活着」，不是「每个点位是否在变」：连接级 LWT 在网关掉线时由 broker 立即置离线；周期状态报文只携带**静默超过阈值的点位清单**（通常为空），报文大小与静默点数成正比而非与点位数成正比。
    - 阈值取 `max(5 × publish_interval, 60s)`；LWT 使用 retain，状态报文不 retain，避免重连后读到过期快照。
    - 前置条件：云端需订阅新增的状态 topic。若现场云端无法改造，再退回逐点心跳，作为独立改动评估。
+   - **实施进度（Step 1 已完成）**：状态 topic 固定派生为 `<上报 topic>/status`（不新增配置字段）；连接时注册 retain 的 Last Will（`{"state":"offline"}`，不带 `ts`，因为 will 在连接时固化），ConnAck 成功后发布 retain 的 `{"state":"online","ts":<毫秒>}`。优雅停机不发送 DISCONNECT，socket 关闭同样被 broker 视为异常断开并代发 offline。发布失败（多为 ACL 未放行）只告警，不影响数据上行。Step 2（静默点清单）待实施。
 
 ---
 
@@ -253,5 +254,6 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 | 质量恢复（Bad/Uncertain → Good）首个样本强制上行 | 设备恢复瞬间会多一条样本，避免云端状态卡在 Bad | 无 |
 | `snapshot` 且 `aggregation.window < publish_interval` | 加载期自动把窗口抬到上报周期并写 `warn!` 日志，**不阻断启动**；Web 保存仍严格拒绝 | 检查启动日志，按需调大窗口 |
 | 新增指标 `gateway_queue_snapshot_superseded_total`、索引 `idx_queue_snapshot` | 云端可采集折叠量；索引只包含 `delivered = 0` 的行 | 无 |
+| 新增状态 topic `<上报 topic>/status`（retain） | ConnAck 后发 `online`，异常断开由 broker 代发 `offline`（含掉电/断网/崩溃/优雅停机） | broker 需放行该 topic 的发布权限；云端不订阅则无影响 |
 
 **回滚**：把 `report_mode` 改回 `stream` 即恢复逐样本上行（配置热重载即可生效，无需重启）；索引与指标保留无害。

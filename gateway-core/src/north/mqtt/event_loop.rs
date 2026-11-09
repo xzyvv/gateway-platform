@@ -119,6 +119,34 @@ pub(super) async fn run_event_loop(inputs: EventLoopInputs) {
                         // （头部槽位永不确认 → 永久重复投递）。见 mark_connected_fresh_session。
                         mark_connected_fresh_session(&pending_ack, &orphan_acks, connected.as_ref());
                         tracing::info!("mqtt connected");
+                        // 静默点判活 Step 1：发布 retain 的 online，覆盖上次异常断开
+                        // 时 broker 代发的 offline。失败只告警（最常见原因是 broker ACL
+                        // 未放行 `<topic>/status` 的发布权限），不能影响数据上行；加超时
+                        // 是因为此刻事件循环未 poll，请求通道满时会一直等下去。
+                        let status = crate::north::mqtt::status::status_topic(&config.topic);
+                        match tokio::time::timeout(
+                            Duration::from_secs(2),
+                            client.publish(
+                                &status,
+                                QoS::AtLeastOnce,
+                                true,
+                                crate::north::mqtt::status::online_payload(),
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => {
+                                tracing::info!("mqtt online status published: {}", status)
+                            }
+                            Ok(Err(e)) => tracing::warn!(
+                                "mqtt publish online status to {} failed: {}（检查 broker ACL 是否允许发布该 topic）",
+                                status,
+                                e
+                            ),
+                            Err(_) => {
+                                tracing::warn!("mqtt publish online status to {} timed out", status)
+                            }
+                        }
                         // f5 修复：clean_session=true 时 broker 在每次重连后清空该
                         // client 的订阅关系，rumqttc 也不会自动重订阅。若不在此重新
                         // 订阅，透传等下行通道会一次断线后永久静默失效（表现为

@@ -12,12 +12,13 @@ pub use outbox::{OutboxStore, OutgoingMsg};
 
 mod payload;
 mod publish;
+mod status;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rumqttc::{AsyncClient, Event, EventLoop, Incoming, MqttOptions, QoS, Transport};
+use rumqttc::{AsyncClient, Event, EventLoop, Incoming, LastWill, MqttOptions, QoS, Transport};
 use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
 
