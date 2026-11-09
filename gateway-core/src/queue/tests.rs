@@ -1418,3 +1418,71 @@ fn test_bulk_insert_covers_chunk_boundary_row_counts() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].value, 122.0);
 }
+
+// ===== snapshot 上报：折叠命令 + 周期 cutoff（actor 级） =====
+
+/// `CollapseSnapshot` 命令必须走通 actor 并回传折叠行数 / 周期上界；
+/// 同一 cutoff 下重复出队不得再取到任何行，排空期间新到的样本留到下个周期。
+#[tokio::test]
+async fn snapshot_collapse_command_bounds_one_cycle() {
+    use crate::queue::storage::QueueStorage;
+    use std::sync::Arc;
+
+    let (_dir, storage) = temp_sqlite();
+    let storage: Arc<dyn QueueStorage> = Arc::new(storage);
+    let queue = DataQueue::with_storage(storage.clone()).unwrap();
+
+    // 必须用「当下」附近的时间戳：actor 会定期跑 retention（30 天），
+    // 1970 年量级的固定时间戳会被当成过期行直接回收。
+    let base = DataPoint::now() - 60_000;
+    // 2 个点位 × 3 拍（时间戳错开，避开同毫秒去重索引）
+    for shot in 0..3i64 {
+        let points: Vec<DataPoint> = (0..2)
+            .map(|i| make_point_at(&format!("p{}", i), (shot * 10 + i) as f64, base + shot))
+            .collect();
+        storage.enqueue_batch(&points).expect("enqueue");
+    }
+
+    let collapse = queue.collapse_snapshot().await.expect("collapse command");
+    assert_eq!(collapse.superseded, 4, "6 行按点位只留最新 2 行");
+
+    let items = queue
+        .dequeue_snapshot(10, collapse.cutoff)
+        .await
+        .expect("dequeue snapshot");
+    let mut values: Vec<f64> = items.iter().map(|i| i.value).collect();
+    values.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    assert_eq!(values, vec![20.0, 21.0], "只应发送最新一拍");
+
+    // 同一周期再排一批：cutoff 内已无未送达行（在途行也会被排除）
+    assert!(
+        queue
+            .dequeue_snapshot(10, collapse.cutoff)
+            .await
+            .expect("second drain")
+            .is_empty(),
+        "同一周期不得重复上行同一点位"
+    );
+
+    // 排空期间新到的样本（id > cutoff）本周期不发
+    storage
+        .enqueue_batch(&[make_point_at("p0", 99.0, base + 10)])
+        .expect("enqueue late sample");
+    assert!(
+        queue
+            .dequeue_snapshot(10, collapse.cutoff)
+            .await
+            .expect("drain after late sample")
+            .is_empty(),
+        "cutoff 之后的样本必须留到下个周期"
+    );
+
+    // 下个周期重新折叠 + 新 cutoff 才能取到
+    let next = queue.collapse_snapshot().await.expect("next collapse");
+    let items = queue
+        .dequeue_snapshot(10, next.cutoff)
+        .await
+        .expect("next cycle drain");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].value, 99.0);
+}

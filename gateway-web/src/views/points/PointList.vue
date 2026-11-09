@@ -251,7 +251,7 @@
             <el-input-number v-model="pointForm.deadband" :min="0" :step="0.1" :precision="4" controls-position="right" style="width: 100%" />
             <el-switch v-model="pointForm.on_change" active-text="变化才上传" />
           </div>
-          <div class="point-inherit-hint">死区：变化幅度小于该值时不产生新数据帧（0 = 不启用）。</div>
+          <div class="point-inherit-hint">死区：变化幅度小于该值时不产生新数据帧（0 = 不启用）。「变化才上传」沿用同一阈值；死区为 0 时仅过滤数值完全相同的样本。</div>
         </el-form-item>
         <el-form-item label="告警高/低限" prop="alarm_high">
           <div class="point-pair">
@@ -280,7 +280,7 @@
               unit-width="82px"
             />
           </div>
-          <div class="point-inherit-hint">聚合窗口（秒）：窗口内多次采样合并成一个上报值；选「不聚合」则逐帧上报。</div>
+          <div class="point-inherit-hint">聚合窗口（秒）：窗口内多次采样合并成一个上报值；选「不聚合」则逐帧上报。快照上报模式下窗口需 ≥ 上报周期，否则中间窗口会被折叠丢弃。</div>
         </el-form-item>
       </el-form>
       <template #footer>

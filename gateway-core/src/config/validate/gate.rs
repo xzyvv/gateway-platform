@@ -143,6 +143,9 @@ impl GatewayConfig {
         if let Err(msgs) = self.validate_cycle_conflict() {
             errors.extend(msgs);
         }
+        if let Err(msgs) = self.validate_snapshot_aggregation() {
+            errors.extend(msgs);
+        }
         if let Err(msgs) = self.validate_extended() {
             errors.extend(msgs);
         }
@@ -419,6 +422,9 @@ impl GatewayConfig {
     }
 
     /// 校验南向采集周期 < 北向上报周期。
+    ///
+    /// 两种上报模式统一要求严格小于：`interval == publish_interval` 时
+    /// `stream` 本来也是每周期约一条，`snapshot` 不额外受益，故不放宽。
     pub fn validate_cycle_conflict(&self) -> Result<(), Vec<String>> {
         if !self.mqtt.enabled {
             return Ok(());
@@ -445,6 +451,36 @@ impl GatewayConfig {
                             dev.name, dev.id, interval, north
                         ));
                     }
+                }
+            }
+        }
+        if conflicts.is_empty() {
+            Ok(())
+        } else {
+            Err(conflicts)
+        }
+    }
+
+    /// `snapshot` 上报模式会把同一周期内的多个聚合窗口折叠成一条，
+    /// 因此聚合窗口不得小于上报周期，否则中间窗口的结果会被静默丢弃。
+    ///
+    /// `stream` 模式逐条上行，无需该约束。
+    pub fn validate_snapshot_aggregation(&self) -> Result<(), Vec<String>> {
+        if !self.mqtt.enabled || !self.mqtt.is_snapshot() {
+            return Ok(());
+        }
+        let north = self.mqtt.publish_interval;
+        let mut conflicts: Vec<String> = Vec::new();
+        for p in &self.points {
+            if let Some(agg) = &p.aggregation {
+                if agg.window < north {
+                    conflicts.push(format!(
+                        "point {} (id={}) 聚合窗口 {}s < 北向周期 {}s：snapshot 模式会把同周期内多个聚合窗口折叠成 1 条，应把窗口调到 >= 北向周期，或改用 stream 模式",
+                        p.name.as_ref().unwrap_or(&p.id),
+                        p.id,
+                        agg.window,
+                        north
+                    ));
                 }
             }
         }
@@ -796,5 +832,73 @@ mod tests {
             "应指出 Modbus 缺 address_num: {:?}",
             errs
         );
+    }
+
+    /// 周期冲突校验不随上报模式放宽：`snapshot` 只是折叠上行，不改变「采样 < 上报」的约束。
+    #[test]
+    fn cycle_conflict_is_strict_in_both_report_modes() {
+        use crate::config::mqtt::ReportMode;
+
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = true;
+        cfg.mqtt.publish_interval = 5;
+        cfg.points = vec![serde_json::from_str(
+            r#"{"id":"p1","name":"p1","device_id":"d1","bus":"","protocol":"modbus","address":"1","data_type":"u16","interval":5}"#,
+        )
+        .expect("minimal point config")];
+
+        for mode in [ReportMode::Stream, ReportMode::Snapshot] {
+            cfg.mqtt.report_mode = mode;
+            assert!(
+                cfg.validate_cycle_conflict().is_err(),
+                "{mode:?} 必须拒绝 interval == publish_interval"
+            );
+        }
+
+        cfg.points[0].interval = 4;
+        cfg.validate_cycle_conflict()
+            .expect("4s 采样 / 5s 上报在两种模式下都应通过");
+    }
+
+    /// snapshot 折叠会把同周期的多个聚合窗口压成 1 条，窗口必须 >= 上报周期。
+    #[test]
+    fn snapshot_aggregation_window_must_cover_publish_interval() {
+        use crate::config::mqtt::ReportMode;
+        use crate::config::AggregationConfig;
+        use crate::engine::model::AggFn;
+
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = true;
+        cfg.mqtt.publish_interval = 5;
+        cfg.mqtt.report_mode = ReportMode::Snapshot;
+        cfg.points = vec![serde_json::from_str(
+            r#"{"id":"p1","name":"p1","device_id":"d1","bus":"","protocol":"modbus","address":"1","data_type":"u16","interval":1}"#,
+        )
+        .expect("minimal point config")];
+
+        cfg.points[0].aggregation = Some(AggregationConfig {
+            window: 1,
+            function: AggFn::Avg,
+        });
+        assert!(
+            cfg.validate_snapshot_aggregation().is_err(),
+            "window(1s) < 上报周期(5s) 必须拒绝"
+        );
+
+        cfg.points[0].aggregation = Some(AggregationConfig {
+            window: 5,
+            function: AggFn::Avg,
+        });
+        cfg.validate_snapshot_aggregation()
+            .expect("window == 上报周期 应通过");
+
+        // stream 模式逐条上行，不受该约束
+        cfg.mqtt.report_mode = ReportMode::Stream;
+        cfg.points[0].aggregation = Some(AggregationConfig {
+            window: 1,
+            function: AggFn::Avg,
+        });
+        cfg.validate_snapshot_aggregation()
+            .expect("stream 模式无需限制聚合窗口");
     }
 }

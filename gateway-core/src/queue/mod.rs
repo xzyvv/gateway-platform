@@ -545,6 +545,44 @@ impl DataQueue {
             .map_err(|e| GatewayError::Queue(format!("dequeue recv failed: {}", e)))
     }
 
+    /// 快照折叠（`report_mode = snapshot`）：把「非最新」的未送达行标记为已送达。
+    ///
+    /// 由上报循环**每周期调用一次**（而不是每批一次），返回值包含折叠行数与本周期
+    /// 出队上界 `cutoff`（折叠时刻的 `MAX(id)`），供本轮 `dequeue_snapshot` 使用。
+    pub async fn collapse_snapshot(
+        &self,
+    ) -> GatewayResult<crate::queue::storage::SnapshotCollapse> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(QueueCommand::CollapseSnapshot { reply })
+            .await
+            .map_err(|e| GatewayError::Queue(format!("collapse snapshot send failed: {}", e)))?;
+        rx.await
+            .map_err(|e| GatewayError::Queue(format!("collapse snapshot recv failed: {}", e)))
+    }
+
+    /// 快照出队（`report_mode = snapshot`）：每个点位只返回最新一行，且只取
+    /// `id <= cutoff` 的行（`cutoff` 由同周期 [`DataQueue::collapse_snapshot`] 给出）。
+    ///
+    /// 更早样本已由折叠标记为已送达（不上行，但仍保留供历史查询）。
+    pub async fn dequeue_snapshot(
+        &self,
+        limit: usize,
+        cutoff: i64,
+    ) -> GatewayResult<Vec<QueuedItem>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(QueueCommand::DequeueSnapshot {
+                limit,
+                cutoff,
+                reply,
+            })
+            .await
+            .map_err(|e| GatewayError::Queue(format!("dequeue snapshot send failed: {}", e)))?;
+        rx.await
+            .map_err(|e| GatewayError::Queue(format!("dequeue snapshot recv failed: {}", e)))
+    }
+
     /// 确认已发送，删除记录
     ///
     /// 存储层 ack 失败会返回 Err（数据其实没被删除）：调用方据此决定

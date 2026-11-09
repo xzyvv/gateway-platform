@@ -247,6 +247,15 @@ pub(super) fn init_queue_db(
     )
     .map_err(|e| GatewayError::Queue(format!("create evict index failed: {}", e)))?;
 
+    // snapshot 上报模式的折叠索引：按 (device_id, point_id) 分组取 MAX(id)，
+    // 再把非最新行标记 delivered。部分索引只覆盖未送达行，体积远小于全表索引；
+    // stream 模式下不会被使用，仅带来少量写入开销。
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queue_snapshot ON data_queue(device_id, point_id, id) WHERE delivered = 0",
+        [],
+    )
+    .map_err(|e| GatewayError::Queue(format!("create snapshot index failed: {}", e)))?;
+
     // 计数器校准放在建索引与去重**之后**：去重会删行，先算会导致终值虚高。
     let (initial_total, initial_unsent): (i64, i64) = conn
         .query_row(

@@ -255,6 +255,18 @@ impl Metrics {
         }
     }
 
+    /// 记录 `snapshot` 上报模式下被折叠的行数（标记已送达但不上行）。
+    ///
+    /// 与 `add_queue_evicted` 区分：折叠是配置语义（每周期每点位只发最新值），
+    /// 不是容量或故障导致的丢失，因此单独计数，便于现场对账。
+    pub fn add_queue_snapshot_superseded(&self, rows: usize) {
+        if rows > 0 {
+            self.queue_persist
+                .snapshot_superseded_rows
+                .fetch_add(rows as u64, Ordering::Relaxed);
+        }
+    }
+
     /// 刷新死信表当前行数（gauge）。由 webhook 维护循环周期调用。
     pub fn set_dead_letter_rows(&self, rows: i64) {
         self.alarm

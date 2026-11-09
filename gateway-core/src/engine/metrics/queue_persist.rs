@@ -50,6 +50,11 @@ pub struct QueuePersistMetrics {
     pub evicted_rows: AtomicU64,
     /// 上述淘汰中**未送达**（delivered=0）的行数——这部分是彻底的计费/审计数据丢失。
     pub evicted_undelivered_rows: AtomicU64,
+    /// `snapshot` 上报模式下被**折叠**（标记已送达但未上行）的行数。
+    ///
+    /// 这是配置选择的预期行为，不是故障：用来核对「采样量 × 周期比 − 实际上行量」
+    /// 是否吻合，避免现场把快照折叠误判为丢数据。
+    pub snapshot_superseded_rows: AtomicU64,
 }
 
 impl QueuePersistMetrics {
@@ -124,6 +129,15 @@ impl QueuePersistMetrics {
              # HELP gateway_queue_evicted_undelivered_rows_total Evicted rows that were never delivered northbound (permanent data loss)\n\
              # TYPE gateway_queue_evicted_undelivered_rows_total counter\n\
              gateway_queue_evicted_undelivered_rows_total {evicted_undelivered}"
+        );
+        let superseded = self
+            .snapshot_superseded_rows
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_queue_snapshot_superseded_total Rows collapsed by snapshot report mode (delivered but not uploaded)\n\
+             # TYPE gateway_queue_snapshot_superseded_total counter\n\
+             gateway_queue_snapshot_superseded_total {superseded}"
         );
     }
 }

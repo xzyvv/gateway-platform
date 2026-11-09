@@ -525,6 +525,116 @@ impl SqliteStorage {
         Ok(items)
     }
 
+    /// 快照出队：每个 `(device_id, point_id)` 只返回**最新一行**（`MAX(id)`），
+    /// 且只取 `id <= cutoff` 的行。
+    ///
+    /// 折叠（把更旧的行标记 delivered）由调用方在每个上报周期开头通过
+    /// `supersede_snapshot` 执行一次，不随批次重复执行——选择语句本身按点位
+    /// 取 `MAX(id)` 已保证「同一批次内每点位仅一行」，即使尚有旧行未折叠也不会重复上行。
+    ///
+    /// `cutoff` 固定本周期数据边界：排空期间新入队的样本（id 更大）留到下个周期，
+    /// 避免同一点位在一个周期内被上行两次。
+    ///
+    /// 步骤：选出每个点位的最新行 → 给选中行置 `in_flight`（同一事务）。
+    pub(super) fn dequeue_snapshot_batch(
+        conn: &mut Connection,
+        limit: usize,
+        cutoff: i64,
+    ) -> rusqlite::Result<Vec<QueuedItem>> {
+        let tx = conn.transaction()?;
+
+        let (items, ids): (Vec<QueuedItem>, Vec<i64>) = {
+            let mut stmt = tx.prepare_cached(
+                // 「最新」按入队序 `MAX(id)` 判定（对应「网关缓存里的当前值」），
+                // 不按 `source_ts`——迟到的旧样本不应覆盖后写入的新值。
+                "WITH latest AS (
+                     SELECT MAX(id) AS id FROM data_queue
+                     WHERE in_flight = 0 AND delivered = 0 AND id <= ?2
+                     GROUP BY device_id, point_id
+                 )
+                 SELECT id, point_id, device_id, value, raw_value, raw_type, quality, quality_reason, timestamp, source_ts, stale_count, value_text
+                 FROM data_queue
+                 WHERE id IN (SELECT id FROM latest)
+                 ORDER BY id ASC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit as i64, cutoff], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    QueuedItem {
+                        id: row.get(0)?,
+                        point_id: row.get(1)?,
+                        device_id: row.get(2)?,
+                        value: row.get(3)?,
+                        raw_value: row.get(4)?,
+                        raw_type: row.get(5)?,
+                        quality: row.get(6)?,
+                        quality_reason: row.get(7)?,
+                        timestamp: row.get(8)?,
+                        source_ts: row.get(9)?,
+                        stale_count: row.get(10)?,
+                        value_text: row.get(11)?,
+                    },
+                ))
+            })?;
+
+            let mut items = Vec::new();
+            let mut ids: Vec<i64> = Vec::new();
+            for row in rows {
+                let (id, item) = row?;
+                ids.push(id);
+                items.push(item);
+            }
+            (items, ids)
+        };
+
+        if !ids.is_empty() {
+            let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+            // 与普通出队一致：记录 dequeued_at，供 stale in_flight 按「出队时间」判定。
+            let now_ms = DataPoint::now();
+            let sql = format!(
+                "UPDATE data_queue SET in_flight = 1, dequeued_at = {now_ms} WHERE id IN ({})",
+                placeholders.join(",")
+            );
+            tx.execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
+        }
+
+        tx.commit()?;
+        Ok(items)
+    }
+
+    /// 快照折叠：把所有「非本点位最新」的未送达行标记 `delivered = 1`（不上行）。
+    ///
+    /// 由 `publish_loop` 在每个上报周期开头调用一次，而非每批一次：同一周期内的
+    /// 重复样本只需折叠一遍，避免「批次数 × 全量 GROUP BY」的冗余扫描。
+    /// 反压（in_flight 达上限）时也应调用——即使不发数据，也要把旧样本收敛掉，
+    /// 否则积压行会持续占磁盘并抬高队列水位。
+    ///
+    /// 注意：调用方必须保证此时没有「即将被选中」的行被误折叠——本语句以
+    /// `in_flight = 0` 为前提，已在途（待 ACK）的行不受影响。
+    ///
+    /// 返回 `(折叠行数, cutoff)`：`cutoff` 是折叠时刻表内 `MAX(id)`，作为本周期
+    /// 出队上界。与折叠同事务读取，保证「折叠边界 = 出队边界」，不会漏掉折叠前
+    /// 已入队的样本，也不会把排空期间新到的样本算进本周期。
+    pub(super) fn supersede_snapshot(conn: &mut Connection) -> rusqlite::Result<(usize, i64)> {
+        let tx = conn.transaction()?;
+        let superseded = tx.execute(
+            "UPDATE data_queue SET delivered = 1
+             WHERE delivered = 0 AND in_flight = 0
+               AND id NOT IN (
+                   SELECT MAX(id) FROM data_queue
+                   WHERE in_flight = 0 AND delivered = 0
+                   GROUP BY device_id, point_id
+               )",
+            [],
+        )?;
+        // MAX(id) 走主键索引，O(1)；空表返回 0，出队自然不会选中任何行。
+        let cutoff: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) FROM data_queue", [], |r| {
+            r.get(0)
+        })?;
+        tx.commit()?;
+        Ok((superseded, cutoff))
+    }
+
     /// 确认已发送（标记 delivered，由 retention/overflow 后续删除）（SQL 实现）
     ///
     /// P0-3：原实现 ack 时直接 DELETE；改为 `UPDATE delivered=1, in_flight=0`。

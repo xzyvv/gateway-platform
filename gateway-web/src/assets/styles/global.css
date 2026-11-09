@@ -78,6 +78,9 @@ html, body, #app {
   /* 白色半透明叠加统一写 rgba(var(--text-inverse-rgb), α)，替代散落的 rgba(255,255,255,α) */
   --text-inverse-rgb: 255, 255, 255;
 
+  /* 等宽字体：地址/报文/日志时间戳等需要对齐的文本（主题无关） */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace;
+
   /* 搜索高亮 mark：亮/暗主题下都固定浅黄底深字，不随主题翻转变 unreadable */
   --color-mark-bg: #fff3cd;
   --color-mark-text: #303133;

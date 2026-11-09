@@ -118,6 +118,25 @@ impl Fixture {
             .collect()
     }
 
+    /// 入队「同一批点位多拍」，模拟 1s 采样 / 5s 上报形成的积压形态。
+    /// 同一 `(point_id, timestamp)` 会被去重索引吞掉，故每一拍显式错开 timestamp。
+    fn enqueue_same_points(&self, point_count: usize, shots: usize) -> usize {
+        let mut total = 0;
+        for shot in 0..shots {
+            let points: Vec<DataPoint> = (0..point_count)
+                .map(|i| {
+                    let v = (shot * 10 + i) as f64;
+                    let mut p = DataPoint::good(&format!("p{}", i), "dev1", v, v, "u16");
+                    p.timestamp = 1_000 + shot as i64;
+                    p.source_ts = 1_000 + shot as i64;
+                    p
+                })
+                .collect();
+            total += self.storage.enqueue_batch(&points).expect("enqueue");
+        }
+        total
+    }
+
     /// 直接改库（仅测试用）：把指定 id 的 `dequeued_at` 改成旧时间，
     /// 用来构造 stale in_flight 场景。
     fn set_dequeued_at(&self, ids: &[i64], ts: i64) {
@@ -381,4 +400,224 @@ fn pick<F: FnMut() -> u64>(next: &mut F, pool: &[i64], n: usize) -> Vec<i64> {
             pool[idx]
         })
         .collect()
+}
+
+// ===== snapshot 上报（每周期折叠一次 + 每点位只出队最新一行） =====
+
+#[test]
+fn snapshot_dequeue_returns_latest_row_per_point() {
+    let f = Fixture::new();
+    assert_eq!(f.enqueue_same_points(3, 5), 15);
+    assert_eq!(f.db_total(), 15);
+
+    // 每个上报周期开头折叠一次：3 个点位各留最新 1 行，其余 12 行标 delivered。
+    assert_eq!(
+        f.storage.collapse_snapshot().expect("collapse").superseded,
+        12
+    );
+    assert_eq!(f.db_unsent(), 3);
+    f.assert_consistent("snapshot collapse");
+
+    let items = f
+        .storage
+        .dequeue_snapshot_batch(10, i64::MAX)
+        .expect("snapshot dequeue");
+    assert_eq!(items.len(), 3, "每个点位只应取 1 行");
+
+    // 最新一拍（shot=4）的 value = 4*10 + i
+    let mut values: Vec<f64> = items.iter().map(|i| i.value).collect();
+    values.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    assert_eq!(values, vec![40.0, 41.0, 42.0]);
+
+    // 3 条在途（仍计入 depth：depth 语义是 delivered=0）
+    assert_eq!(f.db_unsent(), 3);
+    assert_eq!(f.storage.in_flight_count(), 3);
+    f.assert_consistent("snapshot dequeue");
+}
+
+#[test]
+fn snapshot_dequeue_limit_keeps_unsent_latest() {
+    let f = Fixture::new();
+    assert_eq!(f.enqueue_same_points(4, 3), 12);
+
+    // 先折叠：4 个点位各留最新 1 行，其余 8 行标 delivered。
+    assert_eq!(
+        f.storage.collapse_snapshot().expect("collapse").superseded,
+        8
+    );
+
+    let items = f
+        .storage
+        .dequeue_snapshot_batch(2, i64::MAX)
+        .expect("snapshot dequeue");
+    assert_eq!(items.len(), 2);
+
+    // 4 个点位各保留最新行：2 行在途 + 2 行待发
+    assert_eq!(f.db_unsent(), 4);
+    assert_eq!(f.db_total(), 12);
+    assert_eq!(f.storage.in_flight_count(), 2);
+    f.assert_consistent("snapshot dequeue limited");
+}
+
+/// 折叠必须幂等，且不得动「在途」行（那些行等 ACK，标 delivered 会丢数据）。
+#[test]
+fn snapshot_collapse_is_idempotent_and_skips_in_flight() {
+    let f = Fixture::new();
+    assert_eq!(f.enqueue_same_points(2, 4), 8);
+
+    // 8 行 → 每点位留 1 行，折叠 6 行。
+    assert_eq!(
+        f.storage.collapse_snapshot().expect("collapse").superseded,
+        6
+    );
+    // 同上送周期重复调用不应再折叠任何行（否则 depth 会被重复扣减）。
+    assert_eq!(
+        f.storage
+            .collapse_snapshot()
+            .expect("second collapse")
+            .superseded,
+        0,
+        "已折叠的行不得重复计数"
+    );
+    f.assert_consistent("snapshot collapse idempotent");
+
+    // 出队（in_flight=1）后再折叠：在途行不能被标成 delivered。
+    let ids: Vec<i64> = f
+        .storage
+        .dequeue_snapshot_batch(10, i64::MAX)
+        .expect("snapshot dequeue")
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(
+        f.storage
+            .collapse_snapshot()
+            .expect("collapse with in-flight")
+            .superseded,
+        0,
+        "在途行不受折叠影响"
+    );
+    assert_eq!(f.storage.in_flight_count(), 2);
+    assert_eq!(f.db_in_flight(), 2);
+    f.assert_consistent("snapshot collapse skips in-flight");
+}
+
+/// 折叠返回的 cutoff 必须钉住本周期边界：排空期间新到的样本不能同周期上行。
+#[test]
+fn snapshot_dequeue_ignores_rows_newer_than_cutoff() {
+    let f = Fixture::new();
+    assert_eq!(f.enqueue_same_points(2, 2), 4);
+
+    let collapse = f.storage.collapse_snapshot().expect("collapse");
+    assert_eq!(collapse.superseded, 2, "每个点位各折叠 1 行");
+    assert!(collapse.cutoff > 0, "空表以外的折叠必须给出上界");
+
+    // 折叠与排空之间新到一拍（timestamp 错开避开同毫秒去重索引，id > cutoff）。
+    let fresh: Vec<DataPoint> = (0..2)
+        .map(|i| {
+            let v = (20 + i) as f64;
+            let mut p = DataPoint::good(&format!("p{}", i), "dev1", v, v, "u16");
+            p.timestamp = 2_000;
+            p.source_ts = 2_000;
+            p
+        })
+        .collect();
+    assert_eq!(f.storage.enqueue_batch(&fresh).expect("enqueue"), 2);
+
+    // 本周期只发 cutoff 以内的最新行：2 行，且 value 是第 2 拍（shot=1）。
+    let items = f
+        .storage
+        .dequeue_snapshot_batch(10, collapse.cutoff)
+        .expect("snapshot dequeue with cutoff");
+    assert_eq!(items.len(), 2, "cutoff 之后新到的样本必须留到下个周期");
+    let mut values: Vec<f64> = items.iter().map(|i| i.value).collect();
+    values.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    assert_eq!(values, vec![10.0, 11.0]);
+
+    // 下个周期：折叠 + 新 cutoff，才能取到第 3 拍。
+    let next = f.storage.collapse_snapshot().expect("next collapse");
+    let items = f
+        .storage
+        .dequeue_snapshot_batch(10, next.cutoff)
+        .expect("snapshot dequeue next cycle");
+    assert_eq!(items.len(), 2);
+    let mut values: Vec<f64> = items.iter().map(|i| i.value).collect();
+    values.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    assert_eq!(values, vec![20.0, 21.0]);
+    f.assert_consistent("snapshot cutoff");
+}
+
+#[test]
+fn stream_dequeue_still_returns_every_sample() {
+    let f = Fixture::new();
+    f.enqueue_same_points(2, 5);
+
+    let items = f.storage.dequeue_batch(10).expect("dequeue");
+    assert_eq!(items.len(), 10, "stream 模式必须保持逐样本上行");
+    f.assert_consistent("stream dequeue");
+}
+
+/// 已知边界（`docs/design/snapshot-upload.md` §3.5）：折叠只以**未送达行**判定「最新」，
+/// 已送达 / 在途的更新值不参与判定。因此慢 ACK 期间旧行被 release 回未送达后，会在
+/// 更新值之后被再次上行一次——快照语义在失败重试路径上退化为 at-least-once。
+///
+/// 本用例固化该行为：若有人把折叠口径改成「全表 MAX(id)」，这里会失败并提醒同步
+/// 更新设计文档与现场语义说明。
+#[test]
+fn snapshot_slow_ack_can_resend_stale_row_after_newer_delivered() {
+    let f = Fixture::new();
+
+    // 周期 1：只有旧值 1.0 入队 → 折叠保留 → 出队后在途（PubAck 迟迟不回）。
+    let mut p = DataPoint::good("p0", "dev1", 1.0, 1.0, "u16");
+    p.timestamp = 1_000;
+    p.source_ts = 1_000;
+    assert_eq!(f.storage.enqueue_batch(&[p]).expect("enqueue v1"), 1);
+    let c1 = f.storage.collapse_snapshot().expect("collapse 1");
+    let old_id = f
+        .storage
+        .dequeue_snapshot_batch(10, c1.cutoff)
+        .expect("dequeue v1")
+        .into_iter()
+        .map(|i| i.id)
+        .next()
+        .expect("v1 必须被出队");
+
+    // 周期 2：排空期间新值 2.0 入队 → 折叠保留 2.0（1.0 在途，不参与判定）→
+    // 出队并 ACK 成功（先于 1.0 完成）。
+    let mut p = DataPoint::good("p0", "dev1", 2.0, 2.0, "u16");
+    p.timestamp = 2_000;
+    p.source_ts = 2_000;
+    assert_eq!(f.storage.enqueue_batch(&[p]).expect("enqueue v2"), 1);
+    let c2 = f.storage.collapse_snapshot().expect("collapse 2");
+    let new_ids: Vec<i64> = f
+        .storage
+        .dequeue_snapshot_batch(10, c2.cutoff)
+        .expect("dequeue v2")
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(new_ids.len(), 1, "2.0 必须在 1.0 在途时单独上行");
+    f.storage.ack_batch(&new_ids).expect("ack v2");
+
+    // 周期 3：1.0 的 PubAck 超时 → release 回未送达。折叠口径只看未送达行，
+    // 已送达的 2.0 不参与判定，于是 1.0 再次成为「最新未送达」。
+    f.storage.release_in_flight(&[old_id]).expect("release v1");
+    assert_eq!(
+        f.storage
+            .collapse_snapshot()
+            .expect("collapse 3")
+            .superseded,
+        0,
+        "已知边界：旧行不会被折叠（更新值已送达，不参与判定）"
+    );
+    let stale: Vec<f64> = f
+        .storage
+        .dequeue_snapshot_batch(10, i64::MAX)
+        .expect("dequeue stale")
+        .iter()
+        .map(|i| i.value)
+        .collect();
+    assert_eq!(stale, vec![1.0], "已知边界：旧值会在新值之后重发一次");
+    f.assert_consistent("snapshot slow ack");
 }

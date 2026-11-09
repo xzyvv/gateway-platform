@@ -305,7 +305,7 @@ void props
   color: var(--text-secondary);
 }
 .pwd-block {
-  border-top: 1px solid var(--border-color-lighter);
+  border-top: 1px solid var(--border-lighter);
   padding-top: 16px;
 }
 .pwd-head {

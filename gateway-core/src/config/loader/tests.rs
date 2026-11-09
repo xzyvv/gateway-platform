@@ -25,6 +25,56 @@ fn legacy_non_positive_ratio_is_sanitized() {
     assert_eq!(cfg.points[0].pt_ratio, Some(100.0));
 }
 
+/// snapshot 下聚合窗口小于上报周期：加载路径必须抬到上报周期，避免阻断启动。
+#[test]
+fn legacy_snapshot_small_aggregation_window_is_raised() {
+    use crate::config::mqtt::ReportMode;
+    use crate::config::AggregationConfig;
+    use crate::engine::model::AggFn;
+
+    let mut cfg = GatewayConfig::default();
+    cfg.mqtt.enabled = true;
+    cfg.mqtt.publish_interval = 5;
+    cfg.mqtt.report_mode = ReportMode::Snapshot;
+    cfg.points = vec![crate::config::PointConfig {
+        id: "p1".to_string(),
+        aggregation: Some(AggregationConfig {
+            window: 1,
+            function: AggFn::Avg,
+        }),
+        ..Default::default()
+    }];
+
+    assert!(
+        cfg.validate_snapshot_aggregation().is_err(),
+        "未兜底前该配置必须被判非法（Web 保存路径依赖它）"
+    );
+
+    sanitize_legacy_snapshot_aggregation(&mut cfg);
+    assert_eq!(
+        cfg.points[0].aggregation.as_ref().map(|a| a.window),
+        Some(5),
+        "窗口应抬到上报周期"
+    );
+    assert!(
+        cfg.validate_snapshot_aggregation().is_ok(),
+        "兜底后必须通过校验，否则手工改配置会导致升级后网关起不来"
+    );
+
+    // stream 模式不受影响：窗口保持原值
+    cfg.mqtt.report_mode = ReportMode::Stream;
+    cfg.points[0].aggregation = Some(AggregationConfig {
+        window: 1,
+        function: AggFn::Avg,
+    });
+    sanitize_legacy_snapshot_aggregation(&mut cfg);
+    assert_eq!(
+        cfg.points[0].aggregation.as_ref().map(|a| a.window),
+        Some(1),
+        "stream 下窗口应保持原值"
+    );
+}
+
 #[test]
 fn save_creates_new_file() {
     let dir = tempdir().expect("should succeed");

@@ -63,6 +63,60 @@ fn test_bad_quality_passthrough() {
     assert!(ep.process(&p, dp).is_some());
 }
 
+/// 质量恢复边沿：Bad → Good 的首个样本必须上行一次，即使数值没有变化。
+///
+/// Bad 样本绕过管道，死区/变化节点的基线仍是故障前的值；若不强制放行，
+/// 恢复后数值相同的样本会被当成「未变化」过滤，云端会一直停留在 Bad 状态。
+#[test]
+fn test_quality_recovery_forces_upload() {
+    let ep = EdgeProcessor::new();
+    let p = make_point("p7", 1.0, true);
+
+    assert!(ep
+        .process(&p, DataPoint::good("p7", "dev", 10.0, 10.0, "u16"))
+        .is_some());
+    // 值未变 → 死区过滤
+    assert!(ep
+        .process(&p, DataPoint::good("p7", "dev", 10.0, 10.0, "u16"))
+        .is_none());
+    // 采集中断：Bad 样本始终上行
+    assert!(ep
+        .process(
+            &p,
+            DataPoint::failed("p7", "dev", Some(10.0), 1_000, Quality::Bad, "timeout", 1)
+        )
+        .is_some());
+    // 恢复后的首个 Good（数值仍为 10.0）必须上行
+    assert!(ep
+        .process(&p, DataPoint::good("p7", "dev", 10.0, 10.0, "u16"))
+        .is_some());
+    // 之后恢复常规死区过滤
+    assert!(ep
+        .process(&p, DataPoint::good("p7", "dev", 10.0, 10.0, "u16"))
+        .is_none());
+}
+
+/// `on_change` 单独接入管道时也按死区判变化，而不是退化为 `f64::EPSILON`。
+#[test]
+fn test_on_change_uses_deadband_threshold() {
+    let ep = EdgeProcessor::with_nodes(vec![Box::new(ChangeNode::new())]);
+    let p = make_point("p8", 0.5, true);
+
+    assert!(ep
+        .process(&p, DataPoint::good("p8", "dev", 10.0, 10.0, "u16"))
+        .is_some());
+    assert!(
+        ep.process(&p, DataPoint::good("p8", "dev", 10.2, 10.2, "u16"))
+            .is_none(),
+        "0.2 < 死区 0.5，应过滤"
+    );
+    assert!(
+        ep.process(&p, DataPoint::good("p8", "dev", 10.6, 10.6, "u16"))
+            .is_some(),
+        "0.6 > 死区 0.5，应上行"
+    );
+}
+
 #[test]
 fn test_pending_queue_no_loss() {
     let ep = EdgeProcessor::new();

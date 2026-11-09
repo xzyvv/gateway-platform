@@ -52,4 +52,11 @@ tls: MqttTlsConfig | null,
 /**
  * 重连退避参数（默认序列 2/4/8/16/32/60 秒 + 40% 抖动，与历史硬编码一致）。
  */
-reconnect_backoff: ReconnectBackoffConfig, };
+reconnect_backoff: ReconnectBackoffConfig, 
+/**
+ * 上报模式（默认 `stream`，存量配置行为不变）。
+ *
+ * `snapshot` 下采样与上报解耦为「快照」：`publish_interval` 到点后每个点位
+ * 只上行最新一行，中间样本不上行（仍保留在本地历史中）。
+ */
+report_mode: "stream" | "snapshot", };

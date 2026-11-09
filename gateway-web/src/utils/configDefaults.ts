@@ -66,7 +66,7 @@ export function defaultWeb(): WebConfig {
 
 // 后端 MqttConfig 的 serde 默认值（mqtt 节缺失时兜底，工厂函数保证每次返回新对象）
 export function defaultMqtt(): MqttConfig {
-  return { enabled: false, broker: '', topic: '', publish_interval: 60, qos: 1, keep_alive: 30, ack_timeout_secs: 10, username: null, password: null, compression: null, compression_threshold: null, resume_rate_limit: null, payload_template: null, tls: null, reconnect_backoff: { seconds: [1, 2, 5, 10, 30], jitter_ratio: 0 } }
+  return { enabled: false, broker: '', topic: '', publish_interval: 60, qos: 1, keep_alive: 30, ack_timeout_secs: 10, username: null, password: null, compression: null, compression_threshold: null, resume_rate_limit: null, payload_template: null, tls: null, reconnect_backoff: { seconds: [1, 2, 5, 10, 30], jitter_ratio: 0 }, report_mode: 'stream' }
 }
 
 // 后端 SimConsumerConfig 的 serde 默认值（sim_consumer 节缺失时兜底，工厂函数保证每次返回新对象）

@@ -17,7 +17,7 @@
       <div class="derived-topics">
         <el-input :model-value="alarmTopic" readonly placeholder="点位报警/恢复" />
         <el-input :model-value="systemAlarmTopic" readonly placeholder="系统（磁盘）告警" />
-        <div class="derived-hint">由数据 Topic 派生，不可单独配置</div>
+        <div class="field-hint">由数据 Topic 派生，不可单独配置</div>
       </div>
     </el-form-item>
     <el-form-item label="QoS 等级">
@@ -31,6 +31,8 @@
       <!-- max 以「秒」为单位（3600 秒 = 1 小时） -->
       <DurationSelect v-model="mqtt.publish_interval" :max="3600" :units="['s', 'min']" />
     </el-form-item>
+    <!-- 上报策略：4 个预设卡片 + 点位级配置引导（细节见 ReportStrategy.vue） -->
+    <ReportStrategy v-model="mqtt" />
     <el-form-item label="用户名">
       <el-input v-model="mqtt.username" placeholder="留空=匿名连接" clearable />
     </el-form-item>
@@ -92,7 +94,7 @@
             clearable
             @update:model-value="onCaCertInput"
           />
-          <div class="tls-hint">
+          <div class="field-hint">
             仅 Broker 使用 TLS（mqtts/wss）时生效；填 PEM/DER 证书的绝对路径，用于自签或企业私有 CA。
           </div>
         </el-form-item>
@@ -107,7 +109,7 @@
                 :label="opt.label"
               />
             </el-select>
-            <div class="backoff-hint">
+            <div class="field-hint">
               当前：{{ backoff.seconds.join(' / ') }} 秒，抖动 {{ Math.round(backoff.jitter_ratio * 100) }}%
             </div>
           </div>
@@ -124,6 +126,7 @@
 import { computed, ref } from 'vue'
 import DurationSelect from '@/components/industrial/DurationSelect.vue'
 import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
+import ReportStrategy from './ReportStrategy.vue'
 import type { MqttConfig } from '@/api/types'
 import {
   BACKOFF_LABELS,
@@ -217,6 +220,7 @@ const advancedSummary = computed(() => {
     `ACK ${fmt(m.ack_timeout_secs, 's')}`,
     `压缩 ${m.compression || '不压缩'}`,
     `退避 ${BACKOFF_LABELS[backoffPreset.value]}`,
+    `上报 ${m.report_mode === 'snapshot' ? '快照' : '逐样本'}`,
   ]
   if (m.resume_rate_limit) parts.push(`限速 ${m.resume_rate_limit} 条/秒`)
   if (m.tls?.ca_cert_path) parts.push('自签 CA')
@@ -256,19 +260,12 @@ const advancedSummary = computed(() => {
 .derived-topics :deep(.el-input__inner) {
   color: var(--text-secondary);
 }
-.derived-hint {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
 .backoff-field {
   width: 100%;
 }
-.backoff-hint {
-  margin-top: 4px;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-.tls-hint {
+/* 字段下方的辅助说明：旧 .derived-hint / .backoff-hint / .tls-hint 三套同类样式
+   统一收敛为 .field-hint，与其它配置页保持同一套类名与间距。 */
+.field-hint {
   margin-top: 4px;
   font-size: 0.75rem;
   line-height: 1.5;

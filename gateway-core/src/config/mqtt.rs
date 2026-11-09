@@ -31,6 +31,22 @@ pub struct MqttTlsConfig {
     pub insecure_skip_verify: bool,
 }
 
+/// MQTT 上报模式
+///
+/// - `Stream`（默认）：每个采集样本都作为独立行上行，保持历史行为；
+/// - `Snapshot`：每个上报周期内每个点位只上行最新一行，更早的样本标记为已送达
+///   但不上行——对齐 OPC UA 订阅模型（`queueSize = 1`、`discardOldest = true`）
+///   与主流网关的「周期快照」语义。
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportMode {
+    #[default]
+    Stream,
+    Snapshot,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize, Validate, schemars::JsonSchema, ts_rs::TS)]
 #[ts(export)]
 pub struct MqttConfig {
@@ -105,6 +121,21 @@ pub struct MqttConfig {
     #[serde(default = "default_reconnect_backoff")]
     #[validate(nested)]
     pub reconnect_backoff: ReconnectBackoffConfig,
+
+    /// 上报模式（默认 `stream`，存量配置行为不变）。
+    ///
+    /// `snapshot` 下采样与上报解耦为「快照」：`publish_interval` 到点后每个点位
+    /// 只上行最新一行，中间样本不上行（仍保留在本地历史中）。
+    #[serde(default)]
+    #[ts(type = "\"stream\" | \"snapshot\"")]
+    pub report_mode: ReportMode,
+}
+
+impl MqttConfig {
+    /// 是否为快照上报模式（供队列出队与周期校验分派）。
+    pub fn is_snapshot(&self) -> bool {
+        self.report_mode == ReportMode::Snapshot
+    }
 }
 
 /// broker 用户名/密码不得随 `{:?}` 进入日志。
@@ -132,6 +163,7 @@ impl Default for MqttConfig {
             payload_template: None,
             tls: None,
             reconnect_backoff: default_reconnect_backoff(),
+            report_mode: ReportMode::Stream,
         }
     }
 }
@@ -178,6 +210,22 @@ mod tests {
         }"#;
         let cfg: MqttConfig = serde_json::from_str(json).expect("parse without tls field");
         assert!(cfg.tls.is_none(), "未配置 tls → None（君道可走系统 CA）");
+    }
+
+    /// 上报模式：缺省为 `stream`（存量配置零行为变更），显式 `snapshot` 可解析。
+    #[test]
+    fn test_report_mode_defaults_to_stream_and_parses_snapshot() {
+        let base = r#"{"enabled":true,"broker":"mqtt://localhost:1883","topic":"t","publish_interval":5,"qos":1"#;
+        let cfg: MqttConfig =
+            serde_json::from_str(&format!("{base}}}")).expect("parse default report_mode");
+        assert_eq!(cfg.report_mode, ReportMode::Stream);
+        assert!(!cfg.is_snapshot());
+
+        let cfg: MqttConfig =
+            serde_json::from_str(&format!("{base},\"report_mode\":\"snapshot\"}}"))
+                .expect("parse snapshot report_mode");
+        assert_eq!(cfg.report_mode, ReportMode::Snapshot);
+        assert!(cfg.is_snapshot());
     }
 
     /// Bug 2.4: MqttTlsConfig 含 ca_cert_path + insecure_skip_verify 双字段

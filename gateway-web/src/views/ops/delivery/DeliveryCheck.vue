@@ -345,7 +345,7 @@ function exportChecklistMd() {
   align-items: center;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-lighter);
 }
 .tpl-row:last-of-type {
   border-bottom: none;
@@ -405,7 +405,7 @@ function exportChecklistMd() {
   font-size: 0.76rem;
 }
 .manual {
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-lighter);
   border-radius: var(--radius-small);
   padding: 6px 12px;
 }
@@ -414,7 +414,7 @@ function exportChecklistMd() {
   align-items: center;
   gap: 10px;
   padding: 8px 0;
-  border-bottom: 1px dashed var(--border-color);
+  border-bottom: 1px dashed var(--border-lighter);
 }
 .manual-row:last-child {
   border-bottom: none;

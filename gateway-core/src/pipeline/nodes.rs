@@ -338,11 +338,23 @@ impl PipelineNode for DeadbandNode {
         last_values.insert(dp.point_id.clone(), dp.value);
         Some(dp)
     }
+
+    /// 质量恢复样本：放行并把基线更新为恢复值，避免下一条同值样本被误判为「变化」。
+    fn process_recovered(&self, _point: &PointConfig, dp: DataPoint) -> Option<DataPoint> {
+        if dp.value.is_finite() {
+            self.last_values
+                .lock()
+                .insert(dp.point_id.clone(), dp.value);
+        }
+        Some(dp)
+    }
 }
 
 /// 变化上传节点
 ///
-/// 仅在值发生变化时上传，值不变则过滤。
+/// 仅在值发生变化时上传，值不变则过滤。变化阈值优先复用点位死区（`deadband`），
+/// 死区为 0 时才退化为「完全相同才过滤」——`f64::EPSILON` 量级对工程量纲没有
+/// 实际过滤意义，变化上报的带宽收益实际来自死区配置。
 pub struct ChangeNode {
     last_values: Mutex<HashMap<String, f64>>,
 }
@@ -374,13 +386,29 @@ impl PipelineNode for ChangeNode {
         // 原实现会让 NaN 绕过变化检查并写入 last_values，导致后续比较全失效。
         // NaN/Inf 视为变化：直接通过 + 更新 last_values。
         let is_nan = !dp.value.is_finite();
+        // 变化阈值复用死区：死区节点在前，正常路径下这里不会触发；但允许
+        // 单独使用本节点（自定义管道）时也能按死区过滤，避免 f64::EPSILON
+        // 让「变化上报」退化成「每样本都上报」。
+        let threshold = if point.deadband > 0.0 {
+            point.deadband
+        } else {
+            f64::EPSILON
+        };
         let mut last_values = self.last_values.lock();
         if let Some(last_val) = last_values.get(&dp.point_id).copied() {
-            if !is_nan && last_val.is_finite() && (dp.value - last_val).abs() < f64::EPSILON {
-                return None; // 值未变化，过滤
+            if !is_nan && last_val.is_finite() && (dp.value - last_val).abs() < threshold {
+                return None; // 值未变化（或在死区内），过滤
             }
         }
         last_values.insert(dp.point_id.clone(), dp.value);
+        Some(dp)
+    }
+
+    /// 质量恢复样本：放行并更新基线（NaN/Inf 也记账，与其 `process` 行为一致）。
+    fn process_recovered(&self, _point: &PointConfig, dp: DataPoint) -> Option<DataPoint> {
+        self.last_values
+            .lock()
+            .insert(dp.point_id.clone(), dp.value);
         Some(dp)
     }
 }

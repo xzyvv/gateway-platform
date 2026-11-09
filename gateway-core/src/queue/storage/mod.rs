@@ -103,6 +103,31 @@ impl HistoryQueryResult {
     }
 }
 
+/// 快照折叠结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotCollapse {
+    /// 本周期被折叠（标记已送达但不上行）的行数。
+    pub superseded: usize,
+    /// 本周期出队上界：只发送 `id <= cutoff` 的行；`i64::MAX` 表示不限制。
+    ///
+    /// 折叠时取当时表内 `MAX(id)`，把「本周期」的数据边界钉死——排空期间新到的
+    /// 样本（id 更大）留到下个周期，避免同一点位在一个周期内被上行两次。
+    pub cutoff: i64,
+}
+
+impl SnapshotCollapse {
+    /// 不折叠、不限制上界（内存后端不支持折叠，退化为逐样本）。
+    ///
+    /// 注意：SQLite 后端折叠失败时**不走这里**——上报循环会跳过该周期，
+    /// 避免退化为 `i64::MAX` 后同一点位一个周期内被上行两次。
+    pub fn unrestricted() -> Self {
+        Self {
+            superseded: 0,
+            cutoff: i64::MAX,
+        }
+    }
+}
+
 /// 队列存储后端 trait
 ///
 /// 实现方负责内部同步（Mutex / 原子操作），调用方无需额外加锁。
@@ -115,6 +140,24 @@ pub trait QueueStorage: Send + Sync {
 
     /// 批量出队（标记 in_flight），按 id 升序返回。
     fn dequeue_batch(&self, limit: usize) -> GatewayResult<Vec<QueuedItem>>;
+
+    /// 快照出队：每个 `(device_id, point_id)` 只返回最新一行，且 `id <= cutoff`。
+    ///
+    /// 折叠（把更旧的行标记 delivered）由 [`QueueStorage::collapse_snapshot`] 每周期
+    /// 执行一次，不随批次重复。`cutoff` 由折叠结果给出，用于固定本周期数据边界。
+    /// 默认实现退化为普通出队（内存后端 / 测试桩没有折叠能力，`cutoff` 被忽略）。
+    fn dequeue_snapshot_batch(&self, limit: usize, cutoff: i64) -> GatewayResult<Vec<QueuedItem>> {
+        let _ = cutoff;
+        self.dequeue_batch(limit)
+    }
+
+    /// 快照折叠：把「非最新」的未送达行标记为已送达（不上行）。
+    ///
+    /// 由上报循环每周期调用一次，返回折叠行数与本周期出队上界。
+    /// 默认实现不折叠、不限制上界（即退化为逐样本上行）。
+    fn collapse_snapshot(&self) -> GatewayResult<SnapshotCollapse> {
+        Ok(SnapshotCollapse::unrestricted())
+    }
 
     /// 确认已发送，删除记录。
     fn ack_batch(&self, ids: &[i64]) -> GatewayResult<()>;

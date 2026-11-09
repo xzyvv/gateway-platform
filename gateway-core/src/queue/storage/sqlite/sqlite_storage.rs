@@ -21,7 +21,7 @@ use super::wal::{check_wal_size, run_wal_checkpoint, wal_path_for};
 
 use crate::queue::core::limit::{update_in_flight_metric, update_queue_depth_metric};
 use crate::queue::core::{ensure_key, QueuedItem};
-use crate::queue::storage::{HistoryQueryResult, QueueStorage};
+use crate::queue::storage::{HistoryQueryResult, QueueStorage, SnapshotCollapse};
 
 /// in_flight 超时阈值（毫秒）：超过此时间未 ack 的 in_flight 记录自动释放
 const INFLIGHT_TIMEOUT_MS: i64 = 5 * 60 * 1000;
@@ -345,6 +345,30 @@ impl QueueStorage for SqliteStorage {
             update_in_flight_metric(&self.in_flight, &self.metrics);
         }
         Ok(items)
+    }
+
+    fn dequeue_snapshot_batch(&self, limit: usize, cutoff: i64) -> GatewayResult<Vec<QueuedItem>> {
+        let mut guard = self.conn.lock();
+        let items = Self::dequeue_snapshot_batch(&mut guard, limit, cutoff)?;
+        if !items.is_empty() {
+            self.in_flight
+                .fetch_add(items.len() as i64, Ordering::Relaxed);
+            update_in_flight_metric(&self.in_flight, &self.metrics);
+        }
+        Ok(items)
+    }
+
+    fn collapse_snapshot(&self) -> GatewayResult<SnapshotCollapse> {
+        let mut guard = self.conn.lock();
+        let (superseded, cutoff) = Self::supersede_snapshot(&mut guard)?;
+        // 被折叠的行由「未送达」跃迁为「已送达」：depth 语义是 delivered=0 的行数，
+        // 必须同步扣减，否则队列深度虚高（健康判据与反压阈值失真）。
+        if superseded > 0 {
+            Self::saturating_dec(&self.depth, superseded as i64);
+            self.metrics.add_queue_snapshot_superseded(superseded);
+            update_queue_depth_metric(&self.depth, &self.metrics);
+        }
+        Ok(SnapshotCollapse { superseded, cutoff })
     }
 
     fn ack_batch(&self, ids: &[i64]) -> GatewayResult<()> {

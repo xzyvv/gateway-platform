@@ -67,7 +67,7 @@ impl MqttClient {
     ///
     /// tracing: MQTT 批量发布 span，tracing feature off 时 cfg_attr 剥离为零成本。
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self), level = "debug"))]
-    pub(crate) async fn publish_batch(&self) -> BatchOutcome {
+    pub(crate) async fn publish_batch(&self, cutoff: i64) -> BatchOutcome {
         let _permit = match self.publish_semaphore.try_acquire() {
             Ok(p) => p,
             Err(_) => {
@@ -156,7 +156,15 @@ impl MqttClient {
             None => batch_target,
         };
 
-        let batch = match self.queue.dequeue(dequeue_limit).await {
+        // snapshot 模式：每个上报周期内每个点位只取最新一行，更早样本已由
+        // 周期开头的折叠标记为已送达；`cutoff` 进一步排除本周期排空期间新到的样本。
+        // 与 stream 的差别只在出队语句，报文结构与 ack/重发语义完全一致。
+        let dequeued = if self.config.is_snapshot() {
+            self.queue.dequeue_snapshot(dequeue_limit, cutoff).await
+        } else {
+            self.queue.dequeue(dequeue_limit).await
+        };
+        let batch = match dequeued {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!("dequeue failed: {}", e);
@@ -320,6 +328,13 @@ impl MqttClient {
                 remove_slot_by_ack_id(&self.pending_ack, ack_id);
                 self.queue.release(ids).await;
                 tracing::warn!("mqtt publish failed: {}", e);
+                if self.config.is_snapshot() {
+                    // 现场排障提示：snapshot 语义下被更新样本取代的旧行不会重发，
+                    // 只有每点位最新一行会在下个周期重试——不要按 stream 的"全量补发"预期排查。
+                    tracing::warn!(
+                        "snapshot 模式：已释放的旧样本不会重发（将被更新值折叠），仅每点位最新值于下周期重试"
+                    );
+                }
                 self.metrics.inc_mqtt_publish(false);
                 // #9: publish 调用本身失败同样清理 outbox
                 self.cleanup_outbox_on_failure(data_id).await;

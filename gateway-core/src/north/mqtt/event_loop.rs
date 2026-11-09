@@ -266,11 +266,44 @@ impl MqttClient {
                     break;
                 }
                 _ = tokio::time::sleep(interval) => {
-                    // P0-1：周期内排空积压（旧的"每周期只发一批"是上行 20 条/s
-                    // 天花板的根因）。排空逻辑见 `drain_pending`。
-                    let sent = self.drain_pending(&hb).await;
-                    if sent > 0 {
-                        tracing::debug!("mqtt publish cycle drained {} points", sent);
+                    // snapshot 模式：先把本周期积压折叠成「每点位最新一行」，
+                    // 再排空。折叠每周期只做一次（而非每批一次），避免
+                    // 「批次数 × 全量 GROUP BY」的冗余扫描。
+                    // 折叠返回的 cutoff 钉住本周期数据边界：排空期间新到的样本
+                    // 留到下个周期，保证同一点位一个周期内至多上行一条。
+                    //
+                    // 折叠失败（命令通道 / DB 出错）时**跳过本周期排空**：若退化为
+                    // `cutoff = i64::MAX` 继续发，每批都重新取当下 MAX(id)，慢 Broker
+                    // 下排空期间新到的样本会让同一点位在一个周期内上行两次。
+                    let cutoff = if self.config.is_snapshot() {
+                        match self.queue.collapse_snapshot().await {
+                            Ok(c) => {
+                                if c.superseded > 0 {
+                                    tracing::debug!(
+                                        "snapshot collapsed {} superseded rows",
+                                        c.superseded
+                                    );
+                                }
+                                Some(c.cutoff)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "snapshot collapse failed, skipping this publish cycle: {}",
+                                    e
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        Some(i64::MAX)
+                    };
+                    if let Some(cutoff) = cutoff {
+                        // P0-1：周期内排空积压（旧的"每周期只发一批"是上行 20 条/s
+                        // 天花板的根因）。排空逻辑见 `drain_pending`。
+                        let sent = self.drain_pending(&hb, cutoff).await;
+                        if sent > 0 {
+                            tracing::debug!("mqtt publish cycle drained {} points", sent);
+                        }
                     }
                     // 每 10 个发布周期清理一次已确认的 outbox 记录（>1小时）
                     cleanup_counter += 1;
@@ -322,13 +355,17 @@ impl MqttClient {
     /// - 每批之前检查 `stopping`，保证 80s 优雅停机宽限不被排空循环耗尽；
     /// - 批次数上界 `MAX_BATCHES_PER_CYCLE`，防止"生产 ≥ 消费"时单周期永不结束；
     /// - 每批之间 kick 心跳，防止排空耗时超过心跳超时被误判为死循环。
-    async fn drain_pending(&self, hb: &crate::engine::monitor::heartbeat::Heartbeat) -> usize {
+    async fn drain_pending(
+        &self,
+        hb: &crate::engine::monitor::heartbeat::Heartbeat,
+        cutoff: i64,
+    ) -> usize {
         let mut sent_total = 0usize;
         for _ in 0..MAX_BATCHES_PER_CYCLE {
             if self.stopping.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            match self.publish_batch().await {
+            match self.publish_batch(cutoff).await {
                 BatchOutcome::Sent(n) => sent_total += n,
                 BatchOutcome::Throttled { wait_ms } => {
                     tokio::select! {

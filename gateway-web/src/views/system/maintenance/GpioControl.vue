@@ -172,7 +172,7 @@ onMounted(load)
   display: flex; flex-direction: column; gap: 6px;
   padding: 12px 10px;
   border-radius: var(--radius-card);
-  background: var(--bg-card-hover, var(--bg-page));
+  background: var(--bg-fill);
   border: 1px solid var(--border-base);
   margin-bottom: 12px;
 }
@@ -187,7 +187,7 @@ onMounted(load)
 }
 .pin-indicator .dot {
   width: 10px; height: 10px; border-radius: 50%;
-  background: var(--bg-muted);
+  background: var(--border-lighter);
   transition: background-color 0.15s ease;
 }
 .pin-indicator.on .dot { background: var(--text-success); box-shadow: 0 0 6px var(--text-success); }

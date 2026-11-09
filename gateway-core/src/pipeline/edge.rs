@@ -12,6 +12,9 @@
 //! 扩展示例：`FormulaNode`（公式计算）、`UnitNode`（单位换算）、
 //! `OutlierNode`（异常值剔除）等。
 
+use parking_lot::Mutex;
+use std::collections::HashMap;
+
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
 use crate::engine::model::{AggFn, Quality};
@@ -44,6 +47,16 @@ pub trait PipelineNode: Send + Sync {
         self.process(point, dp)
     }
 
+    /// 处理「质量恢复」样本（Bad/Uncertain → Good 的第一个 Good 样本）
+    ///
+    /// 必须放行：Bad 样本绕过管道，死区/变化节点并不知道发生过故障，其基线仍是
+    /// 故障前的值；若恢复后的数值恰好相同，会被当作「未变化」过滤掉，云端将一直
+    /// 停留在 Bad 状态。过滤类节点应重写为**更新基线并放行**；聚合节点保持默认
+    /// 实现（恢复样本仍需进入窗口，不能漏统计）。
+    fn process_recovered(&self, point: &PointConfig, dp: DataPoint) -> Option<DataPoint> {
+        self.process(point, dp)
+    }
+
     /// 刷新所有到期的窗口状态（默认无操作）
     ///
     /// 周期性调用（如每秒），节点应返回已到期但尚未输出的数据点。
@@ -65,6 +78,8 @@ use super::nodes::*;
 
 pub struct EdgeProcessor {
     nodes: Vec<Box<dyn PipelineNode>>,
+    /// 每个点位上一次样本的质量，用于识别 Bad/Uncertain → Good 的恢复边沿
+    last_quality: Mutex<HashMap<String, Quality>>,
 }
 
 impl EdgeProcessor {
@@ -78,7 +93,10 @@ impl EdgeProcessor {
             Box::new(DeadbandNode::new()),
             Box::new(ChangeNode::new()),
         ];
-        Self { nodes }
+        Self {
+            nodes,
+            last_quality: Mutex::new(HashMap::new()),
+        }
     }
 
     /// 用自定义节点列表创建管道
@@ -86,7 +104,10 @@ impl EdgeProcessor {
     /// 调用方完全控制节点序列，不强制注入 `AggregationNode`。
     /// 若未包含聚合节点，`flush_aggregated` / `flush_all` 将返回空 Vec。
     pub fn with_nodes(nodes: Vec<Box<dyn PipelineNode>>) -> Self {
-        Self { nodes }
+        Self {
+            nodes,
+            last_quality: Mutex::new(HashMap::new()),
+        }
     }
 
     /// 处理一个采集数据点
@@ -96,10 +117,24 @@ impl EdgeProcessor {
     ///
     /// 采集失败的数据始终上传（让平台感知设备状态），跳过所有节点。
     pub fn process(&self, point: &PointConfig, dp: DataPoint) -> Option<DataPoint> {
+        // 质量边沿：Bad/Uncertain → Good 的恢复样本必须上行一次（见
+        // `PipelineNode::process_recovered`）。质量更新放在最前面，Bad 样本
+        // 也要记账，否则恢复边沿永远识别不到。
+        let recovered = {
+            let mut last_quality = self.last_quality.lock();
+            let prev = last_quality.insert(dp.point_id.clone(), dp.quality);
+            prev.is_some_and(|q| q != Quality::Good) && dp.quality == Quality::Good
+        };
         if dp.quality != Quality::Good {
             return Some(dp);
         }
         let mut current = dp;
+        if recovered {
+            for node in &self.nodes {
+                current = node.process_recovered(point, current)?;
+            }
+            return Some(current);
+        }
         for node in &self.nodes {
             current = node.process(point, current)?;
         }

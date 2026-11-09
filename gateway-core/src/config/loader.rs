@@ -134,6 +134,7 @@ impl ConfigLoader {
         crate::crypto::decrypt_config_secrets(&mut cfg)
             .map_err(|e| GatewayError::Config(format!("decrypt config secrets failed: {}", e)))?;
         sanitize_legacy_ratios(&mut cfg);
+        sanitize_legacy_snapshot_aggregation(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!("validate config failed: {}", errs.join("; ")))
         })?;
@@ -220,6 +221,7 @@ impl ConfigLoader {
             GatewayError::Config(format!("reload decrypt config secrets failed: {}", e))
         })?;
         sanitize_legacy_ratios(&mut cfg);
+        sanitize_legacy_snapshot_aggregation(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!(
                 "reload validate config failed: {}",
@@ -253,6 +255,35 @@ fn sanitize_legacy_ratios(cfg: &mut GatewayConfig) {
                     );
                     *slot = None;
                 }
+            }
+        }
+    }
+}
+
+/// 存量配置的聚合窗口兜底：`snapshot` 模式下把 `aggregation.window` 抬到 `publish_interval`。
+///
+/// `snapshot` 每周期每个点位只发最新一条，窗口小于上报周期时同周期的多个聚合结果
+/// 会被折叠丢弃。`validate_snapshot_aggregation` 是 fail-fast 的跨字段校验：历史配置
+/// 若先有 `aggregation.window < publish_interval`（`stream` 下合法），再被手工改成
+/// `snapshot`，会在 `validate_all()` 处阻断加载 —— 现场表现为**升级/改配置后网关起不来**。
+/// 与 [`sanitize_legacy_ratios`] 同一策略：加载/热重载路径降级并留痕，Web 保存路径
+/// 仍严格拒绝，避免新配置继续写入非法组合。
+fn sanitize_legacy_snapshot_aggregation(cfg: &mut GatewayConfig) {
+    if !cfg.mqtt.enabled || !cfg.mqtt.is_snapshot() {
+        return;
+    }
+    let north = cfg.mqtt.publish_interval;
+    for p in cfg.points.iter_mut() {
+        if let Some(agg) = p.aggregation.as_mut() {
+            if agg.window < north {
+                tracing::warn!(
+                    "point '{}' 聚合窗口 {}s < 上报周期 {}s（snapshot 模式会把同周期多个聚合窗口折叠成 1 条），已按上报周期 {}s 加载；请手工修正聚合窗口",
+                    p.id,
+                    agg.window,
+                    north,
+                    north
+                );
+                agg.window = north;
             }
         }
     }

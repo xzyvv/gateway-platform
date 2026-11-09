@@ -19,7 +19,7 @@ use crate::engine::model::DataPoint;
 
 use super::item::QueuedItem;
 
-use crate::queue::storage::{HistoryQueryResult, QueueStorage};
+use crate::queue::storage::{HistoryQueryResult, QueueStorage, SnapshotCollapse};
 
 /// 队列命令
 pub(crate) enum QueueCommand {
@@ -27,6 +27,17 @@ pub(crate) enum QueueCommand {
     Dequeue {
         limit: usize,
         reply: oneshot::Sender<Vec<QueuedItem>>,
+    },
+    /// 快照出队：每个点位只返回最新一行，且只取 `id <= cutoff` 的行。
+    DequeueSnapshot {
+        limit: usize,
+        /// 周期出队上界（折叠时刻的 `MAX(id)`），用于隔离本周期新到的样本。
+        cutoff: i64,
+        reply: oneshot::Sender<Vec<QueuedItem>>,
+    },
+    /// 快照折叠：只标记不发送。返回折叠行数与本周期出队上界。
+    CollapseSnapshot {
+        reply: oneshot::Sender<SnapshotCollapse>,
     },
     /// 确认已发送并删除记录。
     ///
@@ -104,6 +115,8 @@ fn sqlite_code_from_message(msg: &str) -> Option<i32> {
 async fn dequeue_with_backpressure(
     storage: &Arc<dyn QueueStorage>,
     limit: usize,
+    cutoff: i64,
+    snapshot: bool,
 ) -> Vec<QueuedItem> {
     let cur_in_flight = storage.in_flight_count();
     if cur_in_flight >= super::limit::MAX_IN_FLIGHT {
@@ -141,6 +154,9 @@ async fn dequeue_with_backpressure(
                 released
             );
             if storage.in_flight_count() >= super::limit::MAX_IN_FLIGHT {
+                if snapshot {
+                    collapse_quietly(storage).await;
+                }
                 return Vec::new();
             }
         } else {
@@ -149,6 +165,11 @@ async fn dequeue_with_backpressure(
                 cur_in_flight,
                 super::limit::MAX_IN_FLIGHT
             );
+            if snapshot {
+                // 反压期间不发数据，但仍把积压收敛到「每点位最新一行」，
+                // 避免旧样本持续占磁盘、把队列水位推到淘汰阈值。
+                collapse_quietly(storage).await;
+            }
             return Vec::new();
         }
     }
@@ -157,7 +178,15 @@ async fn dequeue_with_backpressure(
     // 伪装成「队列为空」——上层拿到空批，无法区分「确实没有数据」与「DB 查询失败」
     // → 表现为**北向静默无数据**（采集正常、MQTT 收不到东西、日志无异常）。
     // 现在错误必须上抛。
-    match tokio::task::spawn_blocking(move || storage_clone.dequeue_batch(limit)).await {
+    match tokio::task::spawn_blocking(move || {
+        if snapshot {
+            storage_clone.dequeue_snapshot_batch(limit, cutoff)
+        } else {
+            storage_clone.dequeue_batch(limit)
+        }
+    })
+    .await
+    {
         Ok(Ok(items)) => items,
         Ok(Err(e)) => {
             tracing::error!(
@@ -171,6 +200,21 @@ async fn dequeue_with_backpressure(
             tracing::error!("dequeue spawn_blocking failed: {}", e);
             Vec::new()
         }
+    }
+}
+
+/// 反压时做一次快照折叠：不发数据，只把积压收敛到「每点位最新一行」。
+/// 失败只记日志，不影响反压返回（反压本身是正常路径）。
+async fn collapse_quietly(storage: &Arc<dyn QueueStorage>) {
+    let storage = storage.clone();
+    match tokio::task::spawn_blocking(move || storage.collapse_snapshot()).await {
+        Ok(Ok(r)) if r.superseded == 0 => {}
+        Ok(Ok(r)) => tracing::debug!(
+            "snapshot collapse under backpressure: {} rows",
+            r.superseded
+        ),
+        Ok(Err(e)) => tracing::warn!("snapshot collapse failed under backpressure: {}", e),
+        Err(e) => tracing::warn!("snapshot collapse join failed: {}", e),
     }
 }
 
@@ -389,7 +433,44 @@ pub(crate) async fn queue_task(
         // #5 修复：硬上限分支主动跑一次 stale in_flight 清理
                                     // （cutoff 与 storage.maintenance 内部一致：5 分钟前），见
                                     // dequeue_with_backpressure。
-        let items = dequeue_with_backpressure(&storage, limit).await;
+        let items = dequeue_with_backpressure(&storage, limit, i64::MAX, false).await;
+                                    if !items.is_empty() {
+                                        let n = storage.in_flight_count();
+                                        if n > 5000 {
+                                            tracing::warn!("in_flight count {} exceeds 5000, broker may be slow", n);
+                                        }
+                                    }
+                                    let _ = reply.send(items);
+                                }
+                                QueueCommand::CollapseSnapshot { reply } => {
+                                    let storage_clone = storage.clone();
+                                    let result = match tokio::task::spawn_blocking(move || {
+                                        storage_clone.collapse_snapshot()
+                                    })
+                                    .await
+                                    {
+                                        Ok(Ok(r)) => r,
+                                        Ok(Err(e)) => {
+                                            tracing::warn!("snapshot collapse failed: {}", e);
+                                            SnapshotCollapse::unrestricted()
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("snapshot collapse join failed: {}", e);
+                                            SnapshotCollapse::unrestricted()
+                                        }
+                                    };
+                                    let _ = reply.send(result);
+                                }
+                                QueueCommand::DequeueSnapshot {
+                                    limit,
+                                    cutoff,
+                                    reply,
+                                } => {
+                                    // 与普通出队共享反压 / 陈旧 in_flight 清理逻辑，
+                                    // 仅出队语句不同（按点位取最新一行 + 周期 cutoff）。
+                                    let items =
+                                        dequeue_with_backpressure(&storage, limit, cutoff, true)
+                                            .await;
                                     if !items.is_empty() {
                                         let n = storage.in_flight_count();
                                         if n > 5000 {

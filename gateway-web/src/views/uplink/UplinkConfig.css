@@ -50,7 +50,7 @@
   padding: 12px;
   max-height: 360px;
   overflow: auto;
-  background: var(--bg-secondary);
+  background: var(--bg-fill);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-small);
   font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
