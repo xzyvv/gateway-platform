@@ -114,6 +114,52 @@ pub(super) struct OverflowReport {
     pub undelivered_deleted: i64,
 }
 
+/// 方案 A：两次容量淘汰之间的最小间隔（毫秒）。
+///
+/// 超限后若每批入队都跑一次 `COUNT + DELETE`，队列表 10^6 行时单轮约 54ms，
+/// 2000 点/s（约每分钟 120 批）下写锁几乎被 trim 占满，`dequeue → ack` 长期
+/// 拿不到锁 → 队列只涨不落、CPU 飙升。1s 的冷却期让 trim 频率从「每批」
+/// 降到「每秒最多一次」，留出足够的写锁时间给 dequeue/ack。
+pub(super) const TRIM_COOLDOWN_MS: i64 = 1000;
+
+/// 方案 A：淘汰目标水位 = `max_rows` 的 90%。
+///
+/// 一次削到上限的 9 成而不是刚好削到上限，是「滞回」：削完之后还有 10% 的
+/// 余量承接后续入队，不必每批都重新触顶后再 trim。
+const TRIM_TARGET_NUM: i64 = 9;
+const TRIM_TARGET_DEN: i64 = 10;
+
+/// 方案 A：判定本批入队后是否执行容量淘汰，以及淘汰的目标水位。
+///
+/// 返回 `None` = 本批不 trim；返回 `Some(target)` = 把表削到 `target` 行。
+///
+/// - `total`：当前表内总行数（O(1) 内存计数器）
+/// - `max_rows`：配置的硬上限
+/// - `last_trim_ms`：上次 trim 的时刻（0 表示从未 trim 过 → 立即触发）
+/// - `now_ms`：当前时刻
+pub(super) fn trim_target(
+    total: i64,
+    max_rows: i64,
+    last_trim_ms: i64,
+    now_ms: i64,
+) -> Option<i64> {
+    // 未超限：热路径常态，零 DB 开销。
+    if total <= max_rows {
+        return None;
+    }
+    // 冷却期内：即使仍超限也先不动手，把写锁让给 dequeue/ack。
+    if last_trim_ms > 0 && now_ms.saturating_sub(last_trim_ms) < TRIM_COOLDOWN_MS {
+        return None;
+    }
+    // 滞回水位：削到上限的 90%（至少 1 行，且不超过上限本身）。
+    let target = max_rows
+        .saturating_mul(TRIM_TARGET_NUM)
+        .saturating_div(TRIM_TARGET_DEN)
+        .max(1)
+        .min(max_rows);
+    Some(target)
+}
+
 /// A1：ack 的实际影响行数（按「状态跃迁」计数）。
 ///
 /// 只统计真正发生状态跃迁的行，因此 ack 天然幂等：
@@ -158,26 +204,30 @@ impl SqliteStorage {
     /// 计数器与表内真实行数严格一致：所有 INSERT / DELETE 都在同一 `conn` 锁内
     /// 完成，且每次增删同步更新计数器（见 `SqliteStorage::enqueue_batch` /
     /// `maintenance` / `cleanup_old_records`）。
+    ///
+    /// 方案 A：`target_rows` 是**本次淘汰的目标水位**，而非配置上限本身。
+    /// 入队路径传入 `trim_target` 算出的滞回水位（上限的 90%），maintenance
+    /// 路径仍直接传配置上限。函数只按 `total - target_rows` 计算要删的行数。
     pub(super) fn enforce_queue_limit(
         conn: &mut Connection,
-        max_rows: i64,
+        target_rows: i64,
         total: i64,
         unsent: i64,
     ) -> OverflowReport {
-        Self::enforce_queue_limit_with(conn, max_rows, total, unsent)
+        Self::enforce_queue_limit_with(conn, target_rows, total, unsent)
     }
 
-    /// 可注入上限的 `enforce_queue_limit`（`max_rows` 来自配置项 `queue.max_rows`，
-    /// 单测也会用极小阈值验证淘汰逻辑）。
+    /// 可注入目标水位的 `enforce_queue_limit`（生产路径传 `queue.max_rows` 或其
+    /// 90% 水位，单测也会用极小阈值验证淘汰逻辑）。
     fn enforce_queue_limit_with(
         conn: &mut Connection,
-        max_rows: i64,
+        target_rows: i64,
         total: i64,
         unsent: i64,
     ) -> OverflowReport {
         // P1-2 快速路径：未超限时**不开事务、不写库**，仅用计数器算比例。
         // 这是入队热路径的常态（队列未满），代价是几次原子读。
-        if total <= max_rows {
+        if total <= target_rows {
             let ratio = if total > 0 {
                 unsent as f64 / total as f64
             } else {
@@ -206,7 +256,7 @@ impl SqliteStorage {
 
         let undelivered_deleted: i64;
         let deleted: i64;
-        let overflow = total - max_rows;
+        let overflow = total - target_rows;
         {
             // A1：探针与 DELETE 的排序键必须**完全一致**，否则两者选中的行集
             // 可能不同（同一毫秒的多行在 `ORDER BY timestamp` 下顺序不确定），
@@ -245,17 +295,17 @@ impl SqliteStorage {
                 // 这是关键告警场景（磁盘即将写满、链路断开），升到 error 级确保
                 // 触发告警通道（Prometheus 采集 + 上行系统级告警）。
                 tracing::error!(
-                    "queue overflow: total={} > limit={}, deleted {} rows ({} rows protected: in_flight; enqueue stays rejected until backlog drains)",
+                    "queue overflow: total={} > target={}, deleted {} rows ({} rows protected: in_flight; enqueue stays rejected until backlog drains)",
                     total,
-                    max_rows,
+                    target_rows,
                     deleted,
                     overflow - deleted
                 );
             } else {
                 tracing::warn!(
-                    "queue overflow: total={} > limit={}, deleted {} oldest non-in-flight records ({} undelivered)",
+                    "queue overflow: total={} > target={}, deleted {} oldest non-in-flight records ({} undelivered)",
                     total,
-                    max_rows,
+                    target_rows,
                     deleted,
                     undelivered_deleted
                 );
@@ -646,6 +696,60 @@ impl SqliteStorage {
             Ok(()) => tracing::debug!("WAL checkpoint TRUNCATE done"),
             Err(e) => tracing::warn!("wal_checkpoint_truncate failed: {}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod trim_target_tests {
+    use super::{trim_target, TRIM_COOLDOWN_MS};
+
+    /// 未超限时不 trim（入队热路径的常态，必须零 DB 开销）。
+    #[test]
+    fn none_when_below_limit() {
+        assert_eq!(trim_target(999, 1000, 0, 10_000), None);
+        assert_eq!(trim_target(1000, 1000, 0, 10_000), None);
+        assert_eq!(trim_target(0, 1000, 0, 10_000), None);
+    }
+
+    /// 超限时一次削到上限的 90%（滞回水位），而不是刚好削到上限。
+    #[test]
+    fn trims_to_ninety_percent_when_over_limit() {
+        assert_eq!(trim_target(1001, 1000, 0, 5), Some(900));
+        assert_eq!(trim_target(1_000_001, 1_000_000, 0, 5), Some(900_000));
+        // total 远超上限时目标水位仍是 90%，不会被 total 影响
+        assert_eq!(trim_target(5_000_000, 1_000_000, 0, 5), Some(900_000));
+    }
+
+    /// 冷却期内即使仍超限也不 trim；冷却到期（≥1s）才允许再次 trim。
+    #[test]
+    fn respects_cooldown_window() {
+        let last = 10_000;
+        assert_eq!(
+            trim_target(2_000, 1_000, last, last + TRIM_COOLDOWN_MS - 1),
+            None,
+            "距上次 trim 不足冷却期时必须跳过"
+        );
+        assert_eq!(
+            trim_target(2_000, 1_000, last, last + TRIM_COOLDOWN_MS),
+            Some(900),
+            "冷却到期后必须恢复 trim"
+        );
+    }
+
+    /// `last_trim_ms == 0` 表示「从未 trim 过」，必须立即触发（启动后首次触顶）。
+    #[test]
+    fn zero_last_trim_means_immediate() {
+        assert_eq!(trim_target(2_000, 1_000, 0, 0), Some(900));
+        // 时钟回拨（now < last）不应永久禁用 trim：饱和减法得 0 < 冷却期，
+        // 行为上是「再等一个冷却周期」，不会 panic / 下溢。
+        assert_eq!(trim_target(2_000, 1_000, 10_000, 9_000), None);
+    }
+
+    /// 极小上限的边界：目标水位至少 1 行、且不超过上限本身。
+    #[test]
+    fn clamps_tiny_limits() {
+        assert_eq!(trim_target(2, 1, 0, 0), Some(1));
+        assert_eq!(trim_target(1, 0, 0, 0), Some(0));
     }
 }
 

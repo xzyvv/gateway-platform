@@ -75,6 +75,12 @@ pub struct SqliteStorage {
     /// 在构造时取一次：它决定淘汰线，运行期改配置只影响健康判定，
     /// 淘汰线随下次重启生效（避免运行期改上限导致大批量删除抖动）。
     max_rows: i64,
+    /// 上次容量淘汰（trim）的时刻（UTC 毫秒，0 = 从未 trim）。
+    ///
+    /// 方案 A：`enqueue_batch` 只有在超过 `max_rows` **且**距上次 trim 已超过
+    /// `TRIM_COOLDOWN_MS` 时才真正删行，避免每批入队都跑一次 `COUNT + DELETE`
+    /// 长期占住写锁、饿死 dequeue/ack。
+    last_trim_ms: AtomicI64,
 }
 
 impl SqliteStorage {
@@ -125,6 +131,7 @@ impl SqliteStorage {
             evicted_total: Arc::new(AtomicI64::new(0)),
             evicted_undelivered_total: Arc::new(AtomicI64::new(0)),
             max_rows,
+            last_trim_ms: AtomicI64::new(0),
         })
     }
 
@@ -275,15 +282,32 @@ impl QueueStorage for SqliteStorage {
         // - 诊断（未送达占比）用 O(1) 内存计数器计算，**每次入队都做**，代价是
         //   两次原子读 + 一次布尔写——没有 DB 往返，不需要降频，也就不存在
         //   「标志滞后几批」的问题。
-        // - 淘汰是唯一需要写库的动作，**只在真的超限时**才开事务。
+        // - 淘汰是唯一需要写库的动作，**只在真的超限且过了冷却期时**才开事务。
         //   旧实现每次入队都 `BEGIN → COUNT(*) → COUNT(*) → COMMIT`，
         //   队列 10^6 行时单次入队扫两遍全表；现在未超限时零 DB 开销。
         let rows_total = self.rows_total.load(Ordering::Relaxed);
         let unsent = self.unsent_estimate();
         self.refresh_unsent_overflow(rows_total, unsent);
 
-        if rows_total > self.max_rows {
-            let report = Self::enforce_queue_limit(conn, self.max_rows, rows_total, unsent);
+        // 方案 A：容量淘汰加「滞回 + 限流」。
+        //
+        // 旧实现只要 `rows_total > max_rows` 就每批入队都 trim 一次。1M 行的表
+        // 单轮 trim 约 54ms，2000 点/s（约 120 批/分钟）时写锁几乎全被 trim 占住，
+        // sim_consumer 的 dequeue → ack 长期抢不到锁 → 队列只涨不落、CPU 飙升。
+        // 现在：距上次 trim 不足 `TRIM_COOLDOWN_MS` 就先不动手；动手时一次削到
+        // `max_rows` 的 90%，削完留出的余量足以承接后续若干批入队，不会立刻再次触顶。
+        let now_ms = DataPoint::now();
+        let trim_plan = super::limit::trim_target(
+            rows_total,
+            self.max_rows,
+            self.last_trim_ms.load(Ordering::Relaxed),
+            now_ms,
+        );
+        if let Some(target_rows) = trim_plan {
+            let report = Self::enforce_queue_limit(conn, target_rows, rows_total, unsent);
+            // 冷却起点按「尝试 trim 的时刻」记，而不是按「删到行」记：即使本次
+            // 因在途行受保护而一行未删，也应等过冷却期再重试，不能每批都扫一遍。
+            self.last_trim_ms.store(now_ms, Ordering::Relaxed);
             // P0-2：overflow 现在也会淘汰**未送达**（delivered=0）行，这些行仍计入
             // depth，必须同步扣减；已送达行在 ack 路径已各自扣过，不再重复扣。
             if report.undelivered_deleted > 0 {
@@ -708,5 +732,90 @@ mod oldest_ts_tests {
             Some(old_ts),
             "聚合表里的历史也必须计入保留跨度"
         );
+    }
+}
+
+/// 方案 A 回归：容量淘汰必须「滞回 + 限流」——超限后一次削到上限的 90%，
+/// 且 1s 内的后续入队不再重复 trim（否则每批入队都占写锁，饿死 dequeue/ack）。
+///
+/// 需要真实 `SqliteStorage`（私有字段 `last_trim_ms` / `rows_total` / `depth`
+/// 只有本模块可见），故放在这里而不是 limit.rs 的测试模块。
+#[cfg(test)]
+mod trim_throttle_tests {
+    use super::SqliteStorage;
+    use crate::engine::metrics::Metrics;
+    use crate::engine::model::DataPoint;
+    use crate::queue::storage::QueueStorage;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    fn make_points(prefix: &str, n: usize) -> Vec<DataPoint> {
+        (0..n)
+            .map(|i| DataPoint::good(&format!("{prefix}-{i}"), "dev", 1.0, 1.0, "f64"))
+            .collect()
+    }
+
+    fn rows(storage: &SqliteStorage) -> i64 {
+        storage
+            .conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM data_queue", [], |r| r.get(0))
+            .expect("count rows")
+    }
+
+    #[test]
+    fn enqueue_trims_to_ninety_percent_then_throttles() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("queue.db");
+        let storage =
+            SqliteStorage::new_with_limit(db_path.to_str().unwrap(), Arc::new(Metrics::new()), 10)
+                .unwrap();
+
+        // 1) 未超限：不 trim，last_trim_ms 保持 0（热路径零 DB 写）。
+        storage.enqueue_batch(&make_points("a", 10)).unwrap();
+        assert_eq!(rows(&storage), 10);
+        assert_eq!(
+            storage.last_trim_ms.load(Ordering::Relaxed),
+            0,
+            "未超限时不得 trim"
+        );
+
+        // 2) 超限：一次削到 90%（10 → 9），而不是刚好削到 max_rows。
+        storage.enqueue_batch(&make_points("b", 1)).unwrap();
+        assert_eq!(rows(&storage), 9, "超限后一次削到上限的 90%");
+        assert_eq!(
+            storage.rows_total.load(Ordering::Relaxed),
+            9,
+            "rows_total 必须与表内真实行数一致"
+        );
+        assert_eq!(
+            storage.depth.load(Ordering::Relaxed),
+            9,
+            "被淘汰的未送达行必须同步扣减 depth"
+        );
+        let first_trim = storage.last_trim_ms.load(Ordering::Relaxed);
+        assert!(first_trim > 0, "trim 后必须记录时刻");
+
+        // 3) 冷却期内再次超限：不得再 trim（行数只增不减即证明没跑 DELETE）。
+        // 这里显式把「上次 trim 时刻」钉在当前时刻，避免依赖步骤 2 与 3 之间的
+        // 真实耗时（CI 偶发卡顿超过 1s 会让用例误判）。
+        let just_trimmed = DataPoint::now();
+        storage.last_trim_ms.store(just_trimmed, Ordering::Relaxed);
+        storage.enqueue_batch(&make_points("c", 2)).unwrap();
+        assert_eq!(rows(&storage), 11, "冷却期内超限也不得删行");
+        assert_eq!(
+            storage.last_trim_ms.load(Ordering::Relaxed),
+            just_trimmed,
+            "冷却期内不得刷新 trim 时刻"
+        );
+
+        // 4) 冷却期过后：恢复 trim，仍削到 90%。
+        storage
+            .last_trim_ms
+            .store(DataPoint::now() - 5_000, Ordering::Relaxed);
+        storage.enqueue_batch(&make_points("d", 1)).unwrap();
+        assert_eq!(rows(&storage), 9, "冷却期过后应恢复 trim 到 90%");
+        assert_eq!(storage.rows_total.load(Ordering::Relaxed), 9);
+        assert_eq!(storage.depth.load(Ordering::Relaxed), 9);
     }
 }
