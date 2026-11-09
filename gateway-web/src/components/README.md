@@ -10,8 +10,8 @@
 components/
 ├── industrial/                 # 工业表单输入控件集（详见 industrial/README.md）
 │   ├── BaudrateSelect.vue
-│   ├── IntervalSelect.vue
 │   ├── DurationSelect.vue
+│   ├── PresetNumberSelect.vue
 │   ├── SlaveIdInput.vue
 │   ├── ProtocolSelector.vue
 │   └── README.md

@@ -27,6 +27,7 @@ mod merge;
 mod trait_impl;
 
 pub(crate) use crate::south::protocol::convert_value;
+pub(crate) use crate::south::protocol::reverse_convert;
 pub(crate) use batch::{
     encode_register_values, merge_batches, merge_write_batches, parse_point_value, write_kind_of,
     WriteKind, MAX_WRITE_COILS, MAX_WRITE_REGISTERS,

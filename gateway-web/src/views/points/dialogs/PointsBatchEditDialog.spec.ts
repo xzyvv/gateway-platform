@@ -12,6 +12,10 @@ vi.mock('@/api/points', () => ({
   updatePoint: updatePointMock,
 }))
 
+vi.mock('@/api/config', () => ({
+  getConfig: vi.fn(),
+}))
+
 vi.mock('@/utils/confirm', () => ({
   confirmAction: confirmMock,
 }))
@@ -26,7 +30,8 @@ vi.mock('element-plus', async () => {
 })
 
 import PointsBatchEditDialog from './PointsBatchEditDialog.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElSelect, ElInputNumber } from 'element-plus'
+import { getConfig } from '@/api/config'
 import type { PointConfig } from '@/api/types'
 
 /**
@@ -107,6 +112,113 @@ describe('PointsBatchEditDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     confirmMock.mockResolvedValue(true)
+    vi.mocked(getConfig).mockResolvedValue({ buses: [], points: [] } as never)
+  })
+
+  it('存在总线时「总线」渲染为下拉，勾选后所选总线应用到每个点位', async () => {
+    vi.mocked(getConfig).mockResolvedValue({
+      buses: [{ port_name: '/dev/ttyS1', protocol: 'modbus' }],
+      points: [],
+    } as never)
+    updatePointMock.mockResolvedValue(makePoint({ id: 'ok' }))
+    const wrapper = mount(PointsBatchEditDialog, {
+      props: { modelValue: true, selection: [makePoint({ id: 'p1', bus: 'old-bus' })], selectedDevice: 'dev1' },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+    await nextTick()
+    await flushPromises()
+
+    const busSelect = wrapper.findAllComponents(ElSelect).find((c) => c.props('placeholder') === '选择总线')
+    expect(busSelect, '总线应改为下拉').toBeTruthy()
+    // 勾选总线字段（名称在最前，总线是第二个勾选框）
+    await wrapper.findAll('input[type="checkbox"]')[1]!.setValue(true)
+    busSelect!.vm.$emit('update:modelValue', '/dev/ttyS1')
+    await nextTick()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('应用到'))!.trigger('click')
+    await flushPromises()
+
+    expect(updatePointMock).toHaveBeenCalledTimes(1)
+    expect((updatePointMock.mock.calls[0]![1] as PointConfig).bus).toBe('/dev/ttyS1')
+  })
+
+  it('勾选 CT/PT 变比后按输入值覆盖到每个点位（不勾选则保持原值）', async () => {
+    updatePointMock.mockResolvedValue(makePoint({ id: 'ok' }))
+    const wrapper = mount(PointsBatchEditDialog, {
+      props: {
+        modelValue: true,
+        selection: [makePoint({ id: 'p1', ct_ratio: null, pt_ratio: 100 })],
+        selectedDevice: 'dev1',
+      },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+    await nextTick()
+    await flushPromises()
+
+    // 勾选框顺序：名称 0、总线 1、协议 2、从站号 3、CT 4、PT 5
+    const checkboxes = wrapper.findAll('input[type="checkbox"]')
+    await checkboxes[4]!.setValue(true)
+    await checkboxes[5]!.setValue(true)
+    const ratioInputs = wrapper
+      .findAllComponents(ElInputNumber)
+      .filter((c) => c.props('placeholder') === '留空=清空该变比')
+    expect(ratioInputs).toHaveLength(2)
+    ratioInputs[0]!.vm.$emit('update:modelValue', 30)
+    ratioInputs[1]!.vm.$emit('update:modelValue', 100)
+    await nextTick()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('应用到'))!.trigger('click')
+    await flushPromises()
+
+    expect(updatePointMock).toHaveBeenCalledTimes(1)
+    const payload = updatePointMock.mock.calls[0]![1] as PointConfig
+    expect(payload.ct_ratio).toBe(30)
+    expect(payload.pt_ratio).toBe(100)
+  })
+
+  it('勾选数据类型/字节序/寄存器数后一并覆盖到每个点位', async () => {
+    updatePointMock.mockResolvedValue(makePoint({ id: 'ok' }))
+    const wrapper = mount(PointsBatchEditDialog, {
+      props: {
+        modelValue: true,
+        selection: [makePoint({ id: 'p1', data_type: 'u16', byte_order: 'ABCD', register_count: 1 })],
+        selectedDevice: 'dev1',
+      },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+    await nextTick()
+    await flushPromises()
+
+    // 勾选框顺序：名称 0、总线 1、协议 2、从站号 3、CT 4、PT 5、数据类型 6、字节序 7、寄存器数 8
+    const checkboxes = wrapper.findAll('input[type="checkbox"]')
+    await checkboxes[6]!.setValue(true)
+    await checkboxes[7]!.setValue(true)
+    await checkboxes[8]!.setValue(true)
+
+    const decodeSelects = wrapper
+      .findAllComponents(ElSelect)
+      .filter((c) => c.props('placeholder') === '不修改（留空=清空）')
+    expect(decodeSelects).toHaveLength(2)
+    decodeSelects[0]!.vm.$emit('update:modelValue', 'f32')
+    decodeSelects[1]!.vm.$emit('update:modelValue', 'CDAB')
+    const countInput = wrapper
+      .findAllComponents(ElInputNumber)
+      .find((c) => c.props('placeholder') === '留空=按数据类型自动')
+    expect(countInput, '应有寄存器数输入框').toBeTruthy()
+    countInput!.vm.$emit('update:modelValue', 2)
+    await nextTick()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('应用到'))!.trigger('click')
+    await flushPromises()
+
+    expect(updatePointMock).toHaveBeenCalledTimes(1)
+    const payload = updatePointMock.mock.calls[0]![1] as PointConfig
+    expect(payload.data_type).toBe('f32')
+    expect(payload.byte_order).toBe('CDAB')
+    expect(payload.register_count).toBe(2)
   })
 
   it('全部失败时 ElMessage.error 带首条原因，且不 emit edited', async () => {

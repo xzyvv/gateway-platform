@@ -10,13 +10,13 @@ use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, Quality};
 use crate::engine::util::crc::crc16;
 
-use super::merge::{reverse_convert, WriteItem};
+use super::merge::WriteItem;
 use super::{
     build_read_request, build_write_multi_coils, build_write_multi_registers,
     clone_collector_error, convert_value, encode_register_values, merge_write_batches,
-    parse_point_value, parse_read_response, write_kind_of, Collector, CollectorError,
-    CollectorResult, ModbusCollector, ModbusExceptionCode, WriteKind, MAX_WRITE_COILS,
-    MAX_WRITE_REGISTERS,
+    parse_point_value, parse_read_response, reverse_convert, write_kind_of, Collector,
+    CollectorError, CollectorResult, ModbusCollector, ModbusExceptionCode, WriteKind,
+    MAX_WRITE_COILS, MAX_WRITE_REGISTERS,
 };
 
 impl Collector for ModbusCollector {

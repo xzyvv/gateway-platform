@@ -58,6 +58,7 @@
  */
 import DataTable, { type ColumnDef } from '@/components/DataTable.vue'
 import { addressColumn } from '@/utils/commonColumns'
+import { DATA_TYPES } from '@/composables/devices/decodeParams'
 import type { BusConfig, PointConfig } from '@/api/types'
 import type { ManualPointForm } from './types'
 
@@ -76,9 +77,6 @@ const manual = defineModel<ManualPointForm>('manual', { required: true })
 const emit = defineEmits<{
   'add-point': []
 }>()
-
-/** 可选的数据类型（与网关侧支持的一致） */
-const DATA_TYPES = ['int16', 'uint16', 'int32', 'uint32', 'float', 'double']
 
 /** 已有点位列表列定义 */
 const pointColumns: ColumnDef<PointConfig>[] = [

@@ -97,6 +97,26 @@ pub(crate) fn validate_scale(scale: f64) -> Result<(), ValidationError> {
     }
 }
 
+/// 校验 CT/PT 变比：必须为有限正数。
+///
+/// 变比是纯倍率，`0` 会把一次侧值乘成 0（采集成功但上报恒 0），负数会反号，
+/// NaN/Inf 会污染后续聚合与上送报文——这些都不可能是现场真实变比，
+/// 一律在配置加载/保存时 fail-fast。无需变比请留空（None），不要填 0。
+pub(crate) fn validate_ratio(ratio: f64) -> Result<(), ValidationError> {
+    if !ratio.is_finite() {
+        return Err(ValidationError::new("ratio_must_be_finite"));
+    }
+    if ratio <= 0.0 {
+        let mut err = ValidationError::new("ratio_must_be_positive");
+        err.message = Some(
+            "CT/PT 变比必须大于 0（如 150/5 填 30、10000/100 填 100；无需变比请留空，不要填 0）"
+                .into(),
+        );
+        return Err(err);
+    }
+    Ok(())
+}
+
 /// 合法字节序（短四字码 + 历史长写法，单一事实来源）。
 ///
 /// 短四字码按 Modbus 约定大写；长写法（`big-endian` 等）是模板字段的历史取值，
@@ -128,23 +148,6 @@ pub(crate) fn validate_byte_order(b: &str) -> Result<(), ValidationError> {
             .into(),
         );
         Err(err)
-    }
-}
-
-/// 校验点位功能码：仅接受读写实现实际识别的取值。
-///
-/// - 读：1/2（线圈、离散输入）、3/4（保持/输入寄存器）
-/// - 写：5/6（单线圈/单寄存器）、15/16（多线圈/多寄存器）
-///
-/// 其它取值（0/7/…）在 `modbus` 的读写路径里都没有分支，配置后只会长期采不到值。
-pub(crate) fn validate_function_code(fc: u8) -> Result<(), ValidationError> {
-    match fc {
-        1..=6 | 15 | 16 => Ok(()),
-        _ => {
-            let mut err = ValidationError::new("invalid_function_code");
-            err.message = Some(format!("function_code {} 非法，应为 1~6 或 15/16", fc).into());
-            Err(err)
-        }
     }
 }
 

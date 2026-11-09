@@ -1,6 +1,30 @@
 use super::*;
 use tempfile::tempdir;
 
+/// 存量配置的 ct_ratio=0 / 负数必须降级为 None，否则校验会阻断启动。
+#[test]
+fn legacy_non_positive_ratio_is_sanitized() {
+    let mut cfg = GatewayConfig::default();
+    let p = crate::config::PointConfig {
+        id: "p1".to_string(),
+        ct_ratio: Some(0.0),
+        pt_ratio: Some(-1.0),
+        ..Default::default()
+    };
+    cfg.points = vec![p];
+
+    sanitize_legacy_ratios(&mut cfg);
+    assert_eq!(cfg.points[0].ct_ratio, None, "0 应降级为未配置");
+    assert_eq!(cfg.points[0].pt_ratio, None, "负数应降级为未配置");
+
+    // 合法变比保持不变
+    cfg.points[0].ct_ratio = Some(30.0);
+    cfg.points[0].pt_ratio = Some(100.0);
+    sanitize_legacy_ratios(&mut cfg);
+    assert_eq!(cfg.points[0].ct_ratio, Some(30.0));
+    assert_eq!(cfg.points[0].pt_ratio, Some(100.0));
+}
+
 #[test]
 fn save_creates_new_file() {
     let dir = tempdir().expect("should succeed");

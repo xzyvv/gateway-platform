@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { ElInput, ElInputNumber, ElRadioGroup } from 'element-plus'
+import { ElInput, ElInputNumber, ElRadioGroup, ElSelect } from 'element-plus'
 
 vi.mock('@/api/protocolTools', () => ({
   listConvertRules: vi.fn(),
@@ -11,10 +11,14 @@ vi.mock('@/api/protocolTools', () => ({
   toggleConvertRule: vi.fn(),
   PROTO_LABEL: { 'modbus-tcp': 'Modbus TCP', 'modbus-rtu': 'Modbus RTU', mqtt: 'MQTT', 'opc-ua': 'OPC UA' },
 }))
+vi.mock('@/api/config', () => ({
+  getConfig: vi.fn(),
+}))
 vi.mock('@/utils/confirm', () => ({ confirmDelete: vi.fn() }))
 
 import ProtocolConvert from './ProtocolConvert.vue'
 import { listConvertRules } from '@/api/protocolTools'
+import { getConfig } from '@/api/config'
 
 /**
  * 协议转换「本地试跑」：现场靠它确认规则填得对不对，再下发到网关。
@@ -83,12 +87,36 @@ describe('ProtocolConvert 本地试跑', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    vi.mocked(getConfig).mockResolvedValue({ buses: [], points: [] } as never)
   })
 
   afterEach(() => {
     for (const w of wrappers) w.unmount()
     wrappers.length = 0
     document.body.innerHTML = ''
+  })
+
+  it('源点位 ID 从真实点位中选择，选中后自动带出点位名称', async () => {
+    vi.mocked(getConfig).mockResolvedValue({
+      buses: [],
+      points: [{ id: 'd1.temp', name: '温度' }],
+    } as never)
+    const wrapper = await mountPage()
+    await openDialog(wrapper)
+
+    const select = wrapper
+      .findAllComponents(ElSelect)
+      .find((c) => c.props('placeholder') === '选择采集点位（运行时按 ID 匹配）')
+    expect(select, '找不到源点位下拉').toBeTruthy()
+    select!.vm.$emit('update:modelValue', 'd1.temp')
+    // 真实交互里 el-select 会同时抛 update:modelValue 与 change（带出名称挂在 change 上）
+    select!.vm.$emit('change', 'd1.temp')
+    await settle()
+
+    const nameInput = wrapper
+      .findAllComponents(ElInput)
+      .find((c) => c.props('placeholder') === '展示名称（可选）')
+    expect(nameInput!.props('modelValue')).toBe('温度')
   })
 
   it('原值模板：输出与输入完全一致，不做任何改写', async () => {

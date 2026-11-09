@@ -9,8 +9,8 @@
 | 组件 | 单位 | 典型值 | 场景 |
 |------|------|--------|------|
 | **BaudrateSelect** | 数字 | 1200-230400 bps | 串口总线配置（RS-232/485） |
-| **IntervalSelect** | 固定 ms | 100ms - 30min 预设 | 工业采集周期（固定毫秒） |
-| **DurationSelect** | 数字+单位 | s/min/h/d 自由组合 | 任意时长（MQTT 上报、NTP 同步、Telemetry 间隔） |
+| **DurationSelect** | 数字+单位 | ms/s/min/h/d 自由组合 | 任意时长（周期/间隔/超时） |
+| **PresetNumberSelect** | 数字 | 常用档位 + 自定义输入 | 区间参数（限流/缓冲/队列/心跳） |
 | **SlaveIdInput** | 数字 0-247 | 常用预设 1/2/10/100/247 + 自定义 | Modbus 从站地址 |
 | **ProtocolSelector** | 字符串 | modbus/dlt645/iec104/opcua 等 | 设备 / 协议选择 |
 | **ModbusAddressInput** | 区段+偏移 | 0xxxx/1xxxx/3xxxx/4xxxx | Modbus 地址（自动算功能码） |
@@ -64,6 +64,7 @@ import BaudrateSelect from '@/components/industrial/BaudrateSelect.vue'
 - ✅ v0.4：Parity / StopBits / DataBits
 - ✅ v0.5：HexInput / IpInput；删除零使用的 TimeRangePicker / PortInput / DataTypeSelect / ByteOrderSelect
 - ✅ N-9：删除零使用的 IpInput.vue 与 `index.ts` 桶文件（全站均为按文件引入）
+- ✅ v0.6：+ PresetNumberSelect（预设档位 + 自定义）；DurationSelect 新增毫秒档并接管 Webhook 上报间隔；删除零使用的 IntervalSelect.vue
 
 ## 维护说明
 

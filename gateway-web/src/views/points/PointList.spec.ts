@@ -232,6 +232,13 @@ describe('Points.vue', () => {
     wrapper.unmount()
   })
 
+  it('点位表展示变比列，现场可直接核对 CT/PT', async () => {
+    const wrapper = mount(Points)
+    await settle()
+    expect(wrapper.find('.el-table__header').text()).toContain('变比')
+    wrapper.unmount()
+  })
+
   it('renders point table with point id and name', async () => {
     const wrapper = mount(Points)
     await settle()

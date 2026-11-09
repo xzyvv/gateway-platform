@@ -173,6 +173,32 @@ describe('PointImportBranch 点位批量导入', () => {
     expect(wrapper.text()).toContain('成功导入 1 个点位')
   })
 
+  it('CSV 支持 CT/PT 列：有效值进 payload，非法变比整行判无效', async () => {
+    const wrapper = mountPage()
+    await csvToPreview(
+      wrapper,
+      [
+        'id,name,device_id,bus,protocol,address,slave_id,address_num,ct_ratio,pt_ratio',
+        'p1,电流,dev1,bus1,modbus,40001,1,0,30,',
+        'p2,坏变比,dev1,bus1,modbus,40002,1,0,0,',
+      ].join('\n'),
+    )
+
+    const props = previewProps(wrapper)
+    expect(props.valid).toBe(1)
+    expect(props.invalid).toBe(1)
+    expect(props.rows[1]!.error).toContain('ct_ratio 必须大于 0')
+
+    await button(wrapper, '下一步：确认导入').trigger('click')
+    await settle()
+    await button(wrapper, '确认导入').trigger('click')
+    await vi.waitFor(() => expect(batchImportPointsMock).toHaveBeenCalledOnce())
+
+    const payload = batchImportPointsMock.mock.calls[0]![0] as PointConfig[]
+    expect(payload).toHaveLength(1)
+    expect(payload[0]).toMatchObject({ id: 'p1', ct_ratio: 30, pt_ratio: null })
+  })
+
   it('步骤条只允许回跳到已解锁步骤', async () => {
     const wrapper = mountPage()
     await settle()

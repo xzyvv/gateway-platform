@@ -20,10 +20,19 @@
       <el-input-number v-model="webhook!.timeout_secs" :min="1" :max="60" />
     </el-form-item>
     <el-form-item label="批量大小">
-      <el-input-number v-model="webhook!.batch_size" :min="1" :max="10000" />
+      <!-- 批量上报按百条为单位调整，逐条微调没有实际意义 -->
+      <el-input-number v-model="webhook!.batch_size" :min="1" :max="10000" :step="100" />
     </el-form-item>
     <el-form-item label="上报间隔">
-      <IntervalSelect v-model="webhook!.interval_ms" />
+      <!-- 后端以毫秒存储；DurationSelect 统一用秒，这里换算并允许毫秒档 -->
+      <DurationSelect
+        v-model="intervalSec"
+        unit="ms"
+        :units="['ms', 's', 'min']"
+        :min="0.1"
+        :max="3600"
+        num-width="120px"
+      />
     </el-form-item>
     <el-form-item label="重试次数">
       <el-input-number v-model="webhook!.max_retries" :min="0" :max="10" />
@@ -35,8 +44,18 @@
 </template>
 
 <script setup lang="ts">
-import IntervalSelect from '@/components/industrial/IntervalSelect.vue'
+import { computed } from 'vue'
+import DurationSelect from '@/components/industrial/DurationSelect.vue'
 import type { WebhookConfig } from '@/api/types'
 
 const webhook = defineModel<WebhookConfig | null>({ required: true })
+
+/** 上报间隔：后端字段是毫秒，DurationSelect 以秒为单位，读写时换算 */
+const intervalSec = computed<number>({
+  get: () => (webhook.value?.interval_ms ?? 1000) / 1000,
+  set: (secs) => {
+    if (!webhook.value) return
+    webhook.value.interval_ms = Math.max(100, Math.round(secs * 1000))
+  },
+})
 </script>

@@ -75,7 +75,9 @@ pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub use common::decode::{convert_value, decode_binary_value, parse_bcd_address, reorder_bytes};
+pub use common::decode::{
+    convert_value, decode_binary_value, parse_bcd_address, reorder_bytes, reverse_convert,
+};
 pub use common::{decode, util};
 #[cfg(feature = "modbus")]
 pub use modbus::ModbusExceptionCode;

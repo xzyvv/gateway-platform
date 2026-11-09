@@ -1,9 +1,7 @@
 //! 合并参数自适应统计与写分组辅助
 //!
 //! 决策表 #3（Modbus 合并参数自适应成本模型）的运行时状态，
-//! 以及批量写入路径用到的分组元素类型与反向换算。
-
-use crate::config::PointConfig;
+//! 以及批量写入路径用到的分组元素类型。
 
 /// 合并参数自适应统计（EMA 移动平均）
 ///
@@ -59,14 +57,3 @@ impl MergeStats {
 
 /// 写分组成员：(地址, 单元数, 入参下标)
 pub(super) type WriteItem = (u16, u16, usize);
-
-/// 反向换算：工程量 `value` -> 原始值 `raw`。
-///
-/// 与 `write` 中的换算保持一致（公式无法反推，沿用「不反推公式」的既有行为）。
-pub(super) fn reverse_convert(point: &PointConfig, value: f64) -> f64 {
-    if point.scale != 0.0 {
-        (value - point.offset) / point.scale
-    } else {
-        value
-    }
-}

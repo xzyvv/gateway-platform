@@ -33,6 +33,25 @@ export interface PointForm {
   unit: string
   scale: number
   offset: number
+  /**
+   * CT / PT 变比（null=不放大）。
+   *
+   * 后端 `convert_value` 会按单位决定是否参与计算，表单侧也只提交生效项，
+   * 避免给电压点位误存 CT 变比后在下次改单位时突然放大 30 倍。
+   */
+  ct_ratio: number | null
+  pt_ratio: number | null
+  /**
+   * Modbus 功能码：与 address_num 一起构成真正的寻址方式。
+   * 非 Modbus 协议另有语义（DLT645/CJT188 用作控制码），编辑时必须原样回传。
+   */
+  function_code: number | null
+  /** 数值解码类型（u16 / float32 …），仅 Modbus 等统一数值解码协议使用 */
+  data_type: string
+  /** 字节序 ABCD/DCBA/CDAB/BADC，留空走后端默认 ABCD */
+  byte_order: string
+  /** 占用寄存器数，留空按数据类型自动推断 */
+  register_count: number | null
   formula: string
   deadband: number
   on_change: boolean

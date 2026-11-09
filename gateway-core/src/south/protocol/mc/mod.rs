@@ -30,7 +30,8 @@ use tokio::sync::Mutex;
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, ModbusDataType, Quality};
 use crate::south::protocol::{
-    clone_collector_error, convert_value, Collector, CollectorError, CollectorResult,
+    clone_collector_error, convert_value, reverse_convert, Collector, CollectorError,
+    CollectorResult,
 };
 
 mod frames;
@@ -671,7 +672,8 @@ impl Collector for McCollector {
                 self.write_bit_txn(&device, value != 0.0)?
             } else {
                 let dt = point.data_type_enum().unwrap_or(ModbusDataType::U16);
-                let words = encode_words(value, dt);
+                // 写值与读路径对偶：北向下发的是一次侧值，需先除回变比与 scale/offset
+                let words = encode_words(reverse_convert(point, value), dt);
                 self.write_words_txn(&device, &words)?
             };
             let (end_code, _) = self.transact(&txn).await?;

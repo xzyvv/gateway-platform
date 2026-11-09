@@ -5,15 +5,10 @@
         <el-input v-model="form.name" placeholder="如：三相电表" maxlength="60" />
       </el-form-item>
       <el-form-item label="协议">
-        <el-select v-model="form.protocol" style="width: 100%">
-          <el-option label="Modbus RTU" value="modbus" />
-          <el-option label="DL/T 645" value="dlt645" />
-          <el-option label="CJ/T 188" value="cjt188" />
-        </el-select>
+        <ProtocolSelector v-model="form.protocol" aria-label="协议" />
       </el-form-item>
       <el-form-item label="采集周期">
-        <el-input-number v-model="form.interval" :min="1" :max="3600" controls-position="right" />
-        <span class="unit">秒</span>
+        <DurationSelect v-model="form.interval" :min="1" :max="3600" :units="['s', 'min']" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -42,6 +37,8 @@
  * 典型应用场景：部署向导第 2 步的模板兜底入口，不直接发请求。
  */
 import type { NewTemplateForm } from './types'
+import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
+import DurationSelect from '@/components/industrial/DurationSelect.vue'
 
 defineProps<{
   saving: boolean
@@ -61,7 +58,3 @@ function close() {
   visible.value = false
 }
 </script>
-
-<style scoped>
-.unit { margin-left: 8px; font-size: 0.75rem; color: var(--text-secondary); }
-</style>

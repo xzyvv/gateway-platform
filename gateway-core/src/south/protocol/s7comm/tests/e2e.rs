@@ -34,6 +34,31 @@ async fn c13_read_lazily_connects_over_tcp() {
     assert!((dp2.raw_value - 42.5).abs() < 0.01, "got {}", dp2.raw_value);
 }
 
+/// 读路径必须按点位换算：scale/offset/formula 与 CT/PT 变比统一在 common 层应用。
+///
+/// 回归：此前 S7 直接把原始值当工程量上送，点位配了 scale/offset 也不生效。
+#[tokio::test]
+async fn read_applies_scale_offset_and_ratio() {
+    let value = 2.0f32.to_be_bytes().to_vec();
+    let addr = spawn_s7_stub(vec![S7StubAction::Serve], value, TS_BYTE).await;
+    let c = S7CommCollector::new(addr, "s7-bus".into(), Duration::from_secs(5));
+    let mut p = s7_point("p1", "DB1.DBD0", "real");
+    p.unit = Some("kW".into());
+    p.scale = 0.1;
+    p.offset = 1.0;
+    p.ct_ratio = Some(30.0);
+    p.pt_ratio = Some(100.0);
+
+    let dp = c.read(&p).await.expect("读取应成功");
+    // 原始 2 → ×0.1+1 = 1.2 二次侧 → ×30×100 = 3600 一次侧
+    assert!((dp.value - 3600.0).abs() < 1e-3, "got {}", dp.value);
+    assert!(
+        (dp.raw_value - 2.0).abs() < 1e-6,
+        "原始值必须保留，got {}",
+        dp.raw_value
+    );
+}
+
 /// C-13 自愈：读到断链后清链，下一次 `read` 自动重连
 #[tokio::test]
 async fn c13_reconnect_after_connection_drop() {

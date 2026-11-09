@@ -182,6 +182,37 @@ fn test_encode_decode_roundtrip_all_types_all_orders() {
     }
 }
 
+// ===== 写路径与读路径对称（CT/PT 变比）=====
+
+/// 电表写数据必须与读路径对称：读乘了 CT×PT，写就要除回来。
+///
+/// 场景：CT=30、PT=100 的功率点，寄存器里存的是二次侧值 2，
+/// 读出来上报一次侧 6000。把 6000 原样写回去，寄存器必须还是 2，
+/// 否则「读到的值写回去」会让表端数值放大 3000 倍。
+#[test]
+fn write_data_reverses_ratio_to_match_read_path() {
+    let mut point = point_for_codec("u16", "ABCD");
+    point.unit = Some("kW".into());
+    point.ct_ratio = Some(30.0);
+    point.pt_ratio = Some(100.0);
+    point.scale = 1.0;
+    point.offset = 0.0;
+
+    let raw = 2.0f64;
+    let primary = convert_value(&point, raw);
+    assert!((primary - 6000.0).abs() < 1e-9, "一次侧值应为 6000");
+
+    // 写路径：一次侧值 → 反算回原始寄存器值
+    let written = reverse_convert(&point, primary);
+    assert!((written - raw).abs() < 1e-9, "写入的寄存器值应为 2");
+
+    // 落到字节上再解回来，确认整条链路自洽
+    let bytes = encode_dlt_value(&point, written, 2).expect("encode");
+    let (decoded, _t, q) = decode_dlt_value(&point, &bytes);
+    assert_eq!(q, Quality::Good);
+    assert!((decoded - raw).abs() < 1e-9);
+}
+
 // ===== P1-1: DLT645-1997 地址字节序反向 =====
 
 /// 1997 版设备回显地址是「高字节在前」，但 `expected_addr`（来自

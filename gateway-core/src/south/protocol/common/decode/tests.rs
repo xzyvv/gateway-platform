@@ -173,6 +173,61 @@ fn test_convert_value_pt_ratio() {
     assert!((convert_value(&p, 100.0) - 10000.0).abs() < 0.0001);
 }
 
+/// 变比按单位门控：电压只吃 PT、电流只吃 CT、功率/电量吃 CT×PT、功率因数都不吃。
+///
+/// 改造前是无条件连乘，电压点位若误填 CT=30 会被放大 30 倍（现场常见误配）。
+#[test]
+fn test_convert_value_ratio_scope_by_unit() {
+    let mut p = make_point_for_convert(1.0, 0.0, None, Some(30.0), Some(100.0));
+
+    p.unit = Some("V".into());
+    assert!((convert_value(&p, 2.0) - 200.0).abs() < 1e-9, "电压只乘 PT");
+
+    p.unit = Some("kV".into());
+    assert!(
+        (convert_value(&p, 2.0) - 200.0).abs() < 1e-9,
+        "大小写/前缀无关"
+    );
+
+    p.unit = Some("A".into());
+    assert!((convert_value(&p, 2.0) - 60.0).abs() < 1e-9, "电流只乘 CT");
+
+    p.unit = Some("kW".into());
+    assert!(
+        (convert_value(&p, 2.0) - 6000.0).abs() < 1e-9,
+        "功率乘 CT×PT"
+    );
+
+    p.unit = Some("kVarh".into());
+    assert!(
+        (convert_value(&p, 2.0) - 6000.0).abs() < 1e-9,
+        "电量乘 CT×PT"
+    );
+
+    p.unit = Some("PF".into());
+    assert!(
+        (convert_value(&p, 0.95) - 0.95).abs() < 1e-9,
+        "功率因数不乘变比"
+    );
+    p.unit = Some("COSΦ".into());
+    assert!(
+        (convert_value(&p, 0.95) - 0.95).abs() < 1e-9,
+        "全大写功率因数同样不乘"
+    );
+
+    // 单位为空 / 未知：保持改造前的兼容行为（两者都乘）
+    p.unit = None;
+    assert!(
+        (convert_value(&p, 2.0) - 6000.0).abs() < 1e-9,
+        "空单位兼容旧行为"
+    );
+    p.unit = Some("℃".into());
+    assert!(
+        (convert_value(&p, 2.0) - 6000.0).abs() < 1e-9,
+        "未知单位兼容旧行为"
+    );
+}
+
 #[test]
 fn test_convert_value_formula_takes_priority() {
     let p = make_point_for_convert(0.1, 5.0, Some("raw*0.01".into()), None, None);
@@ -229,4 +284,77 @@ fn convert_value_negative_inf_falls_back_to_raw() {
     let out = convert_value(&p, 1e200);
     assert!(out.is_finite(), "-Inf 应被兜底，实际 {}", out);
     assert_eq!(out, 1e200);
+}
+
+// ===== 写路径反向换算（reverse_convert）=====
+
+/// 写入必须与读取对称：读乘了 CT×PT，写就要除回来。
+#[test]
+fn reverse_convert_divides_out_effective_ratio() {
+    let mut p = make_point_for_convert(1.0, 0.0, None, Some(30.0), Some(100.0));
+
+    // 功率点：CT=30、PT=100 → 一次侧 6000 对应二次侧 2
+    p.unit = Some("kW".into());
+    assert!((reverse_convert(&p, 6000.0) - 2.0).abs() < 1e-9);
+
+    // 电压点：只有 PT 生效
+    p.unit = Some("V".into());
+    assert!((reverse_convert(&p, 200.0) - 2.0).abs() < 1e-9);
+
+    // 电流点：只有 CT 生效
+    p.unit = Some("A".into());
+    assert!((reverse_convert(&p, 60.0) - 2.0).abs() < 1e-9);
+
+    // 功率因数：两者都不生效
+    p.unit = Some("PF".into());
+    assert!((reverse_convert(&p, 0.95) - 0.95).abs() < 1e-9);
+}
+
+/// 先除变比再反解 scale/offset：offset 不能被变比一起放大。
+#[test]
+fn reverse_convert_applies_offset_after_ratio() {
+    let mut p = make_point_for_convert(2.0, 5.0, None, Some(10.0), None);
+    p.unit = Some("kW".into());
+    // 工程量 = raw*2 + 5，一次侧 = 工程量*10
+    // 取一次侧 250 → 工程量 25 → raw = (25-5)/2 = 10
+    assert!((reverse_convert(&p, 250.0) - 10.0).abs() < 1e-9);
+}
+
+/// 变比为 0（历史配置可能存在）时不得除零。
+#[test]
+fn reverse_convert_skips_non_positive_ratio() {
+    let p = make_point_for_convert(1.0, 0.0, None, Some(0.0), Some(100.0));
+    assert!((reverse_convert(&p, 5.0) - 5.0).abs() < 1e-9);
+}
+
+/// 读写往返一致：读到的值原样写回去应还原成原始寄存器值。
+#[test]
+fn read_write_round_trip_is_symmetric() {
+    let mut p = make_point_for_convert(0.5, 2.0, None, Some(30.0), Some(100.0));
+    p.unit = Some("kWh".into());
+    let raw = 40.0f64;
+    let primary = convert_value(&p, raw);
+    assert!((reverse_convert(&p, primary) - raw).abs() < 1e-9);
+}
+
+/// 往返一致必须覆盖全部单位门控分支，而不是只测功率。
+///
+/// 变比范围由 `ratio_scope` 按单位决定，读写两侧共用同一判定；
+/// 任一分支漂移都会表现为「写进去的值和读回来差一个变比」。
+#[test]
+fn read_write_round_trip_is_symmetric_for_every_unit_scope() {
+    for unit in ["kW", "V", "A", "PF", "℃", ""] {
+        let mut p = make_point_for_convert(0.5, 2.0, None, Some(30.0), Some(100.0));
+        p.unit = if unit.is_empty() {
+            None
+        } else {
+            Some(unit.into())
+        };
+        let raw = 40.0f64;
+        let primary = convert_value(&p, raw);
+        assert!(
+            (reverse_convert(&p, primary) - raw).abs() < 1e-9,
+            "单位 {unit:?} 的读写往返不对称: raw={raw} primary={primary}"
+        );
+    }
 }

@@ -27,9 +27,20 @@ export function parsePointCsvRows(rawText: string): PointCsvParseOutcome {
   const headers = parsed[0]!.fields.map((h) => h.toLowerCase().trim())
   const col = (name: string) => headers.indexOf(name)
   const cell = (fields: string[], i: number) => (i >= 0 ? fields[i] ?? '' : '')
+  /** 变比单元格：留空返回 undefined；非法（非数字 / <= 0）记一条错误 */
+  const parseRatio = (raw: string, name: string, errors: string[]): number | undefined => {
+    if (!raw) return undefined
+    const v = Number(raw)
+    if (!Number.isFinite(v) || v <= 0) {
+      errors.push(`${name} 必须大于 0（无需变比请留空）`)
+      return undefined
+    }
+    return v
+  }
   const idx = {
     id: col('id'), name: col('name'), deviceId: col('device_id'), bus: col('bus'),
     protocol: col('protocol'), address: col('address'), slaveId: col('slave_id'), addressNum: col('address_num'),
+    ctRatio: col('ct_ratio'), ptRatio: col('pt_ratio'),
   }
 
   const rows: PointRow[] = []
@@ -50,6 +61,9 @@ export function parsePointCsvRows(rawText: string): PointCsvParseOutcome {
     if (!address) errors.push('缺少 address')
     // modbus 协议靠从站地址寻址
     if (protocol.toLowerCase() === 'modbus' && !slaveIdStr) errors.push('modbus 协议需要 slave_id')
+    // CT/PT 变比：留空=不启用；填了必须 > 0（0 会把一次侧值乘成 0）
+    const ctRatio = parseRatio(cell(fields, idx.ctRatio), 'ct_ratio', errors)
+    const ptRatio = parseRatio(cell(fields, idx.ptRatio), 'pt_ratio', errors)
 
     const row: PointRow = {
       line,
@@ -59,6 +73,8 @@ export function parsePointCsvRows(rawText: string): PointCsvParseOutcome {
       bus,
       protocol,
       address,
+      ct_ratio: ctRatio,
+      pt_ratio: ptRatio,
       valid: errors.length === 0,
     }
     if (slaveIdStr) {
@@ -107,8 +123,8 @@ export function buildPointPayload(validRows: PointRow[]): PointConfig[] {
     scale: 1,
     offset: 0,
     formula: null,
-    ct_ratio: null,
-    pt_ratio: null,
+    ct_ratio: r.ct_ratio ?? null,
+    pt_ratio: r.pt_ratio ?? null,
     deadband: 0,
     on_change: false,
     unit: null,

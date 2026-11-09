@@ -18,7 +18,7 @@ export function usePointStep() {
   /** 点位列表加载中 */
   const loadingPoints = ref(false)
   /** 手动补录点位的表单值 */
-  const manual = ref<ManualPointForm>({ name: '', addressNum: 0, dataType: 'int16' })
+  const manual = ref<ManualPointForm>({ name: '', addressNum: 0, dataType: 'i16' })
   /** 添加点位请求进行中 */
   const addingPoint = ref(false)
 
@@ -78,7 +78,7 @@ export function usePointStep() {
         modbus_register: null,
       })
       ElMessage.success('点位已添加')
-      manual.value = { name: '', addressNum: 0, dataType: 'int16' }
+      manual.value = { name: '', addressNum: 0, dataType: 'i16' }
       await loadPoints(device.id)
     } catch (e) {
       ElMessage.error(e instanceof Error && e.message ? e.message : '添加点位失败')

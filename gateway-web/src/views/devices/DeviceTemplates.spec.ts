@@ -103,9 +103,20 @@ async function setIntervalField(wrapper: ReturnType<typeof mountPage>, value: nu
   await settle()
 }
 
-/** 点位行内还有 SlaveIdInput 自带的输入框，按行取才不会串位 */
+/** 点位行内：名称 / 地址 / 单位 是 ElInput，CT / PT 是 ElInputNumber */
 async function setPointField(wrapper: ReturnType<typeof mountPage>, row: number, which: 0 | 1, value: string) {
   wrapper.findAll('.point-row')[row]!.findAllComponents(ElInput)[which]!.vm.$emit('update:modelValue', value)
+  await settle()
+}
+
+/** 点位行内的数值输入：0=CT 变比，1=PT 变比 */
+async function setPointRatio(
+  wrapper: ReturnType<typeof mountPage>,
+  row: number,
+  which: 0 | 1,
+  value: number | null,
+) {
+  wrapper.findAll('.point-row')[row]!.findAllComponents(ElInputNumber)[which]!.vm.$emit('update:modelValue', value)
   await settle()
 }
 
@@ -196,13 +207,73 @@ describe('DeviceTemplates 设备模板', () => {
     expect(listMock).toHaveBeenCalledTimes(2)
   })
 
+  it('创建：描述与点位 CT/PT 变比进入提交体，变比填 0 被本地拦下', async () => {
+    const wrapper = mountPage()
+    await openCreate(wrapper)
+    await setField(wrapper, 0, 'meter-tpl')
+    await setField(wrapper, 1, '适配 XX 固件')
+    await setPointField(wrapper, 0, 0, '电量')
+    await setPointField(wrapper, 0, 1, '0')
+    // 单位决定变比是否生效：同一行的第 3 个 ElInput
+    wrapper.findAll('.point-row')[0]!.findAllComponents(ElInput)[2]!.vm.$emit('update:modelValue', 'kWh')
+    await settle()
+
+    await setPointRatio(wrapper, 0, 0, 0)
+    await button(wrapper, '创建').trigger('click')
+    expect(ElMessage.warning).toHaveBeenCalledWith('电量 的 CT/PT 变比必须大于 0（无需变比请留空）')
+    expect(saveMock).not.toHaveBeenCalled()
+
+    await setPointRatio(wrapper, 0, 0, 30)
+    await setPointRatio(wrapper, 0, 1, 100)
+    await button(wrapper, '创建').trigger('click')
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalledOnce())
+
+    const payload = saveMock.mock.calls[0]![0] as DeviceTemplate
+    expect(payload.description).toBe('适配 XX 固件')
+    expect(payload.points[0]).toMatchObject({
+      name: '电量',
+      unit: 'kWh',
+      ct_ratio: 30,
+      pt_ratio: 100,
+    })
+  })
+
+  it('编辑：保存时保留表单未编辑的解码字段，不能被整份抹掉', async () => {
+    listMock.mockResolvedValue([
+      {
+        name: 'tpl-c',
+        protocol: 'modbus',
+        default_interval: 5,
+        points: [
+          { name: 'p', unit: 'kW', scale: 0.1, offset: 2, function_code: 4, default_address: 100, ct_ratio: 30 },
+        ],
+      } as unknown as DeviceTemplate,
+    ])
+    const wrapper = mountPage()
+    await settle()
+    await wrapper.findAll('button').filter((b) => b.text().trim() === '编辑')[0]!.trigger('click')
+    await settle()
+    await button(wrapper, '保存').trigger('click')
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalledOnce())
+
+    const payload = saveMock.mock.calls[0]![0] as DeviceTemplate
+    expect(payload.points[0]).toMatchObject({
+      unit: 'kW',
+      scale: 0.1,
+      offset: 2,
+      function_code: 4,
+      default_address: 100,
+      ct_ratio: 30,
+    })
+  })
+
   it('创建失败：可见报错且弹窗不关，用户可改后重试', async () => {
     saveMock.mockRejectedValue(new Error('name exists'))
     const wrapper = mountPage()
     await openCreate(wrapper)
     await setField(wrapper, 0, 'dup')
-    // ElInput 索引 3 是「默认采集周期」的内嵌输入，点位名称在其后（索引 4）
-    await setField(wrapper, 4, 'p1')
+    // 默认采集周期改成「数字 + 单位」后多了一个单位下拉，按行定位点位名称，避免索引漂移
+    await setPointField(wrapper, 0, 0, 'p1')
 
     await button(wrapper, '创建').trigger('click')
     await settle()

@@ -43,7 +43,20 @@
             <el-tag size="small" type="info" effect="plain">LOG 为自然对数；^ 右结合</el-tag>
           </div>
         </el-form-item>
-        <el-form-item label="单位"><el-input v-model="form.unit" /></el-form-item>
+        <el-form-item label="单位">
+          <!-- 与采集点位同源：常用单位下拉 + 可输入，避免同义写法导致上行分组混乱 -->
+          <el-select
+            v-model="form.unit"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            placeholder="选择或输入单位（可留空）"
+            style="width: 100%"
+          >
+            <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="小数位"><el-input-number v-model="form.decimals" :min="0" :max="6" controls-position="right" /></el-form-item>
         <el-form-item label="状态">
           <el-switch v-model="form.enabled" active-text="启用" inactive-text="停用" />
@@ -85,6 +98,7 @@ import {
   type VirtualPointViewV,
 } from '@/api/pointsOps'
 import { validateFormula, extractPointRefs } from '@/utils/formulaEngine'
+import { unitOptions } from '@/composables/devices/useUnits'
 import { virtualPointEvalUi } from '@/utils/virtualPointStatus'
 import { listDevices } from '@/api/devices'
 import type { ColumnDef } from '@/components/DataTable.vue'

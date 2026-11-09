@@ -71,7 +71,14 @@
             </div>
           </el-form-item>
           <el-form-item label="实时推送缓冲">
-            <el-input-number v-model="web.realtime_buffer" :min="16" :max="65536" :step="128" />
+            <PresetNumberSelect
+              v-model="web.realtime_buffer"
+              :options="REALTIME_BUFFER_PRESETS"
+              :min="16"
+              :max="65536"
+              unit="条"
+              aria-label="实时推送缓冲"
+            />
             <div class="field-hint">
               WebSocket 断线重连时可回放的事件条数（默认 1024）；越大抗抖动越好、内存占用越高。改动需重启网关后生效。
             </div>
@@ -79,11 +86,14 @@
           <el-form-item label="接口限流（次/秒）">
             <div class="rate-limit-field">
               <el-switch v-model="rateLimitEnabled" active-text="开启" inactive-text="关闭" />
-              <el-input-number
+              <PresetNumberSelect
                 v-if="rateLimitEnabled"
                 v-model="rateLimitValue"
+                :options="RATE_LIMIT_PRESETS"
                 :min="1"
                 :max="10000"
+                unit="次/秒"
+                aria-label="接口限流"
               />
             </div>
             <div class="field-hint">
@@ -146,6 +156,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
 import type { WebConfig } from '@/api/types'
 import { changePassword } from '@/api/auth'
 
@@ -172,6 +183,10 @@ const advancedOpen = ref<string[]>([])
  * 避免「关一下再开」把现场已调好的阈值清成默认值。
  */
 const LAST_RATE_LIMIT = 60
+/** 常用限流档位（次/秒），仍可输入 1~10000 内任意整数 */
+const RATE_LIMIT_PRESETS = [10, 30, 60, 120, 300, 600, 1000]
+/** 常用回放缓冲档位（条），默认 1024 */
+const REALTIME_BUFFER_PRESETS = [128, 256, 512, 1024, 2048, 4096, 8192]
 const rateLimitEnabled = computed<boolean>({
   get: () => web.value?.rate_limit_per_sec != null,
   set: (on) => {
@@ -179,10 +194,10 @@ const rateLimitEnabled = computed<boolean>({
     web.value.rate_limit_per_sec = on ? LAST_RATE_LIMIT : null
   },
 })
-const rateLimitValue = computed<number | undefined>({
+const rateLimitValue = computed<number | null>({
   get: () => web.value?.rate_limit_per_sec ?? LAST_RATE_LIMIT,
   set: (v) => {
-    // el-input-number 清空时会给出 null/undefined，保持原值不写入，避免非法配置
+    // 下拉只会回传数字；null 保持原值不写入，避免非法配置
     if (!web.value || v == null) return
     web.value.rate_limit_per_sec = v
   },

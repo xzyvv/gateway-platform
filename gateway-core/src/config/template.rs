@@ -12,7 +12,11 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-use super::{validate_byte_order, validate_protocol, AggregationConfig, DeviceConfig, PointConfig};
+use super::point::parse_data_type;
+use super::{
+    validate_byte_order, validate_protocol, validate_ratio, AggregationConfig, DeviceConfig,
+    PointConfig,
+};
 use crate::engine::error::{GatewayError, GatewayResult};
 
 /// 设备模板（§3.6）
@@ -35,6 +39,13 @@ pub struct DeviceTemplate {
     /// F-01：同 `vendor`，缺省为空串而非拒绝保存。
     #[serde(default)]
     pub model: String,
+    /// 模板说明（备注）
+    ///
+    /// 模板是随文件分发的 JSON，说明写在这里能跟着文件走：适配的固件版本、
+    /// 接线要求、变比是否需要现场调整等。纯文档字段，不参与采集与校验；
+    /// `serde(default)` 保证存量模板文件照常加载（读出来是 `None`）。
+    #[serde(default)]
+    pub description: Option<String>,
     /// 协议
     #[validate(custom(function = "validate_protocol"))]
     pub protocol: String,
@@ -79,6 +90,15 @@ pub struct PointTemplate {
     /// 默认偏移
     #[serde(default)]
     pub offset: f64,
+    /// CT 变比（模板级默认值，展开后可被设备侧覆盖；None=不启用）
+    ///
+    /// 与 `PointConfig::ct_ratio` 同义：一次侧 = 二次侧 × 变比，
+    /// 仅电流/功率/电量类单位生效。模板里通常留空，由现场按铭牌填写。
+    #[serde(default)]
+    pub ct_ratio: Option<f64>,
+    /// PT 变比（模板级默认值，None=不启用，仅电压/功率/电量类单位生效）
+    #[serde(default)]
+    pub pt_ratio: Option<f64>,
     /// 公式
     #[serde(default)]
     pub formula: Option<String>,
@@ -100,6 +120,52 @@ fn default_scale() -> f64 {
 /// F-7: 模板默认版本号
 fn default_template_version() -> u32 {
     1
+}
+
+/// 由功能码 + 0 基寄存器偏移生成 Modbus 5 位展示地址。
+///
+/// 与前端 `modbusAddressOf` 同一套区段规则：线圈 0xxxx / 离散输入 1xxxx /
+/// 输入寄存器 4xxxx / 保持寄存器 3xxxx，后四位是 1 基地址。
+/// 偏移超过 9998 时返回 `None`（5 位串装不下），由调用方兜底，避免编造错地址。
+fn modbus_display_address(function_code: Option<u8>, address_num: Option<u16>) -> Option<String> {
+    let offset = u32::from(address_num?) + 1;
+    if offset > 9999 {
+        return None;
+    }
+    let head = match function_code {
+        Some(1) | Some(5) | Some(15) => '0',
+        Some(2) => '1',
+        Some(4) => '4',
+        _ => '3',
+    };
+    Some(format!("{}{:04}", head, offset))
+}
+
+/// 把历史模板里的数据类型别名（`uint16` / `float` / `double` …）统一成规范名。
+///
+/// 只处理 Modbus：`parse_data_type` 本来就接受这些别名，采集结果不受影响，
+/// 统一是为了让模板列表/表单与新下拉一致（否则下拉里没有该值，用户以为配错了）。
+/// IEC104 的 `float` / `single` / `normalized` 是该协议自己的语义，不能改名。
+///
+/// 返回被改写的点位数（0 表示无需迁移）。
+fn normalize_data_types(t: &mut DeviceTemplate) -> usize {
+    if !t.protocol.eq_ignore_ascii_case("modbus") {
+        return 0;
+    }
+    let mut changed = 0;
+    for p in &mut t.points {
+        let Some(raw) = p.data_type.as_deref() else {
+            continue;
+        };
+        let Some(canonical) = parse_data_type(raw).map(|dt| dt.canonical_name()) else {
+            continue;
+        };
+        if raw != canonical {
+            p.data_type = Some(canonical.to_string());
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// 模板管理器
@@ -192,8 +258,17 @@ impl TemplateManager {
         // 容忍 UTF-8 BOM：现场常用 Windows 记事本编辑模板，保存后带 BOM（EF BB BF），
         // serde_json 会在 line 1 column 1 报 "expected value"——对运维毫无指引性。
         let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-        let t: DeviceTemplate = serde_json::from_str(content)
+        let mut t: DeviceTemplate = serde_json::from_str(content)
             .map_err(|e| GatewayError::Config(format!("parse template failed: {}", e)))?;
+        // 历史模板里的 uint16 / float / double 等别名统一成规范名（仅 Modbus）
+        let normalized = normalize_data_types(&mut t);
+        if normalized > 0 {
+            tracing::info!(
+                template = %t.name,
+                points = normalized,
+                "历史数据类型写法已按规范名加载（如 float→f32），保存该模板后落盘生效"
+            );
+        }
         validate_template(&t)?;
         Ok(t)
     }
@@ -216,7 +291,9 @@ impl TemplateManager {
     }
 
     /// 保存自定义模板
-    pub fn save_custom(&self, template: DeviceTemplate) -> GatewayResult<()> {
+    pub fn save_custom(&self, mut template: DeviceTemplate) -> GatewayResult<()> {
+        // 与加载侧同一条规范化：避免别名再次写回磁盘
+        normalize_data_types(&mut template);
         validate_template(&template)?;
         // P3: 目录创建失败此前被静默忽略，会让后续 fs::write 报出误导性的
         // "写文件失败"，看不出真因（权限 / 磁盘 / 路径），改为直接上抛。
@@ -279,7 +356,18 @@ impl TemplateManager {
             // IEC104 以点位 IOA 寻址，设备地址只表示公共地址；模板展开时必须用
             // 每个点位自己的 IOA（default_address / address_map），否则同一设备的
             // 所有点位会挤在同一个 IOA 上，采集值互相覆盖。
-            let address = if device.protocol.eq_ignore_ascii_case("iec104") {
+            //
+            // Modbus 实际按 `address_num`（0 基偏移）+ 功能码寻址，`address` 只是给
+            // 人看的 5 位展示串。此前统一写 `device.address`（从站地址），列表里
+            // 同一设备的点位全显示成同一个从站号，现场按界面排查会走偏。
+            let address = if device.protocol.eq_ignore_ascii_case("modbus") {
+                modbus_display_address(pt.function_code, address_num).unwrap_or_else(|| {
+                    // 偏移超出 5 位串表达范围（> 9998）：退回偏移数字，至少不丢信息
+                    address_num
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| device.address.clone())
+                })
+            } else if device.protocol.eq_ignore_ascii_case("iec104") {
                 address_num
                     .map(|a| a.to_string())
                     .unwrap_or_else(|| device.address.clone())
@@ -304,8 +392,8 @@ impl TemplateManager {
                 scale: pt.scale,
                 offset: pt.offset,
                 formula: pt.formula.clone(),
-                ct_ratio: None,
-                pt_ratio: None,
+                ct_ratio: pt.ct_ratio,
+                pt_ratio: pt.pt_ratio,
                 deadband: pt.deadband.unwrap_or(0.0),
                 on_change: false,
                 unit: if pt.unit.is_empty() {
@@ -419,6 +507,23 @@ fn validate_template(t: &DeviceTemplate) -> GatewayResult<()> {
             }
             _ => {}
         }
+
+        // 变比必须 > 0：0 会把一次侧值乘成 0，负数会反号——与点位侧同一条规则。
+        // 模板点位未挂 `#[validate(nested)]`，这里显式校验，避免坏模板落盘后才在
+        // 展开/采集阶段表现为「读数全 0」。
+        for (label, ratio) in [("ct_ratio", pt.ct_ratio), ("pt_ratio", pt.pt_ratio)] {
+            if let Some(v) = ratio {
+                validate_ratio(v).map_err(|e| {
+                    GatewayError::Config(format!(
+                        "template '{}' point '{}': {} {}",
+                        t.name,
+                        pt.name,
+                        label,
+                        e.message.unwrap_or(e.code)
+                    ))
+                })?;
+            }
+        }
     }
 
     Ok(())
@@ -440,6 +545,7 @@ mod tests {
             name: "tpl".into(),
             vendor: "v".into(),
             model: "m".into(),
+            description: None,
             protocol: "gpio".into(),
             default_interval: 1,
             default_byte_order: None,
@@ -453,6 +559,8 @@ mod tests {
                 register_count: None,
                 scale: 1.0,
                 offset: 0.0,
+                ct_ratio: None,
+                pt_ratio: None,
                 formula: None,
                 deadband: None,
                 aggregation: None,
@@ -591,6 +699,132 @@ mod tests {
         let points = mgr.expand_devices(&[dev]).expect("iec104 模板应能展开");
         let addresses: Vec<&str> = points.iter().map(|p| p.address.as_str()).collect();
         assert_eq!(addresses, vec!["1001", "1002"]);
+    }
+
+    /// 历史别名（uint16/float/double）在加载时统一成规范名，只影响 Modbus。
+    #[test]
+    fn normalize_data_types_rewrites_modbus_aliases() {
+        let mut tpl = build_template();
+        tpl.protocol = "modbus".into();
+        tpl.points[0].data_type = Some("float".into());
+        tpl.points.push(PointTemplate {
+            name: "p2".into(),
+            data_type: Some("uint16".into()),
+            ..tpl.points[0].clone()
+        });
+        tpl.points.push(PointTemplate {
+            name: "p3".into(),
+            data_type: Some("double".into()),
+            ..tpl.points[0].clone()
+        });
+
+        assert_eq!(normalize_data_types(&mut tpl), 3);
+        assert_eq!(tpl.points[0].data_type.as_deref(), Some("f32"));
+        assert_eq!(tpl.points[1].data_type.as_deref(), Some("u16"));
+        assert_eq!(tpl.points[2].data_type.as_deref(), Some("f64"));
+    }
+
+    /// IEC104 的 float/single 是协议语义，不能被当成 Modbus 别名改写。
+    #[test]
+    fn normalize_data_types_leaves_other_protocols_alone() {
+        for protocol in ["iec104", "s7comm", "gpio"] {
+            let mut tpl = build_template();
+            tpl.protocol = protocol.into();
+            tpl.points[0].data_type = Some("single".into());
+            tpl.points.push(PointTemplate {
+                name: "p2".into(),
+                data_type: Some("float".into()),
+                ..tpl.points[0].clone()
+            });
+
+            assert_eq!(normalize_data_types(&mut tpl), 0, "{protocol} 不应被改写");
+            assert_eq!(tpl.points[0].data_type.as_deref(), Some("single"));
+            assert_eq!(tpl.points[1].data_type.as_deref(), Some("float"));
+        }
+    }
+
+    /// Modbus 展示地址：区段首位由功能码决定，后四位是 1 基地址。
+    #[test]
+    fn modbus_display_address_maps_function_code_and_offset() {
+        assert_eq!(
+            modbus_display_address(Some(3), Some(0)).as_deref(),
+            Some("30001")
+        );
+        assert_eq!(
+            modbus_display_address(Some(4), Some(8191)).as_deref(),
+            Some("48192")
+        );
+        assert_eq!(
+            modbus_display_address(Some(1), Some(0)).as_deref(),
+            Some("00001")
+        );
+        assert_eq!(
+            modbus_display_address(Some(2), Some(15)).as_deref(),
+            Some("10016")
+        );
+        // 偏移超出 5 位串表达范围：返回 None，由调用方兜底
+        assert_eq!(modbus_display_address(Some(3), Some(9999)), None);
+    }
+
+    /// 模板点位的 CT/PT 变比必须原样带到展开后的点位。
+    /// 回归：此前硬编码 `None`，用模板建站时变比必丢。
+    #[test]
+    fn expand_device_carries_template_ratios() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let mut tpl = build_template();
+        tpl.points[0].unit = "kW".into();
+        tpl.points[0].ct_ratio = Some(30.0);
+        tpl.points[0].pt_ratio = Some(100.0);
+        std::fs::write(
+            dir.path().join("tpl.json"),
+            serde_json::to_string(&tpl).expect("serialize template"),
+        )
+        .expect("write template");
+        let mgr = TemplateManager::new(dir.path().to_str().unwrap(), "");
+
+        let points = mgr
+            .expand_devices(&[build_device("meter", "1")])
+            .expect("模板应能展开");
+        assert_eq!(points[0].ct_ratio, Some(30.0));
+        assert_eq!(points[0].pt_ratio, Some(100.0));
+    }
+
+    /// 模板里的 0 / 负变比必须在保存时被拒（否则展开后读数恒为 0 或反号）。
+    #[test]
+    fn template_rejects_non_positive_ratio() {
+        let mut tpl = build_template();
+        tpl.points[0].ct_ratio = Some(0.0);
+        let err = validate_template(&tpl).expect_err("ct_ratio=0 必须被拒");
+        assert!(err.to_string().contains("ct_ratio"), "实际：{err}");
+
+        tpl.points[0].ct_ratio = None;
+        tpl.points[0].pt_ratio = Some(-1.0);
+        let err = validate_template(&tpl).expect_err("pt_ratio=-1 必须被拒");
+        assert!(err.to_string().contains("pt_ratio"), "实际：{err}");
+    }
+
+    /// Modbus：展开点位的 address 是「功能码 + 寄存器偏移」的 5 位展示串，
+    /// 不再是从站地址。回归：此前所有点位都显示成同一个 device.address。
+    #[cfg(feature = "modbus")]
+    #[test]
+    fn expand_modbus_uses_register_offset_as_display_address() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let mut tpl = build_template();
+        tpl.protocol = "modbus".into();
+        tpl.points[0].function_code = Some(3);
+        tpl.points[0].default_address = Some(0);
+        std::fs::write(
+            dir.path().join("tpl.json"),
+            serde_json::to_string(&tpl).expect("serialize template"),
+        )
+        .expect("write template");
+        let mgr = TemplateManager::new(dir.path().to_str().unwrap(), "");
+
+        let mut dev = build_device("meter", "7");
+        dev.protocol = "modbus".into();
+        let points = mgr.expand_devices(&[dev]).expect("modbus 模板应能展开");
+        assert_eq!(points[0].address, "30001", "应展示寄存器地址而非从站号");
+        assert_eq!(points[0].address_num, Some(0), "实际寻址仍用 0 基偏移");
     }
 
     /// byte_order 校验：大写四字码（ABCD 等）按约定大写，必须能通过。

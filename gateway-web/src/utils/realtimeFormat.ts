@@ -46,11 +46,27 @@ export const qualityLabel: Record<string, string> = {
   uncertain: qualityText('uncertain'),
 }
 
+/**
+ * 数据类型 → 中文说明。
+ *
+ * 后端返回的是规范名（`ModbusDataType::canonical_name`）：u16/i16/u32/i32/u64/i64/f32/f64，
+ * 历史配置与旧数据里还可能是 int16/uint16/int32/uint32/float/double 等别名（解析层仍接受），
+ * 两套都登记，避免界面上把规范名显示成裸字符串。未登记的类型由调用方回退成原值。
+ */
 export const typeLabel: Record<string, string> = {
-  int16: '有符号16位',
+  u16: '无符号16位',
+  i16: '有符号16位',
+  u32: '无符号32位',
+  i32: '有符号32位',
+  u64: '无符号64位',
+  i64: '有符号64位',
+  f32: '单精度浮点',
+  f64: '双精度浮点',
+  // 历史别名
   uint16: '无符号16位',
-  int32: '有符号32位',
+  int16: '有符号16位',
   uint32: '无符号32位',
+  int32: '有符号32位',
   float: '单精度浮点',
   double: '双精度浮点',
   bool: '布尔',

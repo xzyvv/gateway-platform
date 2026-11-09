@@ -118,4 +118,17 @@ describe('parseImportPoints — Bug 2.9 字段类型校验', () => {
     expect(r.valid).toHaveLength(0)
     expect(r.error).toMatch(/name/)
   })
+
+  it('CT/PT 变比 <= 0 \u2192 拒收（0 会把一次侧值乘成 0）', () => {
+    for (const key of ['ct_ratio', 'pt_ratio']) {
+      const r = parseImportPoints(JSON.stringify([validPoint({ [key]: 0 })]))
+      expect(r.valid).toHaveLength(0)
+      expect(r.error).toMatch(new RegExp(key))
+      const neg = parseImportPoints(JSON.stringify([validPoint({ [key]: -1 })]))
+      expect(neg.valid).toHaveLength(0)
+    }
+    const ok = parseImportPoints(JSON.stringify([validPoint({ ct_ratio: 30, pt_ratio: 100 })]))
+    expect(ok.valid).toHaveLength(1)
+    expect(ok.error).toBeUndefined()
+  })
 })

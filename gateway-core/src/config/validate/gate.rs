@@ -349,6 +349,23 @@ impl GatewayConfig {
                     ));
                 }
             }
+            // 功能码必须符合所属协议的语义。
+            //
+            // 旧实现把 Modbus 的白名单（1~6/15/16）套在所有协议上：DLT645 的
+            // 写通信地址(0x0C=12)、写密码(0x0F=15) 与 CJT188 的写通信地址(0x15=21)
+            // 全被判为非法配置，根本存不进去；反过来 Modbus 点位配上 DLT645 的
+            // 控制码又会被静默写错。功能码的语义随协议而变，只能按协议分流校验
+            // （字段级 `#[validate(custom)]` 拿不到 protocol，故放在结构级）。
+            if let Some(fc) = p.function_code {
+                if let Some(allowed) = crate::config::point::allowed_function_codes(&p.protocol) {
+                    if !allowed.contains(&fc) {
+                        errs.push(format!(
+                            "point '{}' function_code {} 对协议 {} 非法（允许 {:?}）",
+                            p.id, fc, p.protocol, allowed
+                        ));
+                    }
+                }
+            }
         }
 
         // 总线统一变体字段校验（决策表 #24）：取值按 protocol 限定。
@@ -604,6 +621,78 @@ mod tests {
                 .any(|e| e.contains("points[0].protocol") && e.contains("modbu")),
             "错误应定位到 points[0].protocol 并回显非法值: {:?}",
             errs
+        );
+    }
+
+    /// 功能码必须按协议分流校验。
+    ///
+    /// 旧实现用 Modbus 白名单（1~6/15/16）校验所有协议，导致 DLT645 的
+    /// 写通信地址(0x0C=12)/写密码(0x0F=15) 与 CJT188 的写通信地址(0x15=21)
+    /// 存不进配置；同时 Modbus 点位配上 DLT645 控制码又会被静默写错。
+    #[test]
+    fn function_code_is_validated_per_protocol() {
+        // DLT645：0x0C 写通信地址必须能存进去
+        let mut cfg = GatewayConfig::default();
+        let mut p = point_with("dlt645");
+        p.function_code = Some(0x0C);
+        cfg.points.push(p);
+        assert!(
+            cfg.validate_all().is_ok(),
+            "DLT645 写通信地址(0x0C) 应通过校验: {:?}",
+            cfg.validate_all().err()
+        );
+
+        // DLT645：0x0F 写密码同样合法
+        let mut cfg = GatewayConfig::default();
+        let mut p = point_with("dlt645");
+        p.function_code = Some(0x0F);
+        cfg.points.push(p);
+        assert!(cfg.validate_all().is_ok(), "DLT645 写密码(0x0F) 应通过校验");
+
+        // CJT188：0x15 写通信地址
+        let mut cfg = GatewayConfig::default();
+        let mut p = point_with("cjt188");
+        p.function_code = Some(0x15);
+        cfg.points.push(p);
+        assert!(
+            cfg.validate_all().is_ok(),
+            "CJT188 写通信地址(0x15) 应通过校验"
+        );
+
+        // Modbus：常规功能码必须照旧合法
+        let mut cfg = GatewayConfig::default();
+        let mut p = point_with("modbus");
+        p.address_num = Some(0);
+        p.function_code = Some(3);
+        cfg.points.push(p);
+        assert!(cfg.validate_all().is_ok(), "Modbus FC03 应通过校验");
+
+        // Modbus：DLT645 控制码必须被拒（否则会静默写错设备）
+        let mut cfg = GatewayConfig::default();
+        let mut p = point_with("modbus");
+        p.address_num = Some(0);
+        p.function_code = Some(0x0C);
+        cfg.points.push(p);
+        let errs = cfg
+            .validate_all()
+            .expect_err("Modbus 配 DLT645 控制码应被拒绝");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("function_code") && e.contains("12")),
+            "错误应指出 function_code 非法: {:?}",
+            errs
+        );
+
+        // DLT645：不认识的控制码不阻断加载（存量配置可能带 Modbus 遗留值），
+        // 运行期会落到「写数据」分支，属于无害降级而非静默写错寄存器。
+        let mut cfg = GatewayConfig::default();
+        let mut p = point_with("dlt645");
+        p.function_code = Some(3);
+        cfg.points.push(p);
+        assert!(
+            cfg.validate_all().is_ok(),
+            "DLT645 未知控制码不应阻断配置加载: {:?}",
+            cfg.validate_all().err()
         );
     }
 

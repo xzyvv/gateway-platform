@@ -36,7 +36,8 @@ vi.mock('element-plus', async () => {
 import { usePoints } from './usePoints'
 import { updatePoint, listPoints, deletePoint, restorePoint, createPoint } from '@/api/points'
 import { getConfig } from '@/api/config'
-import { ElMessage, ElButton } from 'element-plus'
+import { ElMessage, ElButton, type FormInstance } from 'element-plus'
+import { nextTick } from 'vue'
 import type { VNode } from 'vue'
 import type { PointConfig, DeviceConfig } from '@/api/types'
 
@@ -219,6 +220,29 @@ describe('usePoints', () => {
     expect(pointForm.address_num).toBe(0)
   })
 
+  it('告警高低限交叉校验：低限不得大于等于高限', async () => {
+    const { pointForm, pointRules } = usePoints()
+    // 直接驱动规则校验器：提交时的 el-form.validate 最终走的就是它
+    const rules = pointRules.alarm_high as unknown as Array<{
+      validator: (rule: unknown, value: unknown, cb: (e?: Error) => void) => void
+    }>
+    const run = () =>
+      new Promise<Error | undefined>((resolve) => {
+        rules[0]!.validator({}, pointForm.alarm_high, (e) => resolve(e))
+      })
+
+    pointForm.alarm_high = 50
+    pointForm.alarm_low = 60
+    expect((await run())?.message).toBe('低限必须小于高限')
+
+    // 仅一侧填写时不校验（表示该侧不启用）
+    pointForm.alarm_low = undefined
+    expect(await run()).toBeUndefined()
+
+    pointForm.alarm_low = 40
+    expect(await run()).toBeUndefined()
+  })
+
   it('openCreate 设 formMode=create + showForm=true', () => {
     const { openCreate, formMode, showForm, selectedDevice } = usePoints()
     selectedDevice.value = 'd1'
@@ -252,9 +276,94 @@ describe('usePoints', () => {
     expect(pointForm.name).toBe('温度')
     expect(pointForm.bus).toBe('bus1')
     expect(pointForm.protocol).toBe('modbus')
-    expect(pointForm.address).toBe('40001')
+    // 展示地址按「功能码 + 偏移」重新推导：fc 缺省 3（保持寄存器）+ 偏移 10 → 30011。
+    // 原样保留 40001 会与真实寻址不一致（实际读的是 FC03 的 10 号寄存器）。
+    expect(pointForm.address).toBe('30011')
     expect(pointForm.slave_id).toBe(2)
     expect(pointForm.address_num).toBe(10)
+  })
+
+  /** 后端 PUT 会无条件覆盖这些字段：不回填 = 用户打开编辑点保存就把变比/寻址参数清空 */
+  it('openEdit 回填 CT/PT 变比与 Modbus 解码参数', () => {
+    const { openEdit, pointForm } = usePoints()
+    openEdit(
+      makePoint({
+        id: 'p3',
+        bus: 'bus1',
+        protocol: 'modbus',
+        address: '30001',
+        address_num: 0,
+        function_code: 4,
+        data_type: 'float32',
+        byte_order: 'CDAB',
+        register_count: 2,
+        unit: 'kWh',
+        ct_ratio: 30,
+        pt_ratio: 100,
+      }),
+    )
+    expect(pointForm.function_code).toBe(4)
+    // 区段 4xxxx → FC04，偏移 0 → 40001
+    expect(pointForm.address).toBe('40001')
+    expect(pointForm.data_type).toBe('float32')
+    expect(pointForm.byte_order).toBe('CDAB')
+    expect(pointForm.register_count).toBe(2)
+    expect(pointForm.ct_ratio).toBe(30)
+    expect(pointForm.pt_ratio).toBe(100)
+  })
+
+  it('切换单位后清空不生效的一侧变比（电压只留 PT、电流只留 CT、功率因数都清）', async () => {
+    const { pointForm } = usePoints()
+    pointForm.unit = 'kWh'
+    pointForm.ct_ratio = 30
+    pointForm.pt_ratio = 100
+    await nextTick()
+    expect(pointForm.ct_ratio).toBe(30)
+    expect(pointForm.pt_ratio).toBe(100)
+
+    pointForm.unit = 'A'
+    await nextTick()
+    expect(pointForm.ct_ratio).toBe(30)
+    expect(pointForm.pt_ratio).toBeNull()
+
+    pointForm.unit = 'PF'
+    await nextTick()
+    expect(pointForm.ct_ratio).toBeNull()
+    expect(pointForm.pt_ratio).toBeNull()
+  })
+
+  it('提交时按单位决定变比：电压只提 PT、功率因数都不提', async () => {
+    vi.mocked(createPoint).mockReset()
+    vi.mocked(createPoint).mockResolvedValue(makePoint())
+    const { pointForm, pointFormRef, submitPoint, selectedDevice } = usePoints()
+    pointFormRef.value = { validate: () => Promise.resolve(true) } as unknown as FormInstance
+    selectedDevice.value = 'd1'
+
+    pointForm.id = 'p1'
+    pointForm.protocol = 'modbus'
+    pointForm.function_code = 4
+    pointForm.address_num = 0
+    pointForm.address = '40001'
+    pointForm.unit = 'V'
+    pointForm.ct_ratio = 30
+    pointForm.pt_ratio = 100
+    await submitPoint()
+    expect(createPoint).toHaveBeenCalledWith('d1', expect.objectContaining({
+      ct_ratio: null,
+      pt_ratio: 100,
+      function_code: 4,
+      address_num: 0,
+    }))
+
+    vi.mocked(createPoint).mockClear()
+    pointForm.unit = 'PF'
+    pointForm.ct_ratio = 30
+    pointForm.pt_ratio = 100
+    await submitPoint()
+    expect(createPoint).toHaveBeenCalledWith('d1', expect.objectContaining({
+      ct_ratio: null,
+      pt_ratio: null,
+    }))
   })
 
   it('openEdit 缺少 slave_id/address_num 时用默认值', () => {

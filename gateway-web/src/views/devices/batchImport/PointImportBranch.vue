@@ -187,9 +187,9 @@ const pointRowColumns: ColumnDef<PointRow>[] = [
 
 /** 生成点位 CSV 模板 */
 function downloadPointTpl() {
-  const header = 'id,name,device_id,bus,protocol,address,slave_id,address_num\n'
-  const example = 'temp_001,温度传感器1,dev_001,bus1,modbus,40001,1,1\n'
-  const example2 = 'voltage_001,电压采样1,dev_002,bus2,dlt645,09000001,,1\n'
+  const header = 'id,name,device_id,bus,protocol,address,slave_id,address_num,ct_ratio,pt_ratio\n'
+  const example = 'temp_001,温度传感器1,dev_001,bus1,modbus,40001,1,1,,\n'
+  const example2 = 'voltage_001,电压采样1,dev_002,bus2,dlt645,09000001,,1,,100\n'
   // 走统一入口：BOM 由 downloadCsvText 附加，否则 Excel 打开示例里的中文是乱码
   downloadCsvText(header + example + example2, 'points_template.csv')
   ElMessage.success('模板已开始下载，填好后点「下一步：上传文件」')

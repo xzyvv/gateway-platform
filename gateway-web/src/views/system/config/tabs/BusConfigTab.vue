@@ -169,14 +169,13 @@
 
       <!-- 填了对端地址才有多事务并发可言，串口总线恒为 1 -->
       <el-form-item v-if="bus.tcp_addr" label="TCP 并发">
-        <el-input-number
-          v-model="bus.tcp_concurrent"
+        <PresetNumberSelect
+          :model-value="tcpConcurrentOf(bus)"
+          :options="TCP_CONCURRENT_PRESETS"
           :min="1"
           :max="1024"
-          placeholder="默认 8"
-          controls-position="right"
           aria-label="TCP 并发数"
-          style="width: 100%"
+          @update:model-value="(v: number) => (bus.tcp_concurrent = v)"
         />
         <div class="field-hint">单连接同时在途请求数，默认 8</div>
       </el-form-item>
@@ -187,12 +186,12 @@
             <span class="advanced-name">高级（采集调优）</span>
           </template>
           <el-form-item label="通道容量">
-            <el-input-number
+            <PresetNumberSelect
               v-model="bus.channel_capacity"
+              :options="CHANNEL_CAPACITY_PRESETS"
               :min="1"
               :max="4096"
-              controls-position="right"
-              style="width: 100%"
+              aria-label="通道容量"
             />
             <div class="field-hint">
               单总线在途采集事件的缓冲深度（默认 128）；高频 TCP 总线可调大，改完保存即重建该总线。
@@ -251,6 +250,7 @@ import ParitySelect from '@/components/industrial/ParitySelect.vue'
 import DataBitsSelect from '@/components/industrial/DataBitsSelect.vue'
 import StopBitsSelect from '@/components/industrial/StopBitsSelect.vue'
 import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
+import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
 import {
   protocolEndpointPlaceholder,
   protocolLabel,
@@ -277,6 +277,14 @@ const emit = defineEmits<{
 }>()
 
 const isSerial = (protocol: string) => protocolTransportOf(protocol) === 'serial'
+
+/** 常用 TCP 并发档位（默认 8）：单连接在途请求数 */
+const TCP_CONCURRENT_PRESETS = [1, 2, 4, 8, 16, 32, 64]
+/** 常用通道容量档位（默认 128） */
+const CHANNEL_CAPACITY_PRESETS = [32, 64, 128, 256, 512, 1024, 2048]
+
+/** `tcp_concurrent` 为 null 表示走后端默认 8；下拉展示该默认值，用户改动后才显式写入 */
+const tcpConcurrentOf = (bus: BusConfig) => bus.tcp_concurrent ?? 8
 
 /**
  * 对端地址输入是否展示。

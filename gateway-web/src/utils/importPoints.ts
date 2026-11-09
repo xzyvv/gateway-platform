@@ -104,6 +104,14 @@ function validateSinglePoint(p: unknown, idx: number): PointValidation {
     return { ok: false, error: `${path} slave_id 必须在 1-247 范围（当前 ${obj.slave_id}）` }
   }
 
+  // CT/PT 变比必须 > 0：0 会把一次侧值乘成 0，负数会反号；无需变比请留空
+  for (const k of ['ct_ratio', 'pt_ratio'] as const) {
+    const ratio = obj[k]
+    if (typeof ratio === 'number' && ratio <= 0) {
+      return { ok: false, error: `${path} ${k} 必须大于 0（无需变比请留空）` }
+    }
+  }
+
   // 字符串字段可选但若提供必须是 string
   const strFields: Array<keyof PointConfig> = [
     'data_id', 'data_type', 'byte_order', 'unit', 'formula', 'name', 'device_id',

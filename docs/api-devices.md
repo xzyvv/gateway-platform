@@ -3,8 +3,8 @@
 > 覆盖「设备运维」域的只读监控与写控制接口：通信质量、采集退避、健康分、设备影子、
 > 拓扑、资产台账、远程控制、设备分组。
 >
-> 路由注册：[`gateway-api/src/web/api/device_ops/routes.rs`](../gateway-api/src/web/api/device_ops/routes.rs)
-> （聚合 `device_ops` 与 `devices` 两个模块的 handler）。
+> 路由注册：[`gateway-api/src/web/api/devices/routes.rs`](../gateway-api/src/web/api/devices/routes.rs)
+> （`/api/devices*` 唯一注册点：合并 `config` 的设备 CRUD、`device_ops` 的运维 handler 与本模块 control/topology/IO）。
 > 设备配置 CRUD（`GET/POST /api/devices`、`PUT/DELETE /api/devices/{id}`）属配置域，不在本文档范围。
 
 ---

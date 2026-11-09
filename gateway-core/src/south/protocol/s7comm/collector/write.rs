@@ -2,7 +2,7 @@
 use super::*;
 
 use crate::config::PointConfig;
-use crate::south::protocol::{clone_collector_error, Collector};
+use crate::south::protocol::{clone_collector_error, reverse_convert, Collector};
 
 impl S7CommCollector {
     /// 写入单个点位（决策表 #11：S7 Write Var，功能码 0x05）
@@ -40,7 +40,9 @@ impl S7CommCollector {
             s7_addr.byte_offset,
             s7_addr.bit_offset,
             s7_addr.data_type,
-            value,
+            // 北向下发的是工程量（一次侧值），写回前必须按读路径的反向换算还原成原始值，
+            // 否则配了 scale/offset/变比的点位会按工程量直接落库，读回来被再乘一次
+            reverse_convert(point, value),
             pdu_ref,
         )?;
 
@@ -115,7 +117,7 @@ impl S7CommCollector {
                     continue;
                 }
             };
-            match frames::encode_value(*value, s7_addr.data_type) {
+            match frames::encode_value(reverse_convert(p, *value), s7_addr.data_type) {
                 Ok(bytes) => pending.push(PendingWrite {
                     idx,
                     spec: frames::ItemSpec {

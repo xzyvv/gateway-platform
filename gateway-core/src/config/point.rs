@@ -8,7 +8,7 @@ use validator::Validate;
 use crate::engine::model::{AggFn, ByteOrder, ModbusDataType};
 
 use super::{
-    validate_byte_order, validate_function_code, validate_non_zero_interval, validate_protocol,
+    validate_byte_order, validate_non_zero_interval, validate_protocol, validate_ratio,
     validate_scale,
 };
 
@@ -102,8 +102,14 @@ pub struct PointConfig {
     #[serde(default)]
     pub data_id: Option<String>,
 
-    /// Modbus 功能码 3=保持寄存器 / 4=输入寄存器 / 1,2=线圈 / 5,6,15,16=写
-    #[validate(custom(function = "validate_function_code"))]
+    /// 功能码（语义随协议而变）
+    ///
+    /// - Modbus：3=保持寄存器 / 4=输入寄存器 / 1,2=线圈 / 5,6,15,16=写
+    /// - DLT645：0x04=写数据 / 0x0C=写通信地址 / 0x0F=写密码
+    /// - CJT188：0x04=写数据 / 0x15=写通信地址
+    ///
+    /// 校验必须按协议分流（见 [`allowed_function_codes`]），字段级校验拿不到
+    /// protocol，只能放到结构级（`gate.rs`）做。
     pub function_code: Option<u8>,
 
     /// 数据类型
@@ -136,13 +142,15 @@ pub struct PointConfig {
     pub formula: Option<String>,
 
     /// CT 变比（电流互感器，如 150/5=30），None=不应用
-    /// 二次侧工程量 × ct_ratio = 一次侧真实电流值
+    /// 二次侧工程量 × ct_ratio = 一次侧真实电流值（仅电流/功率/电量类单位生效）
     #[serde(default)]
+    #[validate(custom(function = "validate_ratio"))]
     pub ct_ratio: Option<f64>,
 
     /// PT 变比（电压互感器，如 10000/100=100），None=不应用
-    /// 二次侧工程量 × pt_ratio = 一次侧真实电压值
+    /// 二次侧工程量 × pt_ratio = 一次侧真实电压值（仅电压/功率/电量类单位生效）
     #[serde(default)]
+    #[validate(custom(function = "validate_ratio"))]
     pub pt_ratio: Option<f64>,
 
     /// 死区阈值
@@ -295,6 +303,71 @@ impl PointConfig {
     }
 }
 
+/// 各协议允许的功能码集合（`None` = 该协议的功能码无需校验）
+///
+/// 功能码在不同协议下语义完全不同，不能共用一份白名单：
+/// - **Modbus**：功能码直接决定读/写哪一类寄存器
+///   （1/2 读离散、3 读保持、4 读输入、5/6 写单点、15 写多线圈、16 写多寄存器），
+///   取值错误会长期采不到值或写错寄存器，必须严格校验
+/// - **DLT645**：只作「写控制码」路由——0x04 写数据、0x0C(12) 写通信地址、
+///   0x0F(15) 写密码；其余取值会落到「写数据」分支，不会写错设备
+/// - **CJT188**：只作「写控制码」路由——0x04 写数据、0x15(21) 写通信地址
+/// - **其它协议**：不使用功能码
+///
+/// 历史实现用 Modbus 的白名单（1~6/15/16）校验所有协议，导致 DLT645 的
+/// 写通信地址(0x0C)、写密码(0x0F) 与 CJT188 的写通信地址(0x15) 根本存不进配置。
+pub fn allowed_function_codes(protocol: &str) -> Option<&'static [u8]> {
+    match protocol.trim().to_ascii_lowercase().as_str() {
+        "modbus" => Some(&[1, 2, 3, 4, 5, 6, 15, 16]),
+        _ => None,
+    }
+}
+
+// ===== CT/PT 变比适用范围 =====
+
+/// CT/PT 变比适用范围（按点位单位判定）
+///
+/// 变比只对「二次侧 → 一次侧」有物理意义的量生效：
+/// - 电压（V/kV/mV）：只乘 PT
+/// - 电流（A/kA/mA）：只乘 CT
+/// - 功率/电量（W/kW/var/kWh/kVarh…）：CT × PT（P = U × I）
+/// - 功率因数（PF/cosφ…）：无量纲，两者都不乘
+/// - 单位为空或不在上述清单：两者都乘（兼容改造前的无条件连乘）
+///
+/// 判定放在配置层：解码（`convert_value` / `reverse_convert`）与 Web 体检
+/// 必须共用同一张单位表，各自复制一份必然漂移。
+/// 前端 `useRatio.ts::ratioScopeOf` 使用同一套判定，改动需两边同步。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RatioScope {
+    /// 只乘 CT（电流类）
+    Ct,
+    /// 只乘 PT（电压类）
+    Pt,
+    /// CT × PT（功率/电量/未知单位）
+    Both,
+    /// 都不乘（功率因数等无量纲量）
+    None,
+}
+
+pub(crate) fn ratio_scope(unit: Option<&str>) -> RatioScope {
+    // 用 Unicode 小写而不是 ASCII 小写："COSΦ" 只有转成 "cosφ" 才认得出来
+    let unit = unit.unwrap_or("").trim().to_lowercase();
+    match unit.as_str() {
+        "" => RatioScope::Both,
+        "v" | "kv" | "mv" => RatioScope::Pt,
+        "a" | "ka" | "ma" => RatioScope::Ct,
+        "pf" | "cos" | "cosφ" | "cosphi" | "功率因数" => RatioScope::None,
+        _ => RatioScope::Both,
+    }
+}
+
+impl PointConfig {
+    /// 本点位的变比适用范围（由 `unit` 决定）。
+    pub(crate) fn ratio_scope(&self) -> RatioScope {
+        ratio_scope(self.unit.as_deref())
+    }
+}
+
 // ===== 默认值函数 =====
 
 fn default_scale() -> f64 {
@@ -411,6 +484,34 @@ mod tests {
             serde_json::from_str(MINIMAL_JSON).expect("最小点位 JSON 应可反序列化");
         assert_eq!(p.scale, 1.0);
         assert!(p.validate().is_ok(), "缺省 scale=1.0 应通过校验");
+    }
+
+    /// CT/PT 变比必须是有限正数：0 会把一次侧值乘成 0，负数反号。
+    #[test]
+    fn non_positive_ratio_rejected() {
+        use validator::Validate;
+        let with_ratio = |k: &str, v: &str| {
+            let json =
+                MINIMAL_JSON.replace("\"interval\": 1", &format!("\"interval\": 1, \"{k}\": {v}"));
+            serde_json::from_str::<PointConfig>(&json).expect("变比字段应可反序列化")
+        };
+
+        assert!(
+            with_ratio("ct_ratio", "30.0").validate().is_ok(),
+            "ct_ratio=30 合法"
+        );
+        assert!(
+            with_ratio("pt_ratio", "100.0").validate().is_ok(),
+            "pt_ratio=100 合法"
+        );
+        assert!(
+            with_ratio("ct_ratio", "0.0").validate().is_err(),
+            "ct_ratio=0 必须拒绝"
+        );
+        assert!(
+            with_ratio("pt_ratio", "-1.0").validate().is_err(),
+            "pt_ratio=-1 必须拒绝"
+        );
     }
 
     /// 回收站为空（None）时不得落盘 `point_trash` 键：存量配置零影响。

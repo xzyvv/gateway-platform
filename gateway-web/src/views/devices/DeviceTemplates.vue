@@ -22,31 +22,35 @@
     </DataTable>
 
     <!-- 新建模板对话框 -->
-    <el-dialog :close-on-click-modal="false" v-model="showCreate" :title="editing ? '编辑设备模板' : '新建设备模板'" width="860px" :before-close="createGuard.beforeClose" @close="form.name = ''; form.description = ''; form.points = []">
+    <el-dialog :close-on-click-modal="false" v-model="showCreate" :title="editing ? '编辑设备模板' : '新建设备模板'" width="1080px" :before-close="createGuard.beforeClose" @close="form.name = ''; form.description = ''; form.points = []">
       <el-form label-width="100px">
         <el-form-item label="模板名称"><el-input v-model="form.name" placeholder="请输入模板名称" /></el-form-item>
-        <el-form-item label="描述"><el-input v-model="form.description" /></el-form-item>
-        <el-form-item label="总线"><el-input v-model="form.bus" placeholder="/dev/ttyUSB0" /></el-form-item>
+        <!-- 模板是随文件分发的 JSON，说明写在这里能跟着文件走（适配固件/接线要求/变比须知） -->
+        <el-form-item label="描述">
+          <el-input v-model="form.description" placeholder="适配型号、固件版本、接线与变比注意事项（可留空）" />
+        </el-form-item>
         <el-form-item label="协议"><ProtocolSelector v-model="form.protocol" /></el-form-item>
         <el-form-item label="默认采集周期">
-          <el-input-number v-model="form.defaultInterval" :min="1" :max="3600" controls-position="right" />
-          <span class="tpl-hint">秒；设备未单独配置采集周期时使用该值</span>
+          <!-- 与其他页面的周期字段统一用「数字 + 单位」，避免用户在分钟/秒之间自己换算 -->
+          <DurationSelect v-model="form.defaultInterval" :min="1" :max="3600" :units="['s', 'min']" unit-width="82px" />
+          <span class="tpl-hint">设备未单独配置采集周期时使用该值</span>
         </el-form-item>
         <el-form-item label="点位列表">
           <div class="point-list">
             <div v-for="(p, i) in form.points" :key="i" class="point-row">
               <el-input v-model="p.name" placeholder="名称" style="width: 120px" />
-              <el-input v-model="p.address" placeholder="地址" style="width: 80px" />
-              <el-select v-model="p.register_type" style="width: 110px">
-                <el-option label="holding" value="holding" />
-                <el-option label="input" value="input" />
-                <el-option label="coil" value="coil" />
-                <el-option label="discrete" value="discrete" />
+              <el-input v-model="p.address" placeholder="0 基偏移" style="width: 96px" />
+              <!-- 功能码决定读哪个区（保持/输入/线圈/离散），也决定列表展示地址的区段 -->
+              <el-select v-model="p.function_code" style="width: 128px">
+                <el-option v-for="fc in FUNCTION_CODES" :key="fc.value" :label="fc.label" :value="fc.value" />
               </el-select>
-              <el-select v-model="p.data_type" style="width: 110px">
-                <el-option v-for="t in dataTypes" :key="t" :label="t" :value="t" />
+              <el-select v-model="p.data_type" style="width: 92px">
+                <el-option v-for="t in DATA_TYPES" :key="t" :label="t" :value="t" />
               </el-select>
-              <SlaveIdInput v-model="p.slave_id" preset-width="84px" custom-width="76px" />
+              <el-input v-model="p.unit" placeholder="单位" style="width: 72px" />
+              <!-- 变比留空=不启用；电流/功率/电量吃 CT，电压/功率/电量吃 PT -->
+              <el-input-number v-model="p.ct_ratio" :min="0" :controls="false" placeholder="CT" style="width: 84px" />
+              <el-input-number v-model="p.pt_ratio" :min="0" :controls="false" placeholder="PT" style="width: 84px" />
               <el-button size="small" type="danger" link @click="form.points.splice(i, 1)">删除</el-button>
             </div>
             <el-button size="small" @click="addPoint"><el-icon><Plus /></el-icon> 新增点位</el-button>
@@ -73,18 +77,31 @@ import {
   listTemplates, saveTemplate, deleteTemplate,
   type DeviceTemplate, type TemplatePoint,
 } from '@/api/templates'
-import SlaveIdInput from '@/components/industrial/SlaveIdInput.vue'
 import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
+import DurationSelect from '@/components/industrial/DurationSelect.vue'
+import { DATA_TYPES } from '@/composables/devices/decodeParams'
 import { formatDateTime } from '@/utils/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 
 /** 表单点位类型：在 API TemplatePoint 基础上补充表单所需字段 */
 interface FormPoint extends TemplatePoint {
-  bus: string
-  protocol: string
-  slave_id: number
+  /** 表单编辑的是 0 基寄存器偏移（后端 default_address），不是 5 位展示地址 */
+  address: string
+  function_code: number
+  unit: string
+  data_type: string
+  ct_ratio: number | null
+  pt_ratio: number | null
 }
+
+/** Modbus 功能码：区段决定读请求类型，也决定列表展示地址的首位 */
+const FUNCTION_CODES = [
+  { value: 3, label: '03 保持寄存器' },
+  { value: 4, label: '04 输入寄存器' },
+  { value: 1, label: '01 线圈' },
+  { value: 2, label: '02 离散输入' },
+]
 
 const templates = ref<DeviceTemplate[]>([])
 const loading = ref(false)
@@ -96,15 +113,21 @@ const editing = ref(false)
 const creating = ref(false)
 const { showToast } = useErrorDisplay()
 
-const dataTypes = ['int16', 'uint16', 'int32', 'uint32', 'float', 'double', 'bool', 'string']
-
 function emptyPoint(): FormPoint {
-  return { name: '', address: '0', register_type: 'holding', data_type: 'float', bus: '/dev/ttyUSB0', protocol: 'modbus', slave_id: 1 }
+  return {
+    name: '',
+    address: '0',
+    function_code: 3,
+    data_type: 'u16',
+    unit: '',
+    ct_ratio: null,
+    pt_ratio: null,
+  }
 }
 
 function emptyForm() {
   return {
-    name: '', description: '', bus: '/dev/ttyUSB0', protocol: 'modbus',
+    name: '', description: '', protocol: 'modbus',
     /** 模板默认采集周期（秒）：设备未显式配置 interval 时按此值展开 */
     defaultInterval: 1,
     points: [emptyPoint()] as FormPoint[],
@@ -120,7 +143,6 @@ const createGuard = useDialogDirtyGuard(showCreate, () => form)
 const tplColumns: ColumnDef<DeviceTemplate>[] = [
   { key: 'name', title: '模板名称', minWidth: 160 },
   { key: 'description', title: '描述', minWidth: 200, ellipsis: true },
-  { key: 'bus', title: '总线', width: 140 },
   { key: 'protocol', title: '协议', width: 100 },
   { key: 'points', title: '点位数', width: 90, cell: (row) => row.points.length },
   {
@@ -144,7 +166,10 @@ const tplColumns: ColumnDef<DeviceTemplate>[] = [
 ]
 
 function addPoint() {
-  form.points.push({ name: '', address: String(form.points.length), register_type: 'holding', data_type: 'float', bus: form.bus, protocol: form.protocol, slave_id: 1 })
+  // 地址默认接着上一行递增，避免新增点位还要自己数偏移
+  const next = emptyPoint()
+  next.address = String(form.points.length)
+  form.points.push(next)
 }
 
 async function load() {
@@ -163,18 +188,20 @@ function openEdit(t: DeviceTemplate) {
   editing.value = true
   form.name = t.name
   form.description = String(t.description ?? '')
-  form.bus = String(t.bus ?? '/dev/ttyUSB0')
   form.protocol = t.protocol || 'modbus'
   // 默认采集周期：后端字段为 default_interval，历史模板可能缺失 → 兜底 1 秒
   form.defaultInterval = Number(t.default_interval ?? 1)
+  // 用展开运算保留表单未编辑的字段（unit/scale/offset/formula/deadband…），
+  // 否则「编辑模板再保存」会把这些字段整体抹掉，等于静默破坏模板
   form.points = (Array.isArray(t.points) ? t.points : []).map((p) => ({
+    ...p,
     name: String(p.name ?? ''),
-    address: String(p.address ?? p.default_address ?? ''),
-    register_type: String(p.register_type ?? p.registerType ?? 'holding'),
-    data_type: String(p.data_type ?? p.dataType ?? 'float'),
-    bus: form.bus,
-    protocol: form.protocol,
-    slave_id: 1,
+    address: String(p.default_address ?? p.address ?? ''),
+    function_code: Number(p.function_code ?? 3),
+    data_type: String(p.data_type ?? 'u16'),
+    unit: String(p.unit ?? ''),
+    ct_ratio: p.ct_ratio == null ? null : Number(p.ct_ratio),
+    pt_ratio: p.pt_ratio == null ? null : Number(p.pt_ratio),
   }))
   if (form.points.length === 0) form.points = [emptyPoint()]
   showCreate.value = true
@@ -183,6 +210,15 @@ function openEdit(t: DeviceTemplate) {
 async function save() {
   if (!form.name.trim()) { ElMessage.warning('请输入模板名称'); return }
   if (form.points.some((p) => !p.name.trim())) { ElMessage.warning('请填写所有点位名称'); return }
+  // 变比必须 > 0：0 会把一次侧值乘成 0，负数会反号；留空表示不启用
+  for (const p of form.points) {
+    const invalid = (p.ct_ratio != null && !(Number(p.ct_ratio) > 0))
+      || (p.pt_ratio != null && !(Number(p.pt_ratio) > 0))
+    if (invalid) {
+      ElMessage.warning(`${p.name.trim() || '点位'} 的 CT/PT 变比必须大于 0（无需变比请留空）`)
+      return
+    }
+  }
   creating.value = true
   try {
     // F-01：后端 DeviceTemplate 的契约是 protocol / default_interval 必填，
@@ -193,15 +229,22 @@ async function save() {
       name: form.name.trim(),
       vendor: '',
       model: '',
+      // Option<String>：留空就不写，避免把空串当成有效描述
+      description: form.description.trim() || undefined,
       protocol: form.protocol,
       default_interval: form.defaultInterval,
       points: form.points.map((p) => {
         const addr = p.address.trim() === '' ? undefined : Number(p.address)
         return {
+          // 展开保留表单未编辑的字段（unit/scale/offset/register_count/function_code…），
+          // 否则编辑模板再保存会把它们整体抹掉
+          ...p,
           name: p.name.trim(),
           address: p.address,
           default_address: addr,
-          data_type: p.data_type ?? undefined,
+          data_type: p.data_type || undefined,
+          ct_ratio: p.ct_ratio ?? undefined,
+          pt_ratio: p.pt_ratio ?? undefined,
         }
       }),
     }

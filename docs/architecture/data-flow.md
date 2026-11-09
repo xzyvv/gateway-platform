@@ -28,6 +28,9 @@ ProcessingPipeline
                             └─→ OPC UA Server / Modbus Server
 ```
 
+> 上图「公式计算」即工程量换算：`raw →(formula 或 scale/offset)→ 二次侧 →(×CT×PT，按单位门控)→ 一次侧`。
+> 顺序、单位门控表与写路径反算规则见 [`../点位配置与换算.md`](../点位配置与换算.md)。
+
 ### 7.1 点位归属（`DataPoint.device_id`）
 
 `DataPoint` 携带 `device_id`，表示该点位属于哪台设备，用于下游按**设备**聚合（设备级上送报文、

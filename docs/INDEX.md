@@ -38,13 +38,14 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 |---|---|
 | [`docs/api-surface.md`](api-surface.md) | **全量端点清单**（REST + WebSocket，含鉴权层级与 handler）：由 `scripts/gen_api_surface.py` 从 `gateway-api/src/web/**/routes.rs` 生成，CI `--check` 校验，禁止手改 |
 | [`docs/api-access.md`](api-access.md) | 访问控制域（`/api/access/*`）REST 契约：限流规则 / API 密钥 / 计划任务 / 访问日志 / 统计 |
-| [`docs/api-devices.md`](api-devices.md) | 设备运维域（`/api/devices/*`、`/api/device-groups/*`、`/api/io/*`、`/api/discover`）REST 契约：通信质量 / 退避 / 健康分 / 影子 / 拓扑 / 资产 / 控制 / 分组，含已知偏差清单 |
+| [`docs/api-devices.md`](api-devices.md) | 设备运维域（`/api/devices/*`、`/api/device-groups/*`、`/api/io/*`）REST 契约：通信质量 / 退避 / 健康分 / 影子 / 拓扑 / 资产 / 控制 / 分组，含已知偏差清单（原 `/api/discover` 已下线，等价能力见协议工具域 `POST /api/protocol-tools/slave-scan`） |
 | [`docs/api-protocol-tools.md`](api-protocol-tools.md) | 协议工具域（`/api/protocol-tools/*`、`/api/protocols/*`）REST 契约：发帧 / 抓包 / 回放 / 探测 / 扫描 / 从站模拟 / 转换规则；**§3 明确 4 处进程内临时态及留证据方式** |
 
 ## 现场运维
 
 | 文档 | 说明 |
 |---|---|
+| [`docs/点位配置与换算.md`](点位配置与换算.md) | **点位换算与协议配置参考**：读/写换算管线（scale/offset/formula + CT/PT 变比）、变比单位门控表、各协议地址与 data_type 语义、字节序、读写对称性矩阵、模板换算字段、常见误配速查 |
 | [`docs/装机前准备清单.md`](装机前准备清单.md) | **面向现场工程师**的装机前准备清单：软件产物 / 系统前置 / 硬件接法（串口驱动、稳定名、DeviceAllow、OTA 分区）/ 完整配置 / fail-closed 安全顺序 / 许可证前置，附「看着正常其实没生效」速查表 |
 | [`docs/容量规划.md`](容量规划.md) | **点位规模 → 磁盘占用换算参考表**：点位 × 采集周期 → 每天行数 → `queue.max_rows` 建议值 → eMMC/SD 卡选型；含原始队列/聚合表/备份/WAL/journald 五项占用总账、磁盘水位四档、现场自查命令与常见误配 |
 | [`docs/config-reload-matrix.md`](config-reload-matrix.md) | **配置生效矩阵**：每个配置分节保存后是热更、需重启还是纯元数据；含持久化/落盘失败语义与「新增分节必须做的 4 步」 |
@@ -61,6 +62,7 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | 文档 | 内容 |
 |---|---|
 | [`docs/perf-baseline.md`](perf-baseline.md) | 13 个场景的**汇总基线**（50 ~ 20 000 点）：参数与结果总表、分场景结论、读数口径（队列上限截断 / p99 饱和 / 整轮失败） |
+| [`docs/perf-baseline-ci.md`](perf-baseline-ci.md) | **CI 性能基线**（GitHub Actions / Linux 4 vCPU）：固定规格 / 固定参数的 4 场景压测（s800 ~ soak2000）的产生方式与判定口径；与开发机基线不可互比 |
 | [`docs/perf-knee.md`](perf-knee.md) | 150 000 点**拐点**压测：总线数 × tcp 并发矩阵；结论「吞吐 ≥ 150k 点/秒，瓶颈在测试机 CPU」 |
 | [`docs/perf-rss-explanation.md`](perf-rss-explanation.md) | RSS 增长**归因**：未配置北向消费 → SQLite page cache 持有，附运维判据与复现命令 |
 | [`docs/bench-baseline.md`](bench-baseline.md) | **微基准基线**（criterion 0.5）：CRC / Modbus 帧构建与校验 / 内存队列 / SQLite 周期 / DataQueue 往返的单点成本与回归判定口径 |

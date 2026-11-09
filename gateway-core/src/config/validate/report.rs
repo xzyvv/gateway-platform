@@ -4,6 +4,7 @@
 //! 报告则做**只读**检查并把问题分为 error / warning / info 三级——前者阻断，
 //! 后两者只提示。新增交叉规则只加在报告侧时，不会让历史配置无法启动。
 
+use crate::config::point::RatioScope;
 use crate::config::GatewayConfig;
 
 /// 配置校验报告中的单条问题。
@@ -321,6 +322,44 @@ impl GatewayConfig {
             }
         }
 
+        // CT/PT 变比与单位不匹配：配了也不会生效。
+        //
+        // 变比生效范围由单位决定（电压只吃 PT、电流只吃 CT、功率/电量两者都吃、
+        // 功率因数都不吃），与解码侧共用 `point::ratio_scope`。错配不报错，
+        // 只会让现场「填了变比但读数没放大」，属最典型的静默失效。
+        for p in &self.points {
+            let scope = p.ratio_scope();
+            let unit = p.unit.as_deref().unwrap_or("(空)");
+            if let Some(ct) = p.ct_ratio {
+                if !matches!(scope, RatioScope::Ct | RatioScope::Both) {
+                    push_level(
+                        &mut issues,
+                        "warning",
+                        "ratio_not_applicable",
+                        format!("points[{}].ct_ratio", p.id),
+                        format!(
+                            "点位 {} 单位为 {unit}，不受 CT 变比影响（电压只受 PT 影响、功率因数两者都不受影响），当前 ct_ratio={ct} 不会生效",
+                            p.id
+                        ),
+                    );
+                }
+            }
+            if let Some(pt) = p.pt_ratio {
+                if !matches!(scope, RatioScope::Pt | RatioScope::Both) {
+                    push_level(
+                        &mut issues,
+                        "warning",
+                        "ratio_not_applicable",
+                        format!("points[{}].pt_ratio", p.id),
+                        format!(
+                            "点位 {} 单位为 {unit}，不受 PT 变比影响（电流只受 CT 影响、功率因数两者都不受影响），当前 pt_ratio={pt} 不会生效",
+                            p.id
+                        ),
+                    );
+                }
+            }
+        }
+
         // 遥测采样率推荐范围（0.0~1.0）。
         if let Some(t) = &self.telemetry {
             if t.enabled && !(0.0..=1.0).contains(&t.sample_ratio) {
@@ -569,6 +608,50 @@ mod report_tests {
             report
                 .iter()
                 .any(|i| i.level == "warning" && i.field == "telemetry.sample_ratio"),
+            "report: {:?}",
+            report
+        );
+    }
+
+    /// 变比与单位不匹配只给 warning（不阻断保存）；匹配时不提示。
+    #[test]
+    fn ratio_not_applicable_is_warning() {
+        let mut cfg = base();
+        cfg.points[0].unit = Some("V".to_string());
+        cfg.points[0].ct_ratio = Some(30.0);
+        let report = cfg.validate_report();
+        assert!(
+            report.iter().any(|i| i.code == "ratio_not_applicable"
+                && i.level == "warning"
+                && i.field == "points[p1].ct_ratio"),
+            "report: {:?}",
+            report
+        );
+        assert!(report.iter().all(|i| i.level != "error"), "不应阻断");
+
+        // 电压点位配 PT 才是有效用法
+        cfg.points[0].ct_ratio = None;
+        cfg.points[0].pt_ratio = Some(100.0);
+        assert!(!cfg
+            .validate_report()
+            .iter()
+            .any(|i| i.code == "ratio_not_applicable"));
+
+        // 功率因数额位两种变比都不生效
+        cfg.points[0].unit = Some("PF".to_string());
+        cfg.points[0].ct_ratio = Some(30.0);
+        let report = cfg.validate_report();
+        assert!(
+            report
+                .iter()
+                .any(|i| i.code == "ratio_not_applicable" && i.field == "points[p1].ct_ratio"),
+            "report: {:?}",
+            report
+        );
+        assert!(
+            report
+                .iter()
+                .any(|i| i.code == "ratio_not_applicable" && i.field == "points[p1].pt_ratio"),
             "report: {:?}",
             report
         );

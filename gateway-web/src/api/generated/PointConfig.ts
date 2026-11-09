@@ -42,7 +42,14 @@ address_num: number | null,
  */
 data_id: string | null, 
 /**
- * Modbus 功能码 3=保持寄存器 / 4=输入寄存器 / 1,2=线圈 / 5,6,15,16=写
+ * 功能码（语义随协议而变）
+ *
+ * - Modbus：3=保持寄存器 / 4=输入寄存器 / 1,2=线圈 / 5,6,15,16=写
+ * - DLT645：0x04=写数据 / 0x0C=写通信地址 / 0x0F=写密码
+ * - CJT188：0x04=写数据 / 0x15=写通信地址
+ *
+ * 校验必须按协议分流（见 [`allowed_function_codes`]），字段级校验拿不到
+ * protocol，只能放到结构级（`gate.rs`）做。
  */
 function_code: number | null, 
 /**
@@ -75,12 +82,12 @@ offset: number,
 formula: string | null, 
 /**
  * CT 变比（电流互感器，如 150/5=30），None=不应用
- * 二次侧工程量 × ct_ratio = 一次侧真实电流值
+ * 二次侧工程量 × ct_ratio = 一次侧真实电流值（仅电流/功率/电量类单位生效）
  */
 ct_ratio: number | null, 
 /**
  * PT 变比（电压互感器，如 10000/100=100），None=不应用
- * 二次侧工程量 × pt_ratio = 一次侧真实电压值
+ * 二次侧工程量 × pt_ratio = 一次侧真实电压值（仅电压/功率/电量类单位生效）
  */
 pt_ratio: number | null, 
 /**

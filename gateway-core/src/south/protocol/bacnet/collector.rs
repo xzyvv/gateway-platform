@@ -4,6 +4,8 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 
+use crate::south::protocol::{convert_value, reverse_convert};
+
 impl Collector for BacnetCollector {
     fn name(&self) -> &'static str {
         "bacnet"
@@ -171,13 +173,14 @@ impl Collector for BacnetCollector {
                     continue;
                 }
 
-                let (value, quality) = frames::parse_value_from_apdu(apdu, invoke_id)?;
+                let (raw_value, quality) = frames::parse_value_from_apdu(apdu, invoke_id)?;
 
                 return Ok(DataPoint {
                     point_id: point.id.clone(),
                     device_id: point.device_id.clone().unwrap_or_default(),
-                    value,
-                    raw_value: value,
+                    // BACnet 解析出的只是原始值，scale/offset/formula 与 CT/PT 变比在 common 层统一换算
+                    value: convert_value(point, raw_value),
+                    raw_value,
                     raw_type: "bacnet".into(),
                     quality,
                     quality_reason: String::new(),
@@ -213,7 +216,13 @@ impl Collector for BacnetCollector {
             }
             drop(ig);
 
-            let apdu = frames::build_write_property_apdu(obj_type, instance, invoke_id, value);
+            // 北向下发的是工程量，写回前按读路径反向还原，保证读写对称
+            let apdu = frames::build_write_property_apdu(
+                obj_type,
+                instance,
+                invoke_id,
+                reverse_convert(point, value),
+            );
             let packet = frames::wrap_bvlc_npdu(&apdu);
             drain_socket(&socket);
             socket
@@ -413,7 +422,8 @@ impl Collector for BacnetCollector {
                                 Some((v, q)) => results.push(Ok(DataPoint {
                                     point_id: p.id.clone(),
                                     device_id: p.device_id.clone().unwrap_or_default(),
-                                    value: *v,
+                                    // 批量路径与单点路径同一套换算，避免两条路径数值不一致
+                                    value: convert_value(p, *v),
                                     raw_value: *v,
                                     raw_type: "bacnet".into(),
                                     quality: *q,

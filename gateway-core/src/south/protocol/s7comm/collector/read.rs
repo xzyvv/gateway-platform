@@ -4,7 +4,7 @@ use super::*;
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
-use crate::south::protocol::{clone_collector_error, Collector};
+use crate::south::protocol::{clone_collector_error, convert_value, Collector};
 
 impl S7CommCollector {
     /// 单点读取（供 `Collector::read` 委托）；惰性建链 + 单 item Read Var。
@@ -75,13 +75,16 @@ impl S7CommCollector {
                 }
             };
 
-        let value = frames::parse_read_response(&resp, s7_addr.data_type)?;
+        let raw_value = frames::parse_read_response(&resp, s7_addr.data_type)?;
+        // 与 Modbus/DLT645 对齐：scale/offset/formula + CT/PT 变比统一在 common 层换算。
+        // 此前 S7 直接把原始值当工程量上送，点位配了 scale/offset 也不生效。
+        let value = convert_value(point, raw_value);
 
         Ok(DataPoint {
             point_id: point.id.clone(),
             device_id: point.device_id.clone().unwrap_or_default(),
             value,
-            raw_value: value,
+            raw_value,
             raw_type: "s7comm".into(),
             quality: Quality::Good,
             quality_reason: String::new(),
@@ -199,11 +202,12 @@ impl S7CommCollector {
                         "S7 multi-read item {i} failed (return code 0x{rc:02X})"
                     ))),
                     Ok(value_bytes) => match frames::decode_value(&value_bytes, p.data_type) {
-                        Ok(v) => Ok(DataPoint {
+                        Ok(raw) => Ok(DataPoint {
                             point_id: point_cfg.id.clone(),
                             device_id: point_cfg.device_id.clone().unwrap_or_default(),
-                            value: v,
-                            raw_value: v,
+                            // 批量路径与单点路径同一套换算，避免两条路径数值不一致
+                            value: convert_value(point_cfg, raw),
+                            raw_value: raw,
                             raw_type: "s7comm".into(),
                             quality: Quality::Good,
                             quality_reason: String::new(),

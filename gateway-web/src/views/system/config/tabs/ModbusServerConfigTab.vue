@@ -19,7 +19,10 @@
     </el-form-item>
     <el-form-item label="起始寄存器地址">
       <el-input-number v-model="form.base_register" :min="0" :max="65535" />
-      <div class="form-hint">auto 模式下第一个点位占用的寄存器地址，后续点位按顺序递增。</div>
+      <div class="form-hint">
+        auto 模式下第一个点位占用的寄存器地址，后续点位按顺序递增。
+        按协议地址填写（从 0 起），不是 40001 这类显示编号：填 0 时主站读 40001，填 100 时主站读 40101（保持寄存器）。
+      </div>
     </el-form-item>
     <el-form-item label="映射模式">
       <el-select v-model="form.mode" style="width: 220px">

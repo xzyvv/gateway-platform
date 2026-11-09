@@ -133,6 +133,7 @@ impl ConfigLoader {
         // 但链路失败且无任何告警。现在解密错误透传到顶层 load() 错误路径。
         crate::crypto::decrypt_config_secrets(&mut cfg)
             .map_err(|e| GatewayError::Config(format!("decrypt config secrets failed: {}", e)))?;
+        sanitize_legacy_ratios(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!("validate config failed: {}", errs.join("; ")))
         })?;
@@ -218,6 +219,7 @@ impl ConfigLoader {
         crate::crypto::decrypt_config_secrets(&mut cfg).map_err(|e| {
             GatewayError::Config(format!("reload decrypt config secrets failed: {}", e))
         })?;
+        sanitize_legacy_ratios(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!(
                 "reload validate config failed: {}",
@@ -225,6 +227,34 @@ impl ConfigLoader {
             ))
         })?;
         Ok(cfg)
+    }
+}
+
+/// 存量配置的变比兜底：把「非正 / 非有限」变比归一化为「未配置」。
+///
+/// `validate_ratio` 是 fail-fast 的字段级校验。历史配置里若存有
+/// `ct_ratio: 0`（旧界面常用 0 表示"无变比"），新增校验后会在
+/// `validate_all()` 处直接阻断加载 —— 现场表现为**升级后网关起不来**。
+/// 因此在校验之前把这类值降级为 `None`（语义等同「未配置变比」）并逐点留痕：
+/// 网关照常启动，运维可从日志定位具体点位后手工修正。
+///
+/// 只作用于磁盘加载 / 热重载路径；Web 保存路径仍由 API 层严格拒绝 0 与负数，
+/// 避免新配置继续写入非法值（fail-fast 只对"新输入"生效，不对"存量"判死刑）。
+fn sanitize_legacy_ratios(cfg: &mut GatewayConfig) {
+    for p in cfg.points.iter_mut() {
+        for (name, slot) in [("ct_ratio", &mut p.ct_ratio), ("pt_ratio", &mut p.pt_ratio)] {
+            if let Some(v) = *slot {
+                if !v.is_finite() || v <= 0.0 {
+                    tracing::warn!(
+                        "point '{}' {}={} 非法（变比必须 > 0），已按「未配置变比」加载；请留空或填写正确变比",
+                        p.id,
+                        name,
+                        v
+                    );
+                    *slot = None;
+                }
+            }
+        }
     }
 }
 

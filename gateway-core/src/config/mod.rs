@@ -17,7 +17,7 @@ mod modbus_server;
 mod mqtt;
 mod ntp;
 mod opcua;
-mod point;
+pub(crate) mod point;
 mod reload_scope;
 mod schema;
 mod self_heal;
@@ -51,7 +51,9 @@ pub use modbus_server::ModbusServerConfig;
 pub use mqtt::MqttConfig;
 pub use ntp::NtpConfig;
 pub use opcua::{OpcuaConfig, OpcuaUserConfig};
-pub use point::{AggregationConfig, DeviceConfig, PointConfig, PointTrashEntry};
+pub use point::{
+    allowed_function_codes, AggregationConfig, DeviceConfig, PointConfig, PointTrashEntry,
+};
 pub use queue::QueueConfig;
 pub use reload_scope::{reload_scope, ReloadScope};
 pub use self_heal::SelfHealConfig;

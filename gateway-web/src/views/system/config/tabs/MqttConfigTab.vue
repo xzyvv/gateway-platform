@@ -50,10 +50,26 @@
         </template>
 
         <el-form-item label="心跳间隔（秒）">
-          <el-input-number v-model="mqtt.keep_alive" :min="5" :max="300" />
+          <PresetNumberSelect
+            v-model="mqtt.keep_alive"
+            :options="KEEP_ALIVE_PRESETS"
+            :min="5"
+            :max="300"
+            unit="秒"
+            placeholder="默认 30"
+            aria-label="心跳间隔"
+          />
         </el-form-item>
         <el-form-item label="ACK 超时（秒）">
-          <el-input-number v-model="mqtt.ack_timeout_secs" :min="1" :max="120" />
+          <PresetNumberSelect
+            v-model="mqtt.ack_timeout_secs"
+            :options="ACK_TIMEOUT_PRESETS"
+            :min="1"
+            :max="120"
+            unit="秒"
+            placeholder="默认 10"
+            aria-label="ACK 超时"
+          />
         </el-form-item>
         <el-form-item label="压缩方式">
           <!-- 空串代理「不压缩」：el-option 的 value 只接受字符串/数字，直接绑 null 会触发 prop 类型警告 -->
@@ -107,6 +123,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import DurationSelect from '@/components/industrial/DurationSelect.vue'
+import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
 import type { MqttConfig } from '@/api/types'
 import {
   BACKOFF_LABELS,
@@ -122,6 +139,11 @@ const mqtt = defineModel<MqttConfig>({ required: true })
 
 /** 高级分组默认收起：这些参数多数部署用默认值即可 */
 const advancedOpen = ref<string[]>([])
+
+/** 心跳常用档位（后端默认 30 秒，校验区间 5~300） */
+const KEEP_ALIVE_PRESETS = [15, 30, 60, 120, 180, 300]
+/** ACK 超时常用档位（后端默认 10 秒，校验区间 1~120） */
+const ACK_TIMEOUT_PRESETS = [5, 10, 15, 30, 60, 120]
 
 /**
  * 点位报警/恢复主题（后端 `format!("{}/alarm", topic)`）。

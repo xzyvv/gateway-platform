@@ -11,7 +11,7 @@
 | 分节 | 关键字段 | 生效方式 | 失败/边界行为 |
 |---|---|---|---|
 | `buses` | 端口、波特率、校验/数据位/停止位、对端地址、协议/变体、`timeout_ms`、`retry_*`、`tcp_concurrent`、`channel_capacity`、`de_pin`、`reconnect_backoff`、OPC UA 客户端认证 | 重建发生变更的总线与采集器 | 校验不过则整次保存被拒，旧配置继续运行 |
-| `points` / `devices` | 点位全字段（地址、类型、字节序、公式、量程等）、设备参数 | 增量重载点位与设备 | 引用不存在设备的点位会被校验拦截 |
+| `points` / `devices` | 点位全字段（地址、类型、字节序、公式、变比、量程等）、设备参数 | 增量重载点位与设备 | 引用不存在设备的点位会被校验拦截。字段语义与换算顺序见 [`点位配置与换算.md`](点位配置与换算.md) |
 | `mqtt` | broker / topic / qos / 凭据 / 心跳 / 压缩 / 续传限速 / `tls.ca_cert_path` / payload 模板 | 重建 MQTT 客户端 | 新客户端连不上时**保留旧客户端**，接口返回 notes 提示 |
 | `ntp` | `server`、`sync_interval` | 下一轮同步循环读取新值 | — |
 | `web`（动态项） | `api_token`、`allow_anon_read`、`realtime_max_subscribers`、`webhook_test_*` | 鉴权中间件 / WS 升级流程每次请求现读 | 超并发上限的新连接直接 503 |

@@ -31,7 +31,9 @@ use tokio::sync::Mutex;
 
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, ModbusDataType, Quality};
-use crate::south::protocol::{convert_value, Collector, CollectorError, CollectorResult};
+use crate::south::protocol::{
+    convert_value, reverse_convert, Collector, CollectorError, CollectorResult,
+};
 
 mod frames;
 use frames::{
@@ -500,7 +502,8 @@ impl Collector for FinsCollector {
                 )
             } else {
                 let dt = point.data_type_enum().unwrap_or(ModbusDataType::U16);
-                let data = encode_words(value, dt);
+                // 写值与读路径对偶：北向下发的是一次侧值，需先除回变比与 scale/offset
+                let data = encode_words(reverse_convert(point, value), dt);
                 build_write_frame(
                     server_node,
                     CLIENT_NODE,

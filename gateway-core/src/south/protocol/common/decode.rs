@@ -3,6 +3,7 @@
 //! 包含字节序重排、二进制类型解码、工程量换算（含 CT/PT 变比）和 BCD 地址解析。
 //! Modbus / DLT645 / CJT188 共用同一套解码逻辑，避免实现不一致。
 
+use crate::config::point::{ratio_scope, RatioScope};
 use crate::config::PointConfig;
 use crate::engine::model::{ByteOrder, ModbusDataType, Quality};
 use crate::engine::util::formula::apply_formula;
@@ -168,12 +169,18 @@ pub fn encode_value_by_type(point: &PointConfig, value: f64, out_len: usize) -> 
     encode_bcd_value(value, out_len)
 }
 
-/// 工程量值换算（分两层：工程量换算 + CT/PT 变比）
+// CT/PT 变比适用范围的判定（`RatioScope` / `ratio_scope`）定义在配置层
+// `crate::config::point`：解码与 Web 体检必须共用同一张单位表。
+
+/// 工程量值换算（两层：工程量换算 + CT/PT 变比）
 ///
 /// 第一层（工程量换算）：公式优先，否则 scale*raw+offset
 /// 第二层（CT/PT 变比）：二次侧工程量 → 一次侧真实值
 ///   - ct_ratio: 电流互感器变比（如 150/5=30），None=不应用
 ///   - pt_ratio: 电压互感器变比（如 10000/100=100），None=不应用
+///   - 是否应用由单位决定，见 [`ratio_scope`]：电压只吃 PT、电流只吃 CT，
+///     功率/电量两者都吃，功率因数都不吃。改造前是无条件连乘，
+///     导致电压点位误填 CT 后会被放大 30 倍。
 pub fn convert_value(point: &PointConfig, raw: f64) -> f64 {
     // 第一层：工程量换算（原始值 → 二次侧工程量）
     let engineering = if let Some(formula) = &point.formula {
@@ -193,13 +200,18 @@ pub fn convert_value(point: &PointConfig, raw: f64) -> f64 {
     } else {
         raw * point.scale + point.offset
     };
-    // 第二层：CT/PT 变比（二次侧 → 一次侧真实值）
+    // 第二层：CT/PT 变比（二次侧 → 一次侧真实值），按单位决定生效范围
     let mut primary = engineering;
-    if let Some(ct) = point.ct_ratio {
-        primary *= ct;
+    let scope = ratio_scope(point.unit.as_deref());
+    if matches!(scope, RatioScope::Ct | RatioScope::Both) {
+        if let Some(ct) = point.ct_ratio {
+            primary *= ct;
+        }
     }
-    if let Some(pt) = point.pt_ratio {
-        primary *= pt;
+    if matches!(scope, RatioScope::Pt | RatioScope::Both) {
+        if let Some(pt) = point.pt_ratio {
+            primary *= pt;
+        }
     }
     // r24-DEC1（修复）：非有限值兜底——
     // 公式失败 / scale × 极端 raw / CT/PT 变比放大
@@ -224,6 +236,59 @@ pub fn convert_value(point: &PointConfig, raw: f64) -> f64 {
         primary = raw;
     }
     primary
+}
+
+/// 反向换算：一次侧值 `value` -> 原始值 `raw`
+///
+/// 与读路径 [`convert_value`] 严格对偶：
+/// - 读：raw --(scale/offset)--> 工程量 --(×CT×PT)--> 一次侧值
+/// - 写：一次侧值 --(÷CT×PT)--> 工程量 --(÷scale、-offset)--> raw
+///
+/// 变比必须**先除**再反解 scale/offset，否则 PT/CT 的倍率会连 offset 一起放大，
+/// 写下去的值与读回来的值对不上（读按 CT×PT 放大，写却不还原）。
+/// 公式无法反推，沿用「不反推公式」的既有行为。
+///
+/// 与 [`convert_value`] 同放在 common 层：读写必须共用同一套 `ratio_scope`
+/// 判定，早期把反向换算留在协议私有模块里，正是「读乘变比、写不还原」
+/// 这个不对称 bug 的根源。
+pub fn reverse_convert(point: &PointConfig, value: f64) -> f64 {
+    let engineering = match effective_ratio(point) {
+        Some(divisor) => value / divisor,
+        None => value,
+    };
+    if point.scale != 0.0 {
+        (engineering - point.offset) / point.scale
+    } else {
+        engineering
+    }
+}
+
+/// 点位当前生效的变比乘积（`None` = 不生效）。
+///
+/// 生效范围与读路径 [`convert_value`] 完全一致（共用同一套 [`ratio_scope`] 判定）：
+/// 电压只吃 PT、电流只吃 CT、功率/电量两者都吃、功率因数都不吃。
+/// 变比为 0 / 非有限值时不反算——除零会把写入值变成 inf，比不还原更糟。
+fn effective_ratio(point: &PointConfig) -> Option<f64> {
+    let scope = ratio_scope(point.unit.as_deref());
+    let mut product = 1.0;
+    let mut active = false;
+    if matches!(scope, RatioScope::Ct | RatioScope::Both) {
+        if let Some(ct) = point.ct_ratio {
+            product *= ct;
+            active = true;
+        }
+    }
+    if matches!(scope, RatioScope::Pt | RatioScope::Both) {
+        if let Some(pt) = point.pt_ratio {
+            product *= pt;
+            active = true;
+        }
+    }
+    if active && product.is_finite() && product != 0.0 {
+        Some(product)
+    } else {
+        None
+    }
 }
 
 /// 解析 BCD 地址

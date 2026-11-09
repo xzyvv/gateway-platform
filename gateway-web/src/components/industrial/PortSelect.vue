@@ -25,6 +25,8 @@
 
 <script setup lang="ts">
 import { ElOption, ElOptionGroup, ElSelect } from 'element-plus'
+// 分组下拉的样式不在 el-select 的样式入口内，单独注入避免选项组错位
+import 'element-plus/es/components/option-group/style/css'
 
 /**
  * 串口端口选择器。

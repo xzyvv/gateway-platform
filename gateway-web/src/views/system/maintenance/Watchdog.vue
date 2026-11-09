@@ -28,8 +28,8 @@
           <el-switch v-model="heal.enabled" />
           <span class="hint">（opt-in，默认关闭；关闭时存量部署行为零变化）</span>
         </el-form-item>
-        <el-form-item label="评估周期(秒)">
-          <el-input-number v-model="heal.check_interval_secs" :min="1" controls-position="right" />
+        <el-form-item label="评估周期">
+          <DurationSelect v-model="heal.check_interval_secs" :min="1" :max="86400" :units="['s', 'min']" num-width="120px" />
         </el-form-item>
         <el-form-item label="触发防抖次数">
           <el-input-number v-model="heal.debounce_k" :min="1" controls-position="right" />
@@ -85,6 +85,7 @@
 import { ref, onMounted, onUnmounted, h } from 'vue'
 import { ElButton, ElMessage } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
+import DurationSelect from '@/components/industrial/DurationSelect.vue'
 import {
   listServices,
   listHealEvents,

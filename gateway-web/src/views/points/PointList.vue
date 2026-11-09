@@ -139,26 +139,53 @@
         <el-form-item label="地址" prop="address">
           <!-- 地址格式随协议不同（Modbus 40001 / S7 DB1.DBD0 / BACnet analog-input:1），
                提示文本统一取后端协议描述符，避免前端只提示 Modbus 写法。 -->
-          <el-input v-model="pointForm.address" :placeholder="protocolAddressPlaceholder(pointForm.protocol)" />
+          <!-- Modbus 实际按「功能码 + address_num」寻址，地址串只是 5 位展示；
+               用区段输入框直接联动两者，避免用户改了地址却不生效。 -->
+          <ModbusAddressInput v-if="isModbus && !modbusAddrOverflow" v-model="modbusAddr" />
+          <el-input v-else v-model="pointForm.address" :placeholder="protocolAddressPlaceholder(pointForm.protocol)" />
+          <div v-if="isModbus && !modbusAddrOverflow" class="point-inherit-hint">
+            区段决定读功能码（0xxxx→FC01、1xxxx→FC02、3xxxx→FC03、4xxxx→FC04），保存时把地址写成上面的 5 位串；
+            1xxxx / 4xxxx 为只读区段。
+          </div>
+          <div v-else-if="isModbus" class="point-inherit-hint">
+            地址偏移超过 9998，5 位地址装不下，请直接填写下方「地址偏移」与展示地址。
+          </div>
         </el-form-item>
         <el-form-item label="从站号" prop="slave_id">
           <el-input-number v-model="pointForm.slave_id" :min="1" :max="247" controls-position="right" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="地址偏移" prop="address_num">
+        <!-- address_num 只有 Modbus 有意义（实际寻址 = 功能码 + 0 基寄存器偏移），
+             其他协议按地址串寻址，暴露该输入只会误导 -->
+        <el-form-item v-if="isModbus && modbusAddrOverflow" label="地址偏移" prop="address_num">
           <el-input-number v-model="pointForm.address_num" :min="0" controls-position="right" style="width: 100%" />
+          <div class="point-inherit-hint">0 基寄存器偏移（读寄存器 1 时填 0）。</div>
+        </el-form-item>
+        <!-- Modbus 数值解码参数：多寄存器类型（float32/u32）必须知道类型与字节序，
+             且后端 PUT 会无条件覆盖这些字段，不展示就没法修正、编辑还会被清空。 -->
+        <el-form-item v-if="isModbus" label="数据类型">
+          <div class="point-pair">
+            <el-select v-model="pointForm.data_type" filterable allow-create default-first-option clearable placeholder="默认 u16" style="width: 100%">
+              <el-option v-for="t in DATA_TYPES" :key="t" :label="t" :value="t" />
+            </el-select>
+            <el-input-number v-model="pointForm.register_count" :min="1" :max="125" controls-position="right" placeholder="寄存器数，留空自动" style="width: 100%" />
+          </div>
+          <div class="point-inherit-hint">float32 / u32 等多寄存器类型需填寄存器数；留空按数据类型自动推断。</div>
+        </el-form-item>
+        <el-form-item v-if="isModbus" label="字节序">
+          <el-select v-model="pointForm.byte_order" clearable placeholder="默认 ABCD（大端）" style="width: 100%">
+            <el-option v-for="b in BYTE_ORDERS" :key="b.value" :label="b.label" :value="b.value" />
+          </el-select>
         </el-form-item>
         <el-form-item label="采集周期" prop="interval">
           <!-- 上界跟随北向上报周期；已有大周期点位保留原值（编辑不应静默改频率） -->
-          <div class="point-pair">
-            <el-input-number
-              v-model="pointForm.interval"
-              :min="1"
-              :max="Math.max(intervalMax, pointForm.interval)"
-              controls-position="right"
-              style="width: 100%"
-            />
-            <span style="color: var(--text-secondary); font-size: 0.75rem">秒</span>
-          </div>
+          <DurationSelect
+            v-model="pointForm.interval"
+            :min="1"
+            :max="Math.max(intervalMax, pointForm.interval)"
+            :units="intervalMax >= 120 ? ['s', 'min'] : ['s']"
+            num-width="100%"
+            unit-width="82px"
+          />
           <div class="point-inherit-hint">必须小于北向上报周期（当前 {{ northInterval }} 秒）；上报周期在「系统配置 → MQTT」中修改。</div>
         </el-form-item>
         <el-form-item label="允许写入" prop="writable">
@@ -170,14 +197,51 @@
              用户填的告警/死区/聚合会被后端静默丢弃。 -->
         <el-divider content-position="left">量程与告警</el-divider>
         <el-form-item label="单位" prop="unit">
-          <el-input v-model="pointForm.unit" placeholder="如: ℃ / kWh（可留空）" />
+          <!-- 常用单位下拉 + 可输入：避免「℃ / C」「kWh / KWH」这类同义写法导致上送端分组混乱 -->
+          <el-select
+            v-model="pointForm.unit"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            placeholder="选择或输入单位（可留空）"
+            style="width: 100%"
+          >
+            <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+          </el-select>
         </el-form-item>
         <el-form-item label="倍率 / 偏移">
           <div class="point-pair">
-            <el-input-number v-model="pointForm.scale" :step="0.1" :precision="4" controls-position="right" style="width: 100%" />
-            <el-input-number v-model="pointForm.offset" :step="0.1" :precision="4" controls-position="right" style="width: 100%" />
+            <el-input-number v-model="pointForm.scale" :step="0.001" :precision="4" controls-position="right" style="width: 100%" />
+            <el-input-number v-model="pointForm.offset" :step="0.001" :precision="4" controls-position="right" style="width: 100%" />
           </div>
           <div class="point-inherit-hint">实际值 = 原始值 × 倍率 + 偏移；倍率不能为 0（1:1 透传请填 1）。</div>
+        </el-form-item>
+        <!-- 变比：电压只吃 PT、电流只吃 CT、功率/电量两者都吃、功率因数都不吃 -->
+        <el-form-item label="CT 变比" prop="ct_ratio">
+          <el-input-number
+            v-model="pointForm.ct_ratio"
+            :min="0.001"
+            :step="0.1"
+            :precision="4"
+            :disabled="!ctEnabled"
+            controls-position="right"
+            placeholder="电流互感比，留空=1"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="PT 变比" prop="pt_ratio">
+          <el-input-number
+            v-model="pointForm.pt_ratio"
+            :min="0.001"
+            :step="0.1"
+            :precision="4"
+            :disabled="!ptEnabled"
+            controls-position="right"
+            placeholder="电压互感比，留空=1"
+            style="width: 100%"
+          />
+          <div class="point-inherit-hint">{{ ratioHint }}</div>
         </el-form-item>
         <el-form-item label="计算公式" prop="formula">
           <el-input v-model="pointForm.formula" placeholder="如: raw * 0.1 + 5（填写后优先于倍率/偏移）" />
@@ -189,7 +253,7 @@
           </div>
           <div class="point-inherit-hint">死区：变化幅度小于该值时不产生新数据帧（0 = 不启用）。</div>
         </el-form-item>
-        <el-form-item label="告警高/低限">
+        <el-form-item label="告警高/低限" prop="alarm_high">
           <div class="point-pair">
             <el-input-number v-model="pointForm.alarm_high" :precision="3" controls-position="right" placeholder="高限，留空=不启用" style="width: 100%" />
             <el-input-number v-model="pointForm.alarm_low" :precision="3" controls-position="right" placeholder="低限，留空=不启用" style="width: 100%" />
@@ -206,7 +270,15 @@
               <el-option label="最小值" value="min" />
               <el-option label="求和" value="sum" />
             </el-select>
-            <el-input-number v-model="pointForm.aggregation_window" :min="1" :max="3600" :disabled="!pointForm.aggregation_fn" controls-position="right" style="width: 100%" />
+            <DurationSelect
+              v-model="pointForm.aggregation_window"
+              :min="1"
+              :max="3600"
+              :units="['s', 'min']"
+              :disabled="!pointForm.aggregation_fn"
+              num-width="100%"
+              unit-width="82px"
+            />
           </div>
           <div class="point-inherit-hint">聚合窗口（秒）：窗口内多次采样合并成一个上报值；选「不聚合」则逐帧上报。</div>
         </el-form-item>
@@ -237,6 +309,8 @@ import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import { usePermission } from '@/composables/auth/usePermission'
 import InlineEditCell from '@/components/InlineEditCell.vue'
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
+import DurationSelect from '@/components/industrial/DurationSelect.vue'
+import ModbusAddressInput from '@/components/industrial/ModbusAddressInput.vue'
 // 必须显式 import：这三个文件在 src/views/points/dialogs/ 下，而 unplugin-vue-components
 // 默认只扫 src/components/，扫不到就只在控制台留一条 Failed to resolve component，
 // 按钮点得动但弹窗永远不出现（静默失效）。
@@ -246,6 +320,11 @@ import PointsGenerateDialog from './dialogs/PointsGenerateDialog.vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn, protocolColumn } from '@/utils/commonColumns'
 import type { PointRow } from '@/composables/devices/usePoints'
+/** 常用工程单位与虚拟点位共用同一份清单 */
+import { unitOptions } from '@/composables/devices/useUnits'
+import { ratioScopeOf } from '@/composables/devices/useRatio'
+import { modbusAddressOf, parseModbusAddress } from '@/composables/devices/usePoints/modbusAddress'
+import { BYTE_ORDERS, DATA_TYPES } from '@/composables/devices/decodeParams'
 
 const router = useRouter()
 const route = useRoute()
@@ -267,6 +346,46 @@ const {
  * 下限取 1，避免上报周期被配成 1s 时算不出合法区间。
  */
 const intervalMax = computed(() => Math.max(1, northInterval.value - 1))
+
+/** 协议继承自设备，Modbus 才需要区段寻址与数值解码参数 */
+const isModbus = computed(() => pointForm.protocol === 'modbus')
+
+/**
+ * Modbus 地址输入（区段 + 1 基序号）。
+ *
+ * get 由真实寻址参数（function_code + address_num）推导，set 反向写入三者，
+ * 保证「改地址」就是「改寻址」，不再出现地址字符串与偏移各说各话。
+ */
+const modbusAddr = computed<string>({
+  get: () => modbusAddressOf(pointForm.function_code, pointForm.address_num),
+  set: (v) => {
+    const parsed = parseModbusAddress(v)
+    if (!parsed) return
+    pointForm.function_code = parsed.functionCode
+    pointForm.address_num = parsed.addressNum
+    pointForm.address = v
+  },
+})
+
+/** 偏移超过 9998（1 基地址 9999）时 5 位地址装不下，退回手填 */
+const modbusAddrOverflow = computed(() => (pointForm.address_num ?? 0) > 9998)
+
+/** 变比适用范围：电压只吃 PT、电流只吃 CT、功率/电量两者都吃、功率因数都不吃 */
+const ratioScope = computed(() => ratioScopeOf(pointForm.unit))
+const ctEnabled = computed(() => ratioScope.value === 'ct' || ratioScope.value === 'both')
+const ptEnabled = computed(() => ratioScope.value === 'pt' || ratioScope.value === 'both')
+const ratioHint = computed(() => {
+  switch (ratioScope.value) {
+    case 'pt':
+      return '当前单位为电压：只有 PT 变比参与计算，CT 不生效（已置空）。'
+    case 'ct':
+      return '当前单位为电流：只有 CT 变比参与计算，PT 不生效（已置空）。'
+    case 'none':
+      return '当前单位为功率因数（无量纲）：CT / PT 都不参与计算。'
+    default:
+      return '功率 = 二次侧值 × CT × PT（P = U × I）；电量同理。电压只需 PT、电流只需 CT。留空表示 1（不放大）。'
+  }
+})
 
 // 模板用字符串 ref="pointFormRef" 反向绑定该 Ref，脚本侧没有直接读取点（校验发生在
 // Composable 的 submitPoint 内）。noUnusedLocals 不把字符串 ref 计入「已使用」，故显式取值。
@@ -438,10 +557,11 @@ const toggleableColumns = [
   { key: 'protocol', title: '协议' },
   { key: 'address', title: '地址' },
   { key: 'slave_id', title: '从站号' },
+  { key: 'ratio', title: '变比' },
   { key: 'writable', title: '允许写入' },
 ]
 const { hidden: hiddenColumns } = useColumnPrefs('points', {
-  // 1366 笔记本上 9 列点位表必然横向滚动：默认收起两列「每行都一样/只是溯源」的信息，
+  // 1366 笔记本上 10 列点位表必然横向滚动：默认收起两列「每行都一样/只是溯源」的信息，
   // 「从站号」「操作」等排查与操作必需的列始终可见（用户可在显示设置里勾回来）。
   narrowHidden: ['_source', 'bus'],
 })
@@ -516,6 +636,19 @@ const pointColumns: ColumnDef<PointRow>[] = [
             align: 'right',
             save: (v: string | number) => savePointField(row, { slave_id: Number(v) }),
           }),
+  },
+  {
+    key: 'ratio',
+    title: '变比',
+    width: 120,
+    // 变比在表单里能配、列表里看不到时，现场无法一眼核对「读数是否需要放大」；
+    // 模板展开的点位同样展示（只读），便于和设备铭牌比对。
+    cell: (row) => {
+      const parts: string[] = []
+      if (row.ct_ratio != null) parts.push(`CT ${row.ct_ratio}`)
+      if (row.pt_ratio != null) parts.push(`PT ${row.pt_ratio}`)
+      return h('span', { class: 'cell-readonly' }, parts.length ? parts.join(' · ') : '—')
+    },
   },
   {
     key: 'writable',

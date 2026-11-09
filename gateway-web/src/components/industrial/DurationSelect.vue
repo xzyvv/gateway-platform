@@ -30,12 +30,12 @@
 <script setup lang="ts">
 /** 时长选择器（双段：数字 + 单位）。
  *
- * 与 IntervalSelect 的区别：
- *  - IntervalSelect：固定毫秒，预设常用工业采集周期（100ms-30min）
- *  - DurationSelect：数字 + 单位自由组合，支持 s/min/h/d，自动转秒写入 modelValue
+ * 统一承载「周期 / 间隔 / 超时」类配置：数字 + 单位自由组合，支持 ms/s/min/h/d，
+ * 自动转秒写入 modelValue。毫秒档用于允许亚秒级的字段（如 Webhook 上报间隔）。
  *
  * 典型场景：
  *  - MQTT 上报周期（秒）
+ *  - Webhook 上报间隔（毫秒）
  *  - NTP 同步间隔（秒）
  *  - Telemetry 指标间隔（秒）
  *  - OTA 升级超时（分）
@@ -66,7 +66,7 @@
  */
 import { computed, ref, watch } from 'vue'
 
-type DurationUnit = 's' | 'min' | 'h' | 'd'
+type DurationUnit = 'ms' | 's' | 'min' | 'h' | 'd'
 
 const props = withDefaults(defineProps<{
   modelValue: number
@@ -97,6 +97,7 @@ const emit = defineEmits<{
 }>()
 
 const UNIT_LABEL: Record<DurationUnit, string> = {
+  ms: '毫秒',
   s: '秒',
   min: '分钟',
   h: '小时',
@@ -104,6 +105,7 @@ const UNIT_LABEL: Record<DurationUnit, string> = {
 }
 
 const UNIT_FACTOR: Record<DurationUnit, number> = {
+  ms: 0.001,
   s: 1,
   min: 60,
   h: 3600,
@@ -117,10 +119,11 @@ function resolveUnit(u: DurationUnit, list: DurationUnit[]): DurationUnit {
 
 /** 当前展示单位：本地可改（下拉切换），同时跟随 props.unit 变化 */
 const activeUnit = ref<DurationUnit>(resolveUnit(props.unit, props.units))
+// 用字符串键做依赖：父组件常用内联数组（:units="['s','min']"），每次渲染都是新引用，
+// 直接 watch 数组会导致用户切换单位后被下一帧重置回首个单位
 watch(
-  () => [props.unit, props.units] as const,
+  () => `${props.unit}|${props.units.join(',')}`,
   () => { activeUnit.value = resolveUnit(props.unit, props.units) },
-  { deep: true },
 )
 
 const factor = computed(() => UNIT_FACTOR[activeUnit.value])
@@ -131,7 +134,8 @@ const valueNum = computed<number>({
     return Math.round(props.modelValue / factor.value)
   },
   set(v: number) {
-    emit('update:modelValue', Math.round(v * factor.value))
+    // 毫秒档下秒值是小数：按毫秒精度（3 位）收敛，避免被取整成整秒
+    emit('update:modelValue', Math.round(v * factor.value * 1000) / 1000)
   },
 })
 

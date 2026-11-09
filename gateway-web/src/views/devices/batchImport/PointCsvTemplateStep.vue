@@ -14,7 +14,9 @@
         <li><b>protocol</b>（协议）modbus、dlt645、cjt188 等（必填）</li>
         <li><b>address</b>（地址）寄存器地址 / 通信标识（必填）</li>
         <li><b>slave_id</b>（从站号）Modbus 从站 ID（modbus 必填）</li>
-        <li><b>address_num</b>（读取数量）选填，默认 1</li>
+        <li><b>address_num</b>（地址偏移，0 基寄存器偏移）选填，默认 0</li>
+        <li><b>ct_ratio</b>（CT 变比，影响电流/功率/电量）选填，留空=不启用，填了须 &gt; 0</li>
+        <li><b>pt_ratio</b>（PT 变比，影响电压/功率/电量）选填，留空=不启用，填了须 &gt; 0</li>
       </ul>
     </div>
   </div>

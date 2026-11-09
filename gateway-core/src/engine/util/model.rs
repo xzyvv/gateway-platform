@@ -52,6 +52,20 @@ impl ModbusDataType {
             ModbusDataType::U64 | ModbusDataType::I64 | ModbusDataType::F64 => 4,
         }
     }
+
+    /// 规范名：与前端下拉、`parse_data_type` 的主写法一致（u16/i16/…/f64）
+    pub fn canonical_name(&self) -> &'static str {
+        match self {
+            ModbusDataType::U16 => "u16",
+            ModbusDataType::I16 => "i16",
+            ModbusDataType::U32 => "u32",
+            ModbusDataType::I32 => "i32",
+            ModbusDataType::U64 => "u64",
+            ModbusDataType::I64 => "i64",
+            ModbusDataType::F32 => "f32",
+            ModbusDataType::F64 => "f64",
+        }
+    }
 }
 
 /// 字节序（§9.4），默认 ABCD

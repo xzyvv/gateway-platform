@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 
 use crate::config::PointConfig;
 use crate::engine::model::{AddressReadEntry, AddressReadResult, DataPoint, Quality};
-use crate::south::protocol::{Collector, CollectorError, CollectorResult};
+use crate::south::protocol::{convert_value, Collector, CollectorError, CollectorResult};
 
 use super::frames::{build_uframe, encode_command_object, read_frame, STARTDT_ACT};
 use super::{command_type_of, Iec104Collector};
@@ -21,15 +21,17 @@ impl Iec104Collector {
     /// `source_ts` 为 CP56Time2a 时标（决策表 #17），无时标时为 0。
     fn to_datapoint(
         point: &PointConfig,
-        value: f64,
+        raw_value: f64,
         quality: Quality,
         source_ts: u64,
     ) -> DataPoint {
         DataPoint {
             point_id: point.id.clone(),
             device_id: point.device_id.clone().unwrap_or_default(),
-            value,
-            raw_value: value,
+            // 快照里存的是原始值（float / normalized / scaled），scale/offset/formula 与
+            // CT/PT 变比统一在 common 层换算；此前 IEC104 配了这些也不生效
+            value: convert_value(point, raw_value),
+            raw_value,
             raw_type: "iec104".into(),
             quality,
             quality_reason: String::new(),
@@ -342,5 +344,47 @@ impl Collector for Iec104Collector {
         value: f64,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CollectorResult<()>> + Send + 'a>> {
         Box::pin(self.write_point(point, value))
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+
+    /// 用最小 JSON 造点位配置：只写关心的字段，其余走 serde 默认值
+    fn point(extra: serde_json::Value) -> PointConfig {
+        let mut base = serde_json::json!({
+            "id": "p1", "bus": "b1", "protocol": "iec104", "address": "100",
+            "interval": 1,
+        });
+        if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
+            for (k, v) in e {
+                b.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::from_value(base).expect("point config")
+    }
+
+    /// 读路径必须按点位换算：scale/offset 与 CT/PT 变比统一在 common 层应用。
+    /// 回归：此前 IEC104 把快照里的原始值直接当工程量，配了 scale 也不生效。
+    #[test]
+    fn to_datapoint_applies_scale_offset_and_ratio() {
+        let p = point(serde_json::json!({
+            "unit": "kW", "scale": 0.1, "offset": 1.0,
+            "ct_ratio": 30.0, "pt_ratio": 100.0,
+        }));
+        let dp = Iec104Collector::to_datapoint(&p, 2.0, Quality::Good, 123);
+        // 原始 2 → ×0.1+1 = 1.2 二次侧 → ×30×100 = 3600 一次侧
+        assert!((dp.value - 3600.0).abs() < 1e-9, "got {}", dp.value);
+        assert!((dp.raw_value - 2.0).abs() < 1e-9, "原始值必须保留");
+        assert_eq!(dp.source_ts, 123);
+    }
+
+    /// 未配置 scale/offset 时换算必须是恒等，避免给存量点位引入偏移
+    #[test]
+    fn to_datapoint_without_scale_is_identity() {
+        let p = point(serde_json::json!({ "unit": "V" }));
+        let dp = Iec104Collector::to_datapoint(&p, 220.0, Quality::Good, 0);
+        assert!((dp.value - 220.0).abs() < 1e-9, "got {}", dp.value);
     }
 }

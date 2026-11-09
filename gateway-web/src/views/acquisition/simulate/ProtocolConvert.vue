@@ -21,11 +21,30 @@
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
         <el-form-item label="规则名称" prop="name"><el-input v-model="form.name" placeholder="请输入规则名称" /></el-form-item>
         <el-form-item label="源协议">
-          <el-select v-model="form.sourceProto" style="width:100%"><el-option v-for="(l,k) in PROTO_LABEL" :key="k" :label="l" :value="k" /></el-select>
+          <!-- 源协议属于采集侧，与点位/设备共用同一份协议注册表（useProtocol） -->
+          <ProtocolSelector v-model="form.sourceProto" aria-label="源协议" />
         </el-form-item>
-        <el-form-item label="源点位 ID" prop="sourcePointId"><el-input v-model="form.sourcePointId" placeholder="采集点位 ID（运行时匹配键）" /></el-form-item>
+        <el-form-item label="源点位 ID" prop="sourcePointId">
+          <!-- 运行时按 ID 精确匹配：手填错一个字符，规则会静默不生效，故改为从配置点位里选 -->
+          <el-select
+            v-model="form.sourcePointId"
+            filterable
+            allow-create
+            default-first-option
+            :loading="pointsLoading"
+            placeholder="选择采集点位（运行时按 ID 匹配）"
+            style="width:100%"
+            @change="onSourcePointChange"
+          >
+            <el-option v-for="o in sourcePointOptions" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+          <div v-if="!pointsLoading && points.length === 0" class="preview-tip">
+            未读取到点位清单，请先在「设备 → 点位」中创建采集点位；也可直接输入已有 ID。
+          </div>
+        </el-form-item>
         <el-form-item label="源点位名称"><el-input v-model="form.sourcePointName" placeholder="展示名称（可选）" /></el-form-item>
         <el-form-item label="目标协议">
+          <!-- 目标协议是上行通道（MQTT / Modbus TCP 等），与南向协议注册表不是同一命名空间，保留独立清单 -->
           <el-select v-model="form.targetProto" style="width:100%"><el-option v-for="(l,k) in PROTO_LABEL" :key="k" :label="l" :value="k" /></el-select>
         </el-form-item>
         <el-form-item label="目标标签"><el-input v-model="form.targetTag" placeholder="如 factory/line1/temp" /></el-form-item>
@@ -37,8 +56,8 @@
           </el-radio-group>
         </el-form-item>
         <template v-if="form.transform === 'linear'">
-          <el-form-item label="缩放系数"><el-input-number v-model="form.scale" :step="0.1" controls-position="right" /></el-form-item>
-          <el-form-item label="偏移量"><el-input-number v-model="form.offset" :step="0.1" controls-position="right" /></el-form-item>
+          <el-form-item label="缩放系数"><el-input-number v-model="form.scale" :step="0.001" controls-position="right" /></el-form-item>
+          <el-form-item label="偏移量"><el-input-number v-model="form.offset" :step="0.001" controls-position="right" /></el-form-item>
         </template>
         <template v-if="form.transform === 'enum'">
           <el-form-item label="枚举映射" prop="enumMap">
@@ -78,10 +97,28 @@ import {Plus, Refresh} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
 import { listConvertRules, createConvertRule, updateConvertRule, deleteConvertRule, toggleConvertRule, PROTO_LABEL, type ConvertRule } from '@/api/protocolTools'
+import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
+import { getConfig } from '@/api/config'
+import type { PointConfig } from '@/api/types'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 
 const rules = ref<ConvertRule[]>([])
+/** 可选点位：规则运行时按 source_point_id 精确匹配，列出真实 ID 避免手填错字后静默不生效 */
+const points = ref<PointConfig[]>([])
+const pointsLoading = ref(false)
+async function loadPoints() {
+  pointsLoading.value = true
+  try {
+    const cfg = await getConfig()
+    points.value = cfg.points || []
+  } catch {
+    // 读不到点位不影响编辑规则其余字段，退回手动输入 ID
+    points.value = []
+  } finally {
+    pointsLoading.value = false
+  }
+}
 const { showToast } = useErrorDisplay()
 const loading = ref(false)
 const showForm = ref(false)
@@ -102,7 +139,30 @@ interface ConvertForm {
   enumMap?: { key: string; label: string }[]
   enabled: boolean
 }
-const form = reactive<ConvertForm>({ name: '', sourceProto: 'modbus-tcp', sourcePointId: '', sourcePointName: '', targetProto: 'mqtt', targetTag: '', transform: 'raw', scale: 1, offset: 0, enumMap: [{ key: '', label: '' }], enabled: true })
+const form = reactive<ConvertForm>({ name: '', sourceProto: 'modbus', sourcePointId: '', sourcePointName: '', targetProto: 'mqtt', targetTag: '', transform: 'raw', scale: 1, offset: 0, enumMap: [{ key: '', label: '' }], enabled: true })
+
+/** 历史规则可能存的是旧协议别名：打开时归一到注册表协议名，避免下拉显示空白 */
+const LEGACY_PROTO_ALIAS: Record<string, string> = { 'modbus-tcp': 'modbus', 'modbus-rtu': 'modbus', 'opc-ua': 'opcua' }
+const normalizeSourceProto = (p: string) => LEGACY_PROTO_ALIAS[p] ?? p
+
+/** 源点位下拉：带出中文名便于识别；编辑历史规则时点位若已删除，仍保留原 ID 避免被清空 */
+const sourcePointOptions = computed(() => {
+  const opts = points.value
+    .filter((p) => p.id)
+    .map((p) => ({ value: p.id, label: p.name ? `${p.name}（${p.id}）` : p.id }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+  const cur = form.sourcePointId.trim()
+  if (cur && !opts.some((o) => o.value === cur)) {
+    opts.unshift({ value: cur, label: `${cur}（配置中未找到该点位）` })
+  }
+  return opts
+})
+
+/** 选中点位后自动带出中文名（仍可手改） */
+function onSourcePointChange(id: string) {
+  const hit = points.value.find((p) => p.id === id)
+  if (hit) form.sourcePointName = hit.name || hit.id
+}
 
 /** 本地试跑：输入原始值后按当前表单参数即时换算（原为「数据清洗」页的浏览器内试跑能力） */
 const previewRaw = ref('')
@@ -146,7 +206,7 @@ function validateEnumKey(_rule: unknown, value: { key: string; label: string }[]
 }
 const formRules: FormRules = {
   name: [{ required: true, message: '请输入规则名称', trigger: 'blur' }],
-  sourcePointId: [{ required: true, message: '请输入源点位 ID', trigger: 'blur' }],
+  sourcePointId: [{ required: true, message: '请输入或选择源点位 ID', trigger: 'change' }],
   enumMap: [{ validator: validateEnumKey, trigger: 'change' }],
 }
 
@@ -212,8 +272,8 @@ const ruleColumns: ColumnDef<ConvertRule>[] = [
 ]
 
 async function load() { loading.value = true; try { rules.value = await listConvertRules() } catch (e) { showToast(e, '加载转换规则失败') } finally { loading.value = false } }
-function openCreate() { Object.assign(form, { name: '', sourceProto: 'modbus-tcp', sourcePointId: '', sourcePointName: '', targetProto: 'mqtt', targetTag: '', transform: 'raw', scale: 1, offset: 0, enumMap: [{ key: '', label: '' }], enabled: true }); isEdit.value = false; showForm.value = true; nextTick(() => formRef.value?.clearValidate()) }
-function edit(row: ConvertRule) { Object.assign(form, JSON.parse(JSON.stringify(row))); isEdit.value = true; editingId.value = row.id; showForm.value = true }
+function openCreate() { Object.assign(form, { name: '', sourceProto: 'modbus', sourcePointId: '', sourcePointName: '', targetProto: 'mqtt', targetTag: '', transform: 'raw', scale: 1, offset: 0, enumMap: [{ key: '', label: '' }], enabled: true }); isEdit.value = false; showForm.value = true; if (!points.value.length) void loadPoints(); nextTick(() => formRef.value?.clearValidate()) }
+function edit(row: ConvertRule) { Object.assign(form, JSON.parse(JSON.stringify(row))); form.sourceProto = normalizeSourceProto(form.sourceProto); isEdit.value = true; editingId.value = row.id; showForm.value = true; if (!points.value.length) void loadPoints() }
 async function save() {
   if (!formRef.value) return
   try { await formRef.value.validate() } catch { return } // 校验失败（如名称为空）直接拦截

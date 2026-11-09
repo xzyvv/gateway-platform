@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 pub use frames::Dlt645Version;
 
-use super::{convert_value, parse_bcd_address, Collector, CollectorError, CollectorResult};
+use super::{
+    convert_value, parse_bcd_address, reverse_convert, Collector, CollectorError, CollectorResult,
+};
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
 use crate::south::bus::BusManager;
@@ -300,7 +302,12 @@ impl Dlt645Collector {
             .data_type_enum()
             .map(|d| d.register_count() as usize * 2)
             .unwrap_or(4);
-        let raw_bytes = encode_dlt_value(point, value, write_value_len).ok_or_else(|| {
+        // 写数据走「一次侧值」语义：北向下发的是一次侧值，
+        // 必须先反算回原始寄存器值（÷CT×PT、÷scale、-offset），
+        // 否则与读路径不对称——读乘变比、写不还原。
+        // 写通信地址(0x0C)/写密码(0x0F)传的是地址与密码整数，不走这里。
+        let raw_value = reverse_convert(point, value);
+        let raw_bytes = encode_dlt_value(point, raw_value, write_value_len).ok_or_else(|| {
             CollectorError::InvalidConfig(format!(
                 "dlt645 write encode failed for point {} (value={}, data_type={:?})",
                 point.id, value, point.data_type

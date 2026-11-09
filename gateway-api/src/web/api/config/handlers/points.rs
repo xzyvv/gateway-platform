@@ -13,6 +13,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
+use gateway_core::config::allowed_function_codes;
 use gateway_core::engine::error::{GatewayError, GatewayResult};
 
 /// 回收站容量上限：按 `deleted_at_ms` 只保留最新 200 条
@@ -180,6 +181,16 @@ pub async fn update_point(
             4002,
             "scale 不能为 0（会使采集值恒等于 offset；如需 1:1 透传请省略或设为 1.0）",
         ));
+    }
+    // CT/PT 变比必须 > 0：0 会把一次侧值乘成 0，负数反号，NaN/Inf 污染上送。
+    if let Some(msg) = invalid_ratio_message(payload.ct_ratio, payload.pt_ratio) {
+        return Ok(ApiResponse::err(4002, msg));
+    }
+    // 功能码必须符合所属协议的语义（与 create_point 同源）。
+    if let Some(msg) =
+        invalid_function_code_message(payload.protocol.as_str(), payload.function_code)
+    {
+        return Ok(ApiResponse::err(4002, msg));
     }
     // 采集周期必须小于北向上报周期：与 GatewayConfig::validate_cycle_conflict 同源。
     // 不再硬编码 60s——北向周期本身可配，硬编码会导致「把上报周期改大后仍按 60 拦截」。
@@ -444,7 +455,53 @@ fn validate_point(payload: &PointPayload, cfg: &GatewayConfig) -> GatewayResult<
             ));
         }
     }
+    // CT/PT 变比必须 > 0：与 GatewayConfig 的 validate_ratio 同源，提前给出明确字段名。
+    if let Some(msg) = invalid_ratio_message(payload.ct_ratio, payload.pt_ratio) {
+        return Err(GatewayError::Config(msg));
+    }
+    // 功能码必须符合所属协议的语义：Modbus 取值写错会长期采不到值或写错寄存器。
+    // 与 config/validate/gate.rs 的结构级校验同源，但这里提前给出可读提示。
+    if let Some(msg) =
+        invalid_function_code_message(payload.protocol.as_str(), payload.function_code)
+    {
+        return Err(GatewayError::Config(msg));
+    }
     Ok(())
+}
+
+/// 功能码与协议不匹配时的提示（`None` = 合法）。
+///
+/// 允许集合的唯一来源是 `gateway_core::config::allowed_function_codes`，
+/// 与结构级校验（`gate.rs`）同源，避免两处白名单漂移。
+/// DLT645/CJT188 的功能码是「写控制码」（0x04 写数据 / 0x0C 写通信地址 /
+/// 0x0F 写密码 / 0x15 写通信地址），语义与 Modbus 完全不同，不能共用白名单。
+fn invalid_function_code_message(protocol: &str, fc: Option<u8>) -> Option<String> {
+    let fc = fc?;
+    let allowed = allowed_function_codes(protocol)?;
+    if allowed.contains(&fc) {
+        return None;
+    }
+    Some(format!(
+        "功能码 {} 对协议 {} 非法（允许 {:?}）；Modbus 功能码决定读写哪类寄存器，写错会长期采不到值或写错寄存器",
+        fc, protocol, allowed
+    ))
+}
+
+/// CT/PT 变比合法性：必须是有限正数（None 表示不放大，合法）。
+///
+/// 0 会把一次侧值乘成 0（采集成功但上报恒 0），负数会反号，NaN/Inf 会污染
+/// 聚合与上送报文；都在写入口拦下，避免坏配置落盘后才在下一次加载时暴雷。
+fn invalid_ratio_message(ct_ratio: Option<f64>, pt_ratio: Option<f64>) -> Option<String> {
+    for (name, ratio) in [("ct_ratio", ct_ratio), ("pt_ratio", pt_ratio)] {
+        if let Some(r) = ratio {
+            if !r.is_finite() || r <= 0.0 {
+                return Some(format!(
+                    "{name} 必须大于 0（如 150/5 填 30、10000/100 填 100；无需变比请留空，不要填 0）"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// N3: 点位总线/协议必须继承所属设备。
@@ -606,6 +663,57 @@ mod tests {
         let mut p59 = payload_with_scale(None);
         p59.interval = 59;
         assert!(validate_point(&p59, &cfg).is_ok(), "interval=59 应通过");
+    }
+
+    /// 功能码必须按协议分流：Modbus 只认标准功能码。
+    ///
+    /// 旧实现用 Modbus 白名单校验所有协议，导致 DLT645 的写通信地址(0x0C)、
+    /// 写密码(0x0F) 与 CJT188 的写通信地址(0x15) 根本存不进配置。
+    #[test]
+    fn validate_point_rejects_function_code_not_allowed_by_protocol() {
+        let cfg = GatewayConfig::default();
+
+        // Modbus 配 DLT645 控制码 → 拒绝
+        let mut p = payload_with_scale(None);
+        p.function_code = Some(0x0C);
+        let err = validate_point(&p, &cfg).expect_err("Modbus 配 0x0C 应被拒绝");
+        assert!(
+            err.message().contains("功能码"),
+            "错误信息应指向功能码，实际: {}",
+            err.message()
+        );
+
+        // DLT645 写通信地址(0x0C) → 放行
+        let mut p = payload_with_scale(None);
+        p.protocol = "dlt645".into();
+        p.function_code = Some(0x0C);
+        assert!(
+            validate_point(&p, &cfg).is_ok(),
+            "DLT645 写通信地址(0x0C) 应通过"
+        );
+
+        // DLT645 写密码(0x0F) → 放行
+        let mut p = payload_with_scale(None);
+        p.protocol = "dlt645".into();
+        p.function_code = Some(0x0F);
+        assert!(
+            validate_point(&p, &cfg).is_ok(),
+            "DLT645 写密码(0x0F) 应通过"
+        );
+
+        // CJT188 写通信地址(0x15) → 放行
+        let mut p = payload_with_scale(None);
+        p.protocol = "cjt188".into();
+        p.function_code = Some(0x15);
+        assert!(
+            validate_point(&p, &cfg).is_ok(),
+            "CJT188 写通信地址(0x15) 应通过"
+        );
+
+        // Modbus 常规功能码 → 放行
+        let mut p = payload_with_scale(None);
+        p.function_code = Some(3);
+        assert!(validate_point(&p, &cfg).is_ok(), "Modbus FC03 应通过");
     }
 
     fn trash_entry(id: &str, deleted_at_ms: i64) -> PointTrashEntry {
