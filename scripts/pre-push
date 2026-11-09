@@ -47,8 +47,10 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
         has_code=1
         break
     fi
+    # 前端（ts/tsx/vue/js/json）也属于「代码」：本轮就出现过 only-前端默认值 +
+    # ts-rs 生成物漂移的改动，旧正则只匹配 Rust 侧扩展名，这类推送会直接跳过门禁。
     if git diff --name-only "$remote_sha" "$local_sha" \
-        | grep -Eq '\.(rs|toml|lock|yml|yaml|sh)$|^scripts/'; then
+        | grep -Eq '\.(rs|toml|lock|yml|yaml|sh|ts|tsx|vue|js|mjs|cjs|json)$|^scripts/'; then
         has_code=1
         break
     fi
@@ -76,16 +78,39 @@ fail() {
 
 start=$(date +%s)
 
-echo "[pre-push] 1/4 格式检查（cargo fmt --check）"
+echo "[pre-push] 1/6 格式检查（cargo fmt --check）"
 cargo fmt --all -- --check || fail "代码格式不符，运行 cargo fmt --all 后重试"
 
-echo "[pre-push] 2/4 编译检查（cargo check --workspace --all-targets）"
+echo "[pre-push] 2/6 编译检查（cargo check --workspace --all-targets）"
 cargo check --workspace --all-targets --quiet || fail "编译失败"
 
-echo "[pre-push] 3/4 clippy（-D warnings）"
+echo "[pre-push] 3/6 clippy（-D warnings）"
 cargo clippy --workspace --all-targets --quiet -- -D warnings || fail "clippy 告警（CI 同样以 -D warnings 判定）"
 
-echo "[pre-push] 4/4 单元测试（cargo test --workspace --lib）"
+echo "[pre-push] 4/6 单元测试（cargo test --workspace --lib）"
 cargo test --workspace --lib --quiet || fail "单元测试失败"
+
+# ts-rs 绑定漂移：改了带 #[ts(export)] 的类型（含文档注释）却没提交生成的 .ts。
+# CI 的 check job 有同一道门（git status --porcelain 口径，能抓新增未跟踪文件），
+# 这里前移到本地——否则要等几分钟的 CI 才知道。
+echo "[pre-push] 5/6 ts-rs 绑定一致性"
+cargo test -p gateway-api export_ts_types --quiet || fail "ts-rs 导出失败（gateway-api）"
+cargo test -p gateway-core export_ts_types --quiet || fail "ts-rs 导出失败（gateway-core）"
+drift=$(git status --porcelain -- gateway-web/src/api/generated/)
+if [ -n "$drift" ]; then
+    echo "$drift"
+    fail "ts-rs 生成的绑定未提交（gateway-web/src/api/generated/），请 git add 后重试"
+fi
+
+# 前端门禁：lint / 类型 / 单测。未安装依赖（node_modules 缺失）时跳过而不是阻断，
+# 避免新机器第一次推送被无关步骤卡住；CI 上始终会安装依赖并执行全量。
+if [ -d gateway-web/node_modules ]; then
+    echo "[pre-push] 6/6 前端门禁（lint / type-check / vitest）"
+    ( cd gateway-web && npm run lint -- --max-warnings=0 ) || fail "前端 lint 失败（warning 零容忍）"
+    ( cd gateway-web && npm run type-check ) || fail "前端类型检查失败（vue-tsc）"
+    ( cd gateway-web && npm run test ) || fail "前端单测失败（vitest）"
+else
+    echo "[pre-push] 6/6 前端门禁：gateway-web/node_modules 不存在，已跳过（CI 侧仍会执行）"
+fi
 
 echo "[pre-push] ✓ 全部通过（$(($(date +%s) - start))s）"

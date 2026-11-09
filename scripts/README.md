@@ -8,6 +8,7 @@
 
 | 脚本 | 作用 |
 |------|------|
+| `pre-push` | 本地推送门禁（`cp scripts/pre-push .git/hooks/pre-push` 安装）：Rust 侧 `fmt --check` / `check --workspace` / `clippy -D warnings` / workspace 单测，ts-rs 生成物漂移检查（`git status --porcelain` 口径，能抓新增未跟踪文件），前端 `lint --max-warnings=0` / `vue-tsc` / `vitest`。纯文档推送自动跳过；`gateway-web/node_modules` 缺失时跳前端段（CI 侧仍全量执行）；`SKIP_GATE=1 git push` 可临时绕过 |
 | `dev-all.ps1` | 一键联调：同时启动 Rust 网关 (`cargo run -p gatewayd`) + Vite dev server (`npm run dev`)，Ctrl+C 同时终止（PowerShell 5+；`-Desktop` 一并启动 Tauri 壳） |
 | `check_repo_health.ps1` / `check_repo_health.sh` | 仓库健康度扫描：bare CR 检测、rust-toolchain 与 ci.yml 版本一致性、ts-rs generated 完整性、CRLF/LF 一致性、构建产物泄漏检测 |
 | `f2_supply_chain_check.ps1` / `f2_supply_chain_check.sh` | F2 供应链门禁本地等效：包装 `cargo deny` + `cargo audit`（与 CI `security.yml` 同口径），建议挂 pre-push；退出码 0 干净 / 1 工具安装失败 / 2 deny 失败 / 3 audit 失败 / 4 两者均失败 |
@@ -33,7 +34,7 @@
 
 | 脚本 | 作用 |
 |------|------|
-| `ci.sh` | CI 5 阶段门禁：`cargo fmt --check` → `cargo check` → `cargo clippy -D warnings` → `cargo test --lib` → `cargo build`，任意失败即非 0 退出。Windows 请在 Git Bash / WSL 下执行，或直接用 `.github/workflows/ci.yml` 同款命令 |
+| `ci.sh` | CI 6 阶段门禁：`cargo fmt --check` → `cargo check --all-targets --all-features` → `cargo clippy -D warnings` → `cargo test --lib` → `cargo test -p license-issuer` → `cargo build`，任意失败即非 0 退出。前端与 ts-rs 门禁由 CI 的 `check` job 单独执行，本地等价物见仓库级 `pre-push`。Windows 请在 Git Bash / WSL 下执行 |
 | `perf_baseline.py` | 性能基线测试（采集延迟、吞吐量等指标） |
 
 **何时用这里：** 只涉及 Rust 后端的 CI、性能、构建相关操作。

@@ -27,11 +27,11 @@ warn() { echo -e "${YELLOW}[CI][warn]${NC} $*"; }
 fail() { echo -e "${RED}[CI][FAIL]${NC} $*"; exit 1; }
 
 # 1. fmt check
-log "1/5 cargo fmt --check"
+log "1/6 cargo fmt --check"
 cargo fmt --all -- --check || fail "代码格式不符（运行 cargo fmt 修复）"
 
 # 2. check
-log "2/5 cargo check --all-targets"
+log "2/6 cargo check --all-targets"
 cargo check --all-targets --all-features || fail "编译检查失败"
 
 # 3. clippy (D warnings)
