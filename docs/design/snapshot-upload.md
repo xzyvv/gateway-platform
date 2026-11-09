@@ -231,6 +231,11 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 1. snapshot + RBE：**不做连接级实现**。省流量由点位级 `on_change`/`deadband` 承担（样本在 pipeline 即被过滤，snapshot 只折叠残余多值）；纯 RBE 会导致值长期不变时下游无法区分「没变化」与「链路挂了」，需额外心跳机制，收益不抵复杂度。
 2. `batch_target` 口径：**沿用行数**（`pending.clamp(100, 500)`）。snapshot 下每点位单周期仅 1 行，行数与点位数恒等，无需分叉。
 3. `max_age_ms`：**v1 不做**。陈旧性已由 `quality`（Good/Stale/Bad）与 `stale_count` 表达，下游可自行过滤；若现场对「重连后不发老值」有硬要求，再作为独立小改动（选中 SQL 增加 `source_ts >= now - max_age`）补上。
+4. 静默点判活：**选「网关级 LWT + 静默点清单」，不做逐点心跳**。
+   - 逐点心跳要给 `PointConfig` 增字段（配置 schema、baseline、前端点位表单、迁移全链路），并在变化节点维护每点状态；8000 点 × 5 分钟一次约 27 条/秒的额外上行，还要额外定义「心跳样本是否参与死区/折叠」。
+   - 判活的本质是「采集侧是否还活着」，不是「每个点位是否在变」：连接级 LWT 在网关掉线时由 broker 立即置离线；周期状态报文只携带**静默超过阈值的点位清单**（通常为空），报文大小与静默点数成正比而非与点位数成正比。
+   - 阈值取 `max(5 × publish_interval, 60s)`；LWT 使用 retain，状态报文不 retain，避免重连后读到过期快照。
+   - 前置条件：云端需订阅新增的状态 topic。若现场云端无法改造，再退回逐点心跳，作为独立改动评估。
 
 ---
 
