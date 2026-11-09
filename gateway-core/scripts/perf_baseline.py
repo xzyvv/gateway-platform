@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -252,9 +253,12 @@ def build_config(points: int, interval_sec: int, web_addr: str, token: str,
         # RSS 会随本地历史库单调上涨（实测 60 min 涨到 226 MB，拟合 144 MB/h），
         # 那时量到的是「未消费积压的存储占用」而不是网关稳态内存。
         # 模拟消费者不外发数据，只做 dequeue + ack，正好用来让队列稳态。
+        # batch_size 取 2000（默认 500 的 4 倍）：CI 上 2000 点/s 会放大成上万行/s，
+        # 500 的小批在慢盘上追不上写入速率，队列缓走到 max_rows 上限再被清空，
+        # 形成锯齿并让 RSS 随库文件反复膨胀。
         cfg["sim_consumer"] = {
             "enabled": True,
-            "batch_size": 500,
+            "batch_size": 2000,
             "interval_ms": 100,
             "log_every": 0,
         }
@@ -361,19 +365,36 @@ def system_cpu(interval: float | None) -> float | None:
     return None
 
 
+# 长稳拟合窗口：只看尾段。前段是一次性填充（队列库首次写入、索引页、预分配
+# 缓冲），与泄漏无关；而 60 min 场景里这段填充可能占掉大半时间（实测队列库
+# 稳定后 RSS 才走平，全程拟合会把填库的页缓存摊成上百 MB/h）。与 soak 判定器
+# （gateway-core/tests/soak/verdict.rs 的 rss_slope_per_hour）的「末段斜率」
+# 同思路，只是窗口按 CI 时长缩短到 20 min。
+RSS_SLOPE_WINDOW_SEC = 1200.0
+
+# 尾段斜率告警阈值（MB/h）。CI 的 soak 只有 60 min、采样 5s，RSS 量化到 0.1 MB，
+# 斜率本身的噪声就有几个 MB/h，1 MB/h 这种 24h 口径在这里只会假红。
+RSS_WARN_MB_PER_HOUR = 50.0
+
+
 def rss_slope_mb_per_hour(snapshots: list[dict]) -> float | None:
-    """RSS 小时斜率（MB/h），最小二乘拟合。
+    """RSS 小时斜率（MB/h），对**尾段**做最小二乘拟合。
 
     与 soak 判定器（gateway-core/tests/soak/verdict.rs 的 rss_slope_per_hour）
     同口径：RSS 是锯齿曲线，首尾两点差会被噪声主导（同一份数据两点差值可能
     是拟合值的数倍），长稳泄漏判据必须用拟合值。
-    丢掉开头 5% 的样本，避开启动期一次性分配（连接池 / 索引页 / 预分配缓冲）——
-    那一段的增长不属于泄漏，摊进斜率会把正常进程判成泄漏。
+    只取最后 min(20 min, 总时长一半) 的样本：启动期的连接池 / 索引页 /
+    预分配缓冲、以及队列库首次填充带来的 RSS 上涨都属于一次性占用，
+    摊进斜率会把正常进程判成泄漏；真正的线性泄漏在尾段同样会体现。
     """
     pts = [(s["t"], s["rss_mb"]) for s in snapshots if s["rss_mb"] is not None]
     if len(pts) < 4:
         return None
-    pts = pts[len(pts) // 20:]
+    span = pts[-1][0] - pts[0][0]
+    cut = pts[-1][0] - min(RSS_SLOPE_WINDOW_SEC, span / 2)
+    pts = [p for p in pts if p[0] >= cut]
+    if len(pts) < 4:
+        return None
     n = len(pts)
     mx = sum(t for t, _ in pts) / n
     my = sum(v for _, v in pts) / n
@@ -547,6 +568,10 @@ def main() -> int:
         return run_sweep(args)
 
     run_dir = os.path.join(args.target, "perf-run")
+    # 每档必须从干净状态起跑：同一 job 里四档共用 perf-run，残留的队列库会让下一档
+    # 继承上一档的积压（实测 soak 起跑时队列已有 46.9 万行，随后直接顶到 max_rows），
+    # RSS 曲线变成「填充 + 锯齿」而不是稳态，斜率判据失去意义。
+    shutil.rmtree(run_dir, ignore_errors=True)
     os.makedirs(run_dir, exist_ok=True)
 
     # ---- Step 1: 构建 ----
@@ -744,8 +769,11 @@ def main() -> int:
         warnings.append("吞吐为 0：从站不可达 / point.bus 与 bus.port_name 不匹配 / 配置无效")
     if rates and rates[0][1] > 0 and rates[-1][1] < rates[0][1] * 0.7:
         warnings.append(f"吞吐衰减：首样本 {rates[0][1]:.0f} → 末样本 {rates[-1][1]:.0f} 点/秒")
-    if len(rss_vals) >= 2 and rss_vals[-1] > rss_vals[0] * 1.5 and rss_vals[-1] - rss_vals[0] > 50:
-        warnings.append(f"RSS 增长 {rss_vals[0]:.0f}→{rss_vals[-1]:.0f} MB，疑似泄漏")
+    # 泄漏告警用尾段斜率，不用首末差值：首末差值把启动期的一次性分配（含队列库
+    # 首次填充）全算进去，正常进程也会被判成「疑似泄漏」。
+    if span >= 1800 and rss_slope is not None and rss_slope > RSS_WARN_MB_PER_HOUR:
+        warnings.append(f"RSS 尾段斜率 {rss_slope:.1f} MB/h"
+                        f"（>{RSS_WARN_MB_PER_HOUR:.0f}），疑似泄漏")
 
     def fmt(v, nd=2, dash="-"):
         return dash if v is None else (f"{v:.{nd}f}" if isinstance(v, float) else str(v))

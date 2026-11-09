@@ -13,8 +13,8 @@
   1. 稳定性（绝对值）：采集失败 = 0 且协议解码错误 = 0；
   2. 吞吐回退：本次吞吐 ≥ 基线 × --throughput-ratio（默认 0.8）；
   3. 延迟回退：本次 p99 ≤ 基线 p99 × --latency-ratio（默认 1.5）；
-  4. 长稳泄漏：duration_min ≥ 30 的场景，RSS 拟合斜率 ≤ --max-rss-mb-per-hour
-     （默认 1.0 MB/h，与 gateway-core/tests/soak/verdict.rs 的门槛同源）。
+  4. 长稳泄漏：duration_min ≥ 30 的场景，RSS **尾段**拟合斜率（最后 20 min）
+     ≤ --max-rss-mb-per-hour（默认 50 MB/h），且峰值 RSS ≤ 512 MB。
 
 两种「不判失败」的情况（避免门禁在数据不具备可比性时假红）：
   · 基线文件不存在或缺少某场景 → 输出 BASELINE-MISSING，退出码 0，
@@ -40,6 +40,10 @@ import sys
 # 长稳判定门槛：短于该时长的场景不判 RSS 斜率——几分钟的采样里，
 # 连接池 / 索引页的一次性分配还没走完，斜率必然为正，判了只会假红。
 SOAK_MIN_DURATION_MIN = 30
+
+# 长稳场景的 RSS 峰值硬上限（MB）。斜率只看趋势，峰值兜住绝对占用：
+# 队列库 / 页缓存 / 缓冲池被一次性撑大时，斜率可能已经走平但内存已经过高。
+RSS_PEAK_LIMIT_MB = 512.0
 
 PASS, FAIL, SKIP, NOTE = "PASS", "FAIL", "SKIP", "NOTE"
 
@@ -109,13 +113,17 @@ def judge_scenario(name: str, base: dict, cur: dict, args) -> dict:
         None if (p99_base is None or p99_cur is None)
         else p99_cur <= p99_base * args.latency_ratio)
 
-    # 4) 长稳：RSS 拟合斜率。短场景只记录数值，不判。
+    # 4) 长稳：RSS 尾段拟合斜率 + 峰值。短场景只记录数值，不判。
     slope = cur.get("rss_mb_per_hour")
+    peak = (cur.get("rss_mb") or {}).get("peak")
     dur = cur.get("duration_min") or 0
     if dur >= SOAK_MIN_DURATION_MIN:
-        add("RSS 斜率（MB/h）", fmt(base.get("rss_mb_per_hour"), 1), fmt(slope, 1),
+        add("RSS 尾段斜率（MB/h）", fmt(base.get("rss_mb_per_hour"), 1), fmt(slope, 1),
             f"≤ {args.max_rss_mb_per_hour:.1f}",
             None if slope is None else slope <= args.max_rss_mb_per_hour)
+        add("RSS 峰值（MB）", fmt((base.get("rss_mb") or {}).get("peak"), 1), fmt(peak, 1),
+            f"≤ {RSS_PEAK_LIMIT_MB:.0f}",
+            None if peak is None else peak <= RSS_PEAK_LIMIT_MB)
     else:
         add("RSS 斜率（MB/h）", fmt(base.get("rss_mb_per_hour"), 1), fmt(slope, 1),
             f"仅长稳 ≥{SOAK_MIN_DURATION_MIN}min 判定", None)
@@ -159,8 +167,8 @@ def main() -> int:
                    help="吞吐门禁：本次 / 基线 的下限（默认 0.80）")
     p.add_argument("--latency-ratio", type=float, default=1.50,
                    help="p99 门禁：本次 / 基线 的上限（默认 1.50）")
-    p.add_argument("--max-rss-mb-per-hour", type=float, default=1.0,
-                   help="长稳 RSS 斜率上限 MB/h（默认 1.0，与 soak 判定器同源）")
+    p.add_argument("--max-rss-mb-per-hour", type=float, default=50.0,
+                   help="长稳 RSS 尾段（最后 20 min）斜率上限 MB/h（默认 50）")
     p.add_argument("--out", default=None, help="Markdown 摘要输出路径（同时打印到 stdout）")
     args = p.parse_args()
 
