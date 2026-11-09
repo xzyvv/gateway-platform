@@ -116,16 +116,27 @@ pub(super) struct OverflowReport {
 
 /// 方案 A：两次容量淘汰之间的最小间隔（毫秒）。
 ///
-/// 超限后若每批入队都跑一次 `COUNT + DELETE`，队列表 10^6 行时单轮约 54ms，
-/// 2000 点/s（约每分钟 120 批）下写锁几乎被 trim 占满，`dequeue → ack` 长期
-/// 拿不到锁 → 队列只涨不落、CPU 飙升。1s 的冷却期让 trim 频率从「每批」
-/// 降到「每秒最多一次」，留出足够的写锁时间给 dequeue/ack。
-pub(super) const TRIM_COOLDOWN_MS: i64 = 1000;
+/// 超限后若每批入队都跑一次 `DELETE`，队列表 10^6 行时单轮可达数百毫秒，
+/// 写锁几乎被 trim 占满，`dequeue → ack` 长期拿不到锁 → 队列只涨不落、CPU 飙升。
+/// 冷却期把 trim 频率从「每批」压到「每秒最多 5 次」，留出写锁时间给 dequeue/ack。
+///
+/// 取 200ms 而不是 1s：单次删除量已被 `TRIM_MAX_ROWS_PER_RUN` 限死，若冷却期仍是
+/// 1s，「每秒可淘汰行数」会低于 8000 点/s 的入队速率，队列表将无界超出 `max_rows`。
+/// 5 次/s × 2000 行/s = 1 万行/s 的淘汰能力，才对 8000 点/s 留出余量。
+pub(super) const TRIM_COOLDOWN_MS: i64 = 200;
+
+/// 方案 A：单次 trim 最多删除的行数（下限，实际还会随本批入队量放大）。
+///
+/// 一次削几十万行会让 `DELETE` 长时间占住写锁，采集侧请求被阻塞、p99 直接爆掉
+/// （CI 实测 s8000 的 p99 从 99ms 涨到 496ms）。这里把单轮成本压在「2000 行」这个
+/// 量级——与历史实现单批删除的规模一致，实测 p99 稳定在 100ms 内。
+const TRIM_MAX_ROWS_PER_RUN: i64 = 2000;
 
 /// 方案 A：淘汰目标水位 = `max_rows` 的 90%。
 ///
 /// 一次削到上限的 9 成而不是刚好削到上限，是「滞回」：削完之后还有 10% 的
-/// 余量承接后续入队，不必每批都重新触顶后再 trim。
+/// 余量承接后续入队，不必每批都重新触顶后再 trim。单次删除量受
+/// `TRIM_MAX_ROWS_PER_RUN` 限制，因此远距离超限时分多轮逐步逼近该水位。
 const TRIM_TARGET_NUM: i64 = 9;
 const TRIM_TARGET_DEN: i64 = 10;
 
@@ -137,11 +148,17 @@ const TRIM_TARGET_DEN: i64 = 10;
 /// - `max_rows`：配置的硬上限
 /// - `last_trim_ms`：上次 trim 的时刻（0 表示从未 trim 过 → 立即触发）
 /// - `now_ms`：当前时刻
+/// - `inserted`：本批实际插入行数，用于放大单轮删除预算
+///
+/// 单轮删除预算 = `max(TRIM_MAX_ROWS_PER_RUN, 2 × inserted)`：固定下限保证低速
+/// 场景也能把积压削下去；随入队量放大则保证「淘汰速率 ≥ 2 倍入队速率」，高速
+/// 场景不会因为预算太小而让队列表无界增长。
 pub(super) fn trim_target(
     total: i64,
     max_rows: i64,
     last_trim_ms: i64,
     now_ms: i64,
+    inserted: i64,
 ) -> Option<i64> {
     // 未超限：热路径常态，零 DB 开销。
     if total <= max_rows {
@@ -152,12 +169,15 @@ pub(super) fn trim_target(
         return None;
     }
     // 滞回水位：削到上限的 90%（至少 1 行，且不超过上限本身）。
-    let target = max_rows
+    let hysteresis = max_rows
         .saturating_mul(TRIM_TARGET_NUM)
         .saturating_div(TRIM_TARGET_DEN)
         .max(1)
         .min(max_rows);
-    Some(target)
+    // 单轮预算：目标水位不得低于 `total - 预算`，否则一次会删掉几万甚至几十万行。
+    let budget = TRIM_MAX_ROWS_PER_RUN.max(inserted.saturating_mul(2));
+    let capped = total.saturating_sub(budget).max(0);
+    Some(hysteresis.max(capped))
 }
 
 /// A1：ack 的实际影响行数（按「状态跃迁」计数）。
@@ -811,36 +831,64 @@ impl SqliteStorage {
 
 #[cfg(test)]
 mod trim_target_tests {
-    use super::{trim_target, TRIM_COOLDOWN_MS};
+    use super::{trim_target, TRIM_COOLDOWN_MS, TRIM_MAX_ROWS_PER_RUN};
 
     /// 未超限时不 trim（入队热路径的常态，必须零 DB 开销）。
     #[test]
     fn none_when_below_limit() {
-        assert_eq!(trim_target(999, 1000, 0, 10_000), None);
-        assert_eq!(trim_target(1000, 1000, 0, 10_000), None);
-        assert_eq!(trim_target(0, 1000, 0, 10_000), None);
+        assert_eq!(trim_target(999, 1000, 0, 10_000, 10), None);
+        assert_eq!(trim_target(1000, 1000, 0, 10_000, 10), None);
+        assert_eq!(trim_target(0, 1000, 0, 10_000, 0), None);
     }
 
-    /// 超限时一次削到上限的 90%（滞回水位），而不是刚好削到上限。
+    /// 刚超限且缺口小于单轮预算时，一次削到上限的 90%（滞回水位）。
     #[test]
-    fn trims_to_ninety_percent_when_over_limit() {
-        assert_eq!(trim_target(1001, 1000, 0, 5), Some(900));
-        assert_eq!(trim_target(1_000_001, 1_000_000, 0, 5), Some(900_000));
-        // total 远超上限时目标水位仍是 90%，不会被 total 影响
-        assert_eq!(trim_target(5_000_000, 1_000_000, 0, 5), Some(900_000));
+    fn trims_to_ninety_percent_within_budget() {
+        assert_eq!(trim_target(1001, 1000, 0, 5, 0), Some(900));
+        // 缺口刚好等于预算（900 + 2000 = 2900）：仍然一次削到 90%，不浪费预算
+        assert_eq!(
+            trim_target(900 + TRIM_MAX_ROWS_PER_RUN, 1000, 0, 5, 0),
+            Some(900)
+        );
     }
 
-    /// 冷却期内即使仍超限也不 trim；冷却到期（≥1s）才允许再次 trim。
+    /// 远超上限时单轮只删 `TRIM_MAX_ROWS_PER_RUN` 行，避免长时间占住写锁。
+    #[test]
+    fn caps_rows_deleted_per_run() {
+        let total = 1_000_001;
+        let target = trim_target(total, 1_000_000, 0, 5, 0).expect("超限必须 trim");
+        assert_eq!(
+            total - target,
+            TRIM_MAX_ROWS_PER_RUN,
+            "单轮删除量必须被预算限住"
+        );
+        // 否则会一次删掉 10 万行——CI 上正是这样把 s8000 的 p99 拖到 496ms
+        assert_ne!(target, 900_000);
+    }
+
+    /// 预算随本批插入量放大（2×），保证高速入队下淘汰能力不被限死。
+    #[test]
+    fn budget_scales_with_inserted() {
+        let total = 2_000_000;
+        let inserted = 50_000;
+        let target = trim_target(total, 1_000_000, 0, 5, inserted).expect("超限必须 trim");
+        assert_eq!(total - target, inserted * 2, "预算 = 2×本批插入量");
+        // 放大后的预算仍受 90% 水位约束，不会把表削到水位以下
+        let target2 = trim_target(total, 1_000_000, 0, 5, 10_000_000).expect("超限必须 trim");
+        assert_eq!(target2, 900_000, "预算再大也不能削到 90% 水位以下");
+    }
+
+    /// 冷却期内即使仍超限也不 trim；冷却到期才允许再次 trim。
     #[test]
     fn respects_cooldown_window() {
         let last = 10_000;
         assert_eq!(
-            trim_target(2_000, 1_000, last, last + TRIM_COOLDOWN_MS - 1),
+            trim_target(2_000, 1_000, last, last + TRIM_COOLDOWN_MS - 1, 0),
             None,
             "距上次 trim 不足冷却期时必须跳过"
         );
         assert_eq!(
-            trim_target(2_000, 1_000, last, last + TRIM_COOLDOWN_MS),
+            trim_target(2_000, 1_000, last, last + TRIM_COOLDOWN_MS, 0),
             Some(900),
             "冷却到期后必须恢复 trim"
         );
@@ -849,17 +897,17 @@ mod trim_target_tests {
     /// `last_trim_ms == 0` 表示「从未 trim 过」，必须立即触发（启动后首次触顶）。
     #[test]
     fn zero_last_trim_means_immediate() {
-        assert_eq!(trim_target(2_000, 1_000, 0, 0), Some(900));
+        assert_eq!(trim_target(2_000, 1_000, 0, 0, 0), Some(900));
         // 时钟回拨（now < last）不应永久禁用 trim：饱和减法得 0 < 冷却期，
         // 行为上是「再等一个冷却周期」，不会 panic / 下溢。
-        assert_eq!(trim_target(2_000, 1_000, 10_000, 9_000), None);
+        assert_eq!(trim_target(2_000, 1_000, 10_000, 9_000, 0), None);
     }
 
     /// 极小上限的边界：目标水位至少 1 行、且不超过上限本身。
     #[test]
     fn clamps_tiny_limits() {
-        assert_eq!(trim_target(2, 1, 0, 0), Some(1));
-        assert_eq!(trim_target(1, 0, 0, 0), Some(0));
+        assert_eq!(trim_target(2, 1, 0, 0, 0), Some(1));
+        assert_eq!(trim_target(1, 0, 0, 0, 0), Some(0));
     }
 }
 
