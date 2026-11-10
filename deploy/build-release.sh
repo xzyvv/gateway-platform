@@ -362,11 +362,14 @@ cp "$ROOT/gateway-core/deploy/serial-rules.sh" "$OUT/"
 # 三者必须在同一目录，deliver.sh 才按「同目录」布局解析；缺任何一个都交付不了。
 cp "$ROOT/deploy/verify-deploy.sh" "$OUT/"
 cp "$ROOT/deploy/deliver.sh" "$OUT/"
+# 开机自启/断电自启的两阶段验证脚本：只能真机跑（重启会带走 CI job），
+# 但脚本必须随包走，否则现场又要手工判断 is-active 分不清「自启」还是「人启」。
+cp "$ROOT/deploy/verify-boot.sh" "$OUT/"
 # 显式补执行位：交付脚本在 Windows 上开发（core.filemode=false），git 里可能
 # 记录成 100644。现场文档写的是 `./deliver.sh` / `./install.sh` 直接执行，
 # 没有执行位就 Permission denied —— 包是「做出来了但跑不起来」。
 chmod +x "$OUT/install.sh" "$OUT/deploy-linux.sh" "$OUT/serial-rules.sh" \
-         "$OUT/verify-deploy.sh" "$OUT/deliver.sh" "$OUT/$BIN_NAME"
+         "$OUT/verify-deploy.sh" "$OUT/deliver.sh" "$OUT/verify-boot.sh" "$OUT/$BIN_NAME"
 # 内置设备模板唯一源在仓库根 templates/（gateway-core/templates 副本已删除）；
 # install.sh 会从包内 templates/builtin 拷贝到 /etc/gateway/templates/builtin
 cp -r "$ROOT/templates" "$OUT/"
