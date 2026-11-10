@@ -55,7 +55,7 @@ ring = "0.17"
 # 默认使用标准 SQLite（开发机无 OpenSSL/Perl）
 # 生产构建启用加密：cargo build -p gateway-core --features encryption
 # （workspace 根不支持 `--features gateway-core/encryption` 写法；构建 gatewayd 时用 -p gatewayd）
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tokio-serial = "5"
 rsntp = "3"
 thiserror = "1"

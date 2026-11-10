@@ -11,7 +11,7 @@
 //! | `engine`   | 中立模型层（error / model / metrics / audit / supervision） |
 //! | `crypto`   | 口令哈希与校验（auth handler） |
 //! | `license`  | License 快照与错误类型 |
-//! | `support`  | 通用工具（如应用目录/默认路径解析） |
+//! | `shared`   | 跨层共享的纯工具（cron 求值 / 时钟可信度 / 默认路径） |
 //!
 //! 曾经的 `platform` 让步已消除：`OtaState` 现已收敛到 `crate::web::traits`
 //! 的 Web 契约视图（`OtaStateView`），handler 不再直接引用
@@ -38,7 +38,11 @@ use std::path::{Path, PathBuf};
 /// 维护指引：仅当某模块确属「Web 契约层」时才加入。`platform` 曾因
 /// 读取 `OtaState` 而临时列入，现已收敛到 `crate::web::traits`
 /// 的 Web 契约视图，故将其移出——新增模块时须显式评估后再加入。
-const ALLOWED_CORE_MODULES: &[&str] = &["config", "engine", "crypto", "license", "support"];
+///
+/// `shared` 取代了已解散的 `support` 层：它只含跨层共享的纯工具
+/// （cron 求值、时钟可信度、默认路径），不触碰引擎内部状态，
+/// 因此属于可被 web/api 直接引用的契约层。
+const ALLOWED_CORE_MODULES: &[&str] = &["config", "engine", "crypto", "license", "shared"];
 
 /// 递归收集目录下所有 .rs 文件
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {

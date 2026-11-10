@@ -194,7 +194,7 @@ fi
 # 4. 安装前端静态资源
 echo "[4/7] 安装前端..."
 if [ -n "$UI_DIST" ] && [ -d "$UI_DIST" ] && [ -f "$UI_DIST/index.html" ]; then
-    rm -rf "$UI_DIR"/*
+    rm -rf "${UI_DIR:?}"/*
     cp -r "$UI_DIST"/. "$UI_DIR"/
     chmod -R a+r "$UI_DIR"
     echo "  ✓ 前端已安装到 $UI_DIR (index.html + $(find "$UI_DIR" -type f | wc -l) 文件)"

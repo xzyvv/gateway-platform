@@ -606,15 +606,12 @@ DB_BAK="${DB_PATH%.*}.db.bak"
 RET_DB_SIZE="（未取到）"
 RET_BAK_LINE="未找到"
 RET_BAK_SCOPE="（未取到）"
-RET_FREE_MB=""
 RET_FREE_LINE="（未取到）"
-RET_STATE="unknown"
 if [ ! -f "$DB_PATH" ]; then
   warn "数据队列库 $DB_PATH 不存在 —— 若尚未采集过数据属正常；若无数据且已上线，请检查 GATEWAY_DB_PATH 是否被误配"
 else
   DB_SIZE=$(du -h "$DB_PATH" 2>/dev/null | awk '{print $1}' || echo "?")
   RET_DB_SIZE="$DB_SIZE"
-  RET_STATE="present"
   ok "数据队列库存在：$DB_PATH（$DB_SIZE）"
   # 同盘备份：能救 SQLite 逻辑损坏，救不回磁盘物理损坏 —— 这条区别必须让客户知道
   if [ -f "$DB_BAK" ]; then
@@ -638,7 +635,6 @@ else
   DB_PART=$(df -P "$DB_PATH" 2>/dev/null | tail -1 | awk '{print $4}' || echo "")
   if [ -n "$DB_PART" ] && [ "$DB_PART" -gt 0 ] 2>/dev/null; then
     DB_FREE_MB=$((DB_PART / 1024))
-    RET_FREE_MB="$DB_FREE_MB"
     RET_FREE_LINE="${DB_FREE_MB} MB"
     if [ "$DB_FREE_MB" -lt 512 ]; then
       warn "数据分区剩余空间仅 ${DB_FREE_MB}MB —— 队列满后会按 FIFO 丢弃最旧数据，磁盘满还会触发退避；请清理或扩容"
@@ -678,7 +674,6 @@ esac
 
 # ── 3. 根健康检查（不需要 token） ──
 echo "${BOLD}[3/7] 健康检查端点${RESET}"
-HTTP_OK=0
 http_code() { curl -s -o /dev/null -w "%{http_code}" "$1" 2>/dev/null || echo "000"; }
 
 CODE=$(http_code "$API/health/live")
@@ -980,8 +975,14 @@ else
 fi
 
 # 串口（Modbus 关键设备）
-if ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | grep -q .; then
-  ok "串口设备存在: $(ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | head -5 | tr '\n' ' ')"
+# 用 glob 展开而不是 `ls | grep`：管道会先跑 ls，且非字母数字文件名会被 ls 拆开。
+SERIAL_DEVS=""
+for dev in /dev/ttyUSB* /dev/ttyACM* /dev/ttyS*; do
+  [ -e "$dev" ] || continue
+  SERIAL_DEVS="$SERIAL_DEVS $dev"
+done
+if [ -n "$SERIAL_DEVS" ]; then
+  ok "串口设备存在: $(printf '%s' "$SERIAL_DEVS" | cut -d' ' -f1-5)"
 else
   warn "未发现 /dev/ttyUSB* / /dev/ttyACM* 串口（插设备后重测）"
 fi
@@ -1292,7 +1293,7 @@ journald_dropin_files() {
 # 取某个 journald 选项的**生效值**（drop-in 覆盖主文件；同名选项取最后一个）
 # $1 = 选项名（如 SystemMaxUse）
 journald_effective_opt() {
-  local opt="$1" val="" v m b rank path
+  local opt="$1" val="" v m rank path
   # 1) 主文件：/etc > /run > /usr/local/lib > /usr/lib，第一个存在的生效
   for m in /etc/systemd/journald.conf /run/systemd/journald.conf \
            /usr/local/lib/systemd/journald.conf /usr/lib/systemd/journald.conf; do
@@ -1303,7 +1304,7 @@ journald_effective_opt() {
     fi
   done
   # 2) drop-in 覆盖主文件：按 basename 排序，同 basename 取高优先级目录
-  while IFS=$'\t' read -r b rank path; do
+  while IFS=$'\t' read -r _ rank path; do
     [ -n "$path" ] || continue
     v=$(grep -E "^[[:space:]]*${opt}=" "$path" 2>/dev/null |
       tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)

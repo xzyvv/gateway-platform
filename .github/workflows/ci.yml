@@ -707,6 +707,7 @@ jobs:
           shellcheck -S warning gateway-core/deploy/install.sh \
             gateway-core/deploy/serial-rules.sh \
             deploy/verify-deploy.sh deploy/deliver.sh deploy/build-release.sh \
+            deploy/verify-boot.sh \
             scripts/test_serial_rules.sh
 
       # 部署脚本与代码的一致性断言（C1~C14）。

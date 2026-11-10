@@ -76,6 +76,17 @@ windows-sys = { workspace = true }
 
 [features]
 ## 生产构建启用 SQLite 加密：cargo build --features encryption
+##
+## 残余风险（RUSTSEC-2026-0459 / CVE-2026-119375，memory-exposure）：
+## 上游 rusqlite 的 bundled-sqlcipher 路径在 libsqlite3-sys 0.39.x 上仍锁
+## `sqlcipher-src =419.0.6`（内含 SQLite 3.53.4，低于修复版本 3.54.0），
+## sqlcipher-src 420.0.0（SQLite 3.54.1）已发布但 libsqlite3-sys 尚未跟进，
+## 且 `=419.0.6` 是精确版本约束，无法用 [patch.crates-io] 顶到 420。
+## 默认构建路径（bundled，非 encryption）已随 rusqlite 0.41 升到 SQLite 3.54.1，
+## 不受影响。触发条件是「打开库文件的同时存在 page size 不同的 -wal 文件，
+## 且该 -wal 由低信任方写入」——本机库文件由网关自身创建，不接受外部投放，
+## 现场暴露面极低。上游发布 libsqlite3-sys 0.40（跟进 sqlcipher-src 420）后，
+## 直接升级即可闭合，无需改代码。
 encryption = ["rusqlite/bundled-sqlcipher"]
 default = ["all-protocols"]
 ## 可观测性链路追踪：为数据管道注入 #[instrument] / info_span!。

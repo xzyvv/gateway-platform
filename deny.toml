@@ -72,6 +72,17 @@ confidence-threshold = 0.8
 # crate = "ring"
 # allow = ["OpenSSL"]
 
+# sqlcipher-src：仅由 gateway-core 的 `encryption` feature 引入
+# （rusqlite/bundled-sqlcipher → libsqlite3-sys/sqlcipher → sqlcipher-src）。
+# 其许可证表达式为 "MIT AND BSD-3-Clause AND blessing AND WTFPL"：
+#   - blessing = SQLite Blessing（SQLite 源码顶部的公有领域奉献声明）
+#   - WTFPL    = SQLCipher 自身的宽松许可
+# 两者都是 SQLite 官方源码自带的宽松条款，不引入任何 copyleft 或商业限制，
+# 与「允许宽松许可证、拒绝 copyleft」的准入原则一致，故显式放行。
+[[licenses.exceptions]]
+crate = "sqlcipher-src"
+allow = ["blessing", "WTFPL"]
+
 [bans]
 # 重复依赖：警告（不阻断，便于审计）
 multiple-versions = "warn"

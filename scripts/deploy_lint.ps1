@@ -82,7 +82,9 @@ function Warn([string]$msg) {
 # Windows：Git for Windows 自带 bash（MSYS2），不依赖 WSL。
 # Linux  ：系统自带 /usr/bin/bash（CI runner 上直接可用）。
 function Find-Bash {
-    $isWindows = ($env:OS -eq "Windows_NT")
+    # 用 .NET 判定平台：$env:OS 在 Linux runner 上并不存在，StrictMode 下读取它
+    # 会抛 WriteError，Linux 侧 CI 日志里一直挂着这条无意义的红字。
+    $isWindows = ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)
     $candidates = @()
     $gitCmd = Get-Command git -ErrorAction SilentlyContinue
     if ($gitCmd) {
@@ -484,8 +486,12 @@ else {
     foreach ($f in $shFiles) {
         $rel = $f.FullName.Substring($repoRoot.Length + 1).Replace('\', '/')
         $txt = Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        # 只看可执行行：注释里的散文（例如「systemctl restart N 次」）不是服务名
+        # 引用。按整行注释剔除，否则 C7 会把散文里的单词当成服务名去比对
+        # SyslogIdentifier，报出「服务名 N」这类无意义的红灯。
+        $codeText = (($txt -split "`r?`n") | Where-Object { $_.TrimStart() -notmatch '^#' }) -join "`n"
         $names = @()
-        foreach ($sm in [regex]::Matches($txt, 'systemctl\s+(?:is-active|is-enabled|status|restart|enable|show)([^\n;|&)]*)')) {
+        foreach ($sm in [regex]::Matches($codeText, 'systemctl\s+(?:is-active|is-enabled|status|restart|enable|show)([^\n;|&)]*)')) {
             $toks = @($sm.Groups[1].Value -split '\s+' | Where-Object { $_ })
             # 从后往前找第一个既不是选项、也不是选项参数的 token。
             # 服务名只允许 [A-Za-z0-9_.-]，带引号/中文标点的（如 echo 里的
@@ -500,7 +506,7 @@ else {
                 break
             }
         }
-        foreach ($jm in [regex]::Matches($txt, 'journalctl\s+-u\s+([A-Za-z0-9_\-\.]+)')) {
+        foreach ($jm in [regex]::Matches($codeText, 'journalctl\s+-u\s+([A-Za-z0-9_\-\.]+)')) {
             $names += $jm.Groups[1].Value
         }
         $names = $names | Sort-Object -Unique

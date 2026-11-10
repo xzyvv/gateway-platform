@@ -106,9 +106,23 @@ test('点位新增与删除：POST / DELETE 各走通一次并给出成功提示
   // 总线/协议已改为从所属设备继承（禁用输入框，placeholder「继承自所属设备」），
   // 不再允许手填，这里不再填 bus
   await expect(dialog.getByPlaceholder('继承自所属设备').first()).toHaveValue('bus1')
-  // 地址 placeholder 由后端协议描述符下发，未加载时会回落「设备地址」，
-  // 不能硬编码 Modbus 文案；按表单项 label 定位更稳。
-  await dialog.getByLabel('地址', { exact: true }).fill('40002')
+  // 地址在 Modbus 协议下不是普通输入框，而是「区段 + 偏移」复合组件
+  // （ModbusAddressInput：区段下拉 + 偏移数字框，根 class=modbus-offset）。
+  // 原来用 getByLabel('地址') 命中的是表单项容器（div[role=group]），
+  // fill 必然失败：Element is not an <input>, <textarea>, <select>。
+  //
+  // 区段必须显式选，不能依赖默认值：区段由点位继承的功能码决定，
+  // 而本用例的设备模板是 modbus-holding（FC03 → 3xxxx 区段），
+  // 断言写死 4xxxx 就会与实际默认值打架。显式选择后断言才稳定。
+  await dialog.locator('.modbus-region').click()
+  await page.getByRole('option', { name: '4xxxx (输入寄存器)' }).click()
+  // 偏移填 2 → 组件合成 5 位地址 40002。
+  const addrOffset = dialog.locator('.modbus-offset input')
+  await addrOffset.fill('2')
+  // el-input-number 在 change 时才回写 v-model；fill 已派发 change，
+  // 再 Tab 失焦兜底一次，确保 40002 真正写进提交体。
+  await addrOffset.press('Tab')
+  await expect(dialog.locator('.modbus-summary')).toContainText('40002')
   // 提交前复检：openCreate 与 submitPoint 都以 selectedDevice 为前置，
   // 若它在打开对话框后被清空，submitPoint 会静默 return（无请求、无校验错误）。
   await expect(page.locator('.el-select__wrapper').first()).toContainText('设备1')

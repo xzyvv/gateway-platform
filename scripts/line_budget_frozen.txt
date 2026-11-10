@@ -17,7 +17,6 @@ gateway-api/src/web/api/system/handlers/status.rs	921
 gateway-api/src/web/config_apply.rs	824
 gateway-api/src/web/heal.rs	834
 gateway-api/src/web/middleware/auth.rs	793
-gateway-api/src/web/traits.rs	714
 gateway-core/src/config/bus.rs	551
 gateway-core/src/config/template.rs	654
 gateway-core/src/config/validate/gate.rs	731
