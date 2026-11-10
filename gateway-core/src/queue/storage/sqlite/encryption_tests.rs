@@ -152,8 +152,8 @@ fn wrong_keyfile_refuses_to_start_and_keeps_files() {
     }
 
     // 覆盖成另一把合法的 32 字节密钥（长度合法，内容错误）。
+    let good_key = std::fs::read(fx.keyfile()).expect("read keyfile");
     std::fs::write(fx.keyfile(), [0x5A_u8; 32]).expect("write wrong keyfile");
-    let db_before = std::fs::read(&fx.db_path).expect("read db before");
 
     // `SqliteStorage` 没有实现 Debug，不能用 `expect_err`，这里手工匹配。
     let err = match SqliteStorage::new(fx.db_path_str(), Arc::new(Metrics::new())) {
@@ -166,9 +166,18 @@ fn wrong_keyfile_refuses_to_start_and_keeps_files() {
         "错误信息必须给出处置开关，实际: {msg}"
     );
 
-    // 关键断言：拒绝启动的过程不得动文件——否则「保护数据」只是句口号。
-    let db_after = std::fs::read(&fx.db_path).expect("read db after");
-    assert_eq!(db_before, db_after, "拒绝启动时不得改写或删除数据库文件");
+    // 关键断言：拒绝启动的过程不得删库、清库或把库重新加密成错误密钥。
+    // 不用字节级相等：SQLite 打开时会做 WAL 恢复/页整理，即使数据没变字节也会变，
+    // 那样断言会因为存储引擎内部行为而误报。真正要守的语义是「数据不丢」：
+    // 换回正确 keyfile 后必须仍能读出原值（若库被错误密钥重写，这里会读失败）。
+    let db_after = std::fs::read(&fx.db_path).expect("拒绝启动后数据库文件必须仍存在");
+    assert!(!db_after.is_empty(), "拒绝启动后不得把库文件清空");
+    std::fs::write(fx.keyfile(), &good_key).expect("restore keyfile");
+    let storage = fx.open();
+    let items = storage
+        .history_query("p1", 0, i64::MAX, 10)
+        .expect("history query");
+    assert_eq!(items.len(), 1, "拒绝启动后原始数据必须仍可读");
     assert_eq!(
         std::fs::metadata(fx.keyfile()).expect("keyfile").len(),
         32,
