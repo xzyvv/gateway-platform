@@ -1087,11 +1087,15 @@ jobs:
           systemctl is-active gateway
           # 开机自启只校验「单元已 enable」，不做 reboot（runner 重启后 job 无法续跑，
           # 断电/重启恢复留给真机验收）。
-          # 不直接用 `is-enabled | grep -qx enabled`：is-enabled 的退出码与输出在不同
-          # systemd 版本/镜像上不一致（曾出现输出为空且退出 1），这里打印实际状态，
-          # 并以 multi-user.target.wants 下的软链作为「已持久化 enable」的硬证据。
-          ENABLED_STATE="$(systemctl is-enabled gateway 2>&1 || true)"
-          echo "is-enabled: [${ENABLED_STATE}]"
+          # 不用 `is-enabled | grep -qx enabled`：grep -q 命中即退出会让 systemctl 收到
+          # SIGPIPE，在 pipefail 下被误判为失败；is-enabled 的输出/退出码在不同 systemd
+          # 版本与镜像上也不一致。`systemctl show -p UnitFileState` 是纯状态查询，
+          # 无管道、无竞态，输出稳定。
+          UNIT_STATE="$(systemctl show -p UnitFileState --value gateway)"
+          echo "UnitFileState: [${UNIT_STATE}]"
+          [ "${UNIT_STATE}" = "enabled" ] \
+            || { echo "::error::gateway.service 未处于 enabled（实际: ${UNIT_STATE}）"; exit 1; }
+          # enable 已持久化的硬证据：multi-user.target.wants 下的软链
           sudo test -L /etc/systemd/system/multi-user.target.wants/gateway.service \
             || { echo "::error::gateway.service 未建立开机自启软链（enable 未持久化）"; exit 1; }
           # install.sh 把包内 gatewayd-<target> 统一装成固定名 gatewayd（不带 target 后缀），
