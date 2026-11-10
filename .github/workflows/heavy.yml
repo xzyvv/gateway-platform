@@ -1004,3 +1004,122 @@ jobs:
           path: ${{ runner.temp }}/gatewayd-arm64-musl-release.tar.gz
           retention-days: 30
           if-no-files-found: error
+
+  # ── ARM64 原生装机验证 ──
+  # 与上面的 release-package 互补：那个 job 在 x86 上交叉编译 + 静态体检，
+  # 只能证明「包做对了」；这里在真实 ARM64 机器上跑 install.sh + verify-deploy.sh，
+  # 证明「装得上、起得来、API 通」。
+  # 用 GitHub 托管的原生 ARM64 runner（完整 VM，PID 1 是 systemd），
+  # 不是 QEMU 模拟：useradd / systemctl / 端口绑定都是真实内核行为。
+  arm64-native-verify:
+    name: ARM64 原生装机验证
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      # 原生构建 musl 静态产物：目标架构 == 宿主架构时 build-release.sh 走裸 cargo，
+      # 由宿主 musl-gcc 编译 bundled sqlite3.c（不经过 cross 容器）。
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-arm64native-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Override cargo config for CI
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      # build-release.sh 在「目标架构 == 宿主架构」时要求 aarch64-linux-musl-gcc；
+      # Debian/Ubuntu 的 musl-tools 只提供宿主同名的 musl-gcc，做个别名即可。
+      - name: Install build deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools curl jq
+          if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+            sudo ln -sfn "$(command -v musl-gcc)" /usr/local/bin/aarch64-linux-musl-gcc
+          fi
+          aarch64-linux-musl-gcc --version | head -1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install frontend dependencies
+        run: |
+          cd gateway-web
+          npm ci --no-audit --no-fund
+
+      - name: Build release package (native arm64 musl)
+        run: bash deploy/build-release.sh --target linux-arm64-musl --sku standard
+
+      - name: Assert binary is static
+        run: |
+          set -euo pipefail
+          BIN="deploy/out/gatewayd-aarch64-unknown-linux-musl"
+          file "$BIN"
+          file "$BIN" | grep -Eq "statically linked|static-pie linked" || {
+            echo "✗ ARM64 交付二进制不是静态链接" >&2; exit 1; }
+
+      # 真装：useradd / 目录与权限 / systemd unit / 出厂配置落盘 / 启动 + 健康检查。
+      # install.sh 默认安装后启动并等健康检查，失败即非零退出。
+      - name: Install and start service
+        run: |
+          cd deploy/out
+          sudo bash install.sh
+
+      - name: Assert service installed, enabled and healthy
+        run: |
+          set -euo pipefail
+          systemctl is-active gateway
+          # 开机自启只校验「单元已 enable」，不做 reboot（runner 重启后 job 无法续跑，
+          # 断电/重启恢复留给真机验收）
+          systemctl is-enabled gateway | grep -qx enabled
+          test -x /opt/gatewayd/gatewayd-aarch64-unknown-linux-musl
+          test -d /opt/gatewayd/ui-dist
+          PORT="$(jq -r '.web.listen_addr' /etc/gateway/config.json)"
+          PORT="${PORT##*:}"
+          echo "health probe port=$PORT"
+          curl -fsS "http://127.0.0.1:${PORT}/api/health"
+
+      # 完整验收：systemd 运行态 / 端口 / 健康 / API 契约 / 运行态配置 / 授权 /
+      # 前端静态 / 硬件能力 / 资源与性能，与现场交付同一套判定口径。
+      # 不传 --token：/api/metrics 类检查会降级为进程/磁盘观测（脚本刻意不制造
+      # 「无 token 就算失败」的假 FAIL）；无 GPIO/串口的 WARN 属预期。
+      # 显式指定 --report：脚本默认把检查单写到「自己目录下的 out/」，
+      # 包里脚本已在 deploy/out 下，默认值会变成 deploy/out/out/ 而落不进 artifact。
+      - name: Full post-install verification
+        run: |
+          sudo bash deploy/out/verify-deploy.sh \
+            --build-info deploy/out/BUILD-INFO.txt \
+            --report "deploy/out/delivery-checklist-${GITHUB_RUN_ID}.md"
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          sudo systemctl status gateway --no-pager || true
+          sudo journalctl -u gateway --no-pager -n 200 || true
+          sudo ls -l /opt/gatewayd /etc/gateway || true
+          sudo tail -n 100 /var/log/gateway/* 2>/dev/null || true
+
+      - name: Upload delivery checklist
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-delivery-checklist
+          path: deploy/out/delivery-checklist-*.md
+          retention-days: 30
+          if-no-files-found: warn
