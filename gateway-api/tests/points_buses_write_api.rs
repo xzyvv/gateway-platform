@@ -156,10 +156,7 @@ async fn update_point_validates_fields_and_owner_device() {
     let mut long_interval = ok.clone();
     long_interval["interval"] = json!(60);
     let body = call(&app, "PUT", "/api/points/p1", Some(long_interval)).await;
-    assert_eq!(
-        body["code"], 0,
-        "北向关闭时不应因采集周期拒绝编辑: {body}"
-    );
+    assert_eq!(body["code"], 0, "北向关闭时不应因采集周期拒绝编辑: {body}");
 
     // scale=0 → 4002（不能静默归零采集值）
     let mut bad = ok.clone();
