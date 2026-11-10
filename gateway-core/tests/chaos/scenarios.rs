@@ -703,17 +703,28 @@ async fn scenario_mqtt_publish_end_to_end() {
     queue.enqueue(points).await.expect("enqueue 5 points");
     assert_eq!(queue.len().await, 5);
 
-    // 等待 broker 至少收到 1 条 publish（事件循环 + connect + publish 有时延）
-    let got = broker
-        .wait_for_publishes(1, std::time::Duration::from_secs(10))
-        .await;
-    assert!(got, "broker must receive at least 1 PUBLISH within 10s");
+    // 连接建立后会先发一条 `<topic>/status` 心跳，所以「收到第一条 PUBLISH」不代表
+    // 数据已经上行；这里按 topic 等到数据消息出现（最多 10s）。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut got = false;
+    while std::time::Instant::now() < deadline {
+        if broker.received.lock().iter().any(|(t, ..)| t == "gw/test") {
+            got = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(got, "10s 内未收到发往配置上送 topic 的数据消息");
     // broker 收到的应是 JSON payload（默认模板），断言可解析
     {
         let received = broker.received.lock();
         assert!(!received.is_empty(), "broker.received must be non-empty");
-        let (topic, payload, _pid, qos) = &received[0];
-        assert_eq!(topic, "gw/test", "PUBLISH must target configured topic");
+        // 连接建立后会先发一条 `<topic>/status` 心跳，received[0] 不一定是数据消息，
+        // 必须按 topic 找，否则会误判为「发错 topic」。
+        let (topic, payload, _pid, qos) = received
+            .iter()
+            .find(|(t, ..)| t == "gw/test")
+            .expect("必须收到发往配置上送 topic 的数据消息");
         assert_eq!(*qos, 1, "QoS1 required for at-least-once delivery");
         // payload 可能是 gzip（默认阈值 1024 字节不触发）或纯 JSON
         // 简化：直接断言 payload 非空；本场景不深入模型

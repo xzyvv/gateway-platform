@@ -15,4 +15,8 @@ mod task;
 pub use item::QueuedItem;
 
 pub(crate) use key::ensure_key;
+// db_init 在 `encryption` 下要拼「keyfile 路径」到拒绝启动的错误提示里。
+// key 模块是私有的，必须先在这里转出，否则跨模块访问不到（all-features 构建会报 E0425）。
+#[cfg(feature = "encryption")]
+pub(crate) use key::keyfile_path;
 pub(crate) use task::{queue_task, QueueCommand};

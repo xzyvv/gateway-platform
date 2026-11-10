@@ -150,15 +150,16 @@ async fn update_point_validates_fields_and_owner_device() {
         .unwrap()
         .contains("interval 必须大于 0"));
 
-    // interval=60（等于北向上送周期）→ 4002
-    let mut bad = ok.clone();
-    bad["interval"] = json!(60);
-    let body = call(&app, "PUT", "/api/points/p1", Some(bad)).await;
-    assert_eq!(body["code"], 4002);
-    assert!(body["message"]
-        .as_str()
-        .unwrap()
-        .contains("小于北向上送周期"));
+    // interval=60：北向关闭时不做周期约束（validate_cycle_conflict 在
+    // !mqtt.enabled 时直接放行，见 config::validate::gate），所以这里应当成功；
+    // 周期冲突本身由 gateway-core 的 gate 单测覆盖，不在写接口层重复断言。
+    let mut long_interval = ok.clone();
+    long_interval["interval"] = json!(60);
+    let body = call(&app, "PUT", "/api/points/p1", Some(long_interval)).await;
+    assert_eq!(
+        body["code"], 0,
+        "北向关闭时不应因采集周期拒绝编辑: {body}"
+    );
 
     // scale=0 → 4002（不能静默归零采集值）
     let mut bad = ok.clone();
