@@ -695,70 +695,14 @@ impl QueueStorage for SqliteStorage {
 }
 
 #[cfg(test)]
-mod saturating_dec_tests {
-    use super::SqliteStorage;
-    use std::sync::atomic::{AtomicI64, Ordering};
-
-    /// P2-c 回归：计数器饱和递减，绝不越减为负。
-    #[test]
-    fn dec_never_goes_negative() {
-        let c = AtomicI64::new(0);
-        // 计数器为 0 时扣减不应变负
-        SqliteStorage::saturating_dec(&c, 10);
-        assert_eq!(c.load(Ordering::Relaxed), 0);
-
-        c.store(5, Ordering::Relaxed);
-        SqliteStorage::saturating_dec(&c, 3);
-        assert_eq!(c.load(Ordering::Relaxed), 2);
-        SqliteStorage::saturating_dec(&c, 100);
-        assert_eq!(c.load(Ordering::Relaxed), 0);
-
-        // n <= 0 时为 no-op
-        c.store(7, Ordering::Relaxed);
-        SqliteStorage::saturating_dec(&c, 0);
-        assert_eq!(c.load(Ordering::Relaxed), 7);
-    }
-}
+mod saturating_dec_tests;
 
 /// v2.0 配额用量口径：`oldest_data_timestamp` 必须同时看原始表与聚合表。
 ///
 /// 超过 24h 的原始行会被压成分钟桶写入 `data_queue_aggregated`；只看原始表会
 /// 把"已保留的长历史"误判为"没有历史"，导致存储天数用量被低估。
 #[cfg(test)]
-mod oldest_ts_tests {
-    use super::SqliteStorage;
-    use crate::engine::metrics::Metrics;
-    use crate::queue::storage::QueueStorage;
-    use std::sync::Arc;
-
-    #[test]
-    fn includes_aggregated_table() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let storage =
-            SqliteStorage::new(db_path.to_str().unwrap(), Arc::new(Metrics::new())).unwrap();
-
-        let old_ts = 1_700_000_000_000i64;
-        // 只往聚合表写一行（模拟原始行已被 retention 清理、只剩分钟桶的历史）
-        {
-            let guard = storage.conn.lock();
-            guard
-                .execute(
-                    "INSERT INTO data_queue_aggregated \
-                         (point_id, window_start, avg_value, min_value, max_value, sample_count) \
-                     VALUES (?1, ?2, 1.0, 1.0, 1.0, 1)",
-                    rusqlite::params!["p-agg", old_ts],
-                )
-                .unwrap();
-        }
-
-        assert_eq!(
-            storage.oldest_data_timestamp(),
-            Some(old_ts),
-            "聚合表里的历史也必须计入保留跨度"
-        );
-    }
-}
+mod oldest_ts_tests;
 
 /// 方案 A 回归：容量淘汰必须「滞回 + 限流」——超限后一次削到上限的 90%，
 /// 且 1s 内的后续入队不再重复 trim（否则每批入队都占写锁，饿死 dequeue/ack）。
@@ -766,122 +710,4 @@ mod oldest_ts_tests {
 /// 需要真实 `SqliteStorage`（私有字段 `last_trim_ms` / `rows_total` / `depth`
 /// 只有本模块可见），故放在这里而不是 limit.rs 的测试模块。
 #[cfg(test)]
-mod trim_throttle_tests {
-    use super::SqliteStorage;
-    use crate::engine::metrics::Metrics;
-    use crate::engine::model::DataPoint;
-    use crate::queue::storage::QueueStorage;
-    use std::sync::atomic::Ordering;
-    use std::sync::Arc;
-
-    fn make_points(prefix: &str, n: usize) -> Vec<DataPoint> {
-        (0..n)
-            .map(|i| DataPoint::good(&format!("{prefix}-{i}"), "dev", 1.0, 1.0, "f64"))
-            .collect()
-    }
-
-    fn rows(storage: &SqliteStorage) -> i64 {
-        storage
-            .conn
-            .lock()
-            .query_row("SELECT COUNT(*) FROM data_queue", [], |r| r.get(0))
-            .expect("count rows")
-    }
-
-    #[test]
-    fn enqueue_trims_to_ninety_percent_then_throttles() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let storage =
-            SqliteStorage::new_with_limit(db_path.to_str().unwrap(), Arc::new(Metrics::new()), 10)
-                .unwrap();
-
-        // 1) 未超限：不 trim，last_trim_ms 保持 0（热路径零 DB 写）。
-        storage.enqueue_batch(&make_points("a", 10)).unwrap();
-        assert_eq!(rows(&storage), 10);
-        assert_eq!(
-            storage.last_trim_ms.load(Ordering::Relaxed),
-            0,
-            "未超限时不得 trim"
-        );
-
-        // 2) 超限：一次削到 90%（10 → 9），而不是刚好削到 max_rows。
-        storage.enqueue_batch(&make_points("b", 1)).unwrap();
-        assert_eq!(rows(&storage), 9, "超限后一次削到上限的 90%");
-        assert_eq!(
-            storage.rows_total.load(Ordering::Relaxed),
-            9,
-            "rows_total 必须与表内真实行数一致"
-        );
-        assert_eq!(
-            storage.depth.load(Ordering::Relaxed),
-            9,
-            "被淘汰的未送达行必须同步扣减 depth"
-        );
-        let first_trim = storage.last_trim_ms.load(Ordering::Relaxed);
-        assert!(first_trim > 0, "trim 后必须记录时刻");
-
-        // 3) 冷却期内再次超限：不得再 trim（行数只增不减即证明没跑 DELETE）。
-        // 这里显式把「上次 trim 时刻」钉在当前时刻，避免依赖步骤 2 与 3 之间的
-        // 真实耗时（CI 偶发卡顿超过 1s 会让用例误判）。
-        let just_trimmed = DataPoint::now();
-        storage.last_trim_ms.store(just_trimmed, Ordering::Relaxed);
-        storage.enqueue_batch(&make_points("c", 2)).unwrap();
-        assert_eq!(rows(&storage), 11, "冷却期内超限也不得删行");
-        assert_eq!(
-            storage.last_trim_ms.load(Ordering::Relaxed),
-            just_trimmed,
-            "冷却期内不得刷新 trim 时刻"
-        );
-
-        // 4) 冷却期过后：恢复 trim，仍削到 90%。
-        storage
-            .last_trim_ms
-            .store(DataPoint::now() - 5_000, Ordering::Relaxed);
-        storage.enqueue_batch(&make_points("d", 1)).unwrap();
-        assert_eq!(rows(&storage), 9, "冷却期过后应恢复 trim 到 90%");
-        assert_eq!(storage.rows_total.load(Ordering::Relaxed), 9);
-        assert_eq!(storage.depth.load(Ordering::Relaxed), 9);
-    }
-
-    /// 单轮删除量必须被预算限住：远超上限时不能一次删几十万行（会长时间占住写锁），
-    /// 而是分多轮逼近 90% 水位。
-    #[test]
-    fn enqueue_caps_rows_deleted_per_trim() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let storage = SqliteStorage::new_with_limit(
-            db_path.to_str().unwrap(),
-            Arc::new(Metrics::new()),
-            1_000,
-        )
-        .unwrap();
-
-        // 预置 3000 行：把「上次 trim 时刻」钉到未来，抑制 seeding 阶段的淘汰。
-        storage
-            .last_trim_ms
-            .store(DataPoint::now() + 60_000, Ordering::Relaxed);
-        for i in 0..30 {
-            storage
-                .enqueue_batch(&make_points(&format!("seed{i}"), 100))
-                .unwrap();
-        }
-        assert_eq!(rows(&storage), 3000);
-
-        // 放开 trim：3010 行，单轮预算 = max(2000, 2×10) = 2000 → 只删到 1010 行。
-        storage.last_trim_ms.store(0, Ordering::Relaxed);
-        storage.enqueue_batch(&make_points("cap", 10)).unwrap();
-        assert_eq!(
-            rows(&storage),
-            1010,
-            "单轮删除量必须被预算限住（3010 - 2000）"
-        );
-
-        // 下一轮：剩余缺口（110 行）小于预算，一次削到 90% 水位。
-        storage.last_trim_ms.store(0, Ordering::Relaxed);
-        storage.enqueue_batch(&make_points("finish", 10)).unwrap();
-        assert_eq!(rows(&storage), 900, "分轮逼近后必须收敛到上限的 90%");
-        assert_eq!(storage.rows_total.load(Ordering::Relaxed), 900);
-        assert_eq!(storage.depth.load(Ordering::Relaxed), 900);
-    }
-}
+mod trim_throttle_tests;
