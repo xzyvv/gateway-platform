@@ -23,7 +23,7 @@ ProcessingPipeline
     │
     ├─→ DataQueue (SQLite WAL) ──MQTT QoS1 ACK──> broker
     ├─→ RealtimeBus (broadcast) ──WS──> 前端实时页
-    └─→ ConversionManager ──┬──> MQTT
+    └─→ NorthDispatcher ──┬──> MQTT
                             ├──> Webhook (HTTP)
                             └─→ OPC UA Server / Modbus Server
 ```

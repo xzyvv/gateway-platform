@@ -23,11 +23,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
-use super::{wait_shutdown_notify, Server};
+use super::{wait_shutdown_notify, NorthServer};
 use crate::config::ModbusPassthroughConfig;
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::util::crc::crc16;
-use crate::support::app::Gateway;
+use crate::support::app::GatewayRuntime;
 
 /// 单次 socket 读取超时。
 ///
@@ -47,7 +47,7 @@ const MAX_CONNECTIONS: usize = 64;
 /// Modbus TCP↔RTU 网关桥接服务
 pub struct ModbusGatewayBridgeServer {
     config: ModbusPassthroughConfig,
-    gateway: Arc<Gateway>,
+    gateway: Arc<GatewayRuntime>,
     running: Arc<AtomicBool>,
     stop_notify: Arc<Notify>,
     /// r60-SD2：与 r48-MQTT1 同型——`stop()` 先置位再 `notify_waiters()`，
@@ -57,7 +57,7 @@ pub struct ModbusGatewayBridgeServer {
 }
 
 impl ModbusGatewayBridgeServer {
-    pub fn new(config: ModbusPassthroughConfig, gateway: Arc<Gateway>) -> Arc<Self> {
+    pub fn new(config: ModbusPassthroughConfig, gateway: Arc<GatewayRuntime>) -> Arc<Self> {
         Arc::new(Self {
             config,
             gateway,
@@ -130,7 +130,7 @@ impl ModbusGatewayBridgeServer {
     }
 }
 
-impl Server for ModbusGatewayBridgeServer {
+impl NorthServer for ModbusGatewayBridgeServer {
     fn name(&self) -> &'static str {
         // 注册表键保持 "modbus_passthrough"（配置键/配额统计依赖此字符串）
         "modbus_passthrough"
@@ -173,7 +173,7 @@ impl Server for ModbusGatewayBridgeServer {
 pub(crate) async fn handle_client(
     mut stream: tokio::net::TcpStream,
     config: &ModbusPassthroughConfig,
-    gateway: &Gateway,
+    gateway: &GatewayRuntime,
     read_timeout: Duration,
 ) {
     let _buf = [0u8; 260];

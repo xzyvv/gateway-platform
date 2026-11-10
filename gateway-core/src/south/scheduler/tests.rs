@@ -305,7 +305,7 @@ async fn r5_reload_failure_rolls_back_collectors_and_points() {
 }
 
 /// Bug-N2 (fix)：空 points 启动是配置错误信号——
-/// metrics.lifecyle.scheduler_empty_starts 必须递增，
+/// metrics.lifecycle.scheduler_empty_starts 必须递增，
 /// 给 Grafana `rate(gateway_scheduler_empty_starts_total[5m]) > 0` 告警用。
 #[tokio::test]
 async fn n2_empty_points_start_increments_empty_starts_metric() {
@@ -322,7 +322,7 @@ async fn n2_empty_points_start_increments_empty_starts_metric() {
     // 启动前：metrics = 0
     assert_eq!(
         metrics
-            .lifecyle
+            .lifecycle
             .scheduler_empty_starts
             .load(Ordering::Relaxed),
         0,
@@ -334,7 +334,7 @@ async fn n2_empty_points_start_increments_empty_starts_metric() {
     // 启动后：metrics = 1
     assert_eq!(
         metrics
-            .lifecyle
+            .lifecycle
             .scheduler_empty_starts
             .load(Ordering::Relaxed),
         1,
@@ -373,7 +373,7 @@ async fn n2_non_empty_points_start_does_not_increment_metric() {
 
     assert_eq!(
         metrics
-            .lifecyle
+            .lifecycle
             .scheduler_empty_starts
             .load(Ordering::Relaxed),
         0,

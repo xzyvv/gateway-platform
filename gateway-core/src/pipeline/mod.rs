@@ -79,7 +79,7 @@ impl CollectedBatch {
 /// 5. 入队 DataQueue
 /// 6. 实时数据 WebSocket 广播
 ///
-/// 北向上报（MQTT/Webhook/Server Sinks）由 ConversionManager 统一管理，
+/// 北向上报（MQTT/Webhook/Server Sinks）由 NorthDispatcher 统一管理，
 /// 从北向专用队列（第 5 层无损通道）接收数据，不再由 Pipeline 直接持有。
 pub struct ProcessingPipeline {
     edge: Arc<EdgeProcessor>,
@@ -90,7 +90,7 @@ pub struct ProcessingPipeline {
     queue: Arc<DataQueue>,
     realtime_bus: Option<Arc<RealtimeBus>>,
     /// 北向专用无损队列发送端（队列满时在此 await 施加背压）。
-    /// `Mutex<Option<..>>` 支持停机时主动 drop 发送端，让 ConversionManager
+    /// `Mutex<Option<..>>` 支持停机时主动 drop 发送端，让 NorthDispatcher
     /// 消费完积压后自然退出。
     north_tx: parking_lot::Mutex<Option<NorthSender>>,
     /// 采集侧 → 处理侧 的通道
@@ -258,7 +258,7 @@ impl ProcessingPipeline {
 
     /// 关闭北向专用队列的发送端（停机用）。
     ///
-    /// drop 后 ConversionManager 消费完已积压的批次即收到 `None` 自然退出，
+    /// drop 后 NorthDispatcher 消费完已积压的批次即收到 `None` 自然退出，
     /// 不会因停机信号提前截断而丢掉最终批。
     pub fn close_north_feed(&self) {
         self.north_tx.lock().take();
@@ -325,7 +325,7 @@ impl ProcessingPipeline {
             let north_tx = self.north_tx.lock().clone();
             if let Some(tx) = north_tx {
                 // 队列满时在此挂起 → 背压传导到采集调度（宁可降速，不丢上报）。
-                // 失败仅发生在 ConversionManager 已退出（停机窗口），
+                // 失败仅发生在 NorthDispatcher 已退出（停机窗口），
                 // 历史数据仍由 DataQueue 保证，不做落盘兜底。
                 if let Err(e) = tx.send(arc).await {
                     tracing::warn!(
@@ -338,7 +338,7 @@ impl ProcessingPipeline {
         }
 
         // M1: 入队由 run() 的 micro-batching 合并处理，这里返回数据点
-        // 北向上报已由 ConversionManager 从北向专用队列消费，Pipeline 不再直接持有 sink。
+        // 北向上报已由 NorthDispatcher 从北向专用队列消费，Pipeline 不再直接持有 sink。
         to_upload
     }
 

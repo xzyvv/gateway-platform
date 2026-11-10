@@ -68,7 +68,7 @@ pub struct Farm {
     pub scheduler: Arc<Scheduler>,
     pub queue: Arc<DataQueue>,
     pub realtime_bus: Arc<RealtimeBus>,
-    /// 第 5 层：北向专用队列接收端，由调用方交给 ConversionManager。
+    /// 第 5 层：北向专用队列接收端，由调用方交给 NorthDispatcher。
     pub north_rx:
         Option<tokio::sync::mpsc::Receiver<Arc<Vec<gateway_core::engine::model::DataPoint>>>>,
     /// 每总线串口桩（可断言事务数）

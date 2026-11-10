@@ -5,17 +5,14 @@ use super::*;
 fn test_decode_words_u16() {
     // D100 = 0x1234，字内小端
     let data = [0x34, 0x12];
-    assert_eq!(
-        decode_words(&data, ModbusDataType::U16),
-        Some(0x1234 as f64)
-    );
+    assert_eq!(decode_words(&data, PointDataType::U16), Some(0x1234 as f64));
 }
 
 #[test]
 fn test_decode_words_f32() {
     // f32 1.5 = 0x3FC00000，小端全序为 00 00 C0 3F
     let data = [0x00, 0x00, 0xC0, 0x3F];
-    let v = decode_words(&data, ModbusDataType::F32).expect("f32");
+    let v = decode_words(&data, PointDataType::F32).expect("f32");
     assert!((v - 1.5).abs() < 1e-6, "got {v}");
 }
 
@@ -25,7 +22,7 @@ fn test_decode_words_u32_word_order() {
     // 字内小端：w0 → 02 00，w1 → 01 00
     let data = [0x02, 0x00, 0x01, 0x00];
     assert_eq!(
-        decode_words(&data, ModbusDataType::U32),
+        decode_words(&data, PointDataType::U32),
         Some(0x00010002 as f64)
     );
 }
@@ -42,11 +39,11 @@ fn test_decode_bit_nibbles() {
 #[test]
 fn test_encode_words_roundtrip() {
     for v in [0u16 as f64, 4660.0, 65535.0] {
-        let bytes = encode_words(v, ModbusDataType::U16);
-        assert_eq!(decode_words(&bytes, ModbusDataType::U16), Some(v));
+        let bytes = encode_words(v, PointDataType::U16);
+        assert_eq!(decode_words(&bytes, PointDataType::U16), Some(v));
     }
-    let bytes = encode_words(1.5, ModbusDataType::F32);
-    assert!((decode_words(&bytes, ModbusDataType::F32).unwrap() - 1.5).abs() < 1e-6);
+    let bytes = encode_words(1.5, PointDataType::F32);
+    assert!((decode_words(&bytes, PointDataType::F32).unwrap() - 1.5).abs() < 1e-6);
 }
 
 #[test]

@@ -685,7 +685,7 @@ where
 /// 里的一个异常信号会放大成全局动作，其他正常总线上的设备在重开期间全部拿到
 /// `BusClosed`（一次误判 = 全站串口中断开）。现按 `target`（`bus:{port_name}`）限定范围。
 ///
-/// 复用配置热重载已验证的总线重建路径（`Gateway::reset_serial_buses`），
+/// 复用配置热重载已验证的总线重建路径（`GatewayRuntime::reset_serial_buses`），
 /// 不新增独立旁路恢复逻辑；走 `reload_lock` 串行化，与并发配置重载互斥。
 async fn reset_serial(state: &Arc<AppState>, target: &str) -> Result<(), String> {
     let cfg = state.config.load_full();

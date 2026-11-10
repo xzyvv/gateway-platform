@@ -4,7 +4,7 @@ use super::frames::*;
 use super::*;
 use crate::config::PointConfig;
 use crate::engine::model::Quality;
-use crate::south::protocol::common::util::{decode_bcd_value, encode_bcd_value};
+use crate::south::protocol::common::codec::{decode_bcd_value, encode_bcd_value};
 use crate::south::protocol::Collector;
 
 /// 组一个 DLT645 响应帧：68 ADDR(6) 68 CTRL LEN DATA CS 16

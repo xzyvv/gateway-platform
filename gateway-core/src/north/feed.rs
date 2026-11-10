@@ -130,7 +130,7 @@ impl NorthSender {
 
 /// 北向专用队列：创建后返回（发送端, 接收端）。
 ///
-/// 发送端交给 `ProcessingPipeline`，接收端交给 `ConversionManager`。
+/// 发送端交给 `ProcessingPipeline`，接收端交给 `NorthDispatcher`。
 pub struct NorthFeed;
 
 impl NorthFeed {

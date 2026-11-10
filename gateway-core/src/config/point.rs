@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-use crate::engine::model::{AggFn, ByteOrder, ModbusDataType};
+use crate::engine::model::{AggFn, ByteOrder, PointDataType};
 
 use super::{
     validate_byte_order, validate_non_zero_interval, validate_protocol, validate_ratio,
@@ -259,16 +259,16 @@ impl Default for PointConfig {
 /// 旧实现只认 `u16`/`f32` 等规范写法，别名一律落进 `_ => None`，采集时静默按 u16 解码
 /// （32 位/浮点值被读成乱码，有符号值被当成无符号）。因此这里必须逐别名兼容，
 /// 非法值由 `validate_all` 显式报错，而不是运行时静默回退。
-pub(crate) fn parse_data_type(s: &str) -> Option<ModbusDataType> {
+pub(crate) fn parse_data_type(s: &str) -> Option<PointDataType> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "u16" | "uint16" => Some(ModbusDataType::U16),
-        "i16" | "int16" => Some(ModbusDataType::I16),
-        "u32" | "uint32" => Some(ModbusDataType::U32),
-        "i32" | "int32" => Some(ModbusDataType::I32),
-        "u64" | "uint64" => Some(ModbusDataType::U64),
-        "i64" | "int64" => Some(ModbusDataType::I64),
-        "f32" | "float" | "float32" => Some(ModbusDataType::F32),
-        "f64" | "double" | "float64" => Some(ModbusDataType::F64),
+        "u16" | "uint16" => Some(PointDataType::U16),
+        "i16" | "int16" => Some(PointDataType::I16),
+        "u32" | "uint32" => Some(PointDataType::U32),
+        "i32" | "int32" => Some(PointDataType::I32),
+        "u64" | "uint64" => Some(PointDataType::U64),
+        "i64" | "int64" => Some(PointDataType::I64),
+        "f32" | "float" | "float32" => Some(PointDataType::F32),
+        "f64" | "double" | "float64" => Some(PointDataType::F64),
         _ => None,
     }
 }
@@ -290,7 +290,7 @@ pub(crate) fn parse_byte_order(s: &str) -> Option<ByteOrder> {
 
 impl PointConfig {
     /// 返回数据类型枚举
-    pub fn data_type_enum(&self) -> Option<ModbusDataType> {
+    pub fn data_type_enum(&self) -> Option<PointDataType> {
         self.data_type.as_deref().and_then(parse_data_type)
     }
 

@@ -1,4 +1,4 @@
-//! 装配阶段辅助函数（Step 12-13：Scheduler/Gateway/AppState/Web/北向/报警/透传 + 优雅停机）
+//! 装配阶段辅助函数（Step 12-13：Scheduler/GatewayRuntime/AppState/Web/北向/报警/透传 + 优雅停机）
 //!
 //! 对应 bootstrap 三段拆分中的 GatewayHandles 阶段，以及停机序列。
 
@@ -13,11 +13,11 @@ use gateway_core::config::{ConfigVersionStore, UplinkTestHistoryStore};
 use gateway_core::engine::metrics::Metrics;
 use gateway_core::engine::supervision::spawn_supervised;
 use gateway_core::engine::Diagnostics;
-use gateway_core::north::server::{MqttPacketPassthrough, Server};
+use gateway_core::north::server::{MqttPacketPassthrough, NorthServer};
 use gateway_core::platform::ota::OtaManager;
 use gateway_core::south::bus::SerialManager;
 use gateway_core::south::scheduler::Scheduler;
-use gateway_core::support::app::{Gateway, GatewayParts};
+use gateway_core::support::app::{GatewayComponents, GatewayRuntime};
 
 use super::super::{CollectionChain, GatewayHandles, NorthProcessing};
 use super::*;
@@ -256,9 +256,9 @@ pub(crate) struct AppStateInputs<'a> {
     pub(crate) north: &'a NorthProcessing,
     pub(crate) deps: AppDeps,
     pub(crate) web_cfg: &'a WebConfig,
-    pub(crate) gateway: &'a Arc<Gateway>,
+    pub(crate) gateway: &'a Arc<GatewayRuntime>,
     pub(crate) passthrough_manager: &'a Option<Arc<MqttPacketPassthrough>>,
-    pub(crate) north_servers: Vec<Arc<dyn Server>>,
+    pub(crate) north_servers: Vec<Arc<dyn NorthServer>>,
     pub(crate) license: Arc<gateway_core::license::LicenseManager>,
     pub(crate) cellular: Option<Arc<gateway_core::platform::cellular::CellularManager>>,
     /// 审计日志实例（由 bootstrap 提前创建，同时注入北向 Server 与 AppState）
@@ -318,7 +318,7 @@ pub(crate) fn build_app_state(inputs: AppStateInputs<'_>) -> Arc<AppState> {
             cert_manager: Arc::new(north.cert_manager.clone()),
             gateway: gateway.clone(),
             north_servers: north_servers.clone(),
-            conversion: north.conversion_mgr.clone(),
+            north_dispatcher: north.north_dispatcher.clone(),
             // 模拟消费者实例（恒存在）：Web 侧的状态接口与启停接口操作的就是它。
             sim_consumer: north.sim_consumer.clone(),
             // 北向队列观测句柄：/apin 从这里读积压/背压，不新增后台采样任务。
@@ -637,7 +637,7 @@ fn seed_baseline_version_if_empty(
     }
 }
 
-/// Step 12-13：组装并启动所有服务（Scheduler/Gateway/AppState/Web/HA/北向/报警/透传）。
+/// Step 12-13：组装并启动所有服务（Scheduler/GatewayRuntime/AppState/Web/HA/北向/报警/透传）。
 ///
 /// 接收 `config_loader`（主函数保留所有权）用于 `AppState.config_loader`
 /// 字段——`config_loader_arc(&config_loader)` 重建等价实例。
@@ -663,9 +663,9 @@ pub(crate) async fn assemble_and_start_services(
         chain.expanded_points.len()
     );
 
-    // ===== 步骤 13 之前：构造 Gateway / AppState =====
+    // ===== 步骤 13 之前：构造 GatewayRuntime / AppState =====
     let disk_status = Arc::new(gateway_core::engine::monitor::health::DiskStatus::new());
-    let gateway = Arc::new(Gateway::new(GatewayParts {
+    let gateway = Arc::new(GatewayRuntime::new(GatewayComponents {
         bus_managers: chain.bus_managers.clone(),
         mqtt: north.mqtt.clone(),
         scheduler: scheduler.clone(),
@@ -746,9 +746,9 @@ pub(crate) async fn assemble_and_start_services(
     let audit = Arc::new(gateway_core::engine::audit::AuditLog::new(
         std::path::PathBuf::from(default_audit_log()),
     ));
-    let (north_servers, conversion_run) = start_north_servers(
+    let (north_servers, north_dispatcher_run) = start_north_servers(
         config,
-        &north.conversion_mgr,
+        &north.north_dispatcher,
         &north.cert_pair,
         &north.cert_manager,
         &gateway,
@@ -858,8 +858,8 @@ pub(crate) async fn assemble_and_start_services(
             health_handles,
             cellular,
             self_heal,
-            // r66-SD1：ConversionManager run 循环 JoinHandle（fan-out 退出等待）。
-            conversion_run: Some(conversion_run),
+            // r66-SD1：NorthDispatcher run 循环 JoinHandle（fan-out 退出等待）。
+            north_dispatcher_run: Some(north_dispatcher_run),
             // P3：北向 run 循环通道表（顺序即停机序）。
             north_channels,
             // r74-SD1：Web 停机信号 + run 句柄，停机序最前触发优雅停机。

@@ -35,7 +35,7 @@
 
 <script setup lang="ts">
 /** Modbus Server（对外服务）配置页签（F-14）。
- *  后端 north/server/modbus_server.rs 已接入 bootstrap；寄存器映射由 ModbusSink 按
+ *  后端 north/server/modbus_server.rs 已接入 bootstrap；寄存器映射由 ModbusServerAdapter 按
  *  base_register + mode 生成，本页只负责配置节本身。 */
 import { computed } from 'vue'
 import { Cpu } from '@element-plus/icons-vue'

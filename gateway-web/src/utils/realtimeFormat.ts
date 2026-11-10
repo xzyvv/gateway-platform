@@ -49,7 +49,7 @@ export const qualityLabel: Record<string, string> = {
 /**
  * 数据类型 → 中文说明。
  *
- * 后端返回的是规范名（`ModbusDataType::canonical_name`）：u16/i16/u32/i32/u64/i64/f32/f64，
+ * 后端返回的是规范名（`PointDataType::canonical_name`）：u16/i16/u32/i32/u64/i64/f32/f64，
  * 历史配置与旧数据里还可能是 int16/uint16/int32/uint32/float/double 等别名（解析层仍接受），
  * 两套都登记，避免界面上把规范名显示成裸字符串。未登记的类型由调用方回退成原值。
  */

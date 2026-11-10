@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use super::Server;
+use super::NorthServer;
 use crate::engine::audit::AuditLog;
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::model::DataPoint;
-use crate::support::app::Gateway;
+use crate::support::app::GatewayRuntime;
 
 use opcua::crypto::SecurityPolicy;
 use opcua::nodes::{AccessLevel, ObjectBuilder, Variable};
@@ -79,12 +79,12 @@ impl Default for OpcUaServerConfig {
     }
 }
 
-/// OPC UA 写回依赖：Gateway 写链路（白名单 + collector 下发）与审计落盘。
+/// OPC UA 写回依赖：GatewayRuntime 写链路（白名单 + collector 下发）与审计落盘。
 ///
 /// 写回调是同步闭包（async-opcua 约束），实际下发通过 `tokio::spawn` 转异步，
 /// 回调本身只做「值解析 + 白名单预检 + 乐观返回 Good」。
 pub struct OpcUaWriteHandler {
-    pub gateway: Arc<Gateway>,
+    pub gateway: Arc<GatewayRuntime>,
     pub audit: Arc<AuditLog>,
 }
 
@@ -396,7 +396,7 @@ pub(crate) fn parse_endpoint(ep: &str) -> GatewayResult<(String, u16)> {
     Ok((host.to_string(), port))
 }
 
-impl Server for OpcUaServer {
+impl NorthServer for OpcUaServer {
     fn name(&self) -> &'static str {
         "opcua"
     }

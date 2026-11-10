@@ -527,7 +527,7 @@ fn harden_windows_key_acl(path: &Path, metrics: Option<&Arc<crate::engine::metri
                     path.display()
                 );
                 if let Some(m) = metrics {
-                    m.lifecyle
+                    m.lifecycle
                         .cert_acl_hardening_failures
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -551,7 +551,7 @@ fn harden_windows_key_acl(path: &Path, metrics: Option<&Arc<crate::engine::metri
                 s
             );
             if let Some(m) = metrics {
-                m.lifecyle
+                m.lifecycle
                     .cert_acl_hardening_failures
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
@@ -563,7 +563,7 @@ fn harden_windows_key_acl(path: &Path, metrics: Option<&Arc<crate::engine::metri
                 e
             );
             if let Some(m) = metrics {
-                m.lifecyle
+                m.lifecycle
                     .cert_acl_hardening_failures
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }

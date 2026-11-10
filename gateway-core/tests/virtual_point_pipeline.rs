@@ -16,7 +16,7 @@ use gateway_core::config::{PointConfig, VirtualPoint};
 use gateway_core::engine::error::GatewayResult;
 use gateway_core::engine::metrics::Metrics;
 use gateway_core::engine::model::DataPoint;
-use gateway_core::north::{ConnectorHealth, ConversionManager, NorthConnector};
+use gateway_core::north::{ConnectorHealth, NorthConnector, NorthDispatcher};
 use gateway_core::pipeline::{
     CollectedBatch, ConvertEngine, EdgeProcessor, PipelineSpawnInputs, ProcessingPipeline,
     RealtimeBus, VirtualPointEngine,
@@ -122,7 +122,7 @@ async fn derived_virtual_point_reaches_queue_and_northbound() {
 
     let connector = RecordingConnector::new();
     let (north_tx, north_rx) = gateway_core::north::NorthFeed::channel(64);
-    let cm = ConversionManager::new(north_rx);
+    let cm = NorthDispatcher::new(north_rx);
     cm.register_connector(connector.clone() as Arc<dyn NorthConnector>);
     let cm_handle = tokio::spawn(async move { cm.run().await });
 

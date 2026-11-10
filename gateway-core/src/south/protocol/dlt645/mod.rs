@@ -24,7 +24,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 pub(crate) mod frames;
-use crate::south::protocol::common::util::encode_bcd_value;
+use crate::south::protocol::common::codec::encode_bcd_value;
 use frames::{
     build_dlt645_frame, build_dlt645_write_address_data, build_dlt645_write_password_data,
     decode_dlt_value, encode_dlt_value, parse_data_id, parse_dlt645_response,

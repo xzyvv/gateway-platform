@@ -8,7 +8,7 @@
 //!
 //! 本文件锁定三条不变量：
 //! 1. 一批采集 → `data_queue` **恰好 1 行**（pipeline 唯一入队点）；
-//! 2. 扇出到各 connector **恰好 1 批 / 1 点**（ConversionManager 不重复投递）；
+//! 2. 扇出到各 connector **恰好 1 批 / 1 点**（NorthDispatcher 不重复投递）；
 //! 3. MQTT 关闭（未注册 connector）时历史查询**仍有数据**
 //!    （数据落库与北向发送解耦，不因北向关闭而丢历史）。
 //!
@@ -26,7 +26,7 @@ use gateway_core::engine::error::GatewayResult;
 use gateway_core::engine::metrics::Metrics;
 use gateway_core::engine::model::DataPoint;
 use gateway_core::north::mqtt::MqttClient;
-use gateway_core::north::{ConnectorHealth, ConversionManager, NorthConnector};
+use gateway_core::north::{ConnectorHealth, NorthConnector, NorthDispatcher};
 use gateway_core::pipeline::{
     CollectedBatch, ConvertEngine, EdgeProcessor, PipelineSpawnInputs, ProcessingPipeline,
     RealtimeBus,
@@ -139,7 +139,7 @@ async fn n1_one_collected_batch_is_delivered_exactly_once() {
     );
     let counter = CountingConnector::new();
 
-    let cm = ConversionManager::new(north_rx);
+    let cm = NorthDispatcher::new(north_rx);
     cm.register_connector(mqtt.clone() as Arc<dyn NorthConnector>);
     cm.register_connector(counter.clone() as Arc<dyn NorthConnector>);
     let cm_handle = tokio::spawn(async move { cm.run().await });

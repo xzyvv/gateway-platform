@@ -1,4 +1,4 @@
-//! Modbus Server sink：将 RealtimeBus 数据推送到 Modbus 寄存器空间。
+//! Modbus 从站适配器：将 RealtimeBus 数据推送到 Modbus 寄存器空间。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,19 +9,19 @@ use crate::config::PointConfig;
 use crate::engine::metrics::SinkId;
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
+use crate::north::server::NorthServer;
 use crate::north::server::RegisterMapping;
-use crate::north::server::Server;
 
-use super::base::SinkCore;
+use super::base::AdapterCore;
 
-/// Modbus Server sink：将 DataPoint 转为寄存器值
+/// Modbus 从站适配器：将 DataPoint 转为寄存器值
 ///
-/// Modbus sink 内部 task 与外部共享寄存器映射表（build_mappings 调用前映射为空，apply_registers 跳过）。
-/// Modbus sink 与 OPC UA sink 不同之处在于：build_mappings 必须在 sink.send 前调用一次，
-/// 因此 sink 字段用 Arc<RwLock> 让内部 task 与外部 build_mappings 共享。
-/// 其余生命周期（channel / 背压 / 停机）由 [`SinkCore`] 统一承载。
-pub struct ModbusSink {
-    core: Arc<SinkCore>,
+/// Modbus 适配器内部 task 与外部共享寄存器映射表（build_mappings 调用前映射为空，apply_registers 跳过）。
+/// Modbus 适配器与 OPC UA 适配器不同之处在于：build_mappings 必须在 send 前调用一次，
+/// 因此寄存器字段用 Arc<RwLock> 让内部 task 与外部 build_mappings 共享。
+/// 其余生命周期（channel / 背压 / 停机）由 [`AdapterCore`] 统一承载。
+pub struct ModbusServerAdapter {
+    core: Arc<AdapterCore>,
     /// 寄存器映射表（point_id → register_addr），Arc 共享给内部 task
     mappings: Arc<RwLock<Vec<RegisterMapping>>>,
     /// Modbus server 句柄：`health()` 据此反映 server 真实运行状态，
@@ -29,7 +29,7 @@ pub struct ModbusSink {
     server: Arc<crate::north::server::modbus_server::ModbusServer>,
 }
 
-impl ModbusSink {
+impl ModbusServerAdapter {
     pub fn new(
         server: Arc<crate::north::server::modbus_server::ModbusServer>,
         metrics: Arc<crate::engine::metrics::Metrics>,
@@ -53,7 +53,7 @@ impl ModbusSink {
         // 失败条件 = server.is_running()==false（Modbus TCP listener 未在 listen、
         // 或者端口被外部进程抢占、或者 modbus 进程自身 panic 后 supervisor 还没拉起）。
         let server_for_recovery = server.clone();
-        let core = SinkCore::new(
+        let core = AdapterCore::new(
             SinkId::Modbus,
             shutdown,
             metrics,
@@ -122,7 +122,7 @@ impl ModbusSink {
     }
 
     /// sink 标识（用于 metrics key，与 send() 内部一致）。
-    /// 注意：NorthConnector::name() 返回 "modbus_sink"（连接器 SPI 名称），
+    /// 注意：NorthConnector::name() 返回 "modbus_adapter"（连接器 SPI 名称），
     /// 本方法返回 "modbus"（历史 metrics key，保持不变）。
     pub fn name(&self) -> &'static str {
         self.core.name()
@@ -144,9 +144,9 @@ impl ModbusSink {
 // 使用全路径 crate::north::NorthConnector 引用 trait。
 
 #[async_trait::async_trait]
-impl crate::north::NorthConnector for ModbusSink {
+impl crate::north::NorthConnector for ModbusServerAdapter {
     fn name(&self) -> &str {
-        "modbus_sink"
+        "modbus_adapter"
     }
 
     async fn publish_batch(&self, batch: &[DataPoint]) -> crate::engine::error::GatewayResult<()> {
@@ -156,7 +156,7 @@ impl crate::north::NorthConnector for ModbusSink {
     }
 
     fn health(&self) -> crate::north::ConnectorHealth {
-        // 真实反映 Modbus server 运行状态（与 OpcUaSink 一致）：server 未运行
+        // 真实反映 Modbus server 运行状态（与 OpcUaServerAdapter 一致）：server 未运行
         // （未启动/已停止）时外部主站读不到寄存器数据，应报告 not connected，
         // 避免监控误判为健康。原实现恒返回 connected=true，属假健康。
         let running = self.server.is_running();

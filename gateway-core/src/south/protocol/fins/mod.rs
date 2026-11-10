@@ -30,7 +30,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
 
 use crate::config::PointConfig;
-use crate::engine::model::{DataPoint, ModbusDataType, Quality};
+use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
     convert_value, reverse_convert, Collector, CollectorError, CollectorResult,
 };
@@ -297,7 +297,7 @@ impl FinsCollector {
         let data = parse_read_response(&payload, MRC_MEMORY_READ, SRC_MEMORY_READ)?;
         Ok((
             end_code,
-            frames::decode_words(&data, ModbusDataType::U16).map(|v| v as i32),
+            frames::decode_words(&data, PointDataType::U16).map(|v| v as i32),
         ))
     }
 }
@@ -341,7 +341,7 @@ impl Collector for FinsCollector {
                     return format!("FINS {}：建链成功，但 DM0 应答不合规（{e}）", self.bus_name)
                 }
             };
-            match frames::decode_words(&data, ModbusDataType::U16) {
+            match frames::decode_words(&data, PointDataType::U16) {
                 Some(v) => format!(
                     "FINS {}：建链成功，DM0 回读值={v}（server_node=0x{server_node:02X}）",
                     self.bus_name
@@ -386,7 +386,7 @@ impl Collector for FinsCollector {
             let (area_code, count, dt) = if is_bit {
                 (area.bit_code, 1u16, None)
             } else {
-                let dt = point.data_type_enum().unwrap_or(ModbusDataType::U16);
+                let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
                 (area.word_code, dt.register_count(), Some(dt))
             };
 
@@ -501,7 +501,7 @@ impl Collector for FinsCollector {
                     &data,
                 )
             } else {
-                let dt = point.data_type_enum().unwrap_or(ModbusDataType::U16);
+                let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
                 // 写值与读路径对偶：北向下发的是一次侧值，需先除回变比与 scale/offset
                 let data = encode_words(reverse_convert(point, value), dt);
                 build_write_frame(

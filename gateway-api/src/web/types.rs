@@ -18,7 +18,7 @@ use gateway_core::config::ConfigVersionStore;
 use gateway_core::config::TemplateManager;
 use gateway_core::config::{ConfigLoader, GatewayConfig, WebConfig};
 use gateway_core::engine::Diagnostics;
-use gateway_core::north::server::Server;
+use gateway_core::north::server::NorthServer;
 use gateway_core::north::sim_consumer::SimConsumer;
 use gateway_core::platform::GpioController;
 use gateway_core::platform::NtpManager;
@@ -75,17 +75,17 @@ impl Clone for ConfigRefs {
 /// 需要 MQTT 客户端时一律走 [`NorthRefs::has_north_consumer`] 所依赖的
 /// `gateway.mqtt()`（实时值）。
 ///
-/// 注：`gateway` 字段是 `Arc<dyn GatewayTrait>` —— `Arc<T: ?Sized>` 实现 `Clone`
+/// 注：`gateway` 字段是 `Arc<dyn GatewayRuntimeTrait>` —— `Arc<T: ?Sized>` 实现 `Clone`
 /// 但**不会**复制底层 trait 对象实例，而只是把引用计数 `+1`，与原手写 Clone 行为一致。
 #[derive(Clone)]
 pub struct NorthRefs {
     pub ota: Arc<dyn crate::web::traits::OtaTrait>,
     pub cert_manager: Arc<gateway_core::crypto::cert::CertManager>,
-    pub gateway: Arc<dyn crate::web::traits::GatewayTrait>,
-    pub north_servers: Vec<Arc<dyn Server>>,
+    pub gateway: Arc<dyn crate::web::traits::GatewayRuntimeTrait>,
+    pub north_servers: Vec<Arc<dyn NorthServer>>,
     /// N-7：北向 fan-out 管理器——状态页从这里读各 connector 的真实
     /// `health()` 与实时广播丢帧计数，而不是按配置猜连通性。
-    pub conversion: Arc<gateway_core::north::ConversionManager>,
+    pub north_dispatcher: Arc<gateway_core::north::NorthDispatcher>,
     /// 内置模拟消费者（SimConsumer）：无 MQTT 通道时的兜底消费者。
     ///
     /// **恒为 Some**（即便配置未启用）——它是一个可运行时启停的组件，

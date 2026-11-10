@@ -27,7 +27,7 @@ impl Metrics {
         // 才能在现场可见——只打 tracing 日志等于没有。
         self.bus.render(&mut out);
         self.alarm.render(&mut out);
-        self.lifecyle.render(&mut out);
+        self.lifecycle.render(&mut out);
         // 队列持久化 / WAL / outbox 降级指标。此前该子结构的 render 从未被调用，
         // 导致 `gateway_queue_persist_*`、`gateway_wal_*`、`gateway_outbox_degraded_total`
         // 全部未导出（Prometheus 上不可见）。
@@ -243,7 +243,7 @@ impl Metrics {
 
         let errors_total = self.collect.serial_errors.load(Ordering::Relaxed)
             + self.collect.collect_failures.load(Ordering::Relaxed)
-            + self.lifecyle.task_panics.load(Ordering::Relaxed);
+            + self.lifecycle.task_panics.load(Ordering::Relaxed);
         out.push_str("# HELP gateway_errors_total Total error count (serial + collect_failures + task_panics)\n");
         out.push_str("# TYPE gateway_errors_total counter\n");
         out.push_str(&format!("gateway_errors_total {}\n", errors_total));

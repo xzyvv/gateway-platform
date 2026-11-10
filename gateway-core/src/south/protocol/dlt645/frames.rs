@@ -13,11 +13,11 @@
 use crate::config::PointConfig;
 use crate::engine::model::Quality;
 use crate::south::bus::FrameBuffer;
+use crate::south::protocol::common::codec::{encode_bcd_value, hex_digit};
 use crate::south::protocol::common::decode::{decode_value_by_type, encode_value_by_type};
 use crate::south::protocol::common::frame_extract::{
     build_68_frame, extract_dlt645_cjt188_frame, parse_68_response,
 };
-use crate::south::protocol::common::util::{encode_bcd_value, hex_digit};
 use crate::south::protocol::{CollectorError, CollectorResult};
 
 /// DLT645 协议变体（配置项 `bus.dlt645_version` / `bus.variant`）

@@ -31,7 +31,7 @@
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
-use crate::engine::model::ModbusDataType;
+use crate::engine::model::PointDataType;
 use crate::south::protocol::{CollectorError, CollectorResult};
 
 /// MC 帧格式（决策表 #16，经统一变体字段选择）。
@@ -506,7 +506,7 @@ pub(crate) fn check_end_code(end_code: u16) -> CollectorResult<()> {
 /// 按 `dt` 解码字元件数据（每字小端，低地址在前）。
 ///
 /// 复用跨协议 `decode_binary_value`：先按字小端拼成字节流，再整体反转为大端规范序。
-pub(crate) fn decode_words(data: &[u8], dt: ModbusDataType) -> Option<f64> {
+pub(crate) fn decode_words(data: &[u8], dt: PointDataType) -> Option<f64> {
     // MC 字数据为「字内小端 + 低地址字在前」。整体反转即得到规范大端序
     // （首字在高位），与 decode_binary_value 的 from_be 约定一致。
     let mut bytes = data.to_vec();
@@ -527,17 +527,17 @@ pub(crate) fn decode_bit(data: &[u8], index: usize) -> Option<f64> {
 }
 
 /// 将 f64 编码为待写字的原始字节（小端），字数为 `dt` 所需寄存器数。
-pub(crate) fn encode_words(value: f64, dt: ModbusDataType) -> Vec<u8> {
+pub(crate) fn encode_words(value: f64, dt: PointDataType) -> Vec<u8> {
     // 先按大端规范得到字节，再按字反转回小端
     let be = match dt {
-        ModbusDataType::U16 => (value as u16).to_be_bytes().to_vec(),
-        ModbusDataType::I16 => (value as i16).to_be_bytes().to_vec(),
-        ModbusDataType::U32 => (value as u32).to_be_bytes().to_vec(),
-        ModbusDataType::I32 => (value as i32).to_be_bytes().to_vec(),
-        ModbusDataType::F32 => (value as f32).to_be_bytes().to_vec(),
-        ModbusDataType::U64 => (value as u64).to_be_bytes().to_vec(),
-        ModbusDataType::I64 => (value as i64).to_be_bytes().to_vec(),
-        ModbusDataType::F64 => value.to_be_bytes().to_vec(),
+        PointDataType::U16 => (value as u16).to_be_bytes().to_vec(),
+        PointDataType::I16 => (value as i16).to_be_bytes().to_vec(),
+        PointDataType::U32 => (value as u32).to_be_bytes().to_vec(),
+        PointDataType::I32 => (value as i32).to_be_bytes().to_vec(),
+        PointDataType::F32 => (value as f32).to_be_bytes().to_vec(),
+        PointDataType::U64 => (value as u64).to_be_bytes().to_vec(),
+        PointDataType::I64 => (value as i64).to_be_bytes().to_vec(),
+        PointDataType::F64 => value.to_be_bytes().to_vec(),
     };
     // 大端规范序整体反转即得到 MC 期望的「字内小端 + 低地址字在前」
     let mut out = be;

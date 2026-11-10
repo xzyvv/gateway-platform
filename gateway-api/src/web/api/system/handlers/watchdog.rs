@@ -68,7 +68,7 @@ pub(crate) async fn list_services(
         uptime,
         cpu,
         mem: 0,
-        restarts: metrics.lifecyle.task_panics.load(Ordering::Relaxed),
+        restarts: metrics.lifecycle.task_panics.load(Ordering::Relaxed),
     });
 
     // 2. MQTT 上行
@@ -146,7 +146,7 @@ pub(crate) async fn list_services(
         uptime,
         cpu: 0.0,
         mem: 0,
-        restarts: metrics.lifecyle.watchdog_timeouts.load(Ordering::Relaxed),
+        restarts: metrics.lifecycle.watchdog_timeouts.load(Ordering::Relaxed),
     });
 
     // 5. OTA
@@ -163,7 +163,10 @@ pub(crate) async fn list_services(
         uptime,
         cpu: 0.0,
         mem: 0,
-        restarts: metrics.lifecyle.config_reload_total.load(Ordering::Relaxed),
+        restarts: metrics
+            .lifecycle
+            .config_reload_total
+            .load(Ordering::Relaxed),
     });
 
     Ok(Json(ApiResponse::ok(services)))

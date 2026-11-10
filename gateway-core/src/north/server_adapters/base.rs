@@ -1,9 +1,9 @@
-//! server sink 通用生命周期内核
+//! 北向从站适配器通用生命周期内核
 //!
-//! 把 OPC UA / Modbus 等 server sink 共有的「内部 task + mpsc channel +
-//! 背压丢弃计数 + 在途深度 metric + 优雅停机」收敛为单一 [`SinkCore`]。
+//! 把 OPC UA / Modbus 等从站适配器共有的「内部 task + mpsc channel +
+//! 背压丢弃计数 + 在途深度 metric + 优雅停机」收敛为单一 [`AdapterCore`]。
 //!
-//! 差异点只有「消费一批点位后如何写回 server」——由构造时传入的 `apply`
+//! 差异点只有「消费一批点位后如何写回从站」——由构造时传入的 `apply`
 //! 回调表达（OPC UA 写地址空间、Modbus 写寄存器空间）。
 //!
 //! 语义（与重构前逐字保持一致）：
@@ -20,12 +20,12 @@ use crate::engine::metrics::{Metrics, SinkId};
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
 
-use super::SINK_CHANNEL_CAPACITY;
+use super::ADAPTER_CHANNEL_CAPACITY;
 
-/// server sink 通用内核
+/// 北向从站适配器通用内核
 ///
 /// 持有 mpsc 发送端、丢弃/在途计数与指标句柄；内部消费 task 由构造时启动。
-pub(super) struct SinkCore {
+pub(super) struct AdapterCore {
     tx: mpsc::Sender<Vec<DataPoint>>,
     /// 累计丢弃的批次数（通道满时）
     dropped: Arc<AtomicU64>,
@@ -40,7 +40,7 @@ pub(super) struct SinkCore {
     sink: SinkId,
 }
 
-impl SinkCore {
+impl AdapterCore {
     /// 创建内核并启动内部消费 task
     ///
     /// - `sink`：内置 sink 标识（`SinkId` 枚举，P2-2）。metrics 标签与 task 名
@@ -68,7 +68,7 @@ impl SinkCore {
         G: Fn() + Send + 'static,
     {
         let name: &'static str = sink.as_str();
-        let (tx, mut rx) = mpsc::channel::<Vec<DataPoint>>(SINK_CHANNEL_CAPACITY);
+        let (tx, mut rx) = mpsc::channel::<Vec<DataPoint>>(ADAPTER_CHANNEL_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
         let in_flight = Arc::new(AtomicUsize::new(0));
         let in_flight_for_task = in_flight.clone();
@@ -85,7 +85,7 @@ impl SinkCore {
                                 // Bug 187 (N17): apply 失败 → on_failure + 重试一次。
                                 if apply(&points).is_err() {
                                     metrics_for_task
-                                        .lifecyle.sink_reconnect_attempts
+                                        .lifecycle.sink_reconnect_attempts
                                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     tracing::warn!(
                                         target: "north.server_sink",
@@ -95,7 +95,7 @@ impl SinkCore {
                                     // 重试一次；仍失败则记 exhausted，本批计入 dropped。
                                     if apply(&points).is_err() {
                                         metrics_for_task
-                                            .lifecyle.sink_reconnect_exhausted
+                                            .lifecycle.sink_reconnect_exhausted
                                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                         // A2：`saturating_sub` 取代裸 `- 1`：
                                         // 计数一旦被并发路径压到 0，裸减会溢出 panic

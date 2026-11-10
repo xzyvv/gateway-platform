@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 use super::frames::*;
 use super::McCollector;
 use crate::config::PointConfig;
-use crate::engine::model::ModbusDataType;
+use crate::engine::model::PointDataType;
 use crate::south::protocol::Collector;
 
 mod address_parse;

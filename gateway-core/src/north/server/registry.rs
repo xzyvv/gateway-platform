@@ -1,13 +1,13 @@
-//! 北向 Server 注册表（北向通道插件化）
+//! 北向从站注册表（北向通道插件化）
 //!
 //! 与 [`crate::south::protocol::registry::ProtocolRegistry`] 对偶：
 //! - ProtocolRegistry 管理「协议名 → Collector 工厂」
-//! - ServerRegistry 管理「Server 名 → Server 工厂」
+//! - NorthServerRegistry 管理「从站名 → 从站工厂」
 //!
 //! 新增北向通道操作清单：
-//! 1. 在 `super::<server>` 模块下实现 `Server` trait
-//! 2. 在本文件写 `fn create_<server>(ctx: &ServerContext) -> Option<Arc<dyn Server>>`
-//! 3. 在 `ServerRegistry::new()` 中调用 `self.register("<server>", create_<server>)`
+//! 1. 在 `super::<server>` 模块下实现 `NorthServer` trait
+//! 2. 在本文件写 `fn create_<server>(ctx: &NorthServerContext) -> Option<Arc<dyn NorthServer>>`
+//! 3. 在 `NorthServerRegistry::new()` 中调用 `self.register("<server>", create_<server>)`
 //! 4. 无需修改 bootstrap 代码
 
 use std::collections::HashMap;
@@ -15,22 +15,22 @@ use std::sync::Arc;
 
 use crate::config::{GatewayConfig, PointConfig};
 use crate::crypto::cert::{CertManager, CertPair};
-use crate::north::ConversionManager;
-use crate::support::app::Gateway;
+use crate::north::NorthDispatcher;
+use crate::support::app::GatewayRuntime;
 
-use super::Server;
+use super::NorthServer;
 
 /// 北向 Server 启动上下文
 ///
 /// 包含所有 Server 工厂可能需要的依赖。新增 Server 若需要新依赖，
 /// 在此结构体追加字段即可，不影响已有工厂签名。
-pub struct ServerContext<'a> {
+pub struct NorthServerContext<'a> {
     pub config: &'a GatewayConfig,
-    pub conversion_mgr: &'a Arc<ConversionManager>,
+    pub north_dispatcher: &'a Arc<NorthDispatcher>,
     pub cert_pair: &'a Option<CertPair>,
     pub cert_manager: &'a CertManager,
-    /// Gateway 组件管理器（供需要读写总线/Collector 的 Server 使用，如 ModbusPassthrough）
-    pub gateway: &'a Arc<Gateway>,
+    /// GatewayRuntime 组件管理器（供需要读写总线/Collector 的 Server 使用，如 ModbusPassthrough）
+    pub gateway: &'a Arc<GatewayRuntime>,
     /// 审计日志（供支持写回的 Server 记录 `point.write`，与 API 写入口同一落盘实例）
     pub audit: &'a Arc<crate::engine::audit::AuditLog>,
     pub expanded_points: &'a [PointConfig],
@@ -39,16 +39,16 @@ pub struct ServerContext<'a> {
 /// Server 工厂函数：根据上下文创建并启动一个 Server，返回句柄供优雅停机
 ///
 /// 返回 `None` 表示该 Server 被配置禁用或初始化失败（已在内部 log）。
-pub type ServerFactory = fn(ctx: &ServerContext) -> Option<Arc<dyn Server>>;
+pub type NorthServerFactory = fn(ctx: &NorthServerContext) -> Option<Arc<dyn NorthServer>>;
 
 /// 北向 Server 注册表
 ///
 /// 维护 Server 名到工厂函数的映射。`start_all` 遍历所有工厂并启动已启用的 Server。
-pub struct ServerRegistry {
-    factories: HashMap<String, ServerFactory>,
+pub struct NorthServerRegistry {
+    factories: HashMap<String, NorthServerFactory>,
 }
 
-impl ServerRegistry {
+impl NorthServerRegistry {
     /// 创建注册表并注册内置 Server
     pub fn new() -> Self {
         let mut registry = Self {
@@ -61,13 +61,13 @@ impl ServerRegistry {
     }
 
     /// 注册一个 Server 工厂
-    pub fn register(&mut self, name: &str, factory: ServerFactory) {
+    pub fn register(&mut self, name: &str, factory: NorthServerFactory) {
         self.factories.insert(name.to_string(), factory);
     }
 
     /// 启动所有已注册的 Server，返回句柄列表供优雅停机
-    pub fn start_all(&self, ctx: &ServerContext) -> Vec<Arc<dyn Server>> {
-        let mut servers: Vec<Arc<dyn Server>> = Vec::new();
+    pub fn start_all(&self, ctx: &NorthServerContext) -> Vec<Arc<dyn NorthServer>> {
+        let mut servers: Vec<Arc<dyn NorthServer>> = Vec::new();
         for (name, factory) in &self.factories {
             match factory(ctx) {
                 Some(srv) => servers.push(srv),
@@ -78,7 +78,7 @@ impl ServerRegistry {
     }
 }
 
-impl Default for ServerRegistry {
+impl Default for NorthServerRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -90,10 +90,10 @@ impl Default for ServerRegistry {
 ///
 /// 仅在 `opcua-server` feature 下编译；裁剪构建的占位实现见下方同名函数。
 #[cfg(feature = "opcua-server")]
-fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
+fn create_opcua_server(ctx: &NorthServerContext) -> Option<Arc<dyn NorthServer>> {
     use crate::engine::supervision::spawn_supervised;
     use crate::north::server::opcua_server::{OpcUaServer, OpcUaServerConfig, OpcUaWriteHandler};
-    use crate::north::OpcUaSink;
+    use crate::north::OpcUaServerAdapter;
     use tracing::{error, info};
 
     let opcua_cfg = ctx.config.opcua.clone()?;
@@ -150,16 +150,16 @@ fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
         }
     });
 
-    // 复用 ConversionManager 的关闭信号：进程停机时统一触发，sink task 得以 drain 收尾队列后退出，
+    // 复用 NorthDispatcher 的关闭信号：进程停机时统一触发，sink task 得以 drain 收尾队列后退出，
     // 而不是等到进程被杀时才被动丢弃在途数据。
-    ctx.conversion_mgr
-        .register_connector(OpcUaSink::with_shutdown(
+    ctx.north_dispatcher
+        .register_connector(OpcUaServerAdapter::with_shutdown(
             opcua_server.clone(),
-            ctx.conversion_mgr.shutdown_token(),
+            ctx.north_dispatcher.shutdown_token(),
             ctx.gateway.metrics.clone(),
         ) as Arc<dyn crate::north::NorthConnector>);
     info!(
-        "opcua server task launched on {} (bridged via ConversionManager)",
+        "opcua server task launched on {} (bridged via NorthDispatcher)",
         opcua_cfg.endpoint
     );
 
@@ -171,7 +171,7 @@ fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
 /// 静默不启动会让运维以为「配置生效了、SCADA 连不上是网络问题」，
 /// 因此把「这个二进制没带该能力」写进日志，并给出可执行的修复方式。
 #[cfg(not(feature = "opcua-server"))]
-fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
+fn create_opcua_server(ctx: &NorthServerContext) -> Option<Arc<dyn NorthServer>> {
     if ctx.config.opcua.as_ref().is_some_and(|c| c.enabled) {
         tracing::warn!(
             "config enables north OPC UA server, but this binary was compiled without feature \
@@ -183,10 +183,10 @@ fn create_opcua_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
 }
 
 /// Modbus Server 工厂（可选，由 config.modbus_server.enabled 控制）
-fn create_modbus_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
+fn create_modbus_server(ctx: &NorthServerContext) -> Option<Arc<dyn NorthServer>> {
     use crate::engine::supervision::spawn_supervised;
     use crate::north::server::modbus_server::ModbusServer;
-    use crate::north::ModbusSink;
+    use crate::north::ModbusServerAdapter;
     use tracing::{error, info};
 
     let mb_cfg = ctx.config.modbus_server.clone()?;
@@ -208,14 +208,14 @@ fn create_modbus_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
         }
     });
 
-    // 复用 ConversionManager 的关闭信号（同 opcua sink），保证 sink task 停机时优雅 drain。
-    let mb_sink = ModbusSink::with_shutdown(
+    // 复用 NorthDispatcher 的关闭信号（同 opcua sink），保证 sink task 停机时优雅 drain。
+    let mb_sink = ModbusServerAdapter::with_shutdown(
         mb_server.clone(),
-        ctx.conversion_mgr.shutdown_token(),
+        ctx.north_dispatcher.shutdown_token(),
         ctx.gateway.metrics.clone(),
     );
     mb_sink.build_mappings(ctx.expanded_points, mb_cfg.base_register);
-    ctx.conversion_mgr
+    ctx.north_dispatcher
         .register_connector(mb_sink as Arc<dyn crate::north::NorthConnector>);
     info!(
         "modbus server started on {} ({} mode, {} register mappings)",
@@ -228,7 +228,7 @@ fn create_modbus_server(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
 }
 
 /// Modbus TCP<->RTU 网关桥接服务工厂（可选，由 config.modbus_passthrough.enabled 控制）
-fn create_modbus_passthrough(ctx: &ServerContext) -> Option<Arc<dyn Server>> {
+fn create_modbus_passthrough(ctx: &NorthServerContext) -> Option<Arc<dyn NorthServer>> {
     use crate::engine::supervision::spawn_supervised;
     use crate::north::server::modbus_gateway_bridge::ModbusGatewayBridgeServer;
     use tracing::{error, info};

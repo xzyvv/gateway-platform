@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use super::frame_buffer::FrameBuffer;
 use crate::config::BusConfig;
 use crate::engine::metrics::Metrics;
-use crate::south::protocol::util::{ascii_to_rtu, rtu_to_ascii};
+use crate::south::protocol::codec::{ascii_to_rtu, rtu_to_ascii};
 use crate::south::protocol::CollectorError;
 
 use super::frame_extract::extract_frame;

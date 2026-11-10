@@ -391,7 +391,7 @@ pub(crate) async fn north_status(State(state): State<Arc<AppState>>) -> impl Int
     // N-7：各 connector 的真实 health()（不再由配置推断）。
     // 配置已启用但连接器未注册（如 outbox 打开失败）时，如实报「未连接 + 原因」，
     // 避免状态页把故障通道显示成「已启用」而不暴露问题。
-    let connectors = state.north.conversion.connector_status();
+    let connectors = state.north.north_dispatcher.connector_status();
     let find = |name: &str| connectors.iter().find(|c| c.name == name);
     let mqtt_health = find("mqtt");
     let mqtt_last_error = mqtt_health.and_then(|c| c.last_error.clone());

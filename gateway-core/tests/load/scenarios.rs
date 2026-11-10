@@ -26,7 +26,7 @@ async fn run_load(spec: FarmSpec, secs: u64) -> (Report, Farm, MqttNorth) {
     let mut farm = Farm::build(spec).await;
 
     // 第 5 层：真 MqttClient 与 pipeline 共用同一 DataQueue；
-    // ConversionManager 消费北向专用队列（其 publish_batch 为空实现，不会双发）。
+    // NorthDispatcher 消费北向专用队列（其 publish_batch 为空实现，不会双发）。
     let north_rx = farm.north_rx.take().expect("north feed receiver");
     let north = MqttNorth::start(farm.queue.clone(), farm.metrics.clone(), north_rx).await;
 

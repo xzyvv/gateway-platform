@@ -414,7 +414,7 @@ jobs:
             --skip engine::alarm::tests::r73_alarm_run_exits_after_stop \
             --skip engine::shutdown::tests::wait_returns_immediately_after_shutdown \
             --skip engine::supervision::tests::r64_spawn_catch_unwind_handle_resolves_on_completion_and_panic \
-            --skip north::conversion::tests::r66_conversion_manager_run_exits_after_shutdown \
+            --skip north::dispatch::tests::r66_north_dispatcher_run_exits_after_shutdown \
             --skip north::mqtt::tests::r48_stop_before_waiter_registers_still_exits \
             --skip north::mqtt::tests::r48_wait_shutdown_not_lost_when_notify_precedes_wait \
             --skip north::mqtt::tests::r48_wait_shutdown_wakes_after_registration \
@@ -423,8 +423,8 @@ jobs:
             --skip north::server::tests::r60_wait_shutdown_notify_blocks_then_wakes_on_notify \
             --skip north::server::tests::r60_wait_shutdown_notify_recovers_from_set_before_register_window \
             --skip north::server::tests::r60_wait_shutdown_notify_returns_immediately_when_stopping_already_set \
-            --skip north::server_sinks::tests::test_modbus_sink_overflow_drops_without_blocking \
-            --skip north::server_sinks::tests::test_opcua_sink_overflow_drops_without_blocking \
+            --skip north::server_adapters::tests::test_modbus_adapter_overflow_drops_without_blocking \
+            --skip north::server_adapters::tests::test_opcua_adapter_overflow_drops_without_blocking \
             --skip north::webhook::tests::r64_webhook_run_exits_after_stop \
             --skip north::webhook::tests::r65_last_flush_slot_is_drained_after_run_exit \
             --skip platform::cellular::modem::tests::bringup_fails_early_when_process_exits \

@@ -66,7 +66,7 @@ impl LaggedCounts {
 ///
 /// 处理管道把"边缘过滤+转换之后、即将入队"的点发布到这里，
 /// Web Server 的 WebSocket 端点 `subscribe()` 拿到 Receiver 后推给前端。
-/// ConversionManager 也订阅此总线，将数据 fan-out 到所有北向 connector。
+/// NorthDispatcher 也订阅此总线，将数据 fan-out 到所有北向 connector。
 ///
 /// 容量由 `WebConfig::realtime_buffer` 控制（默认 1024）。
 /// 消费慢时广播返回 Lagged，调用方应丢弃而非 panic。

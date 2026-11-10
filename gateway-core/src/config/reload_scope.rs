@@ -6,7 +6,7 @@
 //!
 //! # 维护约定
 //!
-//! 本模块必须与 [`crate::support::app::Gateway::reload_config`] 的实际覆盖保持一致：
+//! 本模块必须与 [`crate::support::app::GatewayRuntime::reload_config`] 的实际覆盖保持一致：
 //! - 在 `reload_config` 新增在线应用逻辑时，把对应分节从 `restart_required` 移到 `applied`；
 //! - 新增顶层配置分节时，必须在 [`reload_scope`] 中显式归类（热更 / 需重启 / 纯元数据），
 //!   并补齐本文件底部单测，避免出现「保存成功但既不生效也无提示」的静默分节。
@@ -63,7 +63,7 @@ fn web_needs_restart(old: Option<&WebConfig>, new: Option<&WebConfig>) -> bool {
 pub fn reload_scope(old: &GatewayConfig, new: &GatewayConfig) -> ReloadScope {
     let mut scope = ReloadScope::default();
 
-    // ===== 在线应用（与 Gateway::reload_config 覆盖一致）=====
+    // ===== 在线应用（与 GatewayRuntime::reload_config 覆盖一致）=====
     if old.buses != new.buses {
         scope.applied.push("buses");
     }
@@ -90,7 +90,7 @@ pub fn reload_scope(old: &GatewayConfig, new: &GatewayConfig) -> ReloadScope {
     if old.virtual_points != new.virtual_points {
         scope.applied.push("virtual_points");
     }
-    // 协议转换规则：与虚拟点位同一机制，由 Gateway::reload_config 在线替换规则集
+    // 协议转换规则：与虚拟点位同一机制，由 GatewayRuntime::reload_config 在线替换规则集
     if old.convert_rules != new.convert_rules {
         scope.applied.push("convert_rules");
     }

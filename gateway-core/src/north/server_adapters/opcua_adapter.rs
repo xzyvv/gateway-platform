@@ -1,27 +1,27 @@
-//! OPC UA Server sink：将 RealtimeBus 数据推送到 OPC UA 地址空间。
+//! OPC UA 从站适配器：将 RealtimeBus 数据推送到 OPC UA 地址空间。
 
 use std::sync::Arc;
 
 use crate::engine::metrics::SinkId;
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
-use crate::north::server::Server;
+use crate::north::server::NorthServer;
 
-use super::base::SinkCore;
+use super::base::AdapterCore;
 
-/// OPC UA Server sink
+/// OPC UA 从站适配器
 ///
 /// 内部 task 消费 mpsc channel，调用 `server.apply_points` 同步更新 OPC UA 地址空间。
-/// ConversionManager send 时仅 try_send 到 channel，不等待。
-/// 生命周期（channel / 背压 / 停机）由 [`SinkCore`] 统一承载。
-pub struct OpcUaSink {
-    core: Arc<SinkCore>,
+/// NorthDispatcher send 时仅 try_send 到 channel，不等待。
+/// 生命周期（channel / 背压 / 停机）由 [`AdapterCore`] 统一承载。
+pub struct OpcUaServerAdapter {
+    core: Arc<AdapterCore>,
     /// OPC UA server 句柄：`health()` 据此反映 server 真实运行状态，
     /// 避免 server 未启动 / 已停止时仍上报 connected=true（假健康 + 静默丢数据）。
     server: Arc<crate::north::server::opcua_server::OpcUaServer>,
 }
 
-impl OpcUaSink {
+impl OpcUaServerAdapter {
     pub fn new(
         server: Arc<crate::north::server::opcua_server::OpcUaServer>,
         metrics: Arc<crate::engine::metrics::Metrics>,
@@ -45,7 +45,7 @@ impl OpcUaSink {
         //   sink 内部 task 所在 worker 太久。
         let server_for_apply = server.clone();
         let server_for_recovery = server.clone();
-        let core = SinkCore::new(
+        let core = AdapterCore::new(
             SinkId::OpcUa,
             shutdown,
             metrics,
@@ -91,7 +91,7 @@ impl OpcUaSink {
     }
 
     /// sink 标识（用于 metrics key，与 send() 内部一致）。
-    /// 注意：NorthConnector::name() 返回 "opcua_sink"（连接器 SPI 名称），
+    /// 注意：NorthConnector::name() 返回 "opcua_adapter"（连接器 SPI 名称），
     /// 本方法返回 "opcua"（历史 metrics key，保持不变）。
     pub fn name(&self) -> &'static str {
         self.core.name()
@@ -111,9 +111,9 @@ impl OpcUaSink {
 // ============================================================================
 
 #[async_trait::async_trait]
-impl crate::north::NorthConnector for OpcUaSink {
+impl crate::north::NorthConnector for OpcUaServerAdapter {
     fn name(&self) -> &str {
-        "opcua_sink"
+        "opcua_adapter"
     }
 
     async fn publish_batch(&self, batch: &[DataPoint]) -> crate::engine::error::GatewayResult<()> {

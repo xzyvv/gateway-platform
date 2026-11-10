@@ -126,7 +126,7 @@ pub struct ExchangeOutcome {
     pub elapsed_ms: u64,
 }
 
-/// 调试总线 trait（对象安全，风格与 `GatewayTrait` 一致：手写 Pin<Box<dyn Future>>）
+/// 调试总线 trait（对象安全，风格与 `GatewayRuntimeTrait` 一致：手写 Pin<Box<dyn Future>>）
 pub trait DebugBusTrait: Send + Sync {
     /// 原样写帧、原样收字节；失败按 [`BusErrorKind`] 分类。
     ///

@@ -1,4 +1,4 @@
-//! [`SinkCore`] 生命周期内核的回归测试。
+//! [`AdapterCore`] 生命周期内核的回归测试。
 //!
 //! 覆盖三条现场最要命的路径：
 //! 1. **下游长期不可用** → `apply` 持续失败 → `on_failure` 触发 → 重试一次仍失败
@@ -16,8 +16,8 @@ use crate::engine::metrics::{Metrics, SinkId};
 use crate::engine::model::DataPoint;
 use crate::engine::shutdown::ShutdownToken;
 
-use super::base::SinkCore;
-use super::SINK_CHANNEL_CAPACITY;
+use super::base::AdapterCore;
+use super::ADAPTER_CHANNEL_CAPACITY;
 
 /// 轮询等待条件成立（最多 5s）。
 async fn wait_until<F: Fn() -> bool>(cond: F) -> bool {
@@ -53,7 +53,7 @@ async fn sink_core_apply_always_failing_drops_batch() {
     let ac = apply_calls.clone();
     let fc = failure_calls.clone();
 
-    let core = SinkCore::new(
+    let core = AdapterCore::new(
         SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
@@ -85,14 +85,14 @@ async fn sink_core_apply_always_failing_drops_batch() {
     );
     assert_eq!(
         metrics
-            .lifecyle
+            .lifecycle
             .sink_reconnect_attempts
             .load(Ordering::Relaxed),
         1
     );
     assert_eq!(
         metrics
-            .lifecyle
+            .lifecycle
             .sink_reconnect_exhausted
             .load(Ordering::Relaxed),
         1
@@ -111,7 +111,7 @@ async fn sink_core_dropped_batch_resets_channel_depth_gauge() {
     let metrics = Arc::new(Metrics::new());
     let first = Arc::new(AtomicBool::new(true));
     let f = first.clone();
-    let core = SinkCore::new(
+    let core = AdapterCore::new(
         SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
@@ -151,7 +151,7 @@ async fn sink_core_apply_recovers_after_on_failure_is_not_dropped() {
     let ac = apply_calls.clone();
     let fc = failure_calls.clone();
 
-    let core = SinkCore::new(
+    let core = AdapterCore::new(
         SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
@@ -171,7 +171,7 @@ async fn sink_core_apply_recovers_after_on_failure_is_not_dropped() {
 
     assert!(
         wait_until(|| metrics
-            .lifecyle
+            .lifecycle
             .sink_reconnect_attempts
             .load(Ordering::Relaxed)
             == 1)
@@ -187,7 +187,7 @@ async fn sink_core_apply_recovers_after_on_failure_is_not_dropped() {
     );
     assert_eq!(
         metrics
-            .lifecyle
+            .lifecycle
             .sink_reconnect_exhausted
             .load(Ordering::Relaxed),
         0
@@ -206,7 +206,7 @@ async fn sink_core_channel_full_drops_excess_batches() {
     let rel = release.clone();
 
     // apply 阻塞住，直到测试释放 —— 模拟下游卡死
-    let core = SinkCore::new(
+    let core = AdapterCore::new(
         SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),
@@ -219,7 +219,7 @@ async fn sink_core_channel_full_drops_excess_batches() {
         || {},
     );
 
-    for _ in 0..(SINK_CHANNEL_CAPACITY + 64) {
+    for _ in 0..(ADAPTER_CHANNEL_CAPACITY + 64) {
         core.send(vec![point()]);
     }
 
@@ -248,7 +248,7 @@ async fn sink_core_in_flight_never_underflows_under_concurrent_send() {
     let consumed = Arc::new(AtomicU64::new(0));
     let c = consumed.clone();
 
-    let core = SinkCore::new(
+    let core = AdapterCore::new(
         SinkId::OpcUa,
         ShutdownToken::new(),
         metrics.clone(),

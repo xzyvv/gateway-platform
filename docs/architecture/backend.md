@@ -79,7 +79,7 @@ gateway-core/src/      # 引擎库（lib）
 ├── engine/          # 引擎基础设施：日志/指标/事件总线/健康监控/告警/审计/优雅停机
 │   └── util/        # encoding.rs 二进制编解码 + model.rs 公共模型
 ├── license/         # Ed25519 离线验签 + 机器指纹
-├── north/           # 北向：MQTT / webhook.rs / conversion.rs（RealtimeBus 分发）/ server/（被动服务端）/ server_sinks/（数据推送适配器）
+├── north/           # 北向：MQTT / webhook.rs / dispatch.rs（RealtimeBus 分发）/ server/（被动服务端）/ server_adapters/（数据推送适配器）
 ├── pipeline/        # 处理管道：边缘过滤 → 公式 → 入队 → 实时广播
 ├── platform/        # 平台服务：NTP / OTA / GPIO / 蜂窝 / 看门狗（含 watchdog_flush.rs 队列落盘冲刷）
 ├── queue/           # 断点续传队列（SQLite WAL）

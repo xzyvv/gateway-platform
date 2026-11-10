@@ -3119,14 +3119,14 @@ async fn scenario_watchdog_stall_detected_then_restart_recovers() {
         // 单独建一个只读 Watchdog 视图不方便，这里用同一进程内的 metrics 计数
         // + 事件循环重启后 stale 消失来验证。
         tokio::time::sleep(Duration::from_millis(30)).await;
-        if metrics.lifecyle.watchdog_timeouts.load(Ordering::Relaxed) > 0 {
+        if metrics.lifecycle.watchdog_timeouts.load(Ordering::Relaxed) > 0 {
             saw_stale = true;
             break;
         }
     }
     assert!(saw_stale, "卡死超过宽限期后看门狗超时计数必须增长");
     assert_eq!(
-        metrics.lifecyle.watchdog_timeouts.load(Ordering::Relaxed),
+        metrics.lifecycle.watchdog_timeouts.load(Ordering::Relaxed),
         1,
         "同一次卡死只应触发一次（边沿触发，不得刷屏）"
     );

@@ -22,7 +22,7 @@
 //!
 //! # 热重载
 //!
-//! `Gateway::reload_config` 检测 `virtual_points` 差异后调 `update_rules`
+//! `GatewayRuntime::reload_config` 检测 `virtual_points` 差异后调 `update_rules`
 //! 原子替换规则集（ArcSwap），求值状态（最近值 / 错误）跨重载保留。
 
 use std::collections::HashMap;

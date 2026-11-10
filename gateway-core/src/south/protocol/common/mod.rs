@@ -11,6 +11,6 @@ pub mod decode;
 // DLT645 / CJT188 共享帧层：两者都关闭时不参与编译——这三个函数仅被
 // dlt645::frames 与 cjt188::frames 调用，单协议或零协议构建下会成为死代码，
 // 在 `-D dead_code` 下直接报错（F1 协议裁剪矩阵）。
+pub mod codec;
 #[cfg(any(feature = "dlt645", feature = "cjt188"))]
 pub mod frame_extract;
-pub mod util;

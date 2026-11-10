@@ -2,7 +2,7 @@
 //!
 //! 复用 chaos harness 的注入 seam（`BusDeps` / 内存队列），并驱动**真实**运行时链路：
 //! 节流串口桩（`throttle`）→ 真实 BusManager → ProtocolRegistry → 真实 Scheduler
-//! → ProcessingPipeline → DataQueue + RealtimeBus → ConversionManager → 真 MQTT broker 桩。
+//! → ProcessingPipeline → DataQueue + RealtimeBus → NorthDispatcher → 真 MQTT broker 桩。
 //!
 //! 全部场景 `#[ignore]`，默认 `cargo test` 不执行；手动运行：
 //!   cargo test --test load -- --ignored --test-threads=1

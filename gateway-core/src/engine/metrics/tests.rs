@@ -102,7 +102,7 @@ fn test_errors_total_is_sum() {
     let m = Metrics::new();
     m.collect.serial_errors.store(3, Ordering::Relaxed);
     m.collect.collect_failures.store(5, Ordering::Relaxed);
-    m.lifecyle.task_panics.store(2, Ordering::Relaxed);
+    m.lifecycle.task_panics.store(2, Ordering::Relaxed);
     let out = m.prometheus_export();
     // errors_total = 3 + 5 + 2 = 10
     assert!(out.contains("gateway_errors_total 10"));

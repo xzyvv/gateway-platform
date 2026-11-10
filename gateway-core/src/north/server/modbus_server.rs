@@ -24,7 +24,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
-use super::{wait_shutdown_notify, ModbusServerConfig, RegisterMapping, Server};
+use super::{wait_shutdown_notify, ModbusServerConfig, NorthServer, RegisterMapping};
 use crate::engine::error::{GatewayError, GatewayResult};
 
 /// Modbus function codes
@@ -357,7 +357,7 @@ impl ModbusServer {
     }
 }
 
-impl Server for ModbusServer {
+impl NorthServer for ModbusServer {
     fn name(&self) -> &'static str {
         "modbus"
     }

@@ -1,11 +1,11 @@
-//! Server trait 与 Modbus 从站实现（T3.1）
+//! NorthServer trait 与 Modbus 从站实现（T3.1）
 //!
 //! 网关核心语义：不仅采集，也要暴露。
 //! - Passthrough 模式：采集点位 → 寄存器映射（详见 `mqtt_packet_passthrough`）
 //! - Mirrored 模式：采集数据 + 内部状态
 //! - Static 模式：从配置文件加载静态寄存器
 //!
-//! 与 Collector trait 对偶：Collector 读外部；Server 响应外部读。
+//! 与 Collector trait 对偶：Collector 读外部；NorthServer 响应外部读。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -26,15 +26,15 @@ pub(crate) mod registry;
 // 启动编排位于 gatewayd（独立 crate），故这两个装配入口对外公开；
 // 具体后端实现模块（modbus_server / opcua_server 等）仍为 crate 内私有。
 pub use mqtt_packet_passthrough::MqttPacketPassthrough;
-pub use registry::{ServerContext, ServerRegistry};
+pub use registry::{NorthServerContext, NorthServerRegistry};
 
 // D-05：Modbus Server 配置统一由 `config/modbus_server.rs` 提供（含 `base_register` /
 // `mode`），server 侧不再自行定义同名类型，避免字段集分叉。
 pub use crate::config::ModbusServerConfig;
 
-/// Server trait：协议从站抽象
-pub trait Server: Send + Sync {
-    /// Server 名称（用于 API 展示与日志标识）
+/// NorthServer trait：北向从站抽象
+pub trait NorthServer: Send + Sync {
+    /// 从站名称（用于 API 展示与日志标识）
     fn name(&self) -> &'static str;
 
     /// 启动从站

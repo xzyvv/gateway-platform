@@ -28,7 +28,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::config::PointConfig;
-use crate::engine::model::{DataPoint, ModbusDataType, Quality};
+use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
     clone_collector_error, convert_value, reverse_convert, Collector, CollectorError,
     CollectorResult,
@@ -361,7 +361,7 @@ impl McCollector {
         let value = if device.is_bit {
             decode_bit(&data, 0)
         } else {
-            decode_words(&data, ModbusDataType::U16)
+            decode_words(&data, PointDataType::U16)
         };
         Ok((end_code, value.map(|v| v as i32)))
     }
@@ -405,7 +405,7 @@ impl Collector for McCollector {
                     self.bus_name
                 );
             }
-            match decode_words(&data, ModbusDataType::U16) {
+            match decode_words(&data, PointDataType::U16) {
                 Some(v) => format!("MC {}：建链成功，D0 回读值={v}", self.bus_name),
                 None => format!(
                     "MC {}：建链成功，但 D0 应答数据无法按 U16 解码（{} 字节）",
@@ -442,7 +442,7 @@ impl Collector for McCollector {
     {
         Box::pin(async move {
             let device = parse_address(&point.address)?;
-            let dt = point.data_type_enum().unwrap_or(ModbusDataType::U16);
+            let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
             let points = if device.is_bit {
                 1
             } else {
@@ -499,7 +499,7 @@ impl Collector for McCollector {
                 head: u32,
                 size: u16,
                 is_bit: bool,
-                dt: ModbusDataType,
+                dt: PointDataType,
             }
 
             let mut slots: Vec<Option<CollectorResult<DataPoint>>> = (0..n).map(|_| None).collect();
@@ -514,7 +514,7 @@ impl Collector for McCollector {
                         continue;
                     }
                 };
-                let dt = p.data_type_enum().unwrap_or(ModbusDataType::U16);
+                let dt = p.data_type_enum().unwrap_or(PointDataType::U16);
                 let size = if device.is_bit {
                     1
                 } else {
@@ -671,7 +671,7 @@ impl Collector for McCollector {
             let txn = if device.is_bit {
                 self.write_bit_txn(&device, value != 0.0)?
             } else {
-                let dt = point.data_type_enum().unwrap_or(ModbusDataType::U16);
+                let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
                 // 写值与读路径对偶：北向下发的是一次侧值，需先除回变比与 scale/offset
                 let words = encode_words(reverse_convert(point, value), dt);
                 self.write_words_txn(&device, &words)?

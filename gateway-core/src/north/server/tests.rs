@@ -519,14 +519,14 @@ fn test_build_exception_response() {
 
 // ===== modbus_gateway_bridge.rs: 回归——异常分支必须产出合法 TCP 帧 =====
 
-/// 仅测试用：构建一个「不含任何总线」的 Gateway，用于驱动透传的 `None` 异常分支。
+/// 仅测试用：构建一个「不含任何总线」的 GatewayRuntime，用于驱动透传的 `None` 异常分支。
 ///
-/// 装配实现已移至 `crate::support::app::gateway_without_buses_for_test`：装配整机必须
+/// 装配实现已移至 `crate::support::app::gateway_runtime_without_buses_for_test`：装配整机必须
 /// 具名 `Scheduler` / `SerialManager` 等南向类型，而架构守护
 /// `north_must_not_depend_on_south`（gateway-core/tests/arch_deps.rs）禁止 north 出现
-/// `crate::south::` 引用。装配属 support 层职责（`GatewayParts` 定义于此），故收敛到该层。
-fn test_gateway_without_buses() -> std::sync::Arc<crate::support::app::Gateway> {
-    crate::support::app::gateway_without_buses_for_test()
+/// `crate::south::` 引用。装配属 support 层职责（`GatewayComponents` 定义于此），故收敛到该层。
+fn test_gateway_runtime_without_buses() -> std::sync::Arc<crate::support::app::GatewayRuntime> {
+    crate::support::app::gateway_runtime_without_buses_for_test()
 }
 
 /// 回归缺陷维度：修复前异常分支直接返回 `build_exception_response` 生成的 **TCP** 帧，
@@ -552,7 +552,7 @@ async fn passthrough_missing_bus_emits_wellformed_tcp_exception_frame() {
         target_bus: "no-such-bus".to_string(),
         timeout_ms: 200,
     };
-    let srv = ModbusGatewayBridgeServer::new(cfg, test_gateway_without_buses());
+    let srv = ModbusGatewayBridgeServer::new(cfg, test_gateway_runtime_without_buses());
     let run = srv.clone();
     tokio::spawn(async move {
         let _ = run.start().await;
@@ -608,7 +608,7 @@ async fn passthrough_rejects_when_semaphore_exhausted() {
         .map(|_| concurrency.clone().try_acquire_owned().expect("acquire"))
         .collect();
 
-    let gateway = test_gateway_without_buses();
+    let gateway = test_gateway_runtime_without_buses();
     let sessions = Arc::new(Mutex::new(Vec::new()));
     // 任意 payload：semaphore 在 JSON 解析前拦截，payload 内容无关紧要。
     let payload = br#"{"bus":"x","data":"00","timeout":1000}"#;
@@ -629,7 +629,7 @@ async fn passthrough_rejects_oversized_data() {
     use std::sync::{Arc, Mutex};
     use tokio::sync::Semaphore;
     let concurrency = Arc::new(Semaphore::new(MAX_CONCURRENT_PASSTHROUGH));
-    let gateway = test_gateway_without_buses();
+    let gateway = test_gateway_runtime_without_buses();
     let sessions = Arc::new(Mutex::new(Vec::new()));
 
     // 构造 9000 字节 hex（即 4500 字节二进制），超过 MAX_PASSTHROUGH_BYTES=4096。
@@ -680,7 +680,7 @@ async fn passthrough_empty_id_filled_with_anon_prefix() {
     use std::sync::{Arc, Mutex};
     use tokio::sync::Semaphore;
     let concurrency = Arc::new(Semaphore::new(MAX_CONCURRENT_PASSTHROUGH));
-    let gateway = test_gateway_without_buses();
+    let gateway = test_gateway_runtime_without_buses();
     let sessions = Arc::new(Mutex::new(Vec::new()));
 
     // id 字段为空字符串。bus="x" 不存在 → 走到 "bus not found" 错误，
@@ -709,7 +709,7 @@ async fn passthrough_non_empty_id_preserved() {
     use std::sync::{Arc, Mutex};
     use tokio::sync::Semaphore;
     let concurrency = Arc::new(Semaphore::new(MAX_CONCURRENT_PASSTHROUGH));
-    let gateway = test_gateway_without_buses();
+    let gateway = test_gateway_runtime_without_buses();
     let sessions = Arc::new(Mutex::new(Vec::new()));
     let payload = br#"{"bus":"x","data":"00","timeout":1000,"id":"req-42"}"#;
     let resp =
@@ -739,7 +739,7 @@ async fn passthrough_partial_frame_is_closed_after_read_timeout() {
         target_bus: "no-such-bus".to_string(),
         timeout_ms: 200,
     };
-    let gateway = test_gateway_without_buses();
+    let gateway = test_gateway_runtime_without_buses();
     let read_timeout = std::time::Duration::from_millis(500);
     tokio::spawn(async move {
         let (sock, _) = listener.accept().await.unwrap();

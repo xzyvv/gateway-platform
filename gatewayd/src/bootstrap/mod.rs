@@ -64,12 +64,12 @@ pub(crate) struct NorthProcessing {
     /// 运行态判定——启动时未拉起（配置未启用 / MQTT 已启用）就不算消费者。
     pub(crate) sim_consumer: Arc<gateway_core::north::sim_consumer::SimConsumer>,
     pub(crate) pipeline: Arc<gateway_core::pipeline::ProcessingPipeline>,
-    /// C1: 协议转换模板引擎（与 pipeline 共享同一实例；Gateway 持有用于热重载 swap）
+    /// C1: 协议转换模板引擎（与 pipeline 共享同一实例；GatewayRuntime 持有用于热重载 swap）
     pub(crate) convert: Arc<gateway_core::pipeline::ConvertEngine>,
-    /// 虚拟点位引擎（与 pipeline 共享同一实例；Gateway 持有用于热重载 swap 与 API 查询）
+    /// 虚拟点位引擎（与 pipeline 共享同一实例；GatewayRuntime 持有用于热重载 swap 与 API 查询）
     pub(crate) virtual_points: Arc<gateway_core::pipeline::VirtualPointEngine>,
     pub(crate) realtime_bus: Arc<gateway_core::pipeline::RealtimeBus>,
-    pub(crate) conversion_mgr: Arc<gateway_core::north::ConversionManager>,
+    pub(crate) north_dispatcher: Arc<gateway_core::north::NorthDispatcher>,
     /// P3：北向 run 循环通道表（webhook 等，非 Clone 的 JoinHandle）；
     /// 装配阶段补充报警/透传后交给 graceful_shutdown 统一停机。
     pub(crate) channels: Vec<NorthChannel>,
@@ -78,15 +78,15 @@ pub(crate) struct NorthProcessing {
 /// 网关服务句柄（Step 12-13 产物）：主函数等待退出与优雅停机时使用。
 pub(crate) struct GatewayHandles {
     pub(crate) scheduler: Arc<gateway_core::south::scheduler::Scheduler>,
-    pub(crate) north_servers: Vec<Arc<dyn gateway_core::north::server::Server>>,
+    pub(crate) north_servers: Vec<Arc<dyn gateway_core::north::server::NorthServer>>,
     pub(crate) health_handles: Vec<tokio::task::JoinHandle<()>>,
     /// 蜂窝模块实例（仅配置 enabled 时 Some），停机时交给 graceful_shutdown。
     pub(crate) cellular: Option<Arc<gateway_core::platform::cellular::CellularManager>>,
     /// 自愈执行器停机句柄（仅 [self_heal] opt-in 启用时 Some），停机时交给 graceful_shutdown。
     pub(crate) self_heal: Option<SelfHealShutdown>,
-    /// r66-SD1：ConversionManager run 循环 JoinHandle，停机时在 shutdown_token
+    /// r66-SD1：NorthDispatcher run 循环 JoinHandle，停机时在 shutdown_token
     /// 触发后 await 其退出——确保 fan-out task 真正停掉再推进停机序。
-    pub(crate) conversion_run: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) north_dispatcher_run: Option<tokio::task::JoinHandle<()>>,
     /// P3：北向 run 循环通道表（webhook / 报警 / 透传），
     /// 停机序按表顺序统一 stop + await。
     pub(crate) north_channels: Vec<NorthChannel>,
@@ -142,7 +142,7 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     // （非 Clone，只能 move 给 ShutdownInputs）。
     let mut north = init_north_and_processing(&config, &chain, metrics.clone()).await?;
 
-    // ===== Step 12-13: 组装并启动服务（Scheduler/Gateway/AppState/Web/北向/报警/透传）=====
+    // ===== Step 12-13: 组装并启动服务（Scheduler/GatewayRuntime/AppState/Web/北向/报警/透传）=====
     let (app_state, handles) =
         assemble_and_start_services(&config, &chain, &mut north, &config_loader, metrics.clone())
             .await?;
@@ -250,8 +250,8 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
         health_handles,
         cellular,
         self_heal,
-        // r66-SD1：ConversionManager run 循环 JoinHandle（始终 Some）。
-        conversion_run,
+        // r66-SD1：NorthDispatcher run 循环 JoinHandle（始终 Some）。
+        north_dispatcher_run,
         // P3：北向 run 循环通道表。
         north_channels,
         // r74-SD1：Web 停机信号 + run 句柄（停机序最前触发）。
@@ -261,7 +261,7 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     graceful_shutdown(ShutdownInputs {
         scheduler,
         pipeline: north.pipeline.clone(),
-        conversion_mgr: north.conversion_mgr.clone(),
+        north_dispatcher: north.north_dispatcher.clone(),
         mqtt: north.mqtt.clone(),
         queue: north.queue.clone(),
         state: app_state.clone(),
@@ -269,9 +269,9 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
         health_handles,
         north_servers,
         self_heal,
-        // r66-SD1：ConversionManager run 循环 JoinHandle，
-        // graceful_shutdown 在 conversion_mgr.shutdown_token() 后 await。
-        conversion_run,
+        // r66-SD1：NorthDispatcher run 循环 JoinHandle，
+        // graceful_shutdown 在 north_dispatcher.shutdown_token() 后 await。
+        north_dispatcher_run,
         // P3：北向 run 循环通道表（webhook / 报警 / 透传）。
         north_channels,
         // r74-SD1：Web 停机信号 + run 句柄——停机序最前触发优雅停机。

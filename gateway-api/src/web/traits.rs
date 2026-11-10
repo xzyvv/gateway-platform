@@ -19,7 +19,7 @@ use gateway_core::platform::ota::OtaManager;
 use gateway_core::queue::DataQueue;
 use gateway_core::south::protocol::Collector;
 use gateway_core::south::scheduler::{DeviceStatus, ScheduleTimeline, Scheduler};
-use gateway_core::support::app::Gateway;
+use gateway_core::support::app::GatewayRuntime;
 
 /// 死信队列门面（Webhook 不可投递批次）。
 ///
@@ -393,8 +393,8 @@ pub trait DataQueueTrait: Send + Sync {
     }
 }
 
-/// Gateway trait（仅包含 web handler 实际调用的方法）
-pub trait GatewayTrait: Send + Sync {
+/// GatewayRuntimeTrait（仅包含 web handler 实际调用的方法）
+pub trait GatewayRuntimeTrait: Send + Sync {
     /// 热重载配置（应用增量变更），返回应用说明列表；采集组重建失败时返回 `Err`
     fn reload_config<'a>(
         &'a self,
@@ -611,7 +611,7 @@ impl DataQueueTrait for DataQueue {
     }
 }
 
-impl GatewayTrait for Gateway {
+impl GatewayRuntimeTrait for GatewayRuntime {
     fn reload_config<'a>(
         &'a self,
         old: &'a GatewayConfig,
@@ -624,7 +624,12 @@ impl GatewayTrait for Gateway {
                 + 'a,
         >,
     > {
-        Box::pin(Gateway::reload_config(self, old, new, expanded_points))
+        Box::pin(GatewayRuntime::reload_config(
+            self,
+            old,
+            new,
+            expanded_points,
+        ))
     }
     fn reset_serial_buses<'a>(
         &'a self,
@@ -633,21 +638,24 @@ impl GatewayTrait for Gateway {
         only: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = gateway_core::engine::error::GatewayResult<usize>> + Send + 'a>>
     {
-        Box::pin(Gateway::reset_serial_buses(self, buses, points, only))
+        Box::pin(GatewayRuntime::reset_serial_buses(
+            self, buses, points, only,
+        ))
     }
     fn mqtt(&self) -> Option<Arc<MqttClient>> {
-        Gateway::mqtt(self)
+        GatewayRuntime::mqtt(self)
     }
     fn disk_status(&self) -> Arc<gateway_core::engine::monitor::health::DiskStatus> {
         self.disk_status.clone()
     }
     fn debug_bus(&self, name: &str) -> Option<Arc<dyn crate::web::debug_bus::DebugBusTrait>> {
-        // `Gateway::bus_manager` 返回的 Arc<BusManager> 已实现 DebugBusTrait，
+        // `GatewayRuntime::bus_manager` 返回的 Arc<BusManager> 已实现 DebugBusTrait，
         // 这里显式 unsizing 成 trait object，避免每层调用都写 as 转换。
-        Gateway::bus_manager(self, name).map(|m| m as Arc<dyn crate::web::debug_bus::DebugBusTrait>)
+        GatewayRuntime::bus_manager(self, name)
+            .map(|m| m as Arc<dyn crate::web::debug_bus::DebugBusTrait>)
     }
     fn convert_hits(&self) -> HashMap<String, ConvertHitView> {
-        Gateway::convert_hits(self)
+        GatewayRuntime::convert_hits(self)
             .into_iter()
             .map(|(k, h)| {
                 (
@@ -661,7 +669,7 @@ impl GatewayTrait for Gateway {
             .collect()
     }
     fn virtual_point_states(&self) -> HashMap<String, VirtualPointStateView> {
-        Gateway::virtual_point_states(self)
+        GatewayRuntime::virtual_point_states(self)
             .into_iter()
             .map(|(k, s)| {
                 (
@@ -676,7 +684,7 @@ impl GatewayTrait for Gateway {
             .collect()
     }
     fn recalc_virtual_point(&self, id: &str) -> Option<VirtualPointStateView> {
-        Gateway::recalc_virtual_point(self, id).map(|s| VirtualPointStateView {
+        GatewayRuntime::recalc_virtual_point(self, id).map(|s| VirtualPointStateView {
             value: s.value,
             error: s.error,
             updated_at_ms: s.updated_at_ms,

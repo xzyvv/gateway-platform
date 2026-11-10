@@ -394,14 +394,14 @@ pub(crate) fn parse_write_response(
 }
 
 /// 按大端字序列解码为 f64（复用跨协议规范大端解码）。
-pub(crate) fn decode_words(data: &[u8], dt: crate::engine::model::ModbusDataType) -> Option<f64> {
+pub(crate) fn decode_words(data: &[u8], dt: crate::engine::model::PointDataType) -> Option<f64> {
     let (v, _) = crate::south::protocol::decode_binary_value(data, dt)?;
     Some(v)
 }
 
 /// 将 f64 编码为大端字序列（FINS 数值大端）。
-pub(crate) fn encode_words(value: f64, dt: crate::engine::model::ModbusDataType) -> Vec<u8> {
-    use crate::engine::model::ModbusDataType::*;
+pub(crate) fn encode_words(value: f64, dt: crate::engine::model::PointDataType) -> Vec<u8> {
+    use crate::engine::model::PointDataType::*;
     match dt {
         U16 => (value as u16).to_be_bytes().to_vec(),
         I16 => (value as i16).to_be_bytes().to_vec(),

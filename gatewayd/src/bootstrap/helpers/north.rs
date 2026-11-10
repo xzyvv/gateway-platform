@@ -13,41 +13,41 @@ use gateway_core::config::{GatewayConfig, PointConfig};
 use gateway_core::crypto::cert::{CertManager, CertPair};
 use gateway_core::engine::supervision::{spawn_catch_unwind, spawn_supervised};
 use gateway_core::north::mqtt::MqttClient;
-use gateway_core::north::server::Server;
+use gateway_core::north::server::NorthServer;
 use gateway_core::north::sim_consumer::SimConsumer;
 use gateway_core::pipeline::{EdgeProcessor, PipelineSpawnInputs, ProcessingPipeline, RealtimeBus};
 use gateway_core::queue::DataQueue;
-use gateway_core::support::app::Gateway;
+use gateway_core::support::app::GatewayRuntime;
 
 use gateway_core::support::{default_cert_dir, default_db_path, default_outbox_db};
 
 use super::super::{CollectionChain, NorthProcessing};
 use super::NorthChannel;
 
-/// 启动所有北向 Server（OPC UA / Modbus / 透传）并返回句柄列表供优雅停机。
+/// 启动所有北向从站（OPC UA / Modbus / 透传）并返回句柄列表供优雅停机。
 ///
-/// Server 启动通过 [`gateway_core::north::server::ServerRegistry`] 插件化管理，
+/// NorthServer 启动通过 [`gateway_core::north::server::NorthServerRegistry`] 插件化管理，
 /// 新增北向通道只需在 registry 中注册，无需修改本函数。
 ///
-/// r66-SD1：同步返回 `ConversionManager` 的 run 循环 JoinHandle。
-/// 旧实现 `start_conversion_manager` 调 `spawn_supervised` 但丢弃了返回值——
-/// 停机序只调 `conversion_mgr.shutdown_token().shutdown()`，不知其 fan-out
+/// r66-SD1：同步返回 `NorthDispatcher` 的 run 循环 JoinHandle。
+/// 旧实现 `start_north_dispatcher` 调 `spawn_supervised` 但丢弃了返回值——
+/// 停机序只调 `north_dispatcher.shutdown_token().shutdown()`，不知其 fan-out
 /// task 是否真退出（与 r64 webhook 同型问题）。把句柄透传给停机序
 /// 让其在 `shutdown()` 之后 `await` 其真正退出。
 pub(crate) fn start_north_servers(
     config: &GatewayConfig,
-    conversion_mgr: &Arc<gateway_core::north::ConversionManager>,
+    north_dispatcher: &Arc<gateway_core::north::NorthDispatcher>,
     cert_pair: &Option<CertPair>,
     cert_manager: &CertManager,
-    gateway: &Arc<Gateway>,
+    gateway: &Arc<GatewayRuntime>,
     audit: &Arc<gateway_core::engine::audit::AuditLog>,
     expanded_points: &[PointConfig],
-) -> (Vec<Arc<dyn Server>>, tokio::task::JoinHandle<()>) {
-    use gateway_core::north::server::{ServerContext, ServerRegistry};
+) -> (Vec<Arc<dyn NorthServer>>, tokio::task::JoinHandle<()>) {
+    use gateway_core::north::server::{NorthServerContext, NorthServerRegistry};
 
-    let ctx = ServerContext {
+    let ctx = NorthServerContext {
         config,
-        conversion_mgr,
+        north_dispatcher,
         cert_pair,
         cert_manager,
         gateway,
@@ -56,22 +56,22 @@ pub(crate) fn start_north_servers(
     };
 
     // 插件化启动所有已注册的 Server
-    let registry = ServerRegistry::new();
+    let registry = NorthServerRegistry::new();
     let north_servers = registry.start_all(&ctx);
 
-    // Modbus Passthrough 已通过 ServerRegistry 注册并启动
-    let conversion_run = start_conversion_manager(conversion_mgr);
+    // Modbus Passthrough 已通过 NorthServerRegistry 注册并启动
+    let north_dispatcher_run = start_north_dispatcher(north_dispatcher);
 
-    (north_servers, conversion_run)
+    (north_servers, north_dispatcher_run)
 }
 
 /// 启动转换层分发循环。
 ///
 /// r66-SD1：返回 `spawn_supervised` 的 JoinHandle（旧实现丢弃了）。
-fn start_conversion_manager(
-    conversion_mgr: &Arc<gateway_core::north::ConversionManager>,
+fn start_north_dispatcher(
+    north_dispatcher: &Arc<gateway_core::north::NorthDispatcher>,
 ) -> tokio::task::JoinHandle<()> {
-    let mgr = conversion_mgr.clone();
+    let mgr = north_dispatcher.clone();
     spawn_supervised("conversion_manager", move || {
         let mgr = mgr.clone();
         async move {
@@ -192,17 +192,17 @@ pub(crate) async fn init_north_and_processing(
             .unwrap_or(1024),
     );
 
-    // ===== 1.2: ConversionManager（统一北向连接器注册）=====
+    // ===== 1.2: NorthDispatcher（统一北向连接器注册）=====
     //
     // RealtimeBus 第 5 层：北向单独一条无损 mpsc 队列（容量 1024 批）。
     // 处理管道与广播并列投递同一个 Arc；队列满时背压回传，不静默丢上报。
     let (north_tx, north_rx) =
         gateway_core::north::NorthFeed::channel(gateway_core::north::DEFAULT_NORTH_FEED_CAPACITY);
-    let conversion_mgr = gateway_core::north::ConversionManager::new(north_rx);
+    let north_dispatcher = gateway_core::north::NorthDispatcher::new(north_rx);
 
     // 注册 MQTT connector（若启用）
     if let Some(mqtt_client) = &mqtt {
-        conversion_mgr.register_connector(
+        north_dispatcher.register_connector(
             mqtt_client.clone() as std::sync::Arc<dyn gateway_core::north::NorthConnector>
         );
     }
@@ -256,12 +256,12 @@ pub(crate) async fn init_north_and_processing(
 
     // 注册 Webhook connector
     if let Some(wh) = &webhook_client {
-        conversion_mgr.register_connector(
+        north_dispatcher.register_connector(
             wh.clone() as std::sync::Arc<dyn gateway_core::north::NorthConnector>
         );
     }
 
-    // Server Sinks (OPC UA / Modbus) 由 start_north_servers() 通过 ServerRegistry 注册。
+    // Server Sinks (OPC UA / Modbus) 由 start_north_servers() 通过 NorthServerRegistry 注册。
 
     // Bug 216: 原实现此处新建独立 Metrics 实例，与启动期注入的共享实例不是同一个，
     // 导致处理链/OTel 写入的指标经 /api/metrics（读 AppState 侧实例）永远读不到、恒为 0。
@@ -275,7 +275,7 @@ pub(crate) async fn init_north_and_processing(
     }
 
     // C1: 协议转换模板引擎——从配置编译规则集（空配置 = 空引擎，apply 早退零开销）。
-    // 热重载由 Gateway::reload_config 检测 convert_rules 差异后 swap，无需重建 pipeline。
+    // 热重载由 GatewayRuntime::reload_config 检测 convert_rules 差异后 swap，无需重建 pipeline。
     let convert = gateway_core::pipeline::ConvertEngine::new(
         config.convert_rules.clone().unwrap_or_default(),
     );
@@ -293,7 +293,7 @@ pub(crate) async fn init_north_and_processing(
     }
 
     // 虚拟点位引擎（公式派生量）——从配置编译规则集（空配置 = 空引擎，求值零开销）。
-    // 热重载由 Gateway::reload_config 检测 virtual_points 差异后 swap，无需重建 pipeline。
+    // 热重载由 GatewayRuntime::reload_config 检测 virtual_points 差异后 swap，无需重建 pipeline。
     let virtual_points = gateway_core::pipeline::VirtualPointEngine::new(
         config.virtual_points.clone().unwrap_or_default(),
     );
@@ -341,7 +341,7 @@ pub(crate) async fn init_north_and_processing(
         convert,
         virtual_points,
         realtime_bus,
-        conversion_mgr,
+        north_dispatcher,
         channels,
     })
 }

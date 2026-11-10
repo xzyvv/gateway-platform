@@ -11,7 +11,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Default)]
-pub struct LifecyleMetrics {
+pub struct LifecycleMetrics {
     /// 后台任务 panic 次数（由 supervisor 统计）。
     pub task_panics: AtomicU64,
     /// watchdog 超时次数。
@@ -55,7 +55,7 @@ pub struct LifecyleMetrics {
     pub scheduler_empty_starts: AtomicU64,
 }
 
-impl LifecyleMetrics {
+impl LifecycleMetrics {
     /// 输出到 Prometheus 文本缓冲区。
     pub fn render(&self, buf: &mut String) {
         use std::fmt::Write as _;

@@ -4,11 +4,11 @@
 //! - 真 `MqttBroker`（MQTT 3.1.1 桩）承接 PUBLISH 并回 PubAck；
 //! - 真 `MqttClient` 与 `ProcessingPipeline` **共用同一个 `Arc<DataQueue>`**，
 //!   由 `publish_loop` 出队 → 构建 payload → 发布，收到 PubAck 才 `queue.ack`；
-//! - 仍然跑 `ConversionManager` 并注册该客户端，消费 `NorthFeed` 专用队列，
+//! - 仍然跑 `NorthDispatcher` 并注册该客户端，消费 `NorthFeed` 专用队列，
 //!   避免队列积满 4096 批后反压 pipeline（与生产 bootstrap 一致）。
 //!
 //! 注：`MqttClient` 的 `NorthConnector::publish_batch` 是幂等空实现（数据已在
-//! pipeline 层入队），因此 `ConversionManager` 只起「消费北向队列」的作用，
+//! pipeline 层入队），因此 `NorthDispatcher` 只起「消费北向队列」的作用，
 //! 不会二次入队造成双发。
 //!
 //! 证据口径：以 broker **实收** PUBLISH 条数 / 实收点数（解析 payload）为准，
@@ -20,7 +20,7 @@ use std::time::Duration;
 use gateway_core::engine::metrics::Metrics;
 use gateway_core::engine::model::DataPoint;
 use gateway_core::north::mqtt::MqttClient;
-use gateway_core::north::{ConversionManager, NorthConnector};
+use gateway_core::north::{NorthConnector, NorthDispatcher};
 use gateway_core::queue::DataQueue;
 
 use super::chaos_harness::{make_mqtt_config, MqttBroker};
@@ -49,9 +49,9 @@ impl MqttNorth {
         );
         client.start();
 
-        // 与生产一致：ConversionManager 负责把北向专用队列排空
+        // 与生产一致：NorthDispatcher 负责把北向专用队列排空
         // （publish_batch 为空实现，不会重复入队）。
-        let cm = ConversionManager::new(north_rx);
+        let cm = NorthDispatcher::new(north_rx);
         cm.register_connector(client.clone() as Arc<dyn NorthConnector>);
         let cm_handle = tokio::spawn(async move { cm.run().await });
 

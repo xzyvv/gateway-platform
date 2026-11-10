@@ -14,10 +14,10 @@ fn test_metrics() -> Arc<crate::engine::metrics::Metrics> {
 
 #[cfg(feature = "opcua-server")]
 #[tokio::test]
-async fn test_opcua_sink_overflow_drops_without_blocking() {
+async fn test_opcua_adapter_overflow_drops_without_blocking() {
     let srv = Arc::new(OpcUaServer::new(OpcUaServerConfig::default(), None));
-    let sink = OpcUaSink::new(srv, test_metrics());
-    let total = SINK_CHANNEL_CAPACITY + 5;
+    let sink = OpcUaServerAdapter::new(srv, test_metrics());
+    let total = ADAPTER_CHANNEL_CAPACITY + 5;
     let start = std::time::Instant::now();
     for _ in 0..total {
         sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
@@ -31,14 +31,14 @@ async fn test_opcua_sink_overflow_drops_without_blocking() {
 }
 
 #[tokio::test]
-async fn test_modbus_sink_overflow_drops_without_blocking() {
+async fn test_modbus_adapter_overflow_drops_without_blocking() {
     let srv = Arc::new(ModbusServer::new(
         crate::north::server::ModbusServerConfig::default(),
     ));
-    let sink = ModbusSink::new(srv, test_metrics());
+    let sink = ModbusServerAdapter::new(srv, test_metrics());
     sink.build_mappings(&[], 0);
     let start = std::time::Instant::now();
-    for _ in 0..SINK_CHANNEL_CAPACITY + 5 {
+    for _ in 0..ADAPTER_CHANNEL_CAPACITY + 5 {
         sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
     }
     let elapsed = start.elapsed();
@@ -51,11 +51,11 @@ async fn test_modbus_sink_overflow_drops_without_blocking() {
 
 #[cfg(feature = "opcua-server")]
 #[tokio::test]
-async fn test_opcua_sink_metrics_incremented() {
+async fn test_opcua_adapter_metrics_incremented() {
     // 验证：单次 sink.send() 必然累加 sink_send_total +1
     let metrics = test_metrics();
     let srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
-    let sink = OpcUaSink::new(Arc::new(srv), metrics.clone());
+    let sink = OpcUaServerAdapter::new(Arc::new(srv), metrics.clone());
     let sid = SinkId::OpcUa;
     let before_send = metrics.sink_send_total(sid);
     let before_dropped = metrics.sink_dropped_total(sid);
@@ -70,16 +70,16 @@ async fn test_opcua_sink_metrics_incremented() {
 }
 
 #[tokio::test]
-async fn test_modbus_sink_metrics_send_counted() {
+async fn test_modbus_adapter_metrics_send_counted() {
     let metrics = test_metrics();
     let srv = ModbusServer::new(crate::north::server::ModbusServerConfig::default());
-    let sink = ModbusSink::new(Arc::new(srv), metrics.clone());
+    let sink = ModbusServerAdapter::new(Arc::new(srv), metrics.clone());
     sink.build_mappings(&[], 0);
     let sid = SinkId::Modbus;
     let before_send = metrics.sink_send_total(sid);
     let before_dropped = metrics.sink_dropped_total(sid);
-    // 灌入 SINK_CHANNEL_CAPACITY + 5 批
-    let total_calls = (SINK_CHANNEL_CAPACITY as u64) + 5;
+    // 灌入 ADAPTER_CHANNEL_CAPACITY + 5 批
+    let total_calls = (ADAPTER_CHANNEL_CAPACITY as u64) + 5;
     for _ in 0..total_calls {
         sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
     }
@@ -98,20 +98,20 @@ async fn test_modbus_sink_metrics_send_counted() {
     );
 }
 
-// 注：test_modbus_sink_dropped_increments_on_overflow 已合并到
-// test_modbus_sink_metrics_send_counted 中（send 路径覆盖 + dropped 是路径可能发生也可能不发生）。
+// 注：test_modbus_adapter_dropped_increments_on_overflow 已合并到
+// test_modbus_adapter_metrics_send_counted 中（send 路径覆盖 + dropped 是路径可能发生也可能不发生）。
 // 强行断言 dropped 可能因运行时差异（slot 漏调、current_thread runtime 行为）而 flaky。
 
 #[cfg(feature = "opcua-server")]
 #[tokio::test]
-async fn test_opcua_sink_channel_depth_reported() {
+async fn test_opcua_adapter_channel_depth_reported() {
     // 验证：send 后 metrics.sink_channel_depth 被更新（非负）
     // 并行测试可能也在操作同名 sink 的 metrics，所以只断言 depth >= 0
     // metrics injected via test_metrics()
     // use injected metrics
     let srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
     let metrics = test_metrics();
-    let sink = OpcUaSink::new(Arc::new(srv), metrics.clone());
+    let sink = OpcUaServerAdapter::new(Arc::new(srv), metrics.clone());
     let sid = SinkId::OpcUa;
     sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -121,12 +121,12 @@ async fn test_opcua_sink_channel_depth_reported() {
 }
 
 #[tokio::test]
-async fn test_modbus_sink_channel_depth_reported() {
+async fn test_modbus_adapter_channel_depth_reported() {
     // metrics injected via test_metrics()
     // use injected metrics
     let srv = ModbusServer::new(crate::north::server::ModbusServerConfig::default());
     let metrics = test_metrics();
-    let sink = ModbusSink::new(Arc::new(srv), metrics.clone());
+    let sink = ModbusServerAdapter::new(Arc::new(srv), metrics.clone());
     sink.build_mappings(&[], 0);
     let sid = SinkId::Modbus;
     sink.send(vec![DataPoint::good("p", "d", 1.0, 1.0, "u16")]);
@@ -140,22 +140,22 @@ async fn test_sink_names() {
     #[cfg(feature = "opcua-server")]
     {
         let opcua_srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
-        let sink = OpcUaSink::new(Arc::new(opcua_srv), test_metrics());
+        let sink = OpcUaServerAdapter::new(Arc::new(opcua_srv), test_metrics());
         assert_eq!(sink.name(), "opcua");
     }
     let mb_srv = ModbusServer::new(crate::north::server::ModbusServerConfig::default());
-    let sink = ModbusSink::new(Arc::new(mb_srv), test_metrics());
+    let sink = ModbusServerAdapter::new(Arc::new(mb_srv), test_metrics());
     assert_eq!(sink.name(), "modbus");
 }
 
-/// 回归测试：OpcUaSink::health() 必须真实反映 OPC UA server 运行状态。
+/// 回归测试：OpcUaServerAdapter::health() 必须真实反映 OPC UA server 运行状态。
 ///
 /// 缺陷背景：原实现恒返回 `connected: true`（假健康），server 未启动 / 启动失败 /
 /// 已停止时监控仍显示健康，而外部客户端实际读不到地址空间数据。
 #[cfg(feature = "opcua-server")]
 #[tokio::test]
-async fn test_opcua_sink_health_reflects_server_running() {
-    use crate::north::server::Server;
+async fn test_opcua_adapter_health_reflects_server_running() {
+    use crate::north::server::NorthServer;
     use crate::north::NorthConnector;
     use std::time::Duration;
 
@@ -173,7 +173,7 @@ async fn test_opcua_sink_health_reflects_server_running() {
         ..Default::default()
     };
     let srv = Arc::new(OpcUaServer::new(cfg, None));
-    let sink = OpcUaSink::new(srv.clone(), test_metrics());
+    let sink = OpcUaServerAdapter::new(srv.clone(), test_metrics());
 
     // 未启动：必须报告 not connected（原实现会误报 true）
     assert!(
@@ -206,13 +206,13 @@ async fn test_opcua_sink_health_reflects_server_running() {
     );
 }
 
-/// 回归测试：ModbusSink::health() 必须真实反映 Modbus server 运行状态。
+/// 回归测试：ModbusServerAdapter::health() 必须真实反映 Modbus server 运行状态。
 ///
 /// 缺陷背景：原实现恒返回 `connected: true`（假健康），server 未启动 / 已停止时
 /// 监控仍显示健康，而外部 Modbus 主站实际读不到寄存器数据。
 #[tokio::test]
-async fn test_modbus_sink_health_reflects_server_running() {
-    use crate::north::server::Server;
+async fn test_modbus_adapter_health_reflects_server_running() {
+    use crate::north::server::NorthServer;
     use crate::north::NorthConnector;
     use std::time::Duration;
 
@@ -223,7 +223,7 @@ async fn test_modbus_sink_health_reflects_server_running() {
         ..Default::default()
     };
     let srv = Arc::new(ModbusServer::new(cfg));
-    let sink = ModbusSink::new(srv.clone(), test_metrics());
+    let sink = ModbusServerAdapter::new(srv.clone(), test_metrics());
 
     // 未启动：必须报告 not connected（原实现会误报 true）
     assert!(

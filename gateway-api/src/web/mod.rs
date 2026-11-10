@@ -19,7 +19,7 @@ pub mod types;
 pub mod uptime;
 
 pub use traits::{
-    DataQueueTrait, GatewayTrait, OtaStateView, OtaStatusView, OtaTrait, SchedulerTrait,
+    DataQueueTrait, GatewayRuntimeTrait, OtaStateView, OtaStatusView, OtaTrait, SchedulerTrait,
 };
 pub use types::AppState;
 

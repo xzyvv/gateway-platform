@@ -16,7 +16,7 @@
 
 use crate::south::bus::FrameBuffer;
 use crate::south::protocol::common::asdu::build_interrogation_asdu;
-use crate::south::protocol::common::util::checksum8;
+use crate::south::protocol::common::codec::checksum8;
 use crate::south::protocol::{CollectorError, CollectorResult};
 
 /// 固定帧起始字节
@@ -60,7 +60,7 @@ pub(crate) enum Ft12Frame {
     },
 }
 
-/// 校验和：字节累加 mod 256（与 DLT645/CJT188 共用 `common::util::checksum8`）
+/// 校验和：字节累加 mod 256（与 DLT645/CJT188 共用 `common::codec::checksum8`）
 fn checksum(bytes: &[u8]) -> u8 {
     checksum8(bytes)
 }

@@ -22,7 +22,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 mod frames;
-use crate::south::protocol::common::util::encode_bcd_value;
+use crate::south::protocol::common::codec::encode_bcd_value;
 use frames::{
     build_cjt188_frame, decode_cjt_value, encode_cjt_value, parse_cjt188_data_id,
     parse_cjt188_data_id_v2004, parse_cjt188_response_v, DEFAULT_SER,

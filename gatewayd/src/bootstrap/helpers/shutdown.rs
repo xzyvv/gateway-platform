@@ -12,8 +12,8 @@ use tracing::info;
 use gateway_api::web::AppState;
 use gateway_core::engine::metrics::Metrics;
 use gateway_core::north::mqtt::MqttClient;
-use gateway_core::north::server::Server;
-use gateway_core::north::ConversionManager;
+use gateway_core::north::server::NorthServer;
+use gateway_core::north::NorthDispatcher;
 use gateway_core::queue::DataQueue;
 use gateway_core::south::scheduler::Scheduler;
 
@@ -28,15 +28,15 @@ const RUN_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// r68-SD1：统一"await 后台任务 JoinHandle + 三态日志"模板。
 ///
 /// r64/r66 累计在 graceful_shutdown 中写了 4 处相同的 `match tokio::time::timeout(...).await`
-/// （webhook_run / conversion_run / self_heal.handle 等），分支结构与日志
+/// （webhook_run / north_dispatcher_run / self_heal.handle 等），分支结构与日志
 /// 措辞高度雷同。抽到一处便于：
 /// 1. 未来新增北向通道或后台 task 时直接复用，不必再抄一份 9 行 match。
 /// 2. 三态日志（正常 / panic / 超时）口径统一——之前 webhook 写「run loop exited」、
-///    conversion 写「manager exited」、self_heal
+///    north dispatcher 写「manager exited」、self_heal
 ///    写「stopped」，运维查日志要按 component 名字匹配，行为一致后归一为
 ///    「`<component> exited cleanly / join error / still running」。
 ///
-/// 调用方负责先发「信号」（如 `wh.stop()` / `conversion_mgr.shutdown_token().shutdown()`），
+/// 调用方负责先发「信号」（如 `wh.stop()` / `north_dispatcher.shutdown_token().shutdown()`），
 /// ——本 helper 只等 JoinHandle，不发信号。两步分离更明确：哪些任务需要先停，
 /// 哪些只需等（spawn_supervised 内部已注入 panic 处理），调用处一目了然。
 ///
@@ -164,18 +164,18 @@ pub(crate) struct SelfHealShutdown {
 pub(crate) struct ShutdownInputs {
     pub(crate) scheduler: Arc<Scheduler>,
     pub(crate) pipeline: Arc<gateway_core::pipeline::ProcessingPipeline>,
-    pub(crate) conversion_mgr: Arc<ConversionManager>,
+    pub(crate) north_dispatcher: Arc<NorthDispatcher>,
     pub(crate) mqtt: Option<Arc<MqttClient>>,
     pub(crate) queue: Arc<DataQueue>,
     pub(crate) state: Arc<AppState>,
     pub(crate) cellular: Option<Arc<gateway_core::platform::cellular::CellularManager>>,
     pub(crate) health_handles: Vec<tokio::task::JoinHandle<()>>,
-    pub(crate) north_servers: Vec<Arc<dyn Server>>,
+    pub(crate) north_servers: Vec<Arc<dyn NorthServer>>,
     /// 自愈执行器停机句柄（默认关闭时为 None）。
     pub(crate) self_heal: Option<SelfHealShutdown>,
-    /// r66-SD1：ConversionManager run 循环 JoinHandle。
+    /// r66-SD1：NorthDispatcher run 循环 JoinHandle。
     /// `shutdown_token().shutdown()` 之后 await 其真正退出。
-    pub(crate) conversion_run: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) north_dispatcher_run: Option<tokio::task::JoinHandle<()>>,
     /// P3：北向 run 循环通道表（webhook / HA / 报警 / 透传）。
     ///
     /// 每项自带「停机信号 + run 句柄 + 等待上限」，停机序按表顺序统一执行；
@@ -227,7 +227,7 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
     let ShutdownInputs {
         scheduler,
         pipeline,
-        conversion_mgr,
+        north_dispatcher,
         mqtt,
         queue,
         state,
@@ -235,8 +235,8 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
         health_handles,
         north_servers,
         self_heal,
-        // r66-SD1：ConversionManager run 循环 JoinHandle，shutdown_token() 之后 await。
-        conversion_run,
+        // r66-SD1：NorthDispatcher run 循环 JoinHandle，shutdown_token() 之后 await。
+        north_dispatcher_run,
         // P3：北向 run 循环通道表，queue drain 之后按表顺序统一 stop + await。
         north_channels,
         // r74-SD1：Web 停机信号 + run 句柄，停机序最前触发。
@@ -285,31 +285,31 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
     tokio::time::sleep(Duration::from_millis(500)).await;
     tracing::info!("graceful_shutdown: pipeline flushed");
 
-    // 第 5 层：先关闭北向专用队列发送端——ConversionManager 先把积压批次
+    // 第 5 层：先关闭北向专用队列发送端——NorthDispatcher 先把积压批次
     // 消费完，再因 `recv()` 返回 None 自然退出（停机信号分支也会 drain 残余）。
     // 必须在 drain queue 之前完成，确保 pipeline 最后一批已 fan-out 到下游。
     pipeline.close_north_feed();
     tracing::info!("graceful_shutdown: north feed sender closed");
 
-    // 停北向 fan-out（ConversionManager 与所有 sink/connector 共享同一关闭信号）。
+    // 停北向 fan-out（NorthDispatcher 与所有 sink/connector 共享同一关闭信号）。
     // 必须在 drain queue 之前触发：确保 pipeline 最后一批数据已 fan-out 到
     // MQTT connector（入队）等下游，避免 drain 完成后还有迟到数据入队。
     // 触发后各 sink task 会自行把通道内积压数据写完再退出，后续 queue drain /
     // north servers stop / mqtt stop 的时间即为它们收尾的天然宽限期。
-    conversion_mgr.shutdown_token().shutdown();
+    north_dispatcher.shutdown_token().shutdown();
     tracing::info!(
         "graceful_shutdown: north fan-out signalled ({} connector(s))",
-        conversion_mgr.connector_count()
+        north_dispatcher.connector_count()
     );
-    // r66-SD1：await ConversionManager run 循环真正退出（旧实现只发信号）。
+    // r66-SD1：await NorthDispatcher run 循环真正退出（旧实现只发信号）。
     //
-    // `ConversionManager::run` 是 RealtimeBus 唯一订阅者，shutdown 信号在
+    // `NorthDispatcher::run` 是 RealtimeBus 唯一订阅者，shutdown 信号在
     // select 中以 biased 优先级立即触发，下次 loop 检查 `shutdown.wait()` 即 break。
     // 5s 超时与 webhook 一致；超时不 abort（spawn_supervised 的 task 若被
     // 中途 abort 可能撕裂 RealtimeBus sender 计数），仅告警继续。
-    // r68-SD1：复用 await_join_with_log——component 为 "conversion manager"。
-    if let Some(h) = conversion_run {
-        await_join_with_log("conversion manager", h, RUN_EXIT_TIMEOUT).await;
+    // r68-SD1：复用 await_join_with_log——component 为 "north dispatcher"。
+    if let Some(h) = north_dispatcher_run {
+        await_join_with_log("north dispatcher", h, RUN_EXIT_TIMEOUT).await;
     }
 
     if let Some(cell) = cellular {
@@ -458,7 +458,7 @@ mod tests {
     use std::time::Duration;
 
     /// r68-SD1 契约：正常完成路径——`handle` 立即 resolve 时不应阻塞到 timeout。
-    /// 这是 4 个调用点（self-heal / conversion_mgr / webhook）的共同基础。
+    /// 这是 4 个调用点（self-heal / north_dispatcher / webhook）的共同基础。
     #[tokio::test]
     async fn r68_await_join_with_log_normal_completion() {
         let h = tokio::spawn(async {});
@@ -495,7 +495,7 @@ mod tests {
     }
 
     /// r68-SD1 契约：panic 路径——`handle` 内的 future panic 时仍必须 resolve。
-    /// 4 个调用点都依赖此保证（self-heal / conversion_mgr / webhook
+    /// 4 个调用点都依赖此保证（self-heal / north_dispatcher / webhook
     /// 都用 `spawn_catch_unwind` 或 `spawn_supervised` 包裹 panic，handle
     /// 会 resolve 为 Ok(())——但 spawn_blocking 路径的 panic 不会被
     /// catch_unwind 吸收，会变成 JoinError。本测试覆盖「未受保护的 panic」场景。

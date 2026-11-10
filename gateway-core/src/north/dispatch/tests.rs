@@ -32,9 +32,9 @@ impl crate::north::NorthConnector for TestConnector {
 }
 
 #[tokio::test]
-async fn test_conversion_manager_fanout() {
+async fn test_north_dispatcher_fanout() {
     let (tx, rx) = crate::north::NorthFeed::channel(16);
-    let mgr = ConversionManager::new(rx);
+    let mgr = NorthDispatcher::new(rx);
 
     let s1 = Arc::new(TestConnector {
         name_str: "s1".into(),
@@ -83,9 +83,9 @@ async fn test_conversion_manager_fanout() {
 }
 
 #[tokio::test]
-async fn test_conversion_manager_empty_connectors() {
+async fn test_north_dispatcher_empty_connectors() {
     let (tx, rx) = crate::north::NorthFeed::channel(16);
-    let mgr = ConversionManager::new(rx);
+    let mgr = NorthDispatcher::new(rx);
     assert_eq!(mgr.connector_count(), 0);
 
     let mgr_clone = mgr.clone();
@@ -116,16 +116,16 @@ async fn test_connector_publish_batch_no_panic_on_empty() {
     let _ = Quality::Good;
 }
 
-/// r66-SD1 契约：`shutdown_token().shutdown()` 后 ConversionManager 的 run
+/// r66-SD1 契约：`shutdown_token().shutdown()` 后 NorthDispatcher 的 run
 /// JoinHandle 必须在 5s 内 resolve。
 ///
 /// graceful_shutdown 依赖此保证——若 JoinHandle 不 resolve（shutdown 信号丢失
 /// / run 循环死锁），停机序会白等 5s 才推进，且 systemd SIGKILL 时 run task
 /// 会被硬杀，发送端计数异常。此处锁死该行为。
 #[tokio::test]
-async fn r66_conversion_manager_run_exits_after_shutdown() {
+async fn r66_north_dispatcher_run_exits_after_shutdown() {
     let (_tx, rx) = crate::north::NorthFeed::channel(16);
-    let mgr = ConversionManager::new(rx);
+    let mgr = NorthDispatcher::new(rx);
 
     let mgr_clone = mgr.clone();
     let run_handle = tokio::spawn(async move { mgr_clone.run().await });
@@ -136,20 +136,20 @@ async fn r66_conversion_manager_run_exits_after_shutdown() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(5), run_handle).await;
     assert!(
         res.is_ok(),
-        "r66: shutdown 后 ConversionManager run 循环必须退出（停机序 await 其 JoinHandle）"
+        "r66: shutdown 后 NorthDispatcher run 循环必须退出（停机序 await 其 JoinHandle）"
     );
     // 句柄应 Ok(())——run 正常 break（非 panic 路径）
     assert!(
         res.unwrap().is_ok(),
-        "r66: ConversionManager run 应正常结束（Ok），不应是 JoinError"
+        "r66: NorthDispatcher run 应正常结束（Ok），不应是 JoinError"
     );
 }
 
 /// 第 5 层验收：发送端全部 drop 后 run 必须自然退出（不依赖 shutdown 信号）。
 #[tokio::test]
-async fn conversion_manager_exits_when_feed_closed() {
+async fn north_dispatcher_exits_when_feed_closed() {
     let (tx, rx) = crate::north::NorthFeed::channel(4);
-    let mgr = ConversionManager::new(rx);
+    let mgr = NorthDispatcher::new(rx);
     let mgr_clone = mgr.clone();
     let run_handle = tokio::spawn(async move { mgr_clone.run().await });
     tokio::task::yield_now().await;
@@ -166,7 +166,7 @@ async fn conversion_manager_exits_when_feed_closed() {
 async fn north_feed_backpressure_delivers_every_batch() {
     let total = 32usize;
     let (tx, rx) = crate::north::NorthFeed::channel(1);
-    let mgr = ConversionManager::new(rx);
+    let mgr = NorthDispatcher::new(rx);
     let connector = Arc::new(TestConnector {
         name_str: "bp".into(),
         count: AtomicUsize::new(0),

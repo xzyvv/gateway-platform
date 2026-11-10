@@ -151,7 +151,7 @@ fn build_metrics_pipeline(
         .u64_observable_counter("gateway_task_panics_total")
         .with_description("Background task panic count")
         .with_callback(move |observer| {
-            observer.observe(m.lifecyle.task_panics.load(Ordering::Relaxed), &[]);
+            observer.observe(m.lifecycle.task_panics.load(Ordering::Relaxed), &[]);
         })
         .build();
 
@@ -160,7 +160,7 @@ fn build_metrics_pipeline(
         .u64_observable_counter("gateway_config_reload_total")
         .with_description("Config reload count")
         .with_callback(move |observer| {
-            observer.observe(m.lifecyle.config_reload_total.load(Ordering::Relaxed), &[]);
+            observer.observe(m.lifecycle.config_reload_total.load(Ordering::Relaxed), &[]);
         })
         .build();
 

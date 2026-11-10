@@ -184,7 +184,7 @@ impl Scheduler {
                 "scheduler started with 0 points — 可能原因：points 段缺失 / include 展开失败 / schema 迁移遗漏；前端将显示全部设备离线，运维请检查 /api/system/diagnostics"
             );
             self.metrics
-                .lifecyle
+                .lifecycle
                 .scheduler_empty_starts
                 .fetch_add(1, Ordering::Relaxed);
         }

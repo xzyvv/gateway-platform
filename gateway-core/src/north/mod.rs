@@ -1,24 +1,24 @@
 //! 北向（上报层）：MQTT / Webhook / Server（OPC UA + Modbus）
 //!
-//! 统一管理所有北向上报通道。NorthConnector trait + ConversionManager
+//! 统一管理所有北向上报通道。NorthConnector trait + NorthDispatcher
 //! 负责把北向专用队列（`feed`，第 5 层无损通道）的采集数据分发到已注册的
 //! connector，不经过可丢帧的广播总线。
 
-pub mod conversion;
+pub mod dispatch;
 pub mod feed;
 pub mod mqtt;
 pub mod outbox_monitor;
 pub mod server;
-pub mod server_sinks;
+pub mod server_adapters;
 pub mod sim_consumer;
 pub mod template;
 pub mod webhook;
 
-pub use conversion::ConversionManager;
+pub use dispatch::NorthDispatcher;
 pub use feed::{NorthFeed, NorthFeedStatsSnapshot, NorthSender, DEFAULT_NORTH_FEED_CAPACITY};
-pub use server_sinks::ModbusSink;
+pub use server_adapters::ModbusServerAdapter;
 #[cfg(feature = "opcua-server")]
-pub use server_sinks::OpcUaSink;
+pub use server_adapters::OpcUaServerAdapter;
 pub use sim_consumer::{SimConsumer, SimConsumerStats};
 
 use crate::engine::error::GatewayResult;
@@ -26,11 +26,11 @@ use crate::engine::model::DataPoint;
 
 /// 北向连接器统一 SPI（1.2: 替代 NorthSink + NorthboundSink + PassthroughNode）
 ///
-/// 所有北向通道（MQTT/Webhook/Server Sinks）实现此 trait，
-/// 由 ConversionManager 统一持有，消除 3 套抽象。
+/// 所有北向通道（MQTT/Webhook/Server Adapters）实现此 trait，
+/// 由 NorthDispatcher 统一持有，消除 3 套抽象。
 #[async_trait::async_trait]
 pub trait NorthConnector: Send + Sync {
-    /// 连接器名称（如 "mqtt" / "webhook" / "modbus_sink"）
+    /// 连接器名称（如 "mqtt" / "webhook" / "modbus_adapter"）
     fn name(&self) -> &str;
     /// 启动连接器（建立连接、启动 event loop 等）
     ///

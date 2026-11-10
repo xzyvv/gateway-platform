@@ -10,7 +10,7 @@
 //! 匹配键唯一：`source_point_id == DataPoint.point_id`，且仅处理 `Quality::Good` 点。
 //! `source_proto` / `target_proto` / `target_tag` / `name` 是管理元数据，不参与运行时。
 //!
-//! 热重载：`Gateway::reload_config` 检测 `convert_rules` 差异后调 `update_rules`
+//! 热重载：`GatewayRuntime::reload_config` 检测 `convert_rules` 差异后调 `update_rules`
 //! 原子替换规则集（ArcSwap），命中记账（hits）跨重载保留。
 
 use std::collections::HashMap;

@@ -17,7 +17,7 @@ use crate::engine::util::crc::crc16;
 use crate::south::bus::serial::SerialHandle;
 use crate::south::bus::transport::GpioOutput;
 #[cfg(feature = "modbus")]
-use crate::south::protocol::util::rtu_to_ascii;
+use crate::south::protocol::codec::rtu_to_ascii;
 use crate::south::protocol::CollectorError;
 
 // ============================================================

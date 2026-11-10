@@ -43,7 +43,7 @@ impl Metrics {
 
     /// 记录一次后台任务 panic（由 supervisor 调用）
     pub fn inc_task_panic(&self, _task_name: &str) {
-        self.lifecyle.task_panics.fetch_add(1, Ordering::Relaxed);
+        self.lifecycle.task_panics.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_webhook_publish(&self, success: bool) {
@@ -68,21 +68,21 @@ impl Metrics {
     }
 
     pub fn inc_watchdog_timeout(&self) {
-        self.lifecyle
+        self.lifecycle
             .watchdog_timeouts
             .fetch_add(1, Ordering::Relaxed);
     }
 
     /// S04：优雅停机宽限超时被强制截断。
     pub fn inc_shutdown_forced(&self) {
-        self.lifecyle
+        self.lifecycle
             .shutdown_forced
             .fetch_add(1, Ordering::Relaxed);
     }
 
     /// 记录一次配置热重载
     pub fn inc_config_reload(&self) {
-        self.lifecyle
+        self.lifecycle
             .config_reload_total
             .fetch_add(1, Ordering::Relaxed);
     }

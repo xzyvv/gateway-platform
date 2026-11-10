@@ -63,7 +63,7 @@ fn record_reload_attempt(state: &Arc<AppState>) {
     state
         .platform
         .metrics
-        .lifecyle
+        .lifecycle
         .config_reload_total
         .fetch_add(1, Ordering::Relaxed);
 }
@@ -72,13 +72,13 @@ fn record_reload_success(state: &Arc<AppState>) {
     state
         .platform
         .metrics
-        .lifecyle
+        .lifecycle
         .config_reload_succeeded
         .fetch_add(1, Ordering::Relaxed);
 }
 
 fn record_reload_rejected(state: &Arc<AppState>, err: &ApiError) {
-    let metrics = &state.platform.metrics.lifecyle;
+    let metrics = &state.platform.metrics.lifecycle;
     metrics
         .config_reload_rejected_total
         .fetch_add(1, Ordering::Relaxed);

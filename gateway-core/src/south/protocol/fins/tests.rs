@@ -10,7 +10,7 @@ use tokio::net::{TcpListener, UdpSocket};
 use super::frames::*;
 use super::{mode_from_variant, FinsCollector, FinsMode};
 use crate::config::PointConfig;
-use crate::engine::model::ModbusDataType;
+use crate::engine::model::PointDataType;
 use crate::south::protocol::Collector;
 
 // ============================================================
@@ -92,15 +92,15 @@ fn test_parse_read_response_ok_and_error() {
 #[test]
 fn test_decode_encode_words_big_endian() {
     assert_eq!(
-        decode_words(&[0x12, 0x34], ModbusDataType::U16),
+        decode_words(&[0x12, 0x34], PointDataType::U16),
         Some(0x1234 as f64)
     );
-    let f = decode_words(&[0x3F, 0xC0, 0x00, 0x00], ModbusDataType::F32).expect("f32");
+    let f = decode_words(&[0x3F, 0xC0, 0x00, 0x00], PointDataType::F32).expect("f32");
     assert!((f - 1.5).abs() < 1e-6);
 
-    let bytes = encode_words(0x1234 as f64, ModbusDataType::U16);
+    let bytes = encode_words(0x1234 as f64, PointDataType::U16);
     assert_eq!(bytes, vec![0x12, 0x34]);
-    let bytes = encode_words(1.5, ModbusDataType::F32);
+    let bytes = encode_words(1.5, PointDataType::F32);
     assert_eq!(bytes, vec![0x3F, 0xC0, 0x00, 0x00]);
 }
 
@@ -587,7 +587,7 @@ fn golden_fins_read_dm_words_request() {
 #[test]
 fn golden_fins_write_dm_words_request() {
     // 写 1 个字：值 0x1234（大端字序列）
-    let data = encode_words(0x1234 as f64, ModbusDataType::U16);
+    let data = encode_words(0x1234 as f64, PointDataType::U16);
     let fins = build_write_frame(0x01, 0x02, 0x82, 0x0000, 0x0001, &data);
     let tcp = build_fins_frame_request(&fins);
     crate::south::protocol::golden::assert_golden("fins/write_dm_words_tcp_request.hex", &tcp);
@@ -620,7 +620,7 @@ fn golden_fins_read_dm_words_response_decodes() {
     assert_eq!(payload, vec![0x12, 0x34]);
     assert_eq!(parse_read_end_code(&loaded).expect("结束码可读"), 0);
     assert_eq!(
-        decode_words(&payload, ModbusDataType::U16),
+        decode_words(&payload, PointDataType::U16),
         Some(0x1234 as f64),
         "读回数据应按大端解码为 0x1234"
     );

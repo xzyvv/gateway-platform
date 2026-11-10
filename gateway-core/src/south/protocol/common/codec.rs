@@ -1,4 +1,4 @@
-//! 协议工具函数（跨协议复用，避免重复实现）
+//! 协议帧编解码工具（跨协议复用，避免重复实现）
 //!
 //! - CRC16：Modbus RTU 帧校验（多项式 0xA001）→ 已上提至 `crate::engine::util::crc`
 //! - LRC / ASCII 转换：Modbus ASCII 模式帧工具（仅 south 串口链路使用）

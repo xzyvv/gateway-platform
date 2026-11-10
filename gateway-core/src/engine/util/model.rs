@@ -29,10 +29,10 @@ impl Quality {
     }
 }
 
-/// Modbus 数据类型
+/// 点位数据类型（Modbus / FINS / MC / S7 等协议共用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum ModbusDataType {
+pub enum PointDataType {
     U16,
     I16,
     U32,
@@ -43,27 +43,27 @@ pub enum ModbusDataType {
     F64,
 }
 
-impl ModbusDataType {
+impl PointDataType {
     /// 根据数据类型返回占用的寄存器数（§9.4）
     pub fn register_count(&self) -> u16 {
         match self {
-            ModbusDataType::U16 | ModbusDataType::I16 => 1,
-            ModbusDataType::U32 | ModbusDataType::I32 | ModbusDataType::F32 => 2,
-            ModbusDataType::U64 | ModbusDataType::I64 | ModbusDataType::F64 => 4,
+            PointDataType::U16 | PointDataType::I16 => 1,
+            PointDataType::U32 | PointDataType::I32 | PointDataType::F32 => 2,
+            PointDataType::U64 | PointDataType::I64 | PointDataType::F64 => 4,
         }
     }
 
     /// 规范名：与前端下拉、`parse_data_type` 的主写法一致（u16/i16/…/f64）
     pub fn canonical_name(&self) -> &'static str {
         match self {
-            ModbusDataType::U16 => "u16",
-            ModbusDataType::I16 => "i16",
-            ModbusDataType::U32 => "u32",
-            ModbusDataType::I32 => "i32",
-            ModbusDataType::U64 => "u64",
-            ModbusDataType::I64 => "i64",
-            ModbusDataType::F32 => "f32",
-            ModbusDataType::F64 => "f64",
+            PointDataType::U16 => "u16",
+            PointDataType::I16 => "i16",
+            PointDataType::U32 => "u32",
+            PointDataType::I32 => "i32",
+            PointDataType::U64 => "u64",
+            PointDataType::I64 => "i64",
+            PointDataType::F32 => "f32",
+            PointDataType::F64 => "f64",
         }
     }
 }

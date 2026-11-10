@@ -25,7 +25,7 @@ use crate::south::protocol::ProtocolRegistry;
 use crate::south::scheduler::Scheduler;
 
 /// 网关组件管理器
-pub struct Gateway {
+pub struct GatewayRuntime {
     /// 总线管理器（按 port_name 索引）
     bus_managers: parking_lot::Mutex<HashMap<String, Arc<BusManager>>>,
     /// MQTT 客户端（可热替换）
@@ -48,9 +48,9 @@ pub struct Gateway {
     virtual_points: Arc<crate::pipeline::VirtualPointEngine>,
 }
 
-/// `Gateway::new` 的装配参数：bootstrap 装配点唯一，
+/// `GatewayRuntime::new` 的装配参数：bootstrap 装配点唯一，
 /// 用结构体承载以避免超长参数列表（clippy::too_many_arguments）。
-pub struct GatewayParts {
+pub struct GatewayComponents {
     pub bus_managers: HashMap<String, Arc<BusManager>>,
     pub mqtt: Option<Arc<MqttClient>>,
     pub scheduler: Arc<Scheduler>,
@@ -65,15 +65,15 @@ pub struct GatewayParts {
     pub virtual_points: Arc<crate::pipeline::VirtualPointEngine>,
 }
 
-/// 测试专用：构建一个「不含任何总线」的 `Gateway`。
+/// 测试专用：构建一个「不含任何总线」的 `GatewayRuntime`。
 ///
 /// 放在 support 层而非调用方是为了不违反架构守护 `north_must_not_depend_on_south`
 /// （见 `gateway-core/tests/arch_deps.rs`）：装配整机必须具名 `Scheduler` /
 /// `SerialManager` 等南向类型，而 `north` 禁止出现 `crate::south::` 引用。
-/// 装配本就是 support 层职责（`GatewayParts` 即定义于此），故跨层装配收敛到此处，
+/// 装配本就是 support 层职责（`GatewayComponents` 即定义于此），故跨层装配收敛到此处，
 /// north 侧测试只调用本函数。
 #[cfg(test)]
-pub fn gateway_without_buses_for_test() -> Arc<Gateway> {
+pub fn gateway_runtime_without_buses_for_test() -> Arc<GatewayRuntime> {
     use crate::config::NtpConfig;
     use crate::engine::metrics::Metrics;
     use crate::engine::monitor::health::DiskStatus;
@@ -103,7 +103,7 @@ pub fn gateway_without_buses_for_test() -> Arc<Gateway> {
         pipeline,
         metrics.clone(),
     ));
-    Arc::new(Gateway::new(GatewayParts {
+    Arc::new(GatewayRuntime::new(GatewayComponents {
         bus_managers: HashMap::new(),
         mqtt: None,
         scheduler,
@@ -132,12 +132,12 @@ fn should_force_rebuild(bus_cfg: &BusConfig, force_serial: bool, force_only: Opt
             .unwrap_or(true)
 }
 
-impl Gateway {
+impl GatewayRuntime {
     /// 创建网关管理器
     ///
-    /// 参数经 `GatewayParts` 显式依赖注入（装配点唯一：bootstrap）。
-    pub fn new(parts: GatewayParts) -> Self {
-        let GatewayParts {
+    /// 参数经 `GatewayComponents` 显式依赖注入（装配点唯一：bootstrap）。
+    pub fn new(parts: GatewayComponents) -> Self {
+        let GatewayComponents {
             bus_managers,
             mqtt,
             scheduler,
@@ -264,7 +264,7 @@ impl Gateway {
 
     /// 强制重建串口总线（供自愈 `ResetSerial` 动作复用，不新增旁路恢复逻辑）。
     ///
-    /// 与配置热重载共用 [`Gateway::reload_buses`] 的重建路径：重新打开**串口**
+    /// 与配置热重载共用 [`GatewayRuntime::reload_buses`] 的重建路径：重新打开**串口**
     /// 总线（`tcp_addr` 为空）、替换 BusManager 与 collector，并重建受影响采集组；
     /// TCP 总线不受影响。走 `reload_lock` 串行化，避免与并发配置重载冲突。
     ///
@@ -272,7 +272,7 @@ impl Gateway {
     /// 避免一条总线异常时把所有正常串口总线一并重开）；`None` 重建全部串口总线。
     ///
     /// 返回实际重建的串口总线数量。`buses`/`points` 由调用方传入当前生效配置，
-    /// 使 `Gateway` 无需反向依赖 `AppState`。
+    /// 使 `GatewayRuntime` 无需反向依赖 `AppState`。
     /// 采集组重建失败时返回 `Err`（manager/collector 已部分替换，需由调用方上报）。
     pub async fn reset_serial_buses(
         &self,
@@ -532,7 +532,7 @@ mod r36_tests {
     /// 该总线采集静默停止。修复后旧实例应被回退保留，且不计入"已重建"。
     #[tokio::test]
     async fn reload_buses_keeps_old_manager_when_open_fails() {
-        let gw = gateway_without_buses_for_test();
+        let gw = gateway_runtime_without_buses_for_test();
 
         // 预置一个"旧"串口总线 manager（serial 句柄 None，仅作占位旧实例）
         let cfg = BusConfig {

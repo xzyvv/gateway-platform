@@ -1,7 +1,7 @@
 //! 批量合并算法与点位值解析
 
 use crate::config::PointConfig;
-use crate::engine::model::{ModbusDataType, Quality};
+use crate::engine::model::{PointDataType, Quality};
 
 use crate::engine::model::DataPoint;
 use crate::south::protocol::{convert_value, decode_binary_value as decode_value, reorder_bytes};
@@ -56,7 +56,7 @@ pub(crate) fn merge_batches<'a>(
 pub(crate) fn parse_point_value(point: &PointConfig, regs: &[u16], batch_start: u16) -> DataPoint {
     let addr = point.address_num.unwrap_or(0);
     let offset = (addr - batch_start) as usize;
-    let data_type = point.data_type_enum().unwrap_or(ModbusDataType::U16);
+    let data_type = point.data_type_enum().unwrap_or(PointDataType::U16);
     let byte_order = point.byte_order_enum();
 
     let count = data_type.register_count() as usize;
@@ -198,16 +198,16 @@ pub(crate) fn merge_write_batches(items: &[(u16, u16)], max_units: u16) -> Vec<W
 ///
 /// 单寄存器类型（U16/I16，仅 2 字节）跳过 `reorder_bytes`，避免其 `len < 4` 告警刷屏。
 pub(crate) fn encode_register_values(point: &PointConfig, raw: f64) -> Vec<u16> {
-    let dt = point.data_type_enum().unwrap_or(ModbusDataType::U16);
+    let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
     let be: Vec<u8> = match dt {
-        ModbusDataType::U16 => (raw as u16).to_be_bytes().to_vec(),
-        ModbusDataType::I16 => (raw as i16).to_be_bytes().to_vec(),
-        ModbusDataType::U32 => (raw as u32).to_be_bytes().to_vec(),
-        ModbusDataType::I32 => (raw as i32).to_be_bytes().to_vec(),
-        ModbusDataType::F32 => (raw as f32).to_be_bytes().to_vec(),
-        ModbusDataType::U64 => (raw as u64).to_be_bytes().to_vec(),
-        ModbusDataType::I64 => (raw as i64).to_be_bytes().to_vec(),
-        ModbusDataType::F64 => raw.to_be_bytes().to_vec(),
+        PointDataType::U16 => (raw as u16).to_be_bytes().to_vec(),
+        PointDataType::I16 => (raw as i16).to_be_bytes().to_vec(),
+        PointDataType::U32 => (raw as u32).to_be_bytes().to_vec(),
+        PointDataType::I32 => (raw as i32).to_be_bytes().to_vec(),
+        PointDataType::F32 => (raw as f32).to_be_bytes().to_vec(),
+        PointDataType::U64 => (raw as u64).to_be_bytes().to_vec(),
+        PointDataType::I64 => (raw as i64).to_be_bytes().to_vec(),
+        PointDataType::F64 => raw.to_be_bytes().to_vec(),
     };
     let wire = if be.len() >= 4 {
         reorder_bytes(&be, point.byte_order_enum())

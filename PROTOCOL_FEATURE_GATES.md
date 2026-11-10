@@ -34,7 +34,7 @@ FINS 与 BACnet MS/TP 已移出默认集合并进入「退役观察」：feature
 > `gpio` 是点位级协议，不走 Collector 注册流程，始终编译，不受 feature gate 控制，随所有 SKU 交付。
 
 **OPC UA 为什么拆两向**：南向 Client（`south/protocol/opcua`）与北向 Server
-（`north/server/opcua_server` + `north/server_sinks/opcua_sink`）客户群几乎不重叠，
+（`north/server/opcua_server` + `north/server_adapters/opcua_sink`）客户群几乎不重叠，
 且分别只拉 `async-opcua` 的不同子 crate（client → `async-opcua-client`；
 server → `async-opcua-server`、`async-opcua-nodes`、`async-opcua-core-namespace`）。
 此前 `async-opcua` 是非 optional 硬依赖、北向 Server 又无 `cfg` 门控，

@@ -1,4 +1,4 @@
-//! 协议转换管理器：消费北向专用无损队列并 fan-out 到所有已注册的北向 connector。
+//! 北向分发器：消费北向专用无损队列并 fan-out 到所有已注册的北向 connector。
 //!
 //! 设计（RealtimeBus 第 5 层）：
 //! - 处理管道把同一份 `Arc<Vec<DataPoint>>` 同时投递到广播总线与北向专用队列；
@@ -20,10 +20,10 @@ use crate::engine::shutdown::ShutdownToken;
 
 use super::NorthConnector;
 
-/// 协议转换管理器
+/// 北向分发器
 ///
 /// 消费北向专用队列，将采集数据分发给所有已注册的北向 connector。
-pub struct ConversionManager {
+pub struct NorthDispatcher {
     /// 北向专用队列接收端：`run()` 启动时 take 走（所有权需要），
     /// 同时保证 run 循环只可能被启动一次。
     feed: Mutex<Option<mpsc::Receiver<Arc<Vec<DataPoint>>>>>,
@@ -33,8 +33,8 @@ pub struct ConversionManager {
     shutdown: ShutdownToken,
 }
 
-impl ConversionManager {
-    /// 创建转换管理器（使用全局 ShutdownToken）
+impl NorthDispatcher {
+    /// 创建北向分发器（使用全局 ShutdownToken）
     pub fn new(feed: mpsc::Receiver<Arc<Vec<DataPoint>>>) -> Arc<Self> {
         Arc::new(Self {
             feed: Mutex::new(Some(feed)),

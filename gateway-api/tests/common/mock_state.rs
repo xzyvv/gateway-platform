@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use gateway_api::web::traits::VirtualPointStateView;
 use gateway_api::web::{
-    AppState, DataQueueTrait, GatewayTrait, OtaStateView, OtaStatusView, OtaTrait, SchedulerTrait,
+    AppState, DataQueueTrait, GatewayRuntimeTrait, OtaStateView, OtaStatusView, OtaTrait,
+    SchedulerTrait,
 };
 use gateway_core::config::PointConfig;
 use gateway_core::config::{
@@ -224,7 +225,7 @@ impl MockGateway {
         }
     }
 
-    /// 让下一次 [`GatewayTrait::reload_config`] 返回 `GatewayError::Config(msg)`。
+    /// 让下一次 [`GatewayRuntimeTrait::reload_config`] 返回 `GatewayError::Config(msg)`。
     ///
     /// 一次性：失败被取走后自动清除，后续热重载恢复正常，便于同一用例内
     /// 「先失败 → 再成功」地验证状态没有被污染。
@@ -258,7 +259,7 @@ impl MockGateway {
     }
 }
 
-impl GatewayTrait for MockGateway {
+impl GatewayRuntimeTrait for MockGateway {
     fn reload_config<'a>(
         &'a self,
         old: &'a GatewayConfig,
@@ -467,7 +468,7 @@ pub fn mock_app_state_with_gateway() -> (Arc<AppState>, Arc<MockGateway>) {
 /// 构造带真实调试总线（假实现）的 AppState（P0-1 真实下发/回放集成测试用）。
 ///
 /// `buses` 进 `GatewayConfig.buses`，handler 据 `port_name` 查得到总线配置；
-/// `debug_bus` 作为 `GatewayTrait::debug_bus` 的返回值，接住 handler 下发的帧。
+/// `debug_bus` 作为 `GatewayRuntimeTrait::debug_bus` 的返回值，接住 handler 下发的帧。
 pub fn mock_app_state_with_debug_bus(
     buses: Vec<BusConfig>,
     debug_bus: Arc<dyn gateway_api::web::debug_bus::DebugBusTrait>,
@@ -503,7 +504,7 @@ pub fn mock_app_state_for_self_heal(
     let state = build_mock_state_with_devices(
         None,
         buses,
-        gateway.clone() as Arc<dyn GatewayTrait>,
+        gateway.clone() as Arc<dyn GatewayRuntimeTrait>,
         HashMap::new(),
         devices,
         None,
@@ -514,7 +515,7 @@ pub fn mock_app_state_for_self_heal(
 fn build_mock_state(
     cellular: Option<Arc<gateway_core::platform::cellular::CellularManager>>,
     buses: Vec<BusConfig>,
-    gateway: Arc<dyn GatewayTrait>,
+    gateway: Arc<dyn GatewayRuntimeTrait>,
     collectors: HashMap<String, Arc<dyn Collector>>,
 ) -> Arc<AppState> {
     build_mock_state_with_devices(cellular, buses, gateway, collectors, Vec::new(), None)
@@ -524,7 +525,7 @@ fn build_mock_state(
 fn build_mock_state_with_devices(
     cellular: Option<Arc<gateway_core::platform::cellular::CellularManager>>,
     buses: Vec<BusConfig>,
-    gateway: Arc<dyn GatewayTrait>,
+    gateway: Arc<dyn GatewayRuntimeTrait>,
     collectors: HashMap<String, Arc<dyn Collector>>,
     devices: Vec<DeviceStatus>,
     north_feed: Option<gateway_core::north::NorthSender>,
@@ -638,10 +639,10 @@ fn build_mock_state_with_devices(
             gateway,
             north_servers: Vec::new(),
             // N-7：测试态无 connector，状态接口按「无可用连接器」如实返回。
-            // 第 5 层：ConversionManager 消费北向专用队列（此处不启动 run）。
-            conversion: {
+            // 第 5 层：NorthDispatcher 消费北向专用队列（此处不启动 run）。
+            north_dispatcher: {
                 let (_north_tx, north_rx) = gateway_core::north::NorthFeed::channel(1);
-                gateway_core::north::ConversionManager::new(north_rx)
+                gateway_core::north::NorthDispatcher::new(north_rx)
             },
             // 默认不装配处理管道，`/api/metrics` 不输出北向队列指标；
             // 需要断言该组指标的用例走 `mock_app_state_with_north_feed`。

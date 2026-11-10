@@ -5,12 +5,12 @@
 
 use crate::config::point::{ratio_scope, RatioScope};
 use crate::config::PointConfig;
-use crate::engine::model::{ByteOrder, ModbusDataType, Quality};
+use crate::engine::model::{ByteOrder, PointDataType, Quality};
 use crate::engine::util::formula::apply_formula;
 
 use super::super::CollectorError;
 use super::super::CollectorResult;
-use super::util::{decode_bcd_value, encode_bcd_value};
+use super::codec::{decode_bcd_value, encode_bcd_value};
 
 /// A-1: 跨协议共享——字节序重排（ABCD/DCBA/CDAB/BADC）
 ///
@@ -63,37 +63,37 @@ pub fn reorder_bytes(bytes: &[u8], order: ByteOrder) -> Vec<u8> {
 /// A-1: 跨协议共享——二进制类型解码（U16/I16/U32/I32/F32/U64/I64/F64）
 #[inline]
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all, level = "trace"))]
-pub fn decode_binary_value(bytes: &[u8], dt: ModbusDataType) -> Option<(f64, &'static str)> {
+pub fn decode_binary_value(bytes: &[u8], dt: PointDataType) -> Option<(f64, &'static str)> {
     match dt {
-        ModbusDataType::U16 => {
+        PointDataType::U16 => {
             let a: [u8; 2] = bytes.try_into().ok()?;
             Some((u16::from_be_bytes(a) as f64, "u16"))
         }
-        ModbusDataType::I16 => {
+        PointDataType::I16 => {
             let a: [u8; 2] = bytes.try_into().ok()?;
             Some((i16::from_be_bytes(a) as f64, "i16"))
         }
-        ModbusDataType::U32 => {
+        PointDataType::U32 => {
             let a: [u8; 4] = bytes.try_into().ok()?;
             Some((u32::from_be_bytes(a) as f64, "u32"))
         }
-        ModbusDataType::I32 => {
+        PointDataType::I32 => {
             let a: [u8; 4] = bytes.try_into().ok()?;
             Some((i32::from_be_bytes(a) as f64, "i32"))
         }
-        ModbusDataType::F32 => {
+        PointDataType::F32 => {
             let a: [u8; 4] = bytes.try_into().ok()?;
             Some((f32::from_be_bytes(a) as f64, "f32"))
         }
-        ModbusDataType::U64 => {
+        PointDataType::U64 => {
             let a: [u8; 8] = bytes.try_into().ok()?;
             Some((u64::from_be_bytes(a) as f64, "u64"))
         }
-        ModbusDataType::I64 => {
+        PointDataType::I64 => {
             let a: [u8; 8] = bytes.try_into().ok()?;
             Some((i64::from_be_bytes(a) as f64, "i64"))
         }
-        ModbusDataType::F64 => {
+        PointDataType::F64 => {
             let a: [u8; 8] = bytes.try_into().ok()?;
             Some((f64::from_be_bytes(a), "f64"))
         }
@@ -149,14 +149,14 @@ pub fn encode_value_by_type(point: &PointConfig, value: f64, out_len: usize) -> 
     if let Some(dt) = point.data_type_enum() {
         let mut bytes: Vec<u8> = Vec::with_capacity(out_len);
         match dt {
-            ModbusDataType::U16 => bytes.extend_from_slice(&(value as u16).to_be_bytes()),
-            ModbusDataType::I16 => bytes.extend_from_slice(&(value as i16).to_be_bytes()),
-            ModbusDataType::U32 => bytes.extend_from_slice(&(value as u32).to_be_bytes()),
-            ModbusDataType::I32 => bytes.extend_from_slice(&(value as i32).to_be_bytes()),
-            ModbusDataType::U64 => bytes.extend_from_slice(&(value as u64).to_be_bytes()),
-            ModbusDataType::I64 => bytes.extend_from_slice(&(value as i64).to_be_bytes()),
-            ModbusDataType::F32 => bytes.extend_from_slice(&(value as f32).to_be_bytes()),
-            ModbusDataType::F64 => bytes.extend_from_slice(&value.to_be_bytes()),
+            PointDataType::U16 => bytes.extend_from_slice(&(value as u16).to_be_bytes()),
+            PointDataType::I16 => bytes.extend_from_slice(&(value as i16).to_be_bytes()),
+            PointDataType::U32 => bytes.extend_from_slice(&(value as u32).to_be_bytes()),
+            PointDataType::I32 => bytes.extend_from_slice(&(value as i32).to_be_bytes()),
+            PointDataType::U64 => bytes.extend_from_slice(&(value as u64).to_be_bytes()),
+            PointDataType::I64 => bytes.extend_from_slice(&(value as i64).to_be_bytes()),
+            PointDataType::F32 => bytes.extend_from_slice(&(value as f32).to_be_bytes()),
+            PointDataType::F64 => bytes.extend_from_slice(&value.to_be_bytes()),
         }
         if bytes.len() < out_len {
             // 不足部分在末尾补 0：大端表示下末尾为低位字节，补 0 不改变数值

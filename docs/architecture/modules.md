@@ -103,14 +103,14 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 |---|---|
 | `mqtt/` | `MqttClient` 连接 broker，`outbox` 离线队列，`publish` 批量/透传 |
 | `webhook.rs` | HTTP POST 回调上报（单文件实现，非目录） |
-| `conversion.rs` | `ConversionManager`：订阅 `RealtimeBus`，按注册顺序分发到各 `NorthboundSink`（单测在 `conversion/tests.rs`） |
+| `dispatch.rs` | `NorthDispatcher`：订阅 `RealtimeBus`，按注册顺序分发到各 `NorthboundSink`（单测在 `dispatch/tests.rs`） |
 | `outbox_monitor.rs` | MQTT outbox 积压/失败率监控（暴露为指标与状态接口） |
 | `server/registry.rs` | Server 注册表：按配置装配被动服务端（`ServerContext` / `ServerRegistry`） |
 | `server/modbus_server.rs` | Modbus TCP Server，被动北向暴露点位 |
 | `server/opcua_server.rs` | OPC UA Server，被动北向暴露点位 |
 | `server/mqtt_packet_passthrough.rs` | MQTT 报文透传会话管理 |
 | `server/modbus_gateway_bridge.rs` | Modbus 网关桥接（TCP↔RTU）：收 Modbus TCP 请求 → 去 MBAP 加 CRC 转 RTU → 经 BusManager 发串口 → 响应反向还原。只做帧格式转换、不做协议解析，配置键沿用 `modbus_passthrough` |
-| `server_sinks/` | 数据推送适配器：将 RealtimeBus 数据主动喂给 server/ 下各服务端（区别于 server/ 的被动监听）；基类在 `base.rs` |
+| `server_adapters/` | 数据推送适配器：将 RealtimeBus 数据主动喂给 server/ 下各服务端（区别于 server/ 的被动监听）；基类在 `base.rs` |
 | `template/` | 上送 payload 模板渲染（解析 / 渲染 / 模板注册表） |
 
 **三处 Modbus「服务端」能力的分工（勿误删）**：
@@ -118,7 +118,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | 模块 | 角色 | 数据来源 | 典型用途 |
 |---|---|---|---|
 | `server/modbus_server.rs` | Modbus TCP 从站 | 内存寄存器镜像（由 sink 写入） | 上位机/SCADA 以 Modbus 主站身份读网关 |
-| `server_sinks/modbus_sink.rs` | 数据推送侧通道 | `RealtimeBus` 订阅 | 把采集值持续写进上面那台从站的寄存器空间，是「点位 → 寄存器」的映射执行者 |
+| `server_adapters/modbus_adapter.rs` | 数据推送侧通道 | `RealtimeBus` 订阅 | 把采集值持续写进上面那台从站的寄存器空间，是「点位 → 寄存器」的映射执行者 |
 | `server/modbus_gateway_bridge.rs` | 协议桥接（网关中转） | TCP 客户端请求 | 上游用 Modbus TCP、现场设备只有 RTU 串口时做透明转换 |
 
 前两者是「服务端 + 喂数者」的主从配对，第三个是独立的编译期可选桥接能力，三者不构成重复实现。
@@ -218,7 +218,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | webhook | `config/webhook.rs`（`WebhookConfig`） | `north/webhook.rs`（HTTP POST 上报） |
 | cellular | `config/cellular.rs`（`CellularConfig`） | `platform/cellular/`（拨号与状态查询） |
 | mqtt | `config/mqtt.rs`（`MqttConfig`） | `north/mqtt/`（`MqttClient`） |
-| opcua | `config/opcua.rs`（`OpcuaConfig`） | `south/protocol/opcua/`（采集）+ `north/server_sinks/opcua_sink.rs`（被动暴露） |
+| opcua | `config/opcua.rs`（`OpcuaConfig`） | `south/protocol/opcua/`（采集）+ `north/server_adapters/opcua_adapter.rs`（被动暴露） |
 | metrics | — | `engine/metrics/`（Prometheus `/api/metrics`） vs `engine/monitor/otel.rs`（OTLP 桥接） |
 
 **DTO 类型存放约定**：

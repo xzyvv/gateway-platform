@@ -16,7 +16,7 @@ pub use disk_alarm::{
 
 /// 磁盘压力状态（替代原全局 static DOWNSAMPLE_TRIGGERED）
 ///
-/// 通过 Gateway struct 注入，支持多实例隔离。
+/// 通过 GatewayRuntime struct 注入，支持多实例隔离。
 ///
 /// ## P9：语义订正 —— 这不是"降采样开关"，而是"磁盘压力信号"
 ///

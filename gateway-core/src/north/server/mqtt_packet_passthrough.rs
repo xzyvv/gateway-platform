@@ -40,7 +40,7 @@ use tokio::sync::{mpsc, Semaphore};
 
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::north::mqtt::MqttClient;
-use crate::support::app::Gateway;
+use crate::support::app::GatewayRuntime;
 
 /// r30-PS2: 客户端可指定 `timeout` 字段；硬上限 30 秒防止慢攻击占满总线/任务槽。
 pub(crate) const MAX_PASSTHROUGH_TIMEOUT_MS: u64 = 30_000;
@@ -134,7 +134,7 @@ impl Drop for SessionGuard {
 
 pub struct MqttPacketPassthrough {
     mqtt: Arc<MqttClient>,
-    gateway: Arc<Gateway>,
+    gateway: Arc<GatewayRuntime>,
     /// 指令 topic
     in_topic: String,
     /// 响应 topic
@@ -156,7 +156,7 @@ impl MqttPacketPassthrough {
     /// 创建 MQTT 报文透传管理器
     ///
     /// `base_topic` 为 MQTT 配置中的 topic，透传指令/响应 topic 在此基础上派生。
-    pub fn new(mqtt: Arc<MqttClient>, gateway: Arc<Gateway>, base_topic: &str) -> Arc<Self> {
+    pub fn new(mqtt: Arc<MqttClient>, gateway: Arc<GatewayRuntime>, base_topic: &str) -> Arc<Self> {
         Arc::new(Self {
             mqtt,
             gateway,
@@ -245,7 +245,7 @@ impl MqttPacketPassthrough {
 
     /// 处理一条透传指令
     pub(crate) async fn handle_request(
-        gateway: &Gateway,
+        gateway: &GatewayRuntime,
         payload: &[u8],
         sessions: Arc<std::sync::Mutex<Vec<PassthroughSession>>>,
         concurrency: Arc<Semaphore>,
@@ -576,7 +576,7 @@ mod r73_tests {
             Ok(c) => Arc::new(c),
             Err(_) => return None,
         };
-        let gateway = crate::support::app::gateway_without_buses_for_test();
+        let gateway = crate::support::app::gateway_runtime_without_buses_for_test();
         Some(MqttPacketPassthrough::new(mqtt, gateway, "gw/r73"))
     }
 }

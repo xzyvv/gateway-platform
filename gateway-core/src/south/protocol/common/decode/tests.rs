@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::PointConfig;
-use crate::engine::model::{ByteOrder, ModbusDataType};
+use crate::engine::model::{ByteOrder, PointDataType};
 
 #[test]
 fn test_reorder_bytes_abcd_noop() {
@@ -47,7 +47,7 @@ fn test_reorder_bytes_short_input_passthrough() {
 #[test]
 fn test_decode_u16() {
     let bytes = [0x00, 0x0A];
-    let (v, t) = decode_binary_value(&bytes, ModbusDataType::U16).unwrap();
+    let (v, t) = decode_binary_value(&bytes, PointDataType::U16).unwrap();
     assert_eq!(v, 10.0);
     assert_eq!(t, "u16");
 }
@@ -55,7 +55,7 @@ fn test_decode_u16() {
 #[test]
 fn test_decode_i16_negative() {
     let bytes = [0xFF, 0xF6];
-    let (v, t) = decode_binary_value(&bytes, ModbusDataType::I16).unwrap();
+    let (v, t) = decode_binary_value(&bytes, PointDataType::I16).unwrap();
     assert_eq!(v, -10.0);
     assert_eq!(t, "i16");
 }
@@ -63,7 +63,7 @@ fn test_decode_i16_negative() {
 #[test]
 fn test_decode_u32() {
     let bytes = [0x00, 0x00, 0x01, 0x00];
-    let (v, t) = decode_binary_value(&bytes, ModbusDataType::U32).unwrap();
+    let (v, t) = decode_binary_value(&bytes, PointDataType::U32).unwrap();
     assert_eq!(v, 256.0);
     assert_eq!(t, "u32");
 }
@@ -71,7 +71,7 @@ fn test_decode_u32() {
 #[test]
 fn test_decode_i32_negative() {
     let bytes = [0xFF, 0xFF, 0xFF, 0xF6];
-    let (v, t) = decode_binary_value(&bytes, ModbusDataType::I32).unwrap();
+    let (v, t) = decode_binary_value(&bytes, PointDataType::I32).unwrap();
     assert_eq!(v, -10.0);
     assert_eq!(t, "i32");
 }
@@ -79,7 +79,7 @@ fn test_decode_i32_negative() {
 #[test]
 fn test_decode_f32() {
     let bytes = [0x42, 0x48, 0x00, 0x00];
-    let (v, t) = decode_binary_value(&bytes, ModbusDataType::F32).unwrap();
+    let (v, t) = decode_binary_value(&bytes, PointDataType::F32).unwrap();
     assert!((v - 50.0).abs() < 0.001);
     assert_eq!(t, "f32");
 }
@@ -87,7 +87,7 @@ fn test_decode_f32() {
 #[test]
 fn test_decode_u64() {
     let bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A];
-    let (v, t) = decode_binary_value(&bytes, ModbusDataType::U64).unwrap();
+    let (v, t) = decode_binary_value(&bytes, PointDataType::U64).unwrap();
     assert_eq!(v, 10.0);
     assert_eq!(t, "u64");
 }
@@ -95,7 +95,7 @@ fn test_decode_u64() {
 #[test]
 fn test_decode_f64() {
     let bytes = [0x40, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    let (v, t) = decode_binary_value(&bytes, ModbusDataType::F64).unwrap();
+    let (v, t) = decode_binary_value(&bytes, PointDataType::F64).unwrap();
     assert!((v - 3.125).abs() < 0.0001);
     assert_eq!(t, "f64");
 }
@@ -103,7 +103,7 @@ fn test_decode_f64() {
 #[test]
 fn test_decode_wrong_length_returns_none() {
     let bytes = [0x00, 0x01];
-    assert!(decode_binary_value(&bytes, ModbusDataType::U32).is_none());
+    assert!(decode_binary_value(&bytes, PointDataType::U32).is_none());
 }
 
 fn make_point_for_convert(

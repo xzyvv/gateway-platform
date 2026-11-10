@@ -8,7 +8,7 @@ use crate::engine::metrics::Metrics;
 use crate::south::bus::FrameBuffer;
 use crate::south::protocol::{CollectorError, CollectorResult};
 
-use super::util::checksum8;
+use super::codec::checksum8;
 
 /// DLT645 / CJT188 共用组帧：`0x68 [addr] [0x68] C L DATA CS 0x16`
 ///

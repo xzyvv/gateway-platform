@@ -4,7 +4,7 @@
 //! 通过 `/api/metrics` 端点以 Prometheus 文本格式暴露，供 Grafana 等监控系统抓取。
 //!
 //! 采用依赖注入：`Metrics` 实例在 bootstrap 阶段创建一次，通过构造函数参数
-//! 或 `Gateway.metrics` 字段传递到各模块，避免全局可变状态。
+//! 或 `GatewayRuntime.metrics` 字段传递到各模块，避免全局可变状态。
 //!
 //! ## 拆分说明（Metrics 拆分重构）
 //!
@@ -15,7 +15,7 @@
 //!   `daily_*`、`metric_day`、`ota_progress`。
 //! - **8 个子结构**：`MqttMetrics` / `WebhookMetrics` / `QueuePersistMetrics` /
 //!   `CollectMetrics` / `TransactionMetrics` / `AlarmMetrics` /
-//!   `LifecyleMetrics` / `ProtocolExceptionMetrics`。
+//!   `LifecycleMetrics` / `ProtocolExceptionMetrics`。
 //! - **公共直方图**：`Histogram`（在 `histogram.rs`），被 `CollectMetrics` 与
 //!   `TransactionMetrics` 复用，提供 `record(value_us, &bounds)` 与 `render(...)`。
 //! - **sink fan-out**：`sink_send` / `sink_dropped` / `sink_channel_depth` 三个
@@ -33,7 +33,7 @@ pub mod collect;
 pub mod counter;
 pub mod gauge;
 pub mod histogram;
-pub mod lifecyle;
+pub mod lifecycle;
 pub mod mqtt;
 pub mod pipeline;
 pub mod prometheus;
@@ -51,7 +51,7 @@ pub use alarm::AlarmMetrics;
 pub use bus::BusMetrics;
 pub use collect::CollectMetrics;
 pub use histogram::{Histogram, BUCKETS_LEN};
-pub use lifecyle::LifecyleMetrics;
+pub use lifecycle::LifecycleMetrics;
 pub use mqtt::MqttMetrics;
 pub use pipeline::PipelineMetrics;
 pub use protocol_exception::ProtocolExceptionMetrics;
@@ -148,7 +148,7 @@ pub struct Metrics {
     /// Prom 命名：`gateway_aggregated_rows`。
     pub aggregated_rows: AtomicI64,
     /// OTA 升级进度（0-100）。注：写入仅来自 `ota` 模块，但语义属于"对外状态"
-    /// 而非横切 lifecyle，故留在顶层。
+    /// 而非横切 lifecycle，故留在顶层。
     pub ota_progress: AtomicI64,
 
     /// 点位写入总次数（Web/API 下行写入：单点写、批量写、远程控制、GPIO DO 输出）。
@@ -186,7 +186,7 @@ pub struct Metrics {
     pub alarm: AlarmMetrics,
     /// 横切系统级指标（任务 panic / config reload / sink / 停机）。Prom 命名见
     /// 各 `# HELP` 行。
-    pub lifecyle: LifecyleMetrics,
+    pub lifecycle: LifecycleMetrics,
     /// 协议异常分类指标（当前仅 Modbus）。Prom 命名：
     /// `gateway_modbus_exception_*`。
     pub protocol_exception: ProtocolExceptionMetrics,

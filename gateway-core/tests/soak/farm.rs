@@ -3,7 +3,7 @@
 //! 全部使用生产代码路径（仅替换物理串口为可编程从站桩）：
 //! `SoakPort` → 真实 `BusManager::spawn_with` → `ProtocolRegistry::create`
 //! → 真实 `Scheduler` → `ProcessingPipeline` → `DataQueue` + `RealtimeBus`
-//! → `ConversionManager` → 计数式北向桩。
+//! → `NorthDispatcher` → 计数式北向桩。
 //!
 //! 与 `load/farm.rs` 的差异：
 //! 1. 一条总线多个从站号（复现“同总线单表故障”）；
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use gateway_core::config::{BusConfig, PointConfig};
 use gateway_core::engine::metrics::Metrics;
-use gateway_core::north::ConversionManager;
+use gateway_core::north::NorthDispatcher;
 use gateway_core::pipeline::{
     ConvertEngine, EdgeProcessor, PipelineSpawnInputs, ProcessingPipeline, RealtimeBus,
 };
@@ -199,7 +199,7 @@ impl SoakFarm {
 
         // 北向：质量计数桩，验证“采集 → 管道 → 北向专用队列 → 北向”整链打通
         let sink = QualitySink::new();
-        let cm = ConversionManager::new(north_rx);
+        let cm = NorthDispatcher::new(north_rx);
         cm.register_connector(sink.clone() as Arc<dyn gateway_core::north::NorthConnector>);
         let cm_handle = tokio::spawn(async move { cm.run().await });
 
