@@ -88,7 +88,10 @@ fn legacy_double_consumer_is_sanitized() {
         "未兜底前该配置必须被判非法（Web 保存路径依赖它）"
     );
 
-    sanitize_legacy_consumer_exclusivity(&mut cfg);
+    assert!(
+        sanitize_legacy_consumer_exclusivity(&mut cfg),
+        "双开时应返回「已降级」，调用方据此告知用户配置被改过"
+    );
     assert!(
         !cfg.sim_consumer.enabled,
         "兜底后模拟消费者必须被关闭（保留 MQTT 上行）"
@@ -102,7 +105,10 @@ fn legacy_double_consumer_is_sanitized() {
     // 只开一个消费者时不应被改动
     cfg.sim_consumer.enabled = true;
     cfg.mqtt.enabled = false;
-    sanitize_legacy_consumer_exclusivity(&mut cfg);
+    assert!(
+        !sanitize_legacy_consumer_exclusivity(&mut cfg),
+        "单开时不应降级"
+    );
     assert!(cfg.sim_consumer.enabled, "仅开模拟消费者时应保持不变");
 }
 

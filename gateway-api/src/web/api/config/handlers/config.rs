@@ -14,8 +14,11 @@ use gateway_core::engine::error::{GatewayError, GatewayResult};
 /// PUT /api/config/import — 批量覆盖配置
 pub async fn import_config(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<ConfigImport>,
+    Json(mut payload): Json<ConfigImport>,
 ) -> Result<ApiResponse<serde_json::Value>, ApiError> {
+    // 导入老版本备份时，「mqtt + 模拟消费者」双开的组合按存量策略降级，
+    // 与磁盘加载路径保持一致——恢复流程不该被 400 卡死。降级说明随响应返回。
+    let downgraded = sanitize_imported_config(&mut payload.config);
     if let Err(e) = validate_config(&payload.config) {
         return Ok(ApiResponse::err(4003, e.message()));
     }
@@ -56,7 +59,28 @@ pub async fn import_config(
     );
     let mut resp = serde_json::json!({ "status": "ok" });
     outcome.apply_to(&mut resp);
+    if let Some(note) = downgraded {
+        resp["sanitized"] = serde_json::json!([note]);
+        tracing::warn!("config import downgraded: {}", note);
+    }
     Ok(ApiResponse::ok(resp))
+}
+
+/// 导入路径的存量兜底：双消费者组合降级为「只留 MQTT」。
+///
+/// 与加载路径（`ConfigLoader::load/reload`）共用同一套降级逻辑，保证
+/// 「从老版本备份恢复」和「升级后启动」两种场景表现一致：都是关掉模拟消费者，
+/// 而不是把用户挡在门外。返回降级说明（未降级时为 `None`）。
+fn sanitize_imported_config(config: &mut GatewayConfig) -> Option<String> {
+    if gateway_core::config::sanitize_legacy_consumer_exclusivity(config) {
+        Some(
+            "sim_consumer.enabled 已由 true 降级为 false：它与 mqtt.enabled 互斥，\
+             两个消费者会分流同一批队列数据导致静默丢数（如需用模拟消费者请先停用 MQTT）"
+                .to_string(),
+        )
+    } else {
+        None
+    }
 }
 
 /// POST /api/config/reload — 触发热重载（重新加载磁盘配置 + 增量应用）
@@ -147,4 +171,41 @@ pub async fn backup_config(
         "points": cfg.points.len(),
         "devices": cfg.devices.as_ref().map(|d| d.len()).unwrap_or(0),
     }))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_consumers(mqtt: bool, sim: bool) -> GatewayConfig {
+        let mut cfg = GatewayConfig::default();
+        cfg.mqtt.enabled = mqtt;
+        cfg.sim_consumer.enabled = sim;
+        cfg
+    }
+
+    /// 导入老版本备份（双开）要降级而不是 400——恢复流程不能被挡死。
+    #[test]
+    fn import_downgrades_legacy_double_consumer() {
+        let mut cfg = cfg_with_consumers(true, true);
+        let note = sanitize_imported_config(&mut cfg);
+        assert!(note.is_some(), "双开时必须给出降级说明");
+        assert!(!cfg.sim_consumer.enabled, "模拟消费者应被关掉");
+        assert!(
+            cfg.mqtt.enabled,
+            "MQTT 保留：它是生产链路，模拟消费者只是排障工具"
+        );
+    }
+
+    /// 单消费者场景不动配置。
+    #[test]
+    fn import_keeps_single_consumer_untouched() {
+        let mut only_mqtt = cfg_with_consumers(true, false);
+        assert!(sanitize_imported_config(&mut only_mqtt).is_none());
+        assert!(only_mqtt.mqtt.enabled);
+
+        let mut only_sim = cfg_with_consumers(false, true);
+        assert!(sanitize_imported_config(&mut only_sim).is_none());
+        assert!(only_sim.sim_consumer.enabled, "只有模拟消费者时不该降级");
+    }
 }

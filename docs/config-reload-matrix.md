@@ -47,6 +47,7 @@
 | 配置文件 | `GATEWAY_CONFIG_PATH`（Linux 默认 `/etc/gateway/config.json`），整份原子替换 |
 | 版本库 | `GATEWAY_VERSION_DB`（默认 `config/versions.db`）；`POST /api/config`、`PUT /api/config/import`、回滚、手动备份都会留快照 |
 | 落盘失败 | 返回 500，但**内存已是新配置**：运行态生效、磁盘仍旧值，重启会回退（前端提示会明确说明） |
+| 导入老配置 | `PUT /api/config/import` 遇到 `mqtt.enabled` 与 `sim_consumer.enabled` 同时为真（两个消费者分流同一批队列数据导致静默丢数）时，按存量策略**关掉模拟消费者后落盘**，响应 `sanitized` 字段给出说明——与磁盘加载路径一致，老版本备份恢复不会被 400 挡死；Web 交互式保存仍严格拒绝该组合，不让新配置继续写非法值 |
 | 热重启 | 不做进程自重启（主进程无法通过 API 重启），只热更新可分节 |
 
 ## 五、新增分节时怎么做

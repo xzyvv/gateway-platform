@@ -45,7 +45,7 @@ pub use cellular::CellularConfig;
 pub use convert::{ConvertEnumItemConfig, ConvertRuleConfig};
 pub use groups_assets::{DeviceAsset, DeviceGroup};
 pub use license::{default_quota_for_tier, LicenseConfig, TierQuotaEntry, DEFAULT_TIER_QUOTAS};
-pub use loader::ConfigLoader;
+pub use loader::{sanitize_legacy_consumer_exclusivity, ConfigLoader};
 pub use modbus_passthrough::ModbusPassthroughConfig;
 pub use modbus_server::ModbusServerConfig;
 pub use mqtt::MqttConfig;
