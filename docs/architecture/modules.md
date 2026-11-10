@@ -8,9 +8,9 @@
 
 ### 6.1 启动流程（gatewayd/src/bootstrap/）
 
-13 步启动编排现位于 `gatewayd` crate（`gatewayd/src/bootstrap/`）；`gateway-core` 的 `support` 仅保留 `app`（Gateway 组件管理器）/ `paths`（路径解析）支撑。
+13 步启动编排位于 `gatewayd` crate（`gatewayd/src/bootstrap/`）；`gateway-core` 侧仅保留启动期共享支撑：`runtime/`（`GatewayRuntime` 组件装配与配置热更）与 `shared/`（clock / cron / paths / sqlite_maintenance）。
 
-13 步顺序启动，失败即中止（fail-fast）：
+顺序启动，失败即中止（fail-fast），主要阶段如下（步骤编号以 `bootstrap/mod.rs` 与 `helpers/*.rs` 注释为准）：
 
 1. **加载配置** — `ConfigLoader` 读取 `config.json` + `validate_all` 校验
 2. **初始化日志** — tracing JSON + 按天滚动
@@ -19,11 +19,12 @@
 5. **GPIO** — `GpioController`（Linux）
 6. **串口总线** — `SerialManager` + `BusManager`，按总线名建 HashMap
 7. **Collector** — `ProtocolRegistry` 按协议创建采集器
-8. **SQLite 队列** — `DataQueue`（WAL，1 万条有界通道）
-9. **MQTT 客户端** — `MqttClient`（可选）
-10. **边缘处理 + 管道** — `EdgeProcessor` + `ProcessingPipeline`
-11. **调度器** — `Scheduler` 按协议+总线分组启动定时任务
-12. **Web Server** — axum 监听 `web.listen_addr`（默认 `127.0.0.1:8080`；设为 `0.0.0.0:8080` 时须先设置 `password_hash`，否则 fail-closed 拒绝启动）
+8. **SQLite 队列** — `DataQueue`（WAL，1 万条有界通道）；随后初始化 X.509 设备证书（Step 8b，供 OPC UA / MQTT 双向 TLS；`GATEWAY_REQUIRE_EXTERNAL_CERT=1` 时初始化失败即阻断启动）
+9. **MQTT 客户端** — `MqttClient`（可选）；`sim_consumer` 恒创建实例（Step 9b，无 MQTT 时的兜底消费者，运行期由 API 启停）
+10. **边缘处理 + 管道 + 实时总线** — `EdgeProcessor` / `ProcessingPipeline` / `RealtimeBus`，并装配 `NorthDispatcher`（注册 MQTT / Webhook connector，见 §6.6）
+11. **北向 Server** — OPC UA / Modbus Server 由 `NorthServerRegistry` 按配置装配（被动暴露点位，见 §6.6）
+12. **调度器** — `Scheduler` 按协议 + 总线分组启动定时任务
+13. **Web Server** — axum 监听 `web.listen_addr`（默认 `127.0.0.1:8080`；设为 `0.0.0.0:8080` 时须先设置 `password_hash`，否则 fail-closed 拒绝启动）；同一阶段还启动报警引擎、MQTT 透传、蜂窝模块与计划任务执行器
 
 停机：捕获 SIGTERM/SIGINT → drain 队列 → 停止调度器 → 关闭 MQTT → 退出。
 
@@ -77,9 +78,9 @@ ProcessingPipeline (mpsc 通道，背压)
 1. **EdgeProcessor**（`edge.rs`）— 死区过滤、变化上传、时间窗口聚合（last/avg/max/min/sum）
 2. **公式计算**（`formula.rs`）— evalexpr 求值，scale+offset+CT/PT 变比
 3. **入队** → `DataQueue`（SQLite WAL）
-4. **实时广播** → `RealtimeBus`（broadcast channel）→ WebSocket / 北向 sink
+4. **实时广播** → `RealtimeBus`（broadcast channel）→ WebSocket 实时页；北向另行投递 `NorthFeed`（独立无损 mpsc 队列，不与广播总线共用，满时背压不丢帧）
 
-**透传模式**（`PassthroughNode`）：跳过边缘聚合+队列，直接 MQTT 直发，适用于低延迟、可接受断网丢失的点位。
+**透传模式**：跳过边缘聚合+队列，直接 MQTT 直发（由 MQTT connector 实现），适用于低延迟、可接受断网丢失的点位。
 
 **虚拟点位公式**（`vformula.rs`）是另一套自研递归下降引擎（多变量、可调函数、可引用其它点位），
 与 `formula.rs` 的 evalexpr 刻意不合并。它在浏览器端有一份**等价实现**
@@ -103,22 +104,22 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 |---|---|
 | `mqtt/` | `MqttClient` 连接 broker，`outbox` 离线队列，`publish` 批量/透传 |
 | `webhook.rs` | HTTP POST 回调上报（单文件实现，非目录） |
-| `dispatch.rs` | `NorthDispatcher`：订阅 `RealtimeBus`，按注册顺序分发到各 `NorthboundSink`（单测在 `dispatch/tests.rs`） |
+| `dispatch.rs` | `NorthDispatcher`：消费北向专用无损队列 `NorthFeed`，按注册顺序分发到各 `NorthConnector`（MQTT / Webhook / server adapters，单测在 `dispatch/tests.rs`） |
 | `outbox_monitor.rs` | MQTT outbox 积压/失败率监控（暴露为指标与状态接口） |
-| `server/registry.rs` | Server 注册表：按配置装配被动服务端（`ServerContext` / `ServerRegistry`） |
+| `server/registry.rs` | Server 注册表：按配置装配被动服务端（`NorthServerContext` / `NorthServerRegistry`） |
 | `server/modbus_server.rs` | Modbus TCP Server，被动北向暴露点位 |
 | `server/opcua_server.rs` | OPC UA Server，被动北向暴露点位 |
 | `server/mqtt_packet_passthrough.rs` | MQTT 报文透传会话管理 |
 | `server/modbus_gateway_bridge.rs` | Modbus 网关桥接（TCP↔RTU）：收 Modbus TCP 请求 → 去 MBAP 加 CRC 转 RTU → 经 BusManager 发串口 → 响应反向还原。只做帧格式转换、不做协议解析，配置键沿用 `modbus_passthrough` |
-| `server_adapters/` | 数据推送适配器：将 RealtimeBus 数据主动喂给 server/ 下各服务端（区别于 server/ 的被动监听）；基类在 `base.rs` |
+| `server_adapters/` | 数据推送适配器：`NorthDispatcher` 分发数据后主动喂给 server/ 下各服务端（区别于 server/ 的被动监听）；基类在 `base.rs` |
 | `template/` | 上送 payload 模板渲染（解析 / 渲染 / 模板注册表） |
 
 **三处 Modbus「服务端」能力的分工（勿误删）**：
 
 | 模块 | 角色 | 数据来源 | 典型用途 |
 |---|---|---|---|
-| `server/modbus_server.rs` | Modbus TCP 从站 | 内存寄存器镜像（由 sink 写入） | 上位机/SCADA 以 Modbus 主站身份读网关 |
-| `server_adapters/modbus_adapter.rs` | 数据推送侧通道 | `RealtimeBus` 订阅 | 把采集值持续写进上面那台从站的寄存器空间，是「点位 → 寄存器」的映射执行者 |
+| `server/modbus_server.rs` | Modbus TCP 从站 | 内存寄存器镜像（由 server adapter 写入） | 上位机/SCADA 以 Modbus 主站身份读网关 |
+| `server_adapters/modbus_adapter.rs` | 数据推送侧通道 | `NorthDispatcher` 分发（源为北向 `NorthFeed`） | 把采集值持续写进上面那台从站的寄存器空间，是「点位 → 寄存器」的映射执行者 |
 | `server/modbus_gateway_bridge.rs` | 协议桥接（网关中转） | TCP 客户端请求 | 上游用 Modbus TCP、现场设备只有 RTU 串口时做透明转换 |
 
 前两者是「服务端 + 喂数者」的主从配对，第三个是独立的编译期可选桥接能力，三者不构成重复实现。
@@ -160,7 +161,9 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | `shutdown.rs` | 优雅停机信号 |
 | `bus.rs` | 实时广播总线契约（`RealtimeBus` / `BusConsumerKind` / `LaggedCounts`），由 `pipeline/` 重导出 |
 | `ports.rs` | 基础设施端口（Ports）契约：`AlarmPublisher`（报警上报）、`DiskHealthSink`（磁盘健康），实现分别在 `north/mqtt/` 与 `queue/` |
-| `util/` | 工具子模块：`encoding.rs`（二进制编解码）、`model.rs`（公共数据模型） |
+| `codec/` | 通用编解码工具：`crc.rs`（CRC 校验）、`encoding.rs`（base64 / 十六进制编码） |
+| `formula.rs` | 点位级换算公式求值（与 `pipeline/vformula.rs` 的递归下降引擎区分） |
+| `model.rs` | 公共领域模型（`DataPoint` 等） |
 | `monitor/` | 监控与可观测性子模块（见下） |
 
 **依赖方向（engine 是基础设施层）**：`engine` 只依赖 `config`，**不得**反向依赖 `north` / `queue` / `pipeline`。
@@ -210,7 +213,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 
 ### 6.10 目录层次与命名约定
 
-**跨层同名概念**：以下同名是「配置」与「运行时实现」的刻意分层，不是重复代码。约定为——**配置结构体一律放 `config/`；运行时实现按能力层归属（`platform/` / `north/` / `south/`）**。
+**跨层同名概念**：以下同名是「配置」与「运行时实现」的刻意分层，不是重复代码。约定为——**配置结构体一律放 `config/`；运行时实现按能力层归属（`platform/` / `north/` / `south/`），运行时组件装配在 `runtime/`（`GatewayRuntime`），跨层纯工具与策略在 `shared/`（无 I/O、无业务层依赖）**。
 
 | 概念 | 配置（config/） | 运行时实现 |
 |---|---|---|

@@ -54,5 +54,5 @@
 
 1. 在 `GatewayConfig` 增加字段并实现 `Default`；
 2. 在 `reload_scope` 中显式归类：`applied` / `restart_required` / 静默（纯元数据）；
-3. 若为热更，必须在 `Gateway::reload_config` 中真正消费该字段，否则属于「静默生效」回归；
+3. 若为热更，必须在 `GatewayRuntime::reload_config` 中真正消费该字段，否则属于「静默生效」回归；
 4. 同步更新本表，并确保 `every_config_section_is_classified_in_reload_scope` 通过。

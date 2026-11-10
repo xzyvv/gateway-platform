@@ -116,6 +116,6 @@
 | **透传 (Passthrough)** | MQTT | 跳过边缘聚合+队列，低延迟直发 |
 | **模拟消费者 (SimConsumer)** | 内置 | 无 MQTT 时的兜底消费者：按批 `dequeue → 处理 → ack` 消费队列但不外发数据，用于消除 `has_consumer=false` 的告警歧义（配置项 `sim_consumer`，默认关闭，与 MQTT 互斥）；**运行时可启停**（`POST /api/sim_consumer/start|stop`，状态见 `GET /api/sim_consumer/status`），指标 `gateway_sim_consumer_consumed_total` / `gateway_sim_consumer_batches_total` / `gateway_sim_consumer_running` |
 
-`NorthDispatcher` 订阅 `RealtimeBus`，将采集数据分发给所有已注册的 `NorthboundSink`。
+`NorthDispatcher` 消费北向专用无损队列 `NorthFeed`，将采集数据分发给所有已注册的 `NorthConnector`。
 
 ---

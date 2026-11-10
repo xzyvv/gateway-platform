@@ -33,13 +33,13 @@
 ### parking_lot::Mutex — 短临界区同步
 - 适用：临界区内无 `.await`、持锁时间短的同步场景
 - 特点：不中毒（panic 后仍可用）、性能优于 `std::Mutex`
-- 项目实例：`Gateway.bus_managers`、`Gateway.mqtt`
+- 项目实例：`GatewayRuntime.bus_managers`、`GatewayRuntime.mqtt`
 - 禁止：临界区内有 `.await`（会阻塞 runtime worker 线程）
 
 ### tokio::sync::Mutex — 需要 await 持锁
 - 适用：临界区内需要 `.await` 的异步场景
 - 特点：async 感知，持锁期间不阻塞 runtime
-- 项目实例：`Gateway.reload_lock`、`AppState.config.config_reload_lock`
+- 项目实例：`GatewayRuntime.reload_lock`、`AppState.config.config_reload_lock`
 - 禁止：短临界区（相比 `parking_lot` 有额外开销）
 
 ### parking_lot::RwLock — 读多写少

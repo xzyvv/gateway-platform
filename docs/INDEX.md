@@ -18,7 +18,7 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | 前端技术栈 | [`architecture/frontend.md`](architecture/frontend.md) | Vue 3 + Vite + Element Plus + Pinia 技术栈与目录结构 |
 | 前端状态管理 | [`architecture/frontend-state.md`](architecture/frontend-state.md) | Pinia store 设计、composable 职责边界与测试策略 |
 | 前端命名规范 | [`architecture/frontend-naming.md`](architecture/frontend-naming.md) | 组件 / 文件 / Hub 页签 / 侧栏搜索索引命名与路由约定 |
-| 后端技术栈 | [`architecture/backend.md`](architecture/backend.md) | Rust + Tokio + Axum + rusqlite + 北向 sink 技术栈与目录结构 |
+| 后端技术栈 | [`architecture/backend.md`](architecture/backend.md) | Rust + Tokio + Axum + rusqlite + 北向上报技术栈与目录结构 |
 | 通信协议 | [`architecture/protocols.md`](architecture/protocols.md) | REST/WS 前后端通信 + 南向采集协议 + 北向上报通道 |
 | 核心模块说明 | [`architecture/modules.md`](architecture/modules.md) | 启动流程 / config / south / pipeline / queue / north / Web API / platform / engine / 目录约定 |
 | 数据流 | [`architecture/data-flow.md`](architecture/data-flow.md) | 设备→采集→处理→队列→分发 完整链路 |
