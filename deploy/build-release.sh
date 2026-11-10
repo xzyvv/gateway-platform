@@ -495,9 +495,14 @@ elif [ "$SKU" != "custom" ]; then
 else
   FEATURE_DESC="--no-default-features --features $PROTOCOLS"
 fi
+# git_sha：产出包与代码同源的唯一凭据。现场验收要求「包内 sha == CI 那次提交的
+# sha」，此前 BUILD-INFO.txt 里没有这个字段，交付方只能靠人肉比对文件名与时间，
+# 口径对不上就查不出来。非 git 目录（从 tarball 打包）取不到时写 unknown。
+GIT_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 cat > "$OUT/BUILD-INFO.txt" <<EOF
 # 出厂镜像构建信息（由 deploy/build-release.sh 生成）
 build_time=$(date -Is)
+git_sha=$GIT_SHA
 target=${TARGET:-host}
 rust_target=${RUST_TARGET:-host}
 sku=$SKU

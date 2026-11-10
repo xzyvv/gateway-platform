@@ -8,8 +8,8 @@
 
 - 版本号与 `Cargo.toml` 的 `[workspace.package].version` 保持一致；打 `v*` tag 会触发
   `release-gate.yml`（无条件调用 `heavy.yml` 的全部重作业）。
-- 交付包的 `BUILD-INFO.txt` 记录 `build_time` / `commit` / `protocols` / `sku`，
-  现场报问题时先按 `commit` 定位到本文件的对应版本。
+- 交付包的 `BUILD-INFO.txt` 记录 `build_time` / `git_sha` / `protocols` / `sku`，
+  现场报问题时先按 `git_sha` 定位到本文件的对应版本。
 - 只有「现场能感知」的变更才写进来：新增协议/端点、行为变化、修复的现场故障、
   交付布局变化、门禁口径变化。纯重构与格式化不记。
 - 分类用 `新增 / 变更 / 修复 / 移除 / 安全 / 构建与交付`，同一版本内按影响面排序。
@@ -55,6 +55,11 @@
 - **DLT645 / CJT188 应答前有噪声时整帧被丢弃**（P2-1 性质测试发现）：帧提取器重同步时
   把 `0x68` 之前的噪声连同帧一起返回，`parse_68_response` 因首字节不是 `0x68` 直接拒绝，
   现场表现为「设备已应答但记 NoReply」。现在丢弃前缀噪声，只返回帧本体。
+- **交付包无法核对「与代码同源」**：`BUILD-INFO.txt` 此前没有 sha 字段，
+  而验收文档要求核对包内 sha 与 `git rev-parse HEAD`——两者对不上，核对项形同虚设。
+  现在 `build-release.sh` 写入 `git_sha=`，`verify-deploy.sh --package-only` 缺字段即判 FAIL，
+  CI 的 `release-package` job 额外断言包内 sha **等于**本次 CI 的提交；
+  验收清单与检查单的口径同步改为 `BUILD-INFO.txt` 的 `git_sha`。
 
 ### 文档
 

@@ -956,6 +956,16 @@ jobs:
           # BUILD-INFO.txt 必须是脚本自己写的（有真实 build_time，不是占位值）
           grep -q '^build_time=' "$PKG/BUILD-INFO.txt" || {
             echo "✗ BUILD-INFO.txt 缺 build_time" >&2; exit 1; }
+          # git_sha：交付包与代码同源的唯一凭据，现场验收要拿它跟 git rev-parse HEAD 对照。
+          # 必须是**本次 CI 的提交**，不能是 unknown，也不能是别的 sha。
+          grep -q '^git_sha=' "$PKG/BUILD-INFO.txt" || {
+            echo "✗ BUILD-INFO.txt 缺 git_sha（现场无法核对交付包与代码同源）" >&2; exit 1; }
+          PKG_SHA="$(grep -E '^git_sha=' "$PKG/BUILD-INFO.txt" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+          CI_SHA="$(git rev-parse HEAD)"
+          if [ "$PKG_SHA" != "$CI_SHA" ]; then
+            echo "✗ BUILD-INFO.txt 的 git_sha=$PKG_SHA 与本次 CI 提交 $CI_SHA 不一致" >&2
+            exit 1
+          fi
           grep -q '^protocols=' "$PKG/BUILD-INFO.txt" || {
             echo "✗ BUILD-INFO.txt 缺 protocols（verify-deploy.sh 据此核对线上协议表）" >&2; exit 1; }
           if grep -q 'ci-smoke' "$PKG/BUILD-INFO.txt"; then

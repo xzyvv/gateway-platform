@@ -272,6 +272,19 @@ if [ "$PACKAGE_ONLY" -eq 1 ]; then
     fail "templates/ 缺失或为空"
   fi
 
+  # BUILD-INFO.txt 必须带 git_sha：它是「交付包与代码同源」的唯一凭据，
+  # 现场验收要拿它跟 git rev-parse HEAD 对照。缺这个字段就没法核对同源性。
+  if [ -f "$BUILD_INFO" ]; then
+    PKG_SHA="$(grep -E '^git_sha=' "$BUILD_INFO" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+    if [ -z "$PKG_SHA" ]; then
+      fail "BUILD-INFO.txt 缺 git_sha（无法核对交付包与代码是否同源）"
+    elif [ "$PKG_SHA" = "unknown" ]; then
+      warn "BUILD-INFO.txt 的 git_sha=unknown（打包时不在 git 仓库内），无法核对同源性"
+    else
+      ok "git_sha=$PKG_SHA"
+    fi
+  fi
+
   echo "${BOLD}[2/5] 二进制架构与链接方式${RESET}"
   # 不用 `ls | head`：脚本开着 pipefail，head 提前退出会让上游收到 SIGPIPE。
   BIN=""
@@ -308,8 +321,11 @@ assert (d.get("web") or {}).get("listen_addr")
 # 出厂模板的顶层节：总线 / 点位 / 北向 / 前端。缺任何一节都说明打包时取错了文件。
 for k in ("web", "buses", "points", "mqtt"):
     assert k in d, k
+# queue.max_rows 必须显式给出：出厂模板漏了它就退回代码默认的 100 万行，
+# 现场点位规模一大就断网几小时后开始 FIFO 丢历史（容量规划 §3.3）。
+assert isinstance((d.get("queue") or {}).get("max_rows"), int), "queue.max_rows 缺失或非整数"
 ' "$PKG/config.factory.json" 2>/dev/null; then
-        ok "可解析，且 web.listen_addr / buses / points / mqtt 齐全"
+        ok "可解析，且 web.listen_addr / buses / points / mqtt / queue.max_rows 齐全"
       else
         fail "不可解析或缺关键节"
       fi
@@ -447,8 +463,9 @@ if [ -x "$GW_BIN" ]; then
     if [ -f "$f" ]; then
       BI_LINK=$(grep -E '^link_mode=' "$f" 2>/dev/null | cut -d= -f2 || true)
       BI_GLIBC=$(grep -E '^glibc_min=' "$f" 2>/dev/null | cut -d= -f2 || true)
+      BI_SHA=$(grep -E '^git_sha=' "$f" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)
       if [ -n "$BI_LINK" ]; then
-        info "构建信息: link_mode=${BI_LINK}, glibc_min=${BI_GLIBC:-none}"
+        info "构建信息: link_mode=${BI_LINK}, glibc_min=${BI_GLIBC:-none}, git_sha=${BI_SHA:-unknown}"
       fi
       break
     fi
