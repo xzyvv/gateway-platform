@@ -1088,12 +1088,20 @@ jobs:
           # 开机自启只校验「单元已 enable」，不做 reboot（runner 重启后 job 无法续跑，
           # 断电/重启恢复留给真机验收）
           systemctl is-enabled gateway | grep -qx enabled
-          test -x /opt/gatewayd/gatewayd-aarch64-unknown-linux-musl
+          # install.sh 把包内 gatewayd-<target> 统一装成固定名 gatewayd（不带 target 后缀），
+          # 不要按包内文件名断言，否则会误判。
+          test -x /opt/gatewayd/gatewayd
           test -d /opt/gatewayd/ui-dist
-          PORT="$(jq -r '.web.listen_addr' /etc/gateway/config.json)"
+          test -f /etc/gateway/config.json
+          PORT="$(jq -r '.web.listen_addr // "127.0.0.1:8080"' /etc/gateway/config.json)"
           PORT="${PORT##*:}"
           echo "health probe port=$PORT"
-          curl -fsS "http://127.0.0.1:${PORT}/api/health"
+          # 存活探针是 /health/live；/api/health 不存在（仅有 /api/health/report 且需鉴权）。
+          curl -fsS "http://127.0.0.1:${PORT}/health/live"
+          # 就绪探针在组件降级时返回 503（现场无串口/GPIO 属预期），只打印不判定。
+          echo "--- /health/ready (informational) ---"
+          curl -sS "http://127.0.0.1:${PORT}/health/ready" || true
+          echo
 
       # 完整验收：systemd 运行态 / 端口 / 健康 / API 契约 / 运行态配置 / 授权 /
       # 前端静态 / 硬件能力 / 资源与性能，与现场交付同一套判定口径。
