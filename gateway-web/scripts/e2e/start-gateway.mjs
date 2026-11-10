@@ -95,6 +95,9 @@ console.log(`[e2e-gateway] listen : ${GATEWAY_ADDR}`)
 // 多次运行互相污染）。这里把全部运行数据显式指到本次临时目录，退出即整体删除。
 const isolatedEnv = {
   GATEWAY_CONFIG_PATH: configPath,
+  // 磁盘检查路径必须与实际写盘位置同卷：队列库落在临时目录，
+  // 磁盘监控就应检查临时目录所在分区，而不是宿主机的系统盘根目录。
+  GATEWAY_DATA_DIR: workDir,
   GATEWAY_DB_PATH: join(workDir, 'data_queue.db'),
   GATEWAY_VERSION_DB: join(workDir, 'config_versions.db'),
   GATEWAY_OUTBOX_DB: join(workDir, 'mqtt_outbox.db'),

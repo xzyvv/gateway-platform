@@ -8,6 +8,7 @@ use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::ports::DiskHealthSink;
 
 pub mod disk_alarm;
+mod disk_path;
 
 pub use disk_alarm::{
     disk_level_from_free_pct, DiskAlarmEvent, DiskAlarmNotifier, DiskLevel,
@@ -109,31 +110,7 @@ impl Default for DiskStatus {
 /// 磁盘空间阈值：低于此百分比时拒绝入队（保护 SQLite）
 const DISK_FREE_THRESHOLD_PCT: f64 = 10.0;
 
-/// Bug 94: 默认检测路径可通过环境变量 `GATEWAY_DATA_DIR` 覆盖，
-/// 避免 Windows 部署或自定义安装路径下误报。
-///
-/// Bug T12: 原实现无覆盖时恒返回 `/var/lib/gateway`——该路径在 Windows 上不存在，
-/// `GetDiskFreeSpaceExW` 直接失败，导致磁盘监控循环永久记 warn、`disk_ok` 永不更新
-/// （磁盘满保护在 Windows 下静默失效）。改为按平台给默认值：Windows 回退到系统盘
-/// 根目录（`%SystemDrive%\`），非 Windows 保留 `/var/lib/gateway`。
-/// 磁盘检查路径：优先 `GATEWAY_DATA_DIR`，否则按平台取默认数据分区。
-///
-/// 供 [`super::host`] 的指标采集复用（诊断页展示的磁盘使用率必须与监控循环同口径）。
-pub fn disk_check_path() -> String {
-    if let Ok(p) = std::env::var("GATEWAY_DATA_DIR") {
-        return p;
-    }
-    #[cfg(windows)]
-    {
-        std::env::var("SystemDrive")
-            .map(|d| format!("{}\\", d))
-            .unwrap_or_else(|_| "C:\\".to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        "/var/lib/gateway".to_string()
-    }
-}
+pub use disk_path::disk_check_path;
 
 /// 指定路径所在分区的**使用率**（%），供诊断页展示。
 ///

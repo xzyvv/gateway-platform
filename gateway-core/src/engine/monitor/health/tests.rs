@@ -1,3 +1,4 @@
+use super::disk_path::resolve_disk_check_path;
 use super::*;
 use crate::engine::ports::DiskHealthSink;
 use tempfile::TempDir;
@@ -400,5 +401,47 @@ fn p2_disk_check_path_missing_falls_back_to_existing_ancestor() {
     assert!(
         (base_free - free).abs() < 1.0,
         "存在目录与不存在的子路径应落在同一分区（{base_free} vs {free}）"
+    );
+}
+
+/// 磁盘检查路径必须与实际写盘位置同卷。
+///
+/// 口径错位的后果是双向的：写入卷已满却不告警（数据盘写满而监控看系统盘），
+/// 或系统盘紧张却误阻断入队（监控看系统盘而数据写在数据盘）。
+#[test]
+fn disk_check_path_follows_actual_data_location() {
+    // 1) GATEWAY_DATA_DIR 优先于一切
+    assert_eq!(
+        resolve_disk_check_path(Some("/data/gw"), Some("/other/data_queue.db")),
+        "/data/gw",
+        "GATEWAY_DATA_DIR 必须是最高优先级"
+    );
+
+    // 2) 未指定数据目录时，取队列库所在目录——那才是数据真正落地的卷
+    assert_eq!(
+        resolve_disk_check_path(None, Some("/var/lib/gw/data_queue.db")),
+        "/var/lib/gw",
+        "应取队列库路径的父目录"
+    );
+
+    // 3) 空字符串视为未设置（不得把检查路径退化成空串导致 stat 失败）
+    assert_eq!(
+        resolve_disk_check_path(Some("  "), Some("/var/lib/gw/data_queue.db")),
+        "/var/lib/gw",
+        "空白的数据目录应被忽略"
+    );
+
+    // 4) 相对路径：父目录为 "." 即当前目录，可直接使用
+    assert_eq!(
+        resolve_disk_check_path(None, Some("./data_queue.db")),
+        ".",
+        "相对队列库路径应退化为当前目录"
+    );
+
+    // 5) 两者都未指定时回退到平台默认分区（不返回空串）
+    let fallback = resolve_disk_check_path(None, None);
+    assert!(
+        !fallback.is_empty(),
+        "平台默认回退不得为空串，否则磁盘监控静默失效"
     );
 }

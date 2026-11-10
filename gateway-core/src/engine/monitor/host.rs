@@ -133,7 +133,7 @@ fn store_baseline(idle: u64, total: u64) {
     CPU_HAS_BASELINE.store(1, Ordering::Relaxed);
 }
 
-/// 采集一次主机指标。磁盘使用率针对数据分区（`GATEWAY_DATA_DIR` 或平台默认盘）。
+/// 采集一次主机指标。磁盘使用率针对数据分区（`GATEWAY_DATA_DIR` 或队列库所在目录）。
 pub fn collect() -> HostMetrics {
     HostMetrics {
         cpu_usage_pct: platform::cpu_usage_percent(),
