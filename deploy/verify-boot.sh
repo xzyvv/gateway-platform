@@ -2,11 +2,12 @@
 set -euo pipefail
 
 # ────────────────────────────────────────────────────────────
-# 开机自启 / 断电自启 行为验证脚本（两阶段）
+# 开机自启 / 断电自启 行为验证 + 启动耗时基线
 #
 #   sudo bash verify-boot.sh before [--point p1]     # 重启/断电前，留基线
 #   sudo systemctl reboot                            # 或直接拉闸（断电）
-#   sudo bash verify-boot.sh after  [--point p1]     # 上电后，出判定
+#   sudo bash verify-boot.sh after  [--point p1]     # 上电后，出判定（含三段启动耗时）
+#   sudo bash verify-boot.sh timing [--runs 3]       # 重启服务 N 次采启动耗时基线
 #
 # 通用参数：
 #   --host/--port    省略时读 /etc/gateway/config.json 的 web.listen_addr
@@ -14,7 +15,8 @@ set -euo pipefail
 #   --state          基线文件，默认 /var/lib/gateway/boot-check.env
 #   --point          用于核对「重启前已落库的样本仍在」的点位 ID（强烈建议给）
 #   --max-uptime     after 阶段允许的最大开机时长（秒，默认 900）
-#   --wait           after 阶段等待 /health/live 就绪的秒数（默认 60）
+#   --wait           等待 /health/live 就绪的秒数（默认 60）
+#   --runs           timing 子命令的重启次数（默认 3）
 #   --report         把结果写成 Markdown，便于贴进交付检查单
 #
 # 为什么需要它：`systemctl is-enabled` 只能证明「配置了自启」，
@@ -22,16 +24,21 @@ set -euo pipefail
 # 连 job 一起死掉，所以这件事只能在真机做。仅靠人眼也容易被糊过去：
 # 运维手工 `systemctl start` 同样能让服务 active，因此必须用
 # boot_id 变化 + ActiveEnterTimestamp 落在本次 boot 内来区分「自启」与「人启」。
+#
+# 启动耗时口径（两套，不可混用）：
+#   after 阶段 = 整机口径：上电 → active → /health/live 200（含 systemd、内核、自启）
+#   timing 子命令 = 服务级口径：systemctl restart → active → ready（不含整机上电）
+# 首轮采数只记录不判定；从第二轮起才作为该 SKU 同版本包的回归参照。
 # ────────────────────────────────────────────────────────────
 
 STAGE="${1:-}"
 case "$STAGE" in
-  before|after) shift ;;
+  before|after|timing) shift ;;
   -h|--help|"")
-    sed -n '5,28p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '5,33p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  *) echo "未知阶段: $STAGE（只支持 before / after）" >&2; exit 2 ;;
+  *) echo "未知阶段: $STAGE（只支持 before / after / timing）" >&2; exit 2 ;;
 esac
 
 HOST=""
@@ -42,6 +49,7 @@ POINT=""
 MAX_UPTIME=900
 WAIT_SECS=60
 REPORT=""
+RUNS=3
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +69,8 @@ while [[ $# -gt 0 ]]; do
     --wait=*) WAIT_SECS="${1#*=}"; shift ;;
     --report) REPORT="$2"; shift 2 ;;
     --report=*) REPORT="${1#*=}"; shift ;;
+    --runs) RUNS="$2"; shift 2 ;;
+    --runs=*) RUNS="${1#*=}"; shift ;;
     *) shift ;;
   esac
 done
@@ -150,6 +160,100 @@ PY
 }
 
 now_epoch() { date +%s; }
+now_ms() { date +%s%3N 2>/dev/null || echo "$(( $(date +%s) * 1000 ))"; }
+
+# ════════════════════════ timing ════════════════════════
+# 服务级启动耗时基线：systemctl restart N 次，量「restart→active」与
+# 「active→ready」两段（不含整机上电；整机口径由 after 阶段天然测得）。
+# 首轮采数只记录不判定——没有历史参照时任何阈值都是拍脑袋，
+# 从第二轮起才把中位数作为同版本包的回归参照。
+if [ "$STAGE" = "timing" ]; then
+  echo "${BOLD}== 启动耗时基线：重启服务 ${RUNS} 次，取中位数 ==${RESET}"
+  info "本操作会重启 gateway ${RUNS} 次，每次造成短暂采集中断，请在验收窗口内执行"
+
+  case "$RUNS" in ''|*[!0-9]*|0) echo "无效 --runs: $RUNS" >&2; exit 2 ;; esac
+  if [ "$(svc ActiveState)" != "active" ]; then
+    echo "${RED}gateway.service 当前非 active，请先正常启动后再测${RESET}" >&2
+    exit 1
+  fi
+
+  wait_state() { # $1=期望状态 $2=超时秒；0=达成
+    local ddl=$(( $(date +%s) + $2 ))
+    while [ "$(date +%s)" -lt "$ddl" ]; do
+      [ "$(svc ActiveState)" = "$1" ] && return 0
+      sleep 0.2
+    done
+    return 1
+  }
+  wait_live() { # $2=超时秒；输出 200 或实际码
+    local ddl=$(( $(date +%s) + $2 )) c=000
+    while :; do
+      c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$API/health/live" 2>/dev/null || echo 000)
+      [ "$c" = "200" ] && break
+      [ "$(date +%s)" -ge "$ddl" ] && break
+      sleep 0.2
+    done
+    echo "$c"
+  }
+
+  ROWS=(); ARR_ACT=(); ARR_RDY=(); ARR_TOT=(); FAILED_RUNS=0; N=0
+  for i in $(seq 1 "$RUNS"); do
+    T0=$(now_ms)
+    systemctl restart gateway
+    if ! wait_state active "$WAIT_SECS"; then
+      echo "  ${RED}✗${RESET} 第 ${i} 轮：${WAIT_SECS}s 内未进入 active（journalctl -u gateway 排查）"
+      FAILED_RUNS=$((FAILED_RUNS+1)); continue
+    fi
+    T1=$(now_ms)
+    CODE=$(wait_live "$WAIT_SECS")
+    if [ "$CODE" != "200" ]; then
+      echo "  ${RED}✗${RESET} 第 ${i} 轮：active 后 ${WAIT_SECS}s 内 /health/live 未就绪（当前 ${CODE}）"
+      FAILED_RUNS=$((FAILED_RUNS+1)); continue
+    fi
+    T2=$(now_ms)
+    ACT=$(( T1 - T0 )); RDY=$(( T2 - T1 )); TOT=$(( T2 - T0 ))
+    ARR_ACT+=("$ACT"); ARR_RDY+=("$RDY"); ARR_TOT+=("$TOT"); ROWS+=("| ${i} | ${ACT} | ${RDY} | ${TOT} |")
+    N=$((N+1))
+    ok "第 ${i} 轮：restart→active ${ACT} ms，active→ready ${RDY} ms，合计 ${TOT} ms"
+  done
+
+  if [ "$N" -eq 0 ]; then
+    echo "${RED}全部轮次失败，无法产出基线${RESET}" >&2
+    exit 1
+  fi
+
+  # 下中位数：奇数取正中，偶数取偏小一侧——确定性优先，不做插值
+  median() { printf '%s\n' "$@" | sort -n | awk -v n="$N" 'NR==int((n+1)/2){print; exit}'; }
+  MA=$(median "${ARR_ACT[@]}"); MR=$(median "${ARR_RDY[@]}"); MT=$(median "${ARR_TOT[@]}")
+
+  echo
+  echo "${BOLD}中位数（成功 ${N}/${RUNS} 轮）${RESET}: restart→active ${MA} ms | active→ready ${MR} ms | 合计 ${MT} ms"
+  info "首轮采数只记录不判定；作为 SKU 基线需同版本包、≥3 轮成功"
+  if [ "$FAILED_RUNS" -gt 0 ]; then
+    warn "有 ${FAILED_RUNS} 轮未完成 —— 启动稳定性不达标，中位数仅作参考"
+  fi
+
+  if [ -n "$REPORT" ]; then
+    mkdir -p "$(dirname "$REPORT")"
+    {
+      echo "## 启动耗时基线（$(date -Is)，${RUNS} 轮、成功 ${N} 轮）"
+      echo
+      echo "| 轮次 | restart→active (ms) | active→ready (ms) | 合计 (ms) |"
+      echo "|---|---|---|---|"
+      printf '%s\n' "${ROWS[@]}"
+      echo
+      echo "**中位数**：restart→active ${MA} ms，active→ready ${MR} ms，合计 ${MT} ms"
+      if [ "$FAILED_RUNS" -gt 0 ]; then
+        echo
+        echo "⚠ ${FAILED_RUNS} 轮未完成（未计入中位数）"
+      fi
+    } > "$REPORT"
+    echo "  检查单片段: $REPORT"
+  fi
+
+  [ "$FAILED_RUNS" -eq 0 ] || exit 1
+  exit 0
+fi
 
 # ════════════════════════ before ════════════════════════
 if [ "$STAGE" = "before" ]; then
@@ -315,12 +419,14 @@ if command -v journalctl >/dev/null 2>&1; then
   fi
 fi
 
-# ⑦ 存活探针（刚上电时可能还在起，给 --wait 秒）
+# ⑦ 存活探针（刚上电时可能还在起，给 --wait 秒）；成功时刻即「ready」，
+#    用于推导整机启动耗时：上电→active→ready 三段
 DEADLINE=$(( $(now_epoch) + WAIT_SECS ))
 CODE="000"
+READY_EPOCH=""
 while :; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$API/health/live" 2>/dev/null || echo 000)
-  [ "$CODE" = "200" ] && break
+  if [ "$CODE" = "200" ]; then READY_EPOCH=$(now_epoch); break; fi
   [ "$(now_epoch)" -ge "$DEADLINE" ] && break
   sleep 2
 done
@@ -328,6 +434,19 @@ if [ "$CODE" = "200" ]; then
   ok "GET $API/health/live → 200"
 else
   fail "GET $API/health/live → $CODE（${WAIT_SECS}s 内未就绪）"
+fi
+
+# ⑦b 整机启动耗时（after 独有：含内核/systemd/自启链路，与 timing 子命令口径不同）
+#     ENTER_EPOCH 非空即 DELAY 已算出，无需再判
+T_ACT=""; T_RDY=""; T_TOT=""
+if [ -n "$READY_EPOCH" ] && [ -n "$ENTER_EPOCH" ]; then
+  T_ACT="$DELAY"; [ "$T_ACT" -lt 0 ] && T_ACT=0
+  T_RDY=$(( READY_EPOCH - ENTER_EPOCH )); [ "$T_RDY" -lt 0 ] && T_RDY=0
+  T_TOT=$(( READY_EPOCH - BOOT_EPOCH ));  [ "$T_TOT" -lt 0 ] && T_TOT=0
+  ok "整机启动耗时：上电→active ${T_ACT}s，active→ready ${T_RDY}s，上电→ready ${T_TOT}s"
+  info "服务级口径（不含上电）另测：verify-boot.sh timing --runs 3"
+elif [ -n "$READY_EPOCH" ]; then
+  warn "读不到 ActiveEnterTimestamp，整机启动耗时不完整（上电→ready ≥ $(( READY_EPOCH - BOOT_EPOCH ))s）"
 fi
 
 # ⑧ 数据留存：重启/断电前最后一条已落库样本必须仍在（断电场景最关键）
@@ -364,6 +483,11 @@ if [ -n "$REPORT" ]; then
     echo "| 自启 vs 人启 | ${DELAY:-n/a}s 内 active |"
     echo "| NRestarts | ${BASE_NRESTARTS} → ${CUR_NR} |"
     echo "| /health/live | ${CODE} |"
+    if [ -n "$T_TOT" ]; then
+      echo "| 整机启动耗时 | 上电→active ${T_ACT}s，active→ready ${T_RDY}s，合计 ${T_TOT}s |"
+    else
+      echo "| 整机启动耗时 | 未测得（缺 ActiveEnterTimestamp 或探针未就绪） |"
+    fi
     echo "| 数据留存 | ${BASE_LAST_TS:-未核对} |"
     echo
     echo "**汇总**：PASS=$PASS WARN=$WARN FAIL=$FAIL"
