@@ -1100,10 +1100,17 @@ jobs:
             || { echo "::error::gateway.service 未建立开机自启软链（enable 未持久化）"; exit 1; }
           # install.sh 把包内 gatewayd-<target> 统一装成固定名 gatewayd（不带 target 后缀），
           # 不要按包内文件名断言，否则会误判。
-          test -x /opt/gatewayd/gatewayd
-          test -d /opt/gatewayd/ui-dist
-          test -f /etc/gateway/config.json
-          PORT="$(jq -r '.web.listen_addr // "127.0.0.1:8080"' /etc/gateway/config.json)"
+          # 这几项必须走 sudo：install.sh 建的产物都是 root 所有，
+          # /etc/gateway/config.json 是 0640 root:gateway、/etc/gateway 是 0750，
+          # 非特权用户连 stat 都做不到（`test -f` 会静默失败），会误判成「没装上」。
+          sudo test -x /opt/gatewayd/gatewayd \
+            || { echo "::error::/opt/gatewayd/gatewayd 不存在或不可执行"; exit 1; }
+          sudo test -d /opt/gatewayd/ui-dist \
+            || { echo "::error::/opt/gatewayd/ui-dist 未安装"; exit 1; }
+          sudo test -f /etc/gateway/config.json \
+            || { echo "::error::/etc/gateway/config.json 未生成"; exit 1; }
+          # 配置文件同样只有 root/gateway 可读，jq 也带 sudo。
+          PORT="$(sudo jq -r '.web.listen_addr // "127.0.0.1:8080"' /etc/gateway/config.json)"
           PORT="${PORT##*:}"
           echo "health probe port=$PORT"
           # 存活探针是 /health/live；/api/health 不存在（仅有 /api/health/report 且需鉴权）。
