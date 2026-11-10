@@ -721,7 +721,7 @@ async fn scenario_mqtt_publish_end_to_end() {
         assert!(!received.is_empty(), "broker.received must be non-empty");
         // 连接建立后会先发一条 `<topic>/status` 心跳，received[0] 不一定是数据消息，
         // 必须按 topic 找，否则会误判为「发错 topic」。
-        let (topic, payload, _pid, qos) = received
+        let (_topic, payload, _pid, qos) = received
             .iter()
             .find(|(t, ..)| t == "gw/test")
             .expect("必须收到发往配置上送 topic 的数据消息");
