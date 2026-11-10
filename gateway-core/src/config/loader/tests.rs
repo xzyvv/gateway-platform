@@ -778,6 +778,15 @@ fn factory_template_in_package_is_loadable() {
     mqtt_on.validate_all().expect(
         "出厂模板开启 mqtt.enabled 后必须仍通过校验：示例点位采集周期必须 < publish_interval",
     );
+
+    // queue.max_rows 必须显式写进出厂模板。漏写时会静默退回代码默认的 100 万行，
+    // 而 100 万行只够「500 点位 / 10 秒」撑约 5.6 小时（容量规划 §3.3）；现场断网超过
+    // 这个时长就开始 FIFO 丢历史，且现场只表现为「数据少了」，不会报任何错。
+    assert_eq!(
+        cfg.queue.max_rows, 4_400_000,
+        "出厂模板的 queue.max_rows 必须按「500 点位 / 10 秒 / 断网缓冲 24 小时」\
+         显式给出：漏写会退回代码默认的 100 万行，断网数小时后即开始 FIFO 丢历史"
+    );
 }
 
 /// reload() 对有效文件的热重载正常路径必须返回磁盘上的最新内容。

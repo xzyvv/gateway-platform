@@ -22,7 +22,7 @@
 
   "points": [
     {
-      "_comment": "示例点位：读从站 1 的保持寄存器 0（u16，倍率 1）。仅用于开箱验证链路是否通，投运前请替换为现场点表。",
+      "_comment": "示例点位：读从站 1 的保持寄存器 0（u16，倍率 1）。仅用于开箱验证链路是否通，投运前请替换为现场点表。interval=10 秒：必须严格小于 mqtt.publish_interval（15），否则开启 MQTT 后 validate_cycle_conflict 会拒绝保存；采集周期直接决定磁盘占用（500 点位 × 10 秒 = 50 行/秒 = 432 万行/天），按现场实际周期改。",
       "id": "demo_modbus_1",
       "name": "示例点位",
       "device_id": "demo-device",
@@ -35,7 +35,7 @@
       "data_type": "u16",
       "byte_order": "ABCD",
       "register_count": 1,
-      "interval": 1,
+      "interval": 10,
       "scale": 1.0,
       "offset": 0.0,
       "formula": null,
@@ -48,11 +48,11 @@
   ],
 
   "mqtt": {
-    "_comment": "北向上报。出厂默认关闭：未接 broker 时开启只会让队列持续积压且不断重连。接好 broker 后把 enabled 改 true 并填 broker/topic/账号；注意点位采集周期必须严格小于 publish_interval（校验仅在本段 enabled=true 时生效，示例点位已设为 1s）。resume_rate_limit 是「上行限速（条/秒）」，对全部上行生效（不只是断网补发）：null=不限速；若要设置必须 ≥ 现场写入速率（点位数 ÷ 采集周期），设小了会导致队列积压直至淘汰丢数，容量档位见 docs/容量规划.md §2.1。",
+    "_comment": "北向上报。出厂默认关闭：未接 broker 时开启只会让队列持续积压且不断重连。接好 broker 后把 enabled 改 true 并填 broker/topic/账号；注意点位采集周期必须严格小于 publish_interval（校验仅在本段 enabled=true 时生效，示例点位已设为 10s）。resume_rate_limit 是「上行限速（条/秒）」，对全部上行生效（不只是断网补发）：null=不限速；若要设置必须 ≥ 现场写入速率（点位数 ÷ 采集周期），设小了会导致队列积压直至淘汰丢数，容量档位见 docs/容量规划.md §2.1。",
     "enabled": false,
     "broker": "tcp://127.0.0.1:1883",
     "topic": "gateway/data",
-    "publish_interval": 5,
+    "publish_interval": 15,
     "qos": 1,
     "keep_alive": 60,
     "username": null,
@@ -66,6 +66,11 @@
     "batch_size": 100,
     "interval_ms": 1000,
     "log_every": 100
+  },
+
+  "queue": {
+    "_comment": "队列表行数硬上限：超出后按 FIFO 淘汰最旧的未送达行。本值按「500 点位 / 10 秒周期 / 断网缓冲 24 小时」算出：50 行/秒 × 86400 秒 = 432 万行 → 取整到 10 万倍数 = 440 万行。原始库约 839MB + 备份副本 839MB ≈ 1.7GB，连同 WAL 与 journald 合计约 2.3GB，数据分区建议 4GB（完整场景表见 docs/容量规划.md §5.1）。现场点表或采集周期与出厂示例不同时必须重算（公式见 docs/容量规划.md §3.2）；沿用本值而点位规模更大时，会在断网几小时后就开始丢历史，且现场只表现为「数据少了」不报错。改后需重启才生效（淘汰线在存储层构造时固定）。",
+    "max_rows": 4400000
   },
 
   "web": {

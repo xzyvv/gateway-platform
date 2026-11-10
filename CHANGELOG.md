@@ -60,6 +60,11 @@
   现在 `build-release.sh` 写入 `git_sha=`，`verify-deploy.sh --package-only` 缺字段即判 FAIL，
   CI 的 `release-package` job 额外断言包内 sha **等于**本次 CI 的提交；
   验收清单与检查单的口径同步改为 `BUILD-INFO.txt` 的 `git_sha`。
+- **出厂模板漏写 `queue.max_rows`**：模板此前不带 `queue` 段，落到代码默认的 100 万行，
+  而 100 万行只够「500 点位 / 10 秒」撑约 5.6 小时——现场断网更久就开始 FIFO 丢历史，
+  且只表现为「数据少了」不报错。现在模板显式给出 4,400,000 行（按 500 点位 / 10 秒 /
+  断网缓冲 24 小时算），示例点位采集周期由 1 秒改为 10 秒（`publish_interval` 同步提到 15），
+  Rust 单测与 `deploy_lint` 均把这两项钉死。
 
 ### 文档
 

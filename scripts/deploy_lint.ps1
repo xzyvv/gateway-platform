@@ -1682,6 +1682,42 @@ else {
             Ok "$factoryRel 带示例采集配置（buses=$busCount, points=$pointCount）"
         }
 
+        # queue.max_rows 必须显式给出：漏写会退回代码默认的 100 万行，只够
+        # （500 点位 / 10 秒）撑约 5.6 小时，断网更久就开始 FIFO 丢历史且不报错。
+        $factoryMaxRows = $null
+        if ($null -ne $factory.PSObject.Properties["queue"] -and
+            $null -ne $factory.queue.PSObject.Properties["max_rows"]) {
+            $factoryMaxRows = $factory.queue.max_rows
+        }
+        if ($null -eq $factoryMaxRows) {
+            Fail "$factoryRel 缺 queue.max_rows —— 会退回代码默认的 100 万行，现场点位规模一大就断网几小时后开始 FIFO 丢历史"
+        }
+        elseif ([int]$factoryMaxRows -lt 200000 -or [int]$factoryMaxRows -gt 50000000) {
+            Fail "$factoryRel 的 queue.max_rows=$factoryMaxRows 超出合法范围 [200000, 50000000] —— 网关加载时会拒绝启动"
+        }
+        else {
+            Ok "$factoryRel 显式给出 queue.max_rows=$factoryMaxRows"
+        }
+
+        # 示例点位的采集周期必须严格小于 publish_interval：模板注释让用户接好 broker
+        # 后把 mqtt.enabled 改 true，两者相等时用户照做会被 validate_cycle_conflict 拒绝。
+        $factoryInterval = $null; $factoryPublish = $null
+        if ($pointCount -ge 1) {
+            $firstPoint = @($factory.points)[0]
+            if ($null -ne $firstPoint.PSObject.Properties["interval"]) { $factoryInterval = $firstPoint.interval }
+        }
+        if ($null -ne $factory.PSObject.Properties["mqtt"] -and
+            $null -ne $factory.mqtt.PSObject.Properties["publish_interval"]) {
+            $factoryPublish = $factory.mqtt.publish_interval
+        }
+        if ($null -ne $factoryInterval -and $null -ne $factoryPublish -and
+            [int]$factoryInterval -ge [int]$factoryPublish) {
+            Fail "$factoryRel 的示例点位 interval=$factoryInterval 不小于 mqtt.publish_interval=$factoryPublish —— 用户按注释开启 MQTT 后配置会被 validate_cycle_conflict 拒绝保存"
+        }
+        else {
+            Ok "$factoryRel 的示例点位采集周期与 publish_interval 相容（interval=$factoryInterval < publish_interval=$factoryPublish）"
+        }
+
         # license 四档配额：core→ultra，且 max_points 严格递增
         $quotas = @()
         if ($null -ne $factory.PSObject.Properties["license"] -and
