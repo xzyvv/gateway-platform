@@ -113,12 +113,12 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | `server_sinks/` | 数据推送适配器：将 RealtimeBus 数据主动喂给 server/ 下各服务端（区别于 server/ 的被动监听）；基类在 `base.rs` |
 | `template/` | 上送 payload 模板渲染（解析 / 渲染 / 模板注册表） |
 
-**三处 Modbus "服务端"能力的分工（勿误删）**：
+**三处 Modbus「服务端」能力的分工（勿误删）**：
 
 | 模块 | 角色 | 数据来源 | 典型用途 |
 |---|---|---|---|
 | `server/modbus_server.rs` | Modbus TCP 从站 | 内存寄存器镜像（由 sink 写入） | 上位机/SCADA 以 Modbus 主站身份读网关 |
-| `server_sinks/modbus_sink.rs` | 数据推送侧通道 | `RealtimeBus` 订阅 | 把采集值持续写进上面那台从站的寄存器空间，是"点位 → 寄存器"的映射执行者 |
+| `server_sinks/modbus_sink.rs` | 数据推送侧通道 | `RealtimeBus` 订阅 | 把采集值持续写进上面那台从站的寄存器空间，是「点位 → 寄存器」的映射执行者 |
 | `server/modbus_gateway_bridge.rs` | 协议桥接（网关中转） | TCP 客户端请求 | 上游用 Modbus TCP、现场设备只有 RTU 串口时做透明转换 |
 
 前两者是「服务端 + 喂数者」的主从配对，第三个是独立的编译期可选桥接能力，三者不构成重复实现。
@@ -131,7 +131,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 - `AppState` 共享：配置、队列、调度器、北向管理器、指标等
 - 统一 `require_auth` / `require_auth_if_anon_disabled` 鉴权中间件
 - 端点清单由 `scripts/gen_api_surface.py` 从各子域 `routes.rs` 生成到 [`docs/api-surface.md`](../api-surface.md)，CI 校验防漂移
-- **前缀归属硬约束**：一个 URL 前缀（`/api/<seg>`）只能有一个 `routes.rs` 注册点；脚本的 `check_prefix_ownership` 会在 CI 拦下"同一前缀被多个子域注册"（历史上 `/api/devices*` 曾被 config / device_ops / devices 三家瓜分）。handler 可以留在原处，路由入口必须唯一
+- **前缀归属硬约束**：一个 URL 前缀（`/api/<seg>`）只能有一个 `routes.rs` 注册点；脚本的 `check_prefix_ownership` 会在 CI 拦下「同一前缀被多个子域注册」（历史上 `/api/devices*` 曾被 config / device_ops / devices 三个子域重复注册）。handler 可以留在原处，路由入口必须唯一
 - **`/api/points` 下不允许静态段**：matchit 静态段优先于 `:id` 且不回落，任何 `/api/points/<static>` 都会让同名 id 的点位失去 PUT/DELETE（405）。点位工具与回收站因此各自独立前缀：`/api/point-tools/*`（批量写/虚拟点位/偏移/克隆/查找替换）、`/api/point-trash/*`。新增点位子功能时按此规则挑前缀，不要挂到 `/api/points` 下
 
 **文件拆分**：`types.rs`（AppState + DTO + ApiResponse）、`error.rs`（ApiError + IntoResponse 转换）、`middleware.rs`（鉴权 + 限流）

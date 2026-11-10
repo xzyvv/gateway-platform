@@ -154,11 +154,11 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 
 ### 3.5 语义边界（必须写入文档）
 
-- supersede 掉的行**永远不会上行**。这是配置选择的结果，不是故障。
+- supersede 掉的行**不会上行**。这是配置选择的结果，不是故障。
 - 若本轮发布失败，被 supersede 的旧样本不会因为重发而回来；重发的是选中行（若仍是最新）。
 - **慢 ACK 边界**：折叠只以「未送达行」判定最新，已送达 / 在途的新值不参与。因此当旧行的 PubAck 超时被 `release_in_flight` 回未送达、而更新的行已 ACK 时，旧值会在新值之后**重发一次**——快照语义在失败重试路径上退化为 at-least-once，不是严格的「每周期至多一条」。要彻底消除需按「全表 `MAX(id)`」折叠，代价是把部分索引换成覆盖全部行的 `(device_id, point_id)` 索引（5000 万行规模不划算），v1 明确接受该边界，并由 `snapshot_slow_ack_can_resend_stale_row_after_newer_delivered` 固化。
 - 下游若依赖「每个样本都收到」，必须保持 `stream`。
-- **与点位流水线配合**：`aggregation.window` 必须 ≥ `publish_interval`（`validate_snapshot_aggregation` 强制，`stream` 不限），否则同周期的中间聚合窗口会被折叠丢弃；Web 保存严格拒绝，磁盘加载/热重载路径则把窗口抬到上报周期并 `warn`（`sanitize_legacy_snapshot_aggregation`），避免手工改配置后网关起不来；Bad/Uncertain → Good 的首个样本由 `EdgeProcessor` 强制放行一次（`PipelineNode::process_recovered`），否则数值未变时恢复事件会被死区/变化过滤，云端停留在 Bad——聚合点位的该样本只能进入当前窗口，实际上行最多滞后一个窗口。
+- **与点位流水线配合**：`aggregation.window` 必须 ≥ `publish_interval`（`validate_snapshot_aggregation` 强制，`stream` 不限），否则同周期的中间聚合窗口会被折叠丢弃；Web 保存严格拒绝，磁盘加载/热重载路径则把窗口抬到上报周期并 `warn`（`sanitize_legacy_snapshot_aggregation`），避免手工改配置后网关无法启动；Bad/Uncertain → Good 的首个样本由 `EdgeProcessor` 强制放行一次（`PipelineNode::process_recovered`），否则数值未变时恢复事件会被死区/变化过滤，云端停留在 Bad——聚合点位的该样本只能进入当前窗口，实际上行最多滞后一个窗口。
 
 ---
 
@@ -228,7 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 | 回滚 | — | 配置改回 `stream` 即恢复，无需迁移、无 schema 变更（索引保留无害） |
 
 **已决议（v1 不实施，理由如下）**
-1. snapshot + RBE：**不做连接级实现**。省流量由点位级 `on_change`/`deadband` 承担（样本在 pipeline 即被过滤，snapshot 只折叠残余多值）；纯 RBE 会导致值长期不变时下游无法区分「没变化」与「链路挂了」，需额外心跳机制，收益不抵复杂度。
+1. snapshot + RBE：**不做连接级实现**。省流量由点位级 `on_change`/`deadband` 承担（样本在 pipeline 即被过滤，snapshot 只折叠残余多值）；纯 RBE 会导致值长期不变时下游无法区分「没变化」与「链路中断」，需额外心跳机制，收益不抵复杂度。
 2. `batch_target` 口径：**沿用行数**（`pending.clamp(100, 500)`）。snapshot 下每点位单周期仅 1 行，行数与点位数恒等，无需分叉。
 3. `max_age_ms`：**v1 不做**。陈旧性已由 `quality`（Good/Stale/Bad）与 `stale_count` 表达，下游可自行过滤；若现场对「重连后不发老值」有硬要求，再作为独立小改动（选中 SQL 增加 `source_ts >= now - max_age`）补上。
 4. 静默点判活：**选「网关级 LWT + 静默点清单」，不做逐点心跳**。
@@ -254,6 +254,6 @@ CREATE INDEX IF NOT EXISTS idx_queue_snapshot
 | 质量恢复（Bad/Uncertain → Good）首个样本强制上行 | 设备恢复瞬间会多一条样本，避免云端状态卡在 Bad | 无 |
 | `snapshot` 且 `aggregation.window < publish_interval` | 加载期自动把窗口抬到上报周期并写 `warn!` 日志，**不阻断启动**；Web 保存仍严格拒绝 | 检查启动日志，按需调大窗口 |
 | 新增指标 `gateway_queue_snapshot_superseded_total`、索引 `idx_queue_snapshot` | 云端可采集折叠量；索引只包含 `delivered = 0` 的行 | 无 |
-| 新增状态 topic `<上报 topic>/status`（retain） | ConnAck 后发 `online`，异常断开由 broker 代发 `offline`（含掉电/断网/崩溃/优雅停机） | broker 需放行该 topic 的发布权限；云端不订阅则无影响 |
+| 新增状态 topic `<上报 topic>/status`（retain） | ConnAck 后发 `online`，异常断开由 broker 代发 `offline`（含断电/断网/崩溃/优雅停机） | broker 需放行该 topic 的发布权限；云端不订阅则无影响 |
 
 **回滚**：把 `report_mode` 改回 `stream` 即恢复逐样本上行（配置热重载即可生效，无需重启）；索引与指标保留无害。

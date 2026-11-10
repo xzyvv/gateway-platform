@@ -16,10 +16,10 @@
 | 低价值功能 | 无需下线 | **仍为 0**（每个页面/端点都有真实后端与定位归属） | 端点清单 + 页面清单比对 |
 | 重复冗余实现 | 4 处（E1–E4） | **已清零**（E1–E4 全部收敛为单一实现） | 4 个 composable + 4 份 spec |
 | 协议能力缺口 | diag 4/12 族、扫描类工具仅 Modbus | **diag 10/12 族、扫描类工具注册表驱动**；剩余缺口见 §2.D | `registry/capabilities.rs` + `registry/tests.rs` |
-| 交付门禁 | 散落靠人记 | **一条命令跑完 19 步并出结论**（`scripts/release_gate.ps1`） | 本次实跑：18 PASS / 1 SKIP |
+| 交付门禁 | 散落靠人记 | **一条命令完成 19 步并出结论**（`scripts/release_gate.ps1`） | 本次实跑：18 PASS / 1 SKIP |
 | **下一步主战场** | 主线 B（补能力 + 补验证） | **主线 C：以测试与故障验证为主，能力补齐为辅** | 见 §4 |
 
-**一句话**：功能已经"够用且不冗余"，再投入做"优化/砍功能/重构"的边际收益接近 0；
+**一句话**：功能已经「够用且不冗余」，再投入做「优化/砍功能/重构」的边际收益接近 0；
 真正未被证明的是**这些功能在真实故障与真实交付场景下是否可靠**——因此下一阶段应做**测试**（含故障注入），
 而不是再做功能或重构。
 
@@ -41,7 +41,7 @@
 | 前端单测 | 221 个 `*.spec.ts`（src 217 + e2e 4；vitest 实际收集 **217 文件 / 2040 用例**） | `Get-ChildItem -Recurse *.spec.ts` + CI 实测 |
 | Playwright E2E | 4 套 / 16 用例（smoke、write-flows、routes-deep、debug-paths） | `gateway-web/e2e/` |
 | chaos 故障场景 | **47** 个真路径恢复场景 | `gateway-core/tests/chaos/scenarios.rs` |
-| 覆盖率门禁 | 分目录阈值"只许上调、不许下调" | `gateway-web/vitest.config.ts`:83–104 |
+| 覆盖率门禁 | 分目录阈值「只许上调、不许下调」 | `gateway-web/vitest.config.ts`:83–104 |
 
 ### 1.2 后端功能域（16 组 / 173 端点，口径与 `api-surface.md` 一致）
 
@@ -71,7 +71,7 @@
 
 | Hub | 页签 | 定位归属 | 复核结论 |
 |---|---|---|---|
-| **设备** | 设备清单 / 分组 / 批量命令 / 健康评分 / 远程控制 / 设备模板 / 批量导入 / 设备发现 | 配置 + 现场干预 | 核心；"批量导入"与系统配置侧导入共用校验/结果组件（见 §3.1 R1，入口保留） |
+| **设备** | 设备清单 / 分组 / 批量命令 / 健康评分 / 远程控制 / 设备模板 / 批量导入 / 设备发现 | 配置 + 现场干预 | 核心；「批量导入」与系统配置侧导入共用校验/结果组件（见 §3.1 R1，入口保留） |
 | **点位** | 点位清单 / 已删除 / 虚拟点位 / 点位克隆 / 查找替换 / 地址换算 / 地址偏移 | 配置 + 批量工程作业 | 核心 |
 | **采集调优** | 通信参数 / 通信画像 / 调度优化 | **现场调优核心** | 核心（通信画像口径已并入 `healthVerdict`） |
 | **协议控制台** | 调试向导 / 地址映射 / 寄存器扫描 / 从站扫描 / 参数探测 / 报文捕获 / 编辑 / 回放 / 单步调试 / 从站模拟 / 协议转换 | **现场调试核心** | 核心；入口可用性现由能力位驱动（B3） |
@@ -98,7 +98,7 @@
 | gpio | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ |
 
 - 能力位扩展为 8 位（新增 `supports_register_scan` / `supports_auto_detect`），前端按钮随能力自动可用；
-- `registry/tests.rs` 有两条回归钉子：①`supports_diag` 必须与真实 `diag` 实现一致（12 族）；②"声明 true ⇒ 真的实现了"。
+- `registry/tests.rs` 有两条回归钉子：①`supports_diag` 必须与真实 `diag` 实现一致（12 族）；②「声明 true ⇒ 真的实现了」。
 - **Modbus 族 diag 已补齐**（C2）：`modbus/trait_impl.rs` 覆写 `diag`——建链后用 FC03 真实读一次保持寄存器
   （探针固定 `slave=1 / addr=0 / count=1`，不依赖点位配置），成功即同时证明「链路可用 + 从站应答 + 帧格式/CRC 正确」，
   异常码与无应答按真实原因分档报告。**至此 12 个协议族全部具备真实诊断入口**（`registry/tests.rs` 的
@@ -110,13 +110,13 @@
 |---|---|---|
 | Windows 本地发布门禁 | `scripts/release_gate.ps1`，19 步（`-IncludeChaos` 为 20），失败项可定位到具体步骤，日志落 `target/release-gate/<时间戳>/`；另含 `remote-gate` 步：触发 `release-gate.yml` 并轮询到出结论（无 gh CLI / 无 origin 远端 / 工作区有未提交改动时自动 SKIP 并写明原因） | **已闭环**（本次实跑 18 PASS / 1 SKIP：git 不在 PATH） |
 | CI 门禁 | check / dead_code / 协议 feature 矩阵 / SKU 矩阵 / 集成契约 / bundle 预算 / 覆盖率 / 仓库健康 / chaos / e2e / 加密 / 跨平台 / **ARM 交叉编译** | 覆盖完整；ARM 已纳入（见下） |
-| 发布门禁 | 重作业（cross-arm / static-musl / coverage / chaos / bench / soak-smoke / sku-size-matrix / release-package）抽在 `.github/workflows/heavy.yml`，由 `.github/workflows/release-gate.yml` **无条件**调用；推 `v*` tag、手动触发、每周定时三条路径都会跑，失败即门禁不通过 | **已闭环（P1-3）**：原先重作业只在 `workflow_dispatch`/`RUN_HEAVY=true` 时跑，"发布前必跑"实际不存在 |
-| ARM 交叉编译 | CI `cross-arm`：aarch64-unknown-linux-gnu + armv7-unknown-linux-gnueabihf，`-p gatewayd --features sku-standard` 与出厂包同口径，`file` 校验 ELF 架构 | **已闭环（G2）**：不再依赖开发机手工产包 |
-| 交付包真交付 | `deploy/build-release.sh` 的产出直接进 CI：`ci.yml` 的 `deploy-smoke` 真跑该脚本（musl 静态，包 = 脚本产出 + 现场 `config.json`）并跑 `deliver.sh` 一键安装 + 校验；`heavy.yml` 的 `release-package` 用 cross 产出 **ARM64 musl 真交付包**并逐项断言包内文件齐全、二进制静态链接、`BUILD-INFO.protocols` 与 `entries.rs` 的协议注册名一致 | **已闭环（P1-5）并已实跑通过（2026-11-07）**：run `42375783484` 的 `deploy smoke` 全绿（musl 静态产物 → 真包 → `deliver.sh` install+verify → 健康度 31 通过 0 FAIL → 检查单导出成功）；run `42372915790` 的 `release-package` 全绿（cross ARM64 musl 真交付包校验通过）。此前 CI 的 `deploy-smoke` 是手工复刻包布局 + 自造 `BUILD-INFO.txt`（`build_time=ci-smoke`），与交付脚本是**平行实现**，交付脚本的 bug 永远发现不了。`deploy_lint.ps1` 由 102 项增至 **115 项**（P3-1b 补 C20 后为 **121 项**）：C16 锁死「CI 必须调用真脚本 + 协议名映射不得漂移」，C17 锁死交付脚本执行位，C18 锁死工作流 shell 变量名笔误，C19 锁死 `sudo cp` 造成的 root 属主临时文件，C20 锁死出厂配置模板的存在性与结构完整性 |
+| 发布门禁 | 重作业（cross-arm / static-musl / coverage / chaos / bench / soak-smoke / sku-size-matrix / release-package）抽在 `.github/workflows/heavy.yml`，由 `.github/workflows/release-gate.yml` **无条件**调用；推 `v*` tag、手动触发、每周定时三条路径都会跑，失败即门禁不通过 | **已闭环（P1-3）**：原先重作业只在 `workflow_dispatch`/`RUN_HEAVY=true` 时跑，「发布前必跑」实际不存在 |
+| ARM 交叉编译 | CI `cross-arm`：aarch64-unknown-linux-gnu + armv7-unknown-linux-gnueabihf，`-p gatewayd --features sku-standard` 与出厂包同口径，`file` 校验 ELF 架构 | **已闭环（G2）**：不再依赖开发机手工构建交付包 |
+| 交付包真交付 | `deploy/build-release.sh` 的产出直接进 CI：`ci.yml` 的 `deploy-smoke` 真跑该脚本（musl 静态，包 = 脚本产出 + 现场 `config.json`）并跑 `deliver.sh` 一键安装 + 校验；`heavy.yml` 的 `release-package` 用 cross 产出 **ARM64 musl 真交付包**并逐项断言包内文件齐全、二进制静态链接、`BUILD-INFO.protocols` 与 `entries.rs` 的协议注册名一致 | **已闭环（P1-5）并已实跑通过（2026-11-07）**：run `42375783484` 的 `deploy smoke` 全部通过（musl 静态产物 → 真包 → `deliver.sh` install+verify → 健康度 31 通过 0 FAIL → 检查单导出成功）；run `42372915790` 的 `release-package` 全部通过（cross ARM64 musl 真交付包校验通过）。此前 CI 的 `deploy-smoke` 是手工复刻包布局 + 自造 `BUILD-INFO.txt`（`build_time=ci-smoke`），与交付脚本是**平行实现**，交付脚本的缺陷无法发现。`deploy_lint.ps1` 由 102 项增至 **115 项**（P3-1b 补 C20 后为 **121 项**）：C16 锁死「CI 必须调用真脚本 + 协议名映射不得漂移」，C17 锁死交付脚本执行位，C18 锁死工作流 shell 变量名笔误，C19 锁死 `sudo cp` 造成的 root 属主临时文件，C20 锁死出厂配置模板的存在性与结构完整性 |
 | 交付链路 | `deploy/deliver.sh` 一条命令：install.sh → 等待就绪 → verify-deploy.sh → 交付检查单（Markdown，含构建信息/逐项 PASS/FAIL/诊断命令） | **已闭环（G5）**：检查单由 verify 脚本生成，判定逻辑单一来源 |
 | 部署沙箱一致性 | `gateway.service` 的 `ProtectSystem=strict` / `ReadWritePaths` / `DeviceAllow` 与代码实际读写的路径必须一一对应；`deploy_lint.ps1` C9~C12 把这层约束变成断言，`deploy-smoke` 用真实 systemd 验配置写回 | **已闭环（P0-1~P0-4）**：三层缺陷（配置写回被沙箱拒、GPIO 未放行、串口 `DeviceAllow` 写成伪路径）已修，详见 §1.7 |
 | 桌面端 | `gateway-desktop` 已冻结：不再构建/打包/发布，CI `desktop-build` job 移除，代码保留（workspace 仍编译兜底） | 冻结（现场调试统一走 Web 控制台） |
-| 前端覆盖率 | 分目录阈值"只许上调"；**默认全量口径**（`include: ['src/**/*.{ts,vue}']`，开关已移除） | **已闭环（C1.4）**：阈值按全量实测基线重定，新增无测试文件不再免疫门禁 |
+| 前端覆盖率 | 分目录阈值「只许上调」；**默认全量口径**（`include: ['src/**/*.{ts,vue}']`，开关已移除） | **已闭环（C1.4）**：阈值按全量实测基线重定，新增无测试文件不再免疫门禁 |
 | chaos | **47 场景**（源码口径，`gateway-core/tests/chaos/scenarios.rs`）；默认发行集实跑 **45**——另 2 条 `bacnet-mstp` 场景随该协议「退役观察」不在默认 feature 集内 | C1.3 的 6 类现场故障（证书过期、许可证到期、NTP 失步、看门狗触发、网络切换、南向长时无响应）**已落地**，四段结论见 `docs/故障处置卡.md` |
 | E2E 覆盖 | 4 套 / 16 用例：登录与核心路由巡游、配置保存与点位增删、license 端点、登出、**现场调试主路径**（协议控制台能力位 / 采集调优改参 / 点位读写） | **已闭环（C1.2）**：`e2e/debug-paths.spec.ts` 补齐协议控制台、采集调优、点位读写三条链路，已纳入 `scripts/release_gate.ps1` 的 `web-e2e` 步骤 |
 
@@ -160,7 +160,7 @@
 1. ~~**缺真实体积数据**~~ **已闭环**：CI 新增 `sku-size-matrix` 作业（纯观测不阻塞 PR），
    现已抽到 `.github/workflows/heavy.yml`，由 `release-gate.yml` 在推 `v*` tag /
    手动触发 / 每周定时时跑（原先只在 `workflow_dispatch` 或仓库变量 `RUN_HEAVY=true`
-   时跑，等于"发布前必跑"不存在）。跑 5 个 SKU 的 release 构建并出表，
+   时跑，等于「发布前必跑」不存在）。执行 5 个 SKU 的 release 构建并出表，
    产物见 Actions artifact `sku-size-matrix`。数据来源见上表。
 2. ~~**`opcua` feature 同时打包南向 Client（`south/protocol/opcua`）与北向 Server（`north/server/opcua_server.rs`）**~~ **已闭环**：
    `async-opcua` 改为 optional，拆成 `opcua-client`（`async-opcua/client`）与
@@ -198,7 +198,7 @@
 | **P0-4** 门禁 | 同类问题改完就忘、下次又漂 | 此前 `deploy-lint` job **只跑 actionlint + shellcheck，从未调用 `deploy_lint.ps1`** | CI 改为真跑脚本；新增 C9（代码 open 的设备 ⊆ `DeviceAllow`）、C10（`ReadWritePaths` ⊇ 配置目录）、C11（`install.sh` 权限 ⇔ service 写权限）、C12（禁伪路径）；`deploy-smoke` 增加「Web 改配置 → 校验磁盘 → 重启仍在」的真实写回链路 |
 
 **验证**：`deploy_lint.ps1` **121 项全过**，C9~C12 用 4 个变异逐条反向验证均能报错；
-`deploy-smoke` 在 GitHub Actions 实跑全绿（run `42375783484`）。
+`deploy-smoke` 在 GitHub Actions 实跑全部通过（run `42375783484`）。
 
 **这层约束的含义**：`gateway.service` 与 `install.sh` 从此被视为**功能代码的一部分**——
 新增任何设备、任何需要落盘的目录，都必须同步更新这三个清单（`DeviceAllow` /
@@ -234,17 +234,17 @@
 
 | 档位 | 功能域 | 理由 | 状态 |
 |---|---|---|---|
-| **A 核心（继续加固）** | 参数配置（config）、设备/点位管理、采集调优、协议控制台、点位读写、诊断运维、上行配置与测试、交付验收 | 直接对应"配得起来 + 调得通 + 交得掉" | 已具备；下一步靠**验证**加固（§4.C1） |
+| **A 核心（继续加固）** | 参数配置（config）、设备/点位管理、采集调优、协议控制台、点位读写、诊断运维、上行配置与测试、交付验收 | 直接对应「配得起来 + 调得通 + 交得掉」 | 已具备；下一步靠**验证**加固（§4.C1） |
 | **B 支撑（保留不扩张）** | 访问控制、证书、审计、看门狗、计划任务、Webhook 测试、OTA、蜂窝、GPIO、透传会话 | 频次低但缺失会造成交付事故；已用权限/分组收口 | 保持 |
-| **C 边缘（冻结，只修 bug）** | 历史数据、区间对比、数据压缩、断连续传、质量概览、采集退避、链路追踪 | 现场判"数据不对"要回溯，但**定位不是数据分析平台** | 冻结 |
-| **D 能力缺口（不是冗余）** | ①~~**Modbus 无 diag**~~ **已闭环（C2）**；②~~mc/fins/iec101/串口计量无扫描类调试工具~~ **已闭环（C2）**：mc/fins 按软元件地址逐点探测已实现；iec101/串口计量无寄存器概念，前端显式标注「不适用（不是尚未实现）」；③opcua/iec101/bacnet_mstp 无写 | 缺口才是阻塞现场交付的东西 | **①②已做（见 §4.C2）；③为协议语义限制，暂不做** |
+| **C 边缘（冻结，只修 bug）** | 历史数据、区间对比、数据压缩、断连续传、质量概览、采集退避、链路追踪 | 现场判「数据不对」要回溯，但**定位不是数据分析平台** | 冻结 |
+| **D 能力缺口（不是冗余）** | ①~~**Modbus 无 diag**~~ **已闭环（C2）**；②~~mc/fins/iec101/串口计量无扫描类调试工具~~ **已闭环（C2）**：mc/fins 按软元件地址逐点探测已实现；iec101/串口计量无寄存器概念，前端显式标注「不适用（不是尚未实现）」；③opcua/iec101/bacnet_mstp 无写 | 缺口才是阻塞现场交付的因素 | **①②已做（见 §4.C2）；③为协议语义限制，暂不做** |
 | **E 重复实现** | 第一版 4 处（E1–E4） | 维护成本翻倍 | **已清零**（§3.1） |
 
 ---
 
 ## 3. 低价值 / 重复冗余甄别（复评，带证据）
 
-### 3.1 结论：需下线 0 处、重复实现 0 处；剩余 2 处"入口分散"（可选，低优先）
+### 3.1 结论：需下线 0 处、重复实现 0 处；剩余 2 处「入口分散」（可选，低优先）
 
 | # | 现象 | 复评状态 | 证据 |
 |---|---|---|---|
@@ -255,7 +255,7 @@
 | R1 | **导入路径 4 条**：设备批量导入（`DeviceBatchImport` + `batchImport/*`）/ 设备模板（`DeviceTemplates`）/ 配置导入导出（`ConfigIo`）/ 片段导入（`ConfigFragmentImport`）+ 部署向导 | **已收敛（校验+结果层）** | 入口仍分散（导入是高危操作，分散反而降低误操作），但「JSON 文本解析」统一为 [jsonTextValidator.ts](../gateway-web/src/utils/jsonTextValidator.ts)、「导入结果」统一为 [ImportOutcome.vue](../gateway-web/src/components/ImportOutcome.vue)；`ConfigIo` 两处、`ConfigFragmentImport` 一处均改为共用，片段导入失败由 toast 改为行内展示 |
 | R2 | **网关级健康结论 5 处入口**：设备健康评分 / 运维健康报告 / 网关自诊断 / 网关信息 / 交付验收自检 | **已收敛** | `运维 › 健康报告` 为唯一结论页；自诊断与网关信息改用 [HealthConclusionBar.vue](../gateway-web/src/components/HealthConclusionBar.vue)（一行结论 + 分级计数 + `查看健康报告 →` 深链），不再各自渲染结论卡；问题清单仍共用 `HealthProblemList`。设备健康评分是**设备级**口径、交付自检是**交付六项**口径，语义不同，保留 |
 
-> 判定：R1/R2 属"体验冗余"而非技术债，收敛后两者均已闭环；下一步仍以真机验证为先。
+> 判定：R1/R2 属「体验冗余」而非技术债，收敛后两者均已闭环；下一步仍以真机验证为先。
 
 ### 3.2 技术债务复测（结论：仍为 0）
 
@@ -275,8 +275,8 @@
 - 不为覆盖率数字刷测试：覆盖率 job 出报告不设阈值是对的（**但口径要修，见 C1.4**）；
 - **不按 URL 前缀搬 handler 目录**（2026-11-08 评估后放弃）：`routes.rs` 注册点已按前缀唯一
   （由 `gen_api_surface.py` 的 `check_prefix_ownership` 守护），故障源已消除；搬目录只改
-  "实现文件放哪"，无功能收益，且 `config/handlers/{devices,points}.rs` 通过 `use super::*`
-  依赖 `apply_reload` 等共享辅助，属"搬家 + 解耦"两件事；另外 `now_ms()` 在
+  「实现文件放哪」，无功能收益，且 `config/handlers/{devices,points}.rs` 通过 `use super::*`
+  依赖 `apply_reload` 等共享辅助，属「搬家 + 解耦」两件事；另外 `now_ms()` 在
   `config/handlers/points.rs` 与 `device_ops/handlers/health.rs` 各有一份 `pub(crate)`，
   合域会直接编译失败。命名空间地图见 `gateway-api/src/web/api/mod.rs` 顶部表格。
 
@@ -284,40 +284,40 @@
 
 ## 4. 接下来怎么做：主线 C（以验证为主）
 
-前提判断：**功能面冻结 + 债务 0 + 冗余 0** ⇒ 再投入"优化/砍功能/重构"是负收益；
-剩余风险全部集中在"**功能在真实故障与真实交付场景下是否可靠**"。因此主线 C 的排序是：
+前提判断：**功能面冻结 + 债务 0 + 冗余 0** ⇒ 再投入「优化/砍功能/重构」是负收益；
+剩余风险全部集中在「**功能在真实故障与真实交付场景下是否可靠**」。因此主线 C 的排序是：
 **先补验证（C1）→ 再补最后的硬缺口（C2）→ 最后沉淀现场知识（C3）→ 真机验收（C4，等硬件）**。
 
 ### C1. 验证补强（3–4 天，价值最高 / 成本中）★ 本阶段主体
 
 | 子项 | 做什么 | 验收 |
 |---|---|---|
-| **C1.1 新能力端到端验证** | ①`gateway-api` 增加能力位路由的 API 契约测试：`slave_scan` / `register_scan` / `auto_detect` 对"声明支持的协议"返回可执行结果、对"未声明的协议"返回明确错误（不是 500）；②前端 `useProtocolCaps` 单测 + 加载失败降级；③`useReadPointNow` / `usePointWrite` / `usePointBackoff` 的**协议错误 vs 传输错误**分支各补一条回归钉子 | ✅ 已落地：`gateway-api/tests/protocol_capability_routing.rs`（后端契约）、`useProtocolCaps.spec.ts`（前端 6 例，含加载失败降级 / 未注册协议 / 重试复位）、`useReadPointNow.spec.ts` + `usePointWrite.spec.ts` + `usePointBackoff.spec.ts`（协议错误 vs 传输错误分支） |
+| **C1.1 新能力端到端验证** | ①`gateway-api` 增加能力位路由的 API 契约测试：`slave_scan` / `register_scan` / `auto_detect` 对「声明支持的协议」返回可执行结果、对「未声明的协议」返回明确错误（不是 500）；②前端 `useProtocolCaps` 单测 + 加载失败降级；③`useReadPointNow` / `usePointWrite` / `usePointBackoff` 的**协议错误 vs 传输错误**分支各补一条回归钉子 | ✅ 已落地：`gateway-api/tests/protocol_capability_routing.rs`（后端契约）、`useProtocolCaps.spec.ts`（前端 6 例，含加载失败降级 / 未注册协议 / 重试复位）、`useReadPointNow.spec.ts` + `usePointWrite.spec.ts` + `usePointBackoff.spec.ts`（协议错误 vs 传输错误分支） |
 | **C1.2 浏览器级覆盖现场调试主路径** | 新增 Playwright 用例：协议控制台入口按能力位可用/禁用、采集调优参数修改→生效、点位读写→写值确认弹窗→结果回显（复用现有隔离端口与登录助手） | ✅ 已落地：`e2e/debug-paths.spec.ts`（3 例：能力位禁用/放行、采集调优改参、点位读写），已纳入 `scripts/release_gate.ps1` 的 `web-e2e` 步骤 |
-| **C1.3 chaos 补 6 类现场故障** | 证书过期、许可证到期、NTP 失步、看门狗触发、网络切换（网卡 down/up）、南向长时无响应（超时风暴）；每条要求"**故障 → 现象 → 自愈动作 → 恢复后数据完整性（不丢/不重/有序）**"四段结论，落 `docs/故障处置卡.md` | ✅ 已落地：chaos 由 41 → 47 场景（6 条已补），处置卡 6 张成文 |
-| **C1.4 覆盖率口径修盲区** | 跑一次 `COVERAGE_FULL=1` 全量实测 → 以 `coverage-summary.json` 重定分目录阈值 → 改为默认全量口径（`include: ['src/**/*.{ts,vue}']`），使"新增无测试文件"不再免疫门禁 | ✅ 已落地：`vitest.config.ts` 已是默认全量 `include`（开关已移除），分目录阈值按全量实测基线重定 |
-| **C1.5 调试工具的"非 Modbus"真机验证** | 用 `mc`/`fins`/`iec101`/`dlt645` 的 diag 路径各做一次"连不上就如实报错"的验证（本地无设备时用不可达端点断言错误文案），避免 B3 新代码只被单测覆盖 | ✅ 已落地：`mc` / `fins` / `iec101` / `dlt645` / `cjt188` / `modbus` 各有 1 条"不可达端点如实报错"用例 |
+| **C1.3 chaos 补 6 类现场故障** | 证书过期、许可证到期、NTP 失步、看门狗触发、网络切换（网卡 down/up）、南向长时无响应（超时风暴）；每条要求「**故障 → 现象 → 自愈动作 → 恢复后数据完整性（不丢/不重/有序）**」四段结论，落 `docs/故障处置卡.md` | ✅ 已落地：chaos 由 41 → 47 场景（6 条已补），处置卡 6 张成文 |
+| **C1.4 覆盖率口径修盲区** | 执行一次 `COVERAGE_FULL=1` 全量实测 → 以 `coverage-summary.json` 重定分目录阈值 → 改为默认全量口径（`include: ['src/**/*.{ts,vue}']`），使「新增无测试文件」不再免疫门禁 | ✅ 已落地：`vitest.config.ts` 已是默认全量 `include`（开关已移除），分目录阈值按全量实测基线重定 |
+| **C1.5 调试工具的「非 Modbus」真机验证** | 用 `mc`/`fins`/`iec101`/`dlt645` 的 diag 路径各做一次「连不上就如实报错」的验证（本地无设备时用不可达端点断言错误文案），避免 B3 新代码只被单测覆盖 | ✅ 已落地：`mc` / `fins` / `iec101` / `dlt645` / `cjt188` / `modbus` 各有 1 条「不可达端点如实报错」用例 |
 
 > 为什么先做 C1 而不是 C2：新能力（diag、工具协议化）刚落地，**回归窗口就在现在**；
 > 等功能再变一轮，验证资产就过期了。
 
 ### C2. 最后的能力缺口（1–2 天，价值高 / 成本小）✅ 已落地
 
-1. **Modbus 族 diag**（最高优先）：Modbus 是现场主力协议，却只有"扫从站"没有"诊断"；
+1. **Modbus 族 diag**（最高优先）：Modbus 是现场主力协议，却只有「扫从站」没有「诊断」；
    按 iec104/opcua 的做法补：建链 + 一次真实读（FC03）+ 报寄存器数量，失败如实报。
    ✅ 已落地：`modbus/trait_impl.rs` 覆写 `diag`（FC03 实读探针 `slave=1 / addr=0 / count=1`，不依赖点位配置）。
-2. **扫描类工具的"不适用"判定**（不是全做）：mc/fins 有寄存器模型 → `register_scan` 可实现；
-   iec101 是遥测遥信 → 无寄存器概念，应显式标注"不适用"而不是留着 `✗` 让人误以为缺功能；
+2. **扫描类工具的「不适用」判定**（不是全做）：mc/fins 有寄存器模型 → `register_scan` 可实现；
+   iec101 是遥测遥信 → 无寄存器概念，应显式标注「不适用」而不是留着 `✗` 让人误以为缺功能；
    dlt645/cjt188 同理（表计无地址段扫描语义）。
    ✅ 已落地：mc/fins 的 `register_scan` 已实现；iec101 / dlt645 / cjt188 的前端入口显式标注
-   "该协议不存在从站地址概念，从站扫描不适用（不是尚未实现）"。
+   「该协议不存在从站地址概念，从站扫描不适用（不是尚未实现）」。
 
 ### C3. 现场知识与远程支持（1–2 天，价值中 / 成本小）✅ 已落地
 
-- **故障处置卡**（依赖 C1.3 产出）：按"现象 → 页面 → 判断 → 动作"组织，如
-  "采集值不动" → 采集诊断 → 看退避/质量 → 强制重连/暂停总线；
+- **故障处置卡**（依赖 C1.3 产出）：按「现象 → 页面 → 判断 → 动作」组织，如
+  「采集值不动」→ 采集诊断 → 看退避/质量 → 强制重连/暂停总线；
   ✅ 已落地：`docs/故障处置卡.md`（6 张）。
-- **一键诊断包扩展**：`useDiagnosticExport` 扩成"一次打包：配置快照 + 最近日志 + 健康报告 + 北向状态"，供远程支持。
+- **一键诊断包扩展**：`useDiagnosticExport` 扩成「一次打包：配置快照 + 最近日志 + 健康报告 + 北向状态」，供远程支持。
   ✅ 已落地：`useDiagnosticExport.ts` 的 `exportBundle` 一次产出
   `config.snapshot.json` / `gateway.log` / `health.json` / `north.json`。
 
@@ -325,7 +325,7 @@
 
 > 这三条**不是新功能**，是对已交付能力的现场确认。本机/CI 无法替代：
 > 需要真实设备、真实断电、真实外部端点。未完成前不应对外宣称
-> "断电不丢 / 死信可重投 / 淘汰可见"已验收。
+> 「断电不丢 / 死信可重投 / 淘汰可见」已验收。
 
 | 子项 | 做什么 | 验收判据 | 阻塞 |
 |---|---|---|---|
@@ -358,12 +358,12 @@
 ### 明确不做（防止跑偏）
 
 1. **不做多网关批量下发**：第一版把它列为 B1 首选，复评后**降级**——单台边缘网关没有设备台群，
-   跨网关下发属于上位机/云平台职责，硬做会让网关背上不属于它的状态管理（仓库里也找不到设备台群模型）。真正的"批量工程作业"是**单台内的点位批量作业**（`points_ops` 已覆盖）。
+   跨网关下发属于上位机/云平台职责，硬做会让网关背上不属于它的状态管理（仓库里也找不到设备台群模型）。真正的「批量工程作业」是**单台内的点位批量作业**（`points_ops` 已覆盖）。
 2. **不重构 Rust 核心**：无债证据，只引入回归。
 3. **不砍数据流水页签**：现场判障工具。
 4. **不做多租户 / 大屏 / 报表平台**：偏离定位。
 5. **不新增协议而不做工具化**：只加采集不加调试工具 = 把问题推给现场。
-6. **不为覆盖率数字刷测试**：只修口径（C1.4），不设"刷覆盖率"任务。
+6. **不为覆盖率数字刷测试**：只修口径（C1.4），不设「刷覆盖率」任务。
 
 ---
 
@@ -372,13 +372,13 @@
 | 目标 | 验收标准 | 状态 |
 |---|---|---|
 | C1.1 | 能力位路由有 API 契约测试；前端 3 个新 composable 的错误分支有回归钉子 | ✅ |
-| C1.2 | Playwright 新增 1 套"现场调试主路径"用例并进门禁 | ✅ |
-| C1.3 | ✅ chaos 47 场景（默认发行集实跑 45，2 条 bacnet-mstp 随退役观察不在默认集）；6 类现场故障各在 `docs/故障处置卡.md` 有"现象/自愈/数据完整性"结论 | ✅ |
-| C1.4 | 覆盖率默认全量口径，阈值重定后 CI 绿；新增无测试文件会被拦下 | ✅ |
-| C1.5 | mc/fins/iec101/dlt645/cjt188/modbus 各有 1 条"不可达端点如实报错"用例 | ✅ |
-| C2 | Modbus 在采集调试台可做"连通性诊断 + 单点读值"，与其它族口径一致 | ✅ |
+| C1.2 | Playwright 新增 1 套「现场调试主路径」用例并进门禁 | ✅ |
+| C1.3 | ✅ chaos 47 场景（默认发行集实跑 45，2 条 bacnet-mstp 随退役观察不在默认集）；6 类现场故障各在 `docs/故障处置卡.md` 有「现象/自愈/数据完整性」结论 | ✅ |
+| C1.4 | 覆盖率默认全量口径，阈值重定后 CI 通过；新增无测试文件会被拦下 | ✅ |
+| C1.5 | mc/fins/iec101/dlt645/cjt188/modbus 各有 1 条「不可达端点如实报错」用例 | ✅ |
+| C2 | Modbus 在采集调试台可做「连通性诊断 + 单点读值」，与其它族口径一致 | ✅ |
 | C3 | 一键诊断包一次产出：配置快照 + 日志 + 健康报告 + 北向状态 | ✅ |
 
-**决策点**：若业务方确认"现场协议固定为 Modbus、设备规模长期 <10 台"，
+**决策点**：若业务方确认「现场协议固定为 Modbus、设备规模长期 <10 台」，
 则本阶段只保留 **C1.1 + C2 + C1.3**（≈2 天），C1.2/C1.4/C3 可推后——
 这是本方案允许的最简路径。（实际已全部完成，此处保留为决策记录。）

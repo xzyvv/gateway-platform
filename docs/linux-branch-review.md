@@ -39,7 +39,7 @@
 **位置**：`gateway-core/src/platform/hardware_watchdog.rs`
 
 **问题**：`kick()` / `stop()` / `start()` 三处对 `/dev/watchdog` 的写失败都不做任何处理。
-硬件看门狗一旦写失败（设备掉电复位后 fd 失效、内核驱动异常），
+硬件看门狗一旦写失败（设备断电复位后 fd 失效、内核驱动异常），
 软件层**毫不知情**，继续按「已喂狗」运行 → 硬件超时 → **设备强制复位**。
 对工业网关而言，误复位 = 采集中断 = 数据丢失。
 
@@ -107,7 +107,7 @@ OTA 与主流程共用同一句柄，**结构上不可能再二次 open**。
 
 ---
 
-### 1.5 P1 — GPIO 重复 request 同一物理线（EBUSY，DI 点位永远读不到值）
+### 1.5 P1 — GPIO 重复 request 同一物理线（EBUSY，DI 点位始终读不到值）
 
 **位置**：`gateway-core/src/platform/gpio.rs`
 
@@ -471,7 +471,7 @@ spawn 失败与退出码**。在 systemd 管理的容器 / minimal rootfs 上
 
 > 前两轮（§1 / §8）是**按已知缺陷线索**复审；本轮改为**机械全量扫描**：
 > 把全仓所有 `cfg(target_os="linux")` / `cfg(unix)` / `cfg(not(windows))` /
-> `cfg!(target_os="linux")` 逐条过目，再补做此前从未跑通过的 ARM 产物链路。
+> `cfg!(target_os="linux")` 逐条过目，再补做此前从未验证通过的 ARM 产物链路。
 
 ### 9.1 全量 cfg 扫描结果
 
@@ -503,12 +503,12 @@ Unix 默认权限 **0644**（同机其它用户可读可改）。
 **创建即 0600**（不走「先宽后紧再 chmod」，避免 chmod 竞态窗口）。
 新增 Unix 单测 `flush_once_snapshot_is_owner_only` 断言权限恰为 `0o600`。
 
-### 9.3 ARM 产物链路：此前从未跑通，现已四条全绿
+### 9.3 ARM 产物链路：此前从未验证通过，现已四条全部通过
 
 **「未验证」的真实含义**：CI 的 `cross-arm` 是重作业（`workflow_dispatch` 或
 `vars.RUN_HEAVY == 'true'` 才跑），且 GitHub Actions 额度已耗尽 →
 **ARM 代码路径长期没有被真正编译过**。本地虽有 `scripts/arm_cross_check.ps1`，
-但 zig 交叉链路从未成功跑通 release 产物。
+但 zig 交叉链路从未成功产出 release 产物。
 
 **本轮修掉的三个根因**（都在 `scripts/linux/zigwrap.rs`）：
 
@@ -541,14 +541,14 @@ Unix 默认权限 **0644**（同机其它用户可读可改）。
 > musl 的两项检查（无 `.dynamic` 段、无 `GLIBC_2.xx` 引用）是「现场设备
 > glibc 版本千差万别」场景的关键判据 —— gnu 动态产物带着构建机的 glibc
 > 版本要求，在 Debian10(2.28) / Debian11(2.31) / Yocto musl 上直接
-> `GLIBC_2.xx not found`，这是现场最典型的「装上去跑不起来」。
+> `GLIBC_2.xx not found`，这是现场最典型的「装上后无法运行」。
 
 ### 9.4 门禁脚本自身修掉的两个缺陷
 
 | 位置 | 缺陷 | 修法 |
 |---|---|---|
 | `scripts/arm_cross_check.ps1` L185-189 | 注释称「zig cc 白名单不认这个参数…改用 ld.lld flavor 直接驱动 rust-lld 即可绕开」—— 与实际机制不符（gnu 分支实际靠 zigwrap 丢弃参数通过，musl 分支才是 rust-lld 直驱） | 改写注释，分别说明 gnu / musl 两条**不同**的绕过路径 |
-| `scripts/arm_cross_check.ps1` L139-147 | `-MuslOnly` 对**默认的 gnu target 列表**做过滤 → 结果必为空 → **musl 链路永远「跳过」**，从未真正验证过 | 改为「优先用调用方显式传入的 musl target，否则回落到默认 musl 列表」 |
+| `scripts/arm_cross_check.ps1` L139-147 | `-MuslOnly` 对**默认的 gnu target 列表**做过滤 → 结果必为空 → **musl 链路恒为「跳过」**，从未真正验证过 | 改为「优先用调用方显式传入的 musl target，否则回落到默认 musl 列表」 |
 
 ### 9.5 第三轮验证结果
 
@@ -569,7 +569,7 @@ Unix 默认权限 **0644**（同机其它用户可读可改）。
 > 而且现场表现与前三轮同类：**静默失效**（只有一条 warn 或 EPERM，容易被判成硬件故障）。
 >
 > 三条缺陷都在 `gateway-core/deploy/gateway.service` 与 `install.sh` 的权限配置里，
-> 与 Rust 代码逻辑无关，因此在 Windows 开发机与 x86 CI 上跑单测永远发现不了。
+> 与 Rust 代码逻辑无关，因此在 Windows 开发机与 x86 CI 上运行单测无法发现。
 
 ### 10.1 P0 — Web API 在线改配置在真机上必然落盘失败
 
@@ -648,7 +648,7 @@ actionlint + shellcheck，**根本没调用过这个脚本**）。
 | 项 | 结果 |
 |---|---|
 | `scripts/deploy_lint.ps1` | **121 项全过 / 0 失败 / 0 警告**（C9~C12 + 后续 C14~C20） |
-| `deploy-smoke`（真实 systemd + 真实安装） | GitHub Actions 实跑全绿（run `42375783484`）：安装 → 启动 → 配置写回 → 重启存活 → 健康度 31 通过 0 FAIL |
+| `deploy-smoke`（真实 systemd + 真实安装） | GitHub Actions 实跑全部通过（run `42375783484`）：安装 → 启动 → 配置写回 → 重启存活 → 健康度 31 通过 0 FAIL |
 | C9~C12 反向验证 | 4 个变异逐条还原缺陷，对应断言均报错：删 `ReadWritePaths /etc/gateway` → C10（+C11 交叉告警）；删 `DeviceAllow=/dev/gpiochip0` → C9；`char-ttyUSB` 写回 `/dev/ttyUSB` → C12（+C9 设备覆盖告警）；`install.sh` 目录改回 `g+rX` → C11 |
 
 ### 10.6 本轮剩余风险
@@ -690,7 +690,7 @@ actionlint + shellcheck，**根本没调用过这个脚本**）。
 > 顺序也要对齐：代码按候选顺序取**第一个存在的**路径，脚本若选错优先级会报出另一个设备，
 > 结论同样不可信。
 
-> OTA 介质匹配的判据也踩过一个坑：**不能用「剥掉尾部数字」当同族判据**——
+> OTA 介质匹配的判据也曾经历过一次修订：**不能用「剥掉尾部数字」当同族判据**——
 > 那会把整盘 `/dev/mmcblk0` 削成 `/dev/mmcblk`、`/dev/nvme0n1` 削成 `/dev/nvme0n`，
 > 媒体匹配就失真了。脚本改为按命名族分别推导所属整盘
 > （`pN` 族 `mmcblk0p2 → mmcblk0` / `nvme0n1p2 → nvme0n1`；`sdX N` 族 `sda1 → sda`；
@@ -703,14 +703,14 @@ actionlint + shellcheck，**根本没调用过这个脚本**）。
 脚本只会报一句「未设置」，装完还是没设，磁盘照样会被日志吃满。而这条路径的后果是
 **数据停采而不是报错**（§9.1 队列触顶 + 磁盘不足），现场几乎无法定位。
 
-这里有个反直觉的坑，也是最容易改错的地方：
+这里有一个反直觉的要点，也是最容易改错的地方：
 
 | 缺陷 | 现象 |
 |---|---|
 | `SystemMaxUse=` 写进 `gateway.service` | **静默不生效**。它是 `journald.conf` 的 `[Journal]` 段选项，unit 里没有 `[Journal]` 段，systemd 直接忽略。看着「配了限额」，实际 journal 无上限——比不配更危险 |
 | 只查 `/etc/systemd/journald.conf` 主文件 | 若按官方推荐用 drop-in 落地，验收脚本反而报「未设置」→ 现场误以为没生效，反复排查 |
-| 只有限额、没有 unit 级限流 | 限额只兜住「总量」，兜不住「速率」。异常刷屏时 journal 会在几分钟内冲到上限，数据盘瞬间见底 |
-| 只有 unit 级限流、没有限额 | `LogRateLimit*` 丢弃超限消息，但**不限制磁盘占用**——总量仍会一路涨到磁盘满 |
+| 只有限额、没有 unit 级限流 | 限额只兜住「总量」，兜不住「速率」。异常日志激增时 journal 会在几分钟内冲到上限，数据盘瞬间被占满 |
+| 只有 unit 级限流、没有限额 | `LogRateLimit*` 丢弃超限消息，但**不限制磁盘占用**——总量仍会持续增长直至磁盘占满 |
 
 修复（三段缺一不可）：
 

@@ -45,11 +45,11 @@
 | # | 必须先发生 | 否则 | 现场可见现象 | 依据 |
 |---|---|---|---|---|
 | ① | **公钥随网关版本落地** | 网关验签必失败 | `status = Invalid`，日志 `license verify failed: license signature invalid` | `gateway-core/src/license/verify.rs` `verify_file_text` |
-| ② | **网关先装机** | 拿不到设备码，签发无从谈起 | 无设备码可取 | `gateway-core/src/license/fingerprint.rs` `collect()` |
+| ② | **网关先装机** | 拿不到设备码，签发无法进行 | 无设备码可取 | `gateway-core/src/license/fingerprint.rs` `collect()` |
 | ③ | **`license.path` 先配好** | 导入写盘失败 | 导入报「授权文件写入失败」，`status` 不变 | `gatewayd/.../assemble.rs` `init_license`；`gateway-core/src/license/mod.rs` `import()` |
 | ④ | **系统时钟先校准** | 可能被判时钟回拨 | `status = Tampered`，日志 `license clock rollback detected` | `gateway-core/src/license/clock.rs` |
 | ⑤ | **签发时决定是否传配额** | 现场改 `tier_quotas` 无效 | 改了配置但配额数字不变（`quota_source = license`） | `gateway-core/src/config/license.rs` `quota_for_tier`；`license/mod.rs` `current()` |
-| ⑥ | **先导 license，再配大批点位** | 保存配置被拒 | HTTP 4021 / 7001 / 7003 | `gateway-api/src/web/config_apply.rs` `check_config_quota` |
+| ⑥ | **先导入 license，再配大批点位** | 保存配置被拒 | HTTP 4021 / 7001 / 7003 | `gateway-api/src/web/config_apply.rs` `check_config_quota` |
 | ⑦ | **`config.json` 四档 `tier_quotas` 写全** | 该档失去现场可调手段 | 启动 WARN + 前端提示 `quota_source = tier_missing` | `gateway-core/src/config/license.rs` `missing_tiers()` |
 | ⑧ | **（语义前提）license 失效 = 新增受限，不是断采** | — | 已配数据继续采集，新增/改配置被拒 | `design/license-v2-quota.md` §6 |
 
@@ -63,7 +63,7 @@
 
 签发用的是**私钥**，网关验签用的是**公钥**。两者必须成对：
 
-- 签发方私钥：`tools/license-issuer` 的 `keys/license_ed25519.pk8`（**永不入仓库**，已 gitignore）
+- 签发方私钥：`tools/license-issuer` 的 `keys/license_ed25519.pk8`（**严禁提交入仓库**，已 gitignore）
 - 网关公钥：编译进二进制的 `PUBLIC_KEYS`（`gateway-core/src/license/mod.rs`）
 
 ```rust
@@ -78,7 +78,7 @@ pub const PUBLIC_KEYS: &[[u8; 32]] = &[PUBLIC_KEY_OLD];
 - 公钥表**为空** → 直接 `BadSignature`（不静默接受任何 license）
 - 全部公钥都验不过 → `BadSignature` → 状态 `Invalid` → 降级
 
-也就是说：**公钥没到位就签发，签出来的东西在网关上必然是废的**，而且失败点在
+也就是说：**公钥未到位就签发，签出的 license 在网关上必然验签失败**，而且失败点在
 「导入之后」，容易误判成 license 文件损坏。
 
 ### 关于 `GATEWAY_LICENSE_PUBKEY_HEX`
@@ -106,7 +106,7 @@ pub const PUBLIC_KEYS: &[[u8; 32]] = &[PUBLIC_KEY_OLD];
 2. 新公钥 hex 填进 `PUBLIC_KEYS` 数组（**追加**，旧钥保留）
 3. 随版本发布
 
-过渡期保留旧钥的意义：老客户手上的 license 仍能验签通过，直到他们拿到新版本。
+过渡期保留旧钥的意义：老客户手上的 license 仍能验签通过，直到客户升级到新版本。
 
 ### 现场自检
 
@@ -238,14 +238,14 @@ license-issuer issue \
   - 双副本全丢时，与 license 文件 mtime 交叉校验：当前时间比 license 文件的 mtime
     **早超过 48h**（= license 文件落在「未来」）→ `Tampered`
   - 副本读失败 → **fail-closed**（判时钟不可信 → 降级）
-- NTP 校时成功后调 `ClockGuard::resync` **洗白**基准（无需重启）
+- NTP 校时成功后调 `ClockGuard::resync` **重置**基准（无需重启）
 
 ### 为什么顺序不能反
 
 无 RTC 电池的工控板断电后时间漂回过去是常态。**如果先导入、后校时**：
 
 1. 导入时校验走一遍 `check_and_update`，把**错误的时间**写成了基准；
-2. 之后即使校时成功，`resync` 会重置基准 → 正常情况下能洗白；
+2. 之后即使校时成功，`resync` 会重置基准 → 正常情况下能恢复；
 3. 但若在两次之间服务重启、或副本机制出现缺失，就会被判 `Tampered`。
 
 **先校时再导入**，等于让第一次基准就是真实时间，后续一切正常。
@@ -296,7 +296,7 @@ curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:8080/api/ntp/status
 `license-issuer issue` 的配额参数是**可选**的：
 
 - **传了** `--max-points`（或 `--sku` 自动带出）→ quota 写进 payload →
-  现场**再怎么改 `config.json` 的 `tier_quotas` 都不生效**（① 优先于 ②）
+  现场调整 `config.json` 的 `tier_quotas` **不会生效**（① 优先于 ②）
 - **不传** → payload 里 `quota = None` → 现场改 `config.json` 的 `tier_quotas`
   **立即生效**，不用重新签发、不用换版本
 
@@ -326,7 +326,7 @@ curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:8080/api/ntp/status
 
 ---
 
-## 7. ⑥ 先导 license，再配大批点位
+## 7. ⑥ 先导入 license，再配大批点位
 
 ### 依赖内容
 
@@ -343,10 +343,10 @@ curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:8080/api/ntp/status
 | 从未导入 license | **7001** | 先导入授权 |
 | 授权已失效（过期/指纹不符/验签失败） | **7003** | 先处理授权失效 |
 
-所以：**先配 500 个点位再导 license**，中途每保存一次都会被拒；
-而**先导 license 再配点位**，全程顺畅。
+所以：**先配 500 个点位再导入 license**，中途每保存一次都会被拒；
+而**先导入 license 再配点位**，全程可正常保存。
 
-### 一个反向的坑
+### 一个反向场景
 
 导入**低档位** license 时，如果存量配置已超出新档位配额：
 
@@ -386,15 +386,15 @@ pro 2500 / ultra 5000，`max_protocols` 与 `northbound_channels` 为 `null`=不
 present = false，tier = core，配额走 absent 兜底
 ```
 
-- **已配置的数据继续采集、继续落库**（原本 200 点，失效后仍在跑，不会突然停）
+- **已配置的数据继续采集、继续落库**（原本 200 点，失效后仍继续采集，不会突然停止）
 - **任何新增/修改配置操作被拒**（4021 / 7001 / 7003）
 - 区分只体现在 `status` 上，便于排查
 
-现场一句话：**授权掉了不会断采，但你加不了新点位。**
+现场结论：**授权失效不会中断采集，但无法新增点位。**
 
 ---
 
-## 10. 签发方操作清单（照着做）
+## 10. 签发方操作清单（按序执行）
 
 ```bash
 # 0. 一次性：生成钥对（私钥永不入库，需离线备份）
@@ -438,12 +438,12 @@ curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:8080/api/license
 | 导入报「授权文件签名无效」 | 网关二进制里没有对应公钥（§2） | 确认公钥已编译进该版本并已发版到现场 |
 | 导入报「授权文件与本设备不匹配」 | 设备码取自另一台机器，或 `/etc/machine-id` 变了（§3） | 重新取码签发，**不要手工改指纹** |
 | 导入报「授权文件写入失败」 | `license.path` 指向只读目录（§4） | 改成 `/etc/gateway/license.lic` 并**重启** |
-| 导入成功但 `status = Tampered` | 时钟回拨（§5） | 先校时；NTP 校时成功后自动洗白，无需重启 |
+| 导入成功但 `status = Tampered` | 时钟回拨（§5） | 先校时；NTP 校时成功后自动重置，无需重启 |
 | 导入成功但 `status = Expired` | 签发时没传 `--expires-at` → 永久；或已过期 | 向供应商申请续期 |
-| 配额数字改了不生效 | license 自带 quota 优先（§6） | 要现场可调就得**不传**配额参数重新签发 |
+| 配额数字改了不生效 | license 自带 quota 优先（§6） | 要保留现场可调能力，需**不传**配额参数重新签发 |
 | `quota_source = tier_missing` | `config.json` 漏配该档（§8） | 显式写全四档 |
 | 加点位被拒 4021 / 7001 / 7003 | 配额不足 / 未导入 / 授权失效（§7、§9） | 按错误码对应处理 |
-| 授权「自己好了」 | NTP 校时后 `apply_ntp_resync` 自动重校验（§5） | 预期行为，不用重启 |
+| 授权「自动恢复」 | NTP 校时后 `apply_ntp_resync` 自动重校验（§5） | 预期行为，不用重启 |
 
 ---
 

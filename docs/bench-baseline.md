@@ -16,7 +16,7 @@
 | 操作系统 | Windows 11（10.0.26200） |
 | Rust | rustc 1.98.1（2026-09-01） |
 | criterion | 0.5（`html_reports`） |
-| 采样 | criterion 默认：预热 3 s、测量 5 s、100 样本 |
+| 采样 | criterion 默认：预热 3s、测量 5s、100 样本 |
 | 构建口径 | `profile.bench` 继承 `[profile.release]`：`opt-level = "z"`、`lto = true`、`codegen-units = 1` |
 
 **口径提醒**：数值来自**体积优先**的 release 配置（`opt-level="z"` + LTO），
@@ -63,7 +63,7 @@
 ## 3. 读数口径与解读
 
 1. **`sqlite_cycle` 的绝对值包含磁盘 fsync**，标准差很大（`/1` 达 386 µs，`/256` 达 6.1 ms）。
-   它测的是持久化真实成本，不是 CPU 成本；单次采样的波动属正常，别据此判定「性能退化」。
+   它测的是持久化真实成本，不是 CPU 成本；单次采样的波动属正常，不要据此判定「性能退化」。
    需要稳态判据时，看 `perf-baseline.md` 的端到端队列数据，或多次重跑取中位数。
 2. **`dataqueue_roundtrip` 含 Tokio 调度**，是生产路径的编排开销；纯数据结构成本看
    `memory_*` 组。两者不要混比。

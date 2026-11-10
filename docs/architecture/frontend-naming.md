@@ -11,7 +11,7 @@
 | 文件（页面） | 对象 + 视图能力 | `DeviceTopology.vue` `PointHub.vue` |
 | 路由 | `/<域>[/<能力>]` | `/devices/topology`、`/system/config` |
 
-一句话：**目录回答"哪个业务"，文件名回答"哪种视图"，路由是两者的拼接**。
+一句话：**目录回答「哪个业务」，文件名回答「哪种视图」，路由是两者的拼接**。
 
 ## 2. 一级模块（业务域）
 
@@ -51,7 +51,7 @@
 规则：
 - 页面**不留** `index.vue`，文件名必须自解释；
 - Hub 容器统一 `*Hub.vue`，其 tab 页放在同目录（`tabs/` 子目录）且不带 `Tab` 后缀；
-- 能力词只表达"视图做什么"，不表达技术栈（禁止 `*Page` `*View` `*Comp`）。
+- 能力词只表达「视图做什么」，不表达技术栈（禁止 `*Page` `*View` `*Comp`）。
 
 ### 3.2 附属文件
 
@@ -69,7 +69,7 @@
 
 | 反例 | 问题 | 正例 |
 | --- | --- | --- |
-| `dashboard/` | 与"运行总览"业务名不符 | `overview/` |
+| `dashboard/` | 与「运行总览」业务名不符 | `overview/` |
 | `config/`（跨切） | 既含采集调参又含系统配置 | 拆到 `acquisition/` 与 `system/config/` |
 | `protocol-tools/` | 按实现手段分类，非业务域 | `acquisition/` |
 | `diagnostics/` | 与运维域重复 | `ops/` |

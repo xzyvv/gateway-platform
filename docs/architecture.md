@@ -12,7 +12,7 @@ Gateway Platform 是面向工厂环境（表计、PLC、空调等）的工业数
 | `gateway-core/` | Rust 2021 | `cargo build --release -p gateway-core` | `target/release/libgateway_core.rlib`（引擎库） | 采集引擎 + 数据处理 + 北向上报 |
 | `gateway-api/` | Rust 2021 | `cargo build --release -p gateway-api` | `target/release/libgateway_api.rlib`（Web 面库） | Web API（REST/WS，axum + tower） |
 | `gatewayd/` | Rust 2021 | `cargo build --release -p gatewayd` | `target/release/gatewayd`（可执行） | 启动编排 + 网关主程序 |
-| `gateway-desktop/` | Rust 2021 + Tauri 2 | `npm run build`（`tauri build`） | 桌面安装包（Tauri bundle） | 现场调试桌面客户端：内嵌后端、免浏览器直接连网关 |
+| `gateway-desktop/` | Rust 2021 + Tauri 2 | `npm run build`（`tauri build`） | 桌面交付包（Tauri bundle） | 现场调试桌面客户端：内嵌后端、免浏览器直接连网关 |
 | `tools/license-issuer/` | Rust 2021 | `cargo build --release -p license-issuer` | `target/release/license-issuer`（CLI） | 离线授权签发工具（Ed25519 签名，复用 `gateway-core` 的 license 格式实现，杜绝签发/校验格式漂移） |
 
 ---

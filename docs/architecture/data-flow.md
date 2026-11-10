@@ -105,7 +105,7 @@ Prometheus 暴露（`gateway_core::engine::metrics::sim_consumer`）：
 ## 7.3 数据留存与恢复边界
 
 > 本节是**产品边界声明**，不是实现说明。交付前必须让客户知道本节内容，
-> 否则"我以为数据有备份"会成为最贵的一类现场纠纷。
+> 否则「我以为数据有备份」会成为最贵的一类现场纠纷。
 
 ### 7.3.1 唯一副本
 
@@ -124,7 +124,7 @@ Prometheus 暴露（`gateway_core::engine::metrics::sim_consumer`）：
 
 | 保护机制 | 覆盖场景 | 实现位置 |
 |---|---|---|
-| `synchronous=FULL` | 断电/掉电后不丢已提交数据 | `queue/storage/sqlite/db_init.rs` |
+| `synchronous=FULL` | 断电后不丢已提交数据 | `queue/storage/sqlite/db_init.rs` |
 | 启动时 `PRAGMA integrity_check` + 自动从备份恢复 | SQLite 文件逻辑损坏 | `queue/storage/sqlite/db_init.rs` |
 | 备份一致性（先 checkpoint 再拷贝） | 备份不漏掉 `-wal` 中已提交的行 | `queue/storage/sqlite/wal.rs` |
 | `disk_full` 标志 + 退避 | 磁盘满时退避，避免 CPU 空转 | 队列写入路径 |
