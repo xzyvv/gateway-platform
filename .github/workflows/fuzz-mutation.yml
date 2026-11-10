@@ -27,13 +27,15 @@ env:
 
 jobs:
   mutation:
-    name: mutation (queue/formula/decode) shard ${{ matrix.shard }}/8
+    name: mutation (queue/formula/decode) shard ${{ matrix.shard + 1 }}/8
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        # cargo-mutants 的 --shard k/n 中 k 是 0-based 且要求 k < n，
+        # 所以这里的 matrix 必须从 0 开始；展示用的序号统一 +1。
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
 
@@ -65,8 +67,11 @@ jobs:
         # 变异范围由仓库根的 mutants.toml 收敛到 queue / formula / 解码模块。
         # --in-place：直接在工作树内变异，省掉每个变异体复制整个 workspace 的开销；
         # CI 是一次性环境，不存在污染工作区的风险。
-        # --shard 4 路并行；有存活变异体时命令以非零码退出，作为质量信号。
-        run: cargo mutants -p gateway-core --in-place --shard ${{ matrix.shard }}/4
+        # --shard 的分母必须与上面的 matrix 长度一致（8 路并行）：cargo-mutants
+        # 要求 k < n，写成 /4 时 shard 4~8 会直接报 "shard k must be less than n"
+        # 而一个变异体都没跑，白白烧掉 5 个 runner。
+        # 有存活变异体时命令以非零码退出，作为质量信号。
+        run: cargo mutants -p gateway-core --in-place --shard ${{ matrix.shard }}/8
         env:
           RUSTFLAGS: ""
           CARGO_INCREMENTAL: "0"
@@ -75,7 +80,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutants-out-shard-${{ matrix.shard }}
+          name: mutants-out-shard-${{ matrix.shard + 1 }}
           path: mutants.out
           if-no-files-found: ignore
 
@@ -102,7 +107,14 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@cargo-fuzz
+        # 必须走 @v2 + with: tool:，不能用 @cargo-fuzz：
+        # 后者解析到的是 install-action 仓库的顶层 cargo-fuzz 分支，那份 main.sh
+        # 依赖「ref 名即工具名」的推断，而分支 ref 传不进 INPUT_TOOL，
+        # 结果 tool 为空 → 什么也没装 → `cargo fuzz` 报 no such command。
+        # @v2 + tool: 与 security.yml 装 cargo-audit / cargo-deny 的写法一致。
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
 
       - name: Fuzz ${{ matrix.target }}
         # 单目标 60s 冒烟预算；crash / OOM / 超时都会以非零码退出。
