@@ -25,9 +25,9 @@ use tokio::sync::Notify;
 
 use super::{wait_shutdown_notify, NorthServer};
 use crate::config::ModbusPassthroughConfig;
+use crate::engine::codec::crc::crc16;
 use crate::engine::error::{GatewayError, GatewayResult};
-use crate::engine::util::crc::crc16;
-use crate::support::app::GatewayRuntime;
+use crate::runtime::GatewayRuntime;
 
 /// 单次 socket 读取超时。
 ///

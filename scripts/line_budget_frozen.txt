@@ -46,7 +46,7 @@ gateway-core/src/south/protocol/mc/frames.rs	623
 gateway-core/src/south/protocol/mc/mod.rs	701
 gateway-core/src/south/protocol/opcua/mod.rs	894
 gateway-core/src/south/scheduler/mod.rs	542
-gateway-core/src/support/app.rs	654
-gateway-core/src/support/cron.rs	717
+gateway-core/src/runtime/gateway.rs	654
+gateway-core/src/shared/cron.rs	717
 gatewayd/src/bootstrap/helpers/assemble.rs	910
 gatewayd/src/bootstrap/helpers/shutdown.rs	539

@@ -265,7 +265,7 @@ pub(super) fn prune_log_dir(dir: &std::path::Path) -> Vec<(PathBuf, u64)> {
 fn spawn_log_rotation() {
     crate::engine::supervision::spawn_supervised("log_rotation", || async {
         loop {
-            prune_log_dir(std::path::Path::new(crate::support::default_log_dir()));
+            prune_log_dir(std::path::Path::new(crate::shared::default_log_dir()));
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
     });
@@ -315,7 +315,7 @@ pub fn init_logging(telemetry: Option<&crate::config::TelemetryConfig>) {
     let _ = telemetry;
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let log_dir = std::path::Path::new(crate::support::default_log_dir());
+    let log_dir = std::path::Path::new(crate::shared::default_log_dir());
 
     let mut layers: Vec<
         Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>,

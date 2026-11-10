@@ -1135,7 +1135,7 @@ pub fn dlt645_response(addr6: &[u8], data: &[u8], corrupt_cs: bool) -> Vec<u8> {
 
 /// 独立实现的 CRC-16/MODBUS（poly 0xA001，init 0xFFFF，低字节在前）。
 ///
-/// 刻意不复用生产的 `gateway_core::engine::util::crc::crc16`——作为交叉校验
+/// 刻意不复用生产的 `gateway_core::engine::codec::crc::crc16`——作为交叉校验
 /// oracle，避免"用被测量自身验证被测量"的自洽错误。
 pub fn modbus_crc16(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;

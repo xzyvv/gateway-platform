@@ -11,7 +11,7 @@ use rusqlite::Connection;
 
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::metrics::Metrics;
-use crate::{engine::model::DataPoint, support::sqlite_maintenance::run_incremental_vacuum};
+use crate::{engine::model::DataPoint, shared::sqlite_maintenance::run_incremental_vacuum};
 
 use super::db_init::init_queue_db;
 use super::history::{aggregate_minute_windows, query_history_ex, query_raw_rows};

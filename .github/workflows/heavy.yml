@@ -396,7 +396,7 @@ jobs:
           }
 
           # ① 整个 gateway-core lib 测试集在 QEMU 上真跑一遍。
-          #    之前只跑 engine::util:: 两组纯函数，其余 ARM 相关代码停留在
+          #    之前只跑 engine::codec:: 两组纯函数，其余 ARM 相关代码停留在
           #    "能编译"——但编译通过不代表在 ARM 运行时成立：位宽、原子序、
           #    字节序、Linux 专属分支（/proc 解析、gpiod、bootenv）都只在
           #    真正执行时才暴露问题。现在 lib 里的 1400+ 用例全部上模拟器。

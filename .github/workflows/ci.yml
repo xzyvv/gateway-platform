@@ -125,7 +125,7 @@ jobs:
           for tz in UTC Asia/Shanghai America/New_York; do
             echo "=== TZ=$tz ==="
             log="$(TZ="$tz" cargo test -p gateway-core --lib --quiet --features tracing-otlp -- \
-                    support::cron:: license::clock:: engine::util::model:: \
+                    shared::cron:: license::clock:: engine::model:: \
                     south::scheduler::device_state:: 2>&1)"
             echo "$log"
             # 过滤条件失配时 cargo 报 "0 passed" 并返回 0，

@@ -124,7 +124,7 @@ struct NtpStatusResponse {
 }
 
 pub(crate) async fn ntp_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    use gateway_core::support::clock::{evaluate_clock, NtpObservation};
+    use gateway_core::shared::clock::{evaluate_clock, NtpObservation};
 
     let ntp = state.platform.ntp.status();
     let observation = NtpObservation {
@@ -133,7 +133,7 @@ pub(crate) async fn ntp_status(State(state): State<Arc<AppState>>) -> impl IntoR
         synced: ntp.source == "NTP",
         offset_ms: ntp.offset_ms,
     };
-    // 用与调度器相同的判据（gateway-core::support::clock）
+    // 用与调度器相同的判据（gateway-core::shared::clock）
     let reason = evaluate_clock(chrono::Utc::now().timestamp_millis(), observation);
 
     Json(NtpStatusResponse {

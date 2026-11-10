@@ -592,7 +592,7 @@ fi
 # 但客户默认会以为"系统有备份"——所以必须让它变成检查单上看得见的一条结论。
 # 这里核的是「当前这台机器的实际状态」，边界声明本身写进检查单的固定段落。
 echo "${BOLD}[1g] 数据留存${RESET}"
-# 默认路径必须与代码 default_db_path（gateway-core/src/support/paths.rs）逐字一致，
+# 默认路径必须与代码 default_db_path（gateway-core/src/shared/paths.rs）逐字一致，
 # 否则脚本会检查一个根本不存在的库。deploy_lint C21 会核对这一点。
 DB_PATH="${GATEWAY_DB_PATH:-/var/lib/gateway/data_queue.db}"
 # 路径可被 GATEWAY_DB_PATH 覆盖，与代码 default_db_path 一致

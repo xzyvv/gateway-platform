@@ -47,7 +47,7 @@ soak-out/
 **/soak-out*/
 # OPC UA Server 的 PKI 存储（运行期自动生成的证书/私钥）
 pki/
-# 设备证书目录（运行期自动生成的自签名证书 + **私钥**，见 support/paths.rs
+# 设备证书目录（运行期自动生成的自签名证书 + **私钥**，见 shared/paths.rs
 # 的 default_cert_dir = ./certs）。私钥永不进仓库。
 certs/
 **/certs/

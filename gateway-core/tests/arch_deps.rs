@@ -18,10 +18,10 @@
 //! 文档注释中提及对偶模块（如 registry 的说明）不构成代码依赖，不应误报。
 //!
 //! 背景：2026-10 梯队三重构将 DataPoint 上提至 `crate::engine::model`、
-//! crc16 上提至 `crate::engine::util::crc`，消除了 north→south 的全部反向依赖。
+//! crc16 上提至 `crate::engine::codec::crc`，消除了 north→south 的全部反向依赖。
 //! 后续两次下沉同样遵循"上提到中立层"的手法：
 //! - 点位级换算公式 `apply_formula` 由 `pipeline::formula` 上提至
-//!   `crate::engine::util::formula`（解除 south/protocol → pipeline 越层）；
+//!   `crate::engine::formula`（解除 south/protocol → pipeline 越层）；
 //! - 授权档位与配额模型 `Tier` / `Quota` 由 `license` 下沉至
 //!   `crate::domain::license`（解除 config ↔ license 双向循环）。
 
@@ -181,7 +181,7 @@ fn south_must_not_depend_on_north() {
 /// south/protocol（协议解析层）不得引用 pipeline（处理管道）
 ///
 /// 协议层只负责"把字节解成原始值"，换算公式等共用能力属于中立层
-/// `crate::engine::util::formula`。若协议层直接依赖 pipeline，
+/// `crate::engine::formula`。若协议层直接依赖 pipeline，
 /// 会形成"协议层 → 处理层"的越层依赖：处理层的边缘过滤、虚拟点、
 /// 入队等概念泄漏进协议解析。
 #[test]

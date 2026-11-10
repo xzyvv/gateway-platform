@@ -17,9 +17,9 @@ use gateway_core::engine::error::GatewayResult;
 use gateway_core::north::mqtt::MqttClient;
 use gateway_core::platform::ota::OtaManager;
 use gateway_core::queue::DataQueue;
+use gateway_core::runtime::GatewayRuntime;
 use gateway_core::south::protocol::Collector;
 use gateway_core::south::scheduler::{DeviceStatus, ScheduleTimeline, Scheduler};
-use gateway_core::support::app::GatewayRuntime;
 
 /// 死信队列门面（Webhook 不可投递批次）。
 ///

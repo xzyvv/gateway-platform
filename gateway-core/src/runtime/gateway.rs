@@ -67,10 +67,10 @@ pub struct GatewayComponents {
 
 /// 测试专用：构建一个「不含任何总线」的 `GatewayRuntime`。
 ///
-/// 放在 support 层而非调用方是为了不违反架构守护 `north_must_not_depend_on_south`
+/// 放在 runtime 层而非调用方是为了不违反架构守护 `north_must_not_depend_on_south`
 /// （见 `gateway-core/tests/arch_deps.rs`）：装配整机必须具名 `Scheduler` /
 /// `SerialManager` 等南向类型，而 `north` 禁止出现 `crate::south::` 引用。
-/// 装配本就是 support 层职责（`GatewayComponents` 即定义于此），故跨层装配收敛到此处，
+/// 装配本就是 runtime 层职责（`GatewayComponents` 即定义于此），故跨层装配收敛到此处，
 /// north 侧测试只调用本函数。
 #[cfg(test)]
 pub fn gateway_runtime_without_buses_for_test() -> Arc<GatewayRuntime> {
@@ -422,7 +422,7 @@ impl GatewayRuntime {
         }
 
         // S1: 加载设备证书（与启动时同一路径，跨平台化避免硬编码 Linux 路径）
-        let cert_dir = std::path::Path::new(crate::support::default_cert_dir());
+        let cert_dir = std::path::Path::new(crate::shared::default_cert_dir());
         let reload_cert = {
             // Bug r11-CERT8 (fix): 注入 metrics 用于 Windows ACL 加固失败计数。
             // 非 Windows 平台该指标永远为 0（仅 error 路径递增），保留无害。
@@ -440,7 +440,7 @@ impl GatewayRuntime {
         let new_client = MqttClient::new(
             mqtt_config,
             self.queue.clone(),
-            Some(crate::support::default_outbox_db()),
+            Some(crate::shared::default_outbox_db()),
             reload_cert,
             self.metrics.clone(),
         )?;

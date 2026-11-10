@@ -1,12 +1,12 @@
 //! 协议帧编解码工具（跨协议复用，避免重复实现）
 //!
-//! - CRC16：Modbus RTU 帧校验（多项式 0xA001）→ 已上提至 `crate::engine::util::crc`
+//! - CRC16：Modbus RTU 帧校验（多项式 0xA001）→ 已上提至 `crate::engine::codec::crc`
 //! - LRC / ASCII 转换：Modbus ASCII 模式帧工具（仅 south 串口链路使用）
 //!
 //! 所有协议采集器与帧提取层统一从此模块引入，
 //! 消除 `bus_manager` 与 `modbus_collector` 各自定义的重复。
 
-use crate::engine::util::crc::crc16;
+use crate::engine::codec::crc::crc16;
 
 /// 累加和校验（CS）：字节累加 mod 256
 ///

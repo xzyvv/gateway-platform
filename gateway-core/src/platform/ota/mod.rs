@@ -169,7 +169,7 @@ const WRITE_MAX_RETRIES: u32 = 3;
 /// 解码失败返回 Err（fail-closed），由调用方阻断启动——避免"配了签名密钥却因解码失败
 /// 静默退化为不验签"的降级。未配置密钥时调用方直接传 `None`，保持 CRC32-only 向后兼容路径。
 pub fn parse_signing_key(encoded: &str) -> GatewayResult<Vec<u8>> {
-    crate::engine::util::encoding::b64_decode(encoded)
+    crate::engine::codec::encoding::b64_decode(encoded)
         .ok_or_else(|| GatewayError::Config("web.ota_signing_key is not valid base64".into()))
 }
 

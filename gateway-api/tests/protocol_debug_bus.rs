@@ -126,7 +126,7 @@ async fn call(state: Arc<gateway_api::web::AppState>, req: Request<Body>) -> (St
 /// 拼一条带正确 CRC16 的 Modbus RTU 帧
 fn rtu_frame(prefix: &[u8]) -> Vec<u8> {
     let mut v = prefix.to_vec();
-    let crc = gateway_core::engine::util::crc::crc16(prefix);
+    let crc = gateway_core::engine::codec::crc::crc16(prefix);
     v.extend_from_slice(&crc.to_le_bytes());
     v
 }

@@ -15,7 +15,7 @@
 //! 1970/厂商默认值，或运行中被 OS 校时大幅调整，此时按 `Utc::now()` 判到期会
 //! 在错误时刻执行任务（前跳会集中补跑、后跳会静默停摆）。因此调度循环在每 tick
 //! 用 [`ClockGate`] 判定时钟可信度（判定逻辑与 API 共用，见
-//! `gateway_core::support::clock`）：
+//! `gateway_core::shared::clock`）：
 //! - 不可信期间**不触发**任何定时任务（只告警一次），手动「立即执行」不受影响；
 //! - 恢复可信或检测到墙钟大幅跳变时，用 [`reanchor_all`] 按当前时刻重算全部启用
 //!   任务的 next_run_at——**漏掉的窗口直接跳过，不补跑**，避免开机/校时瞬间集中执行。
@@ -23,7 +23,7 @@
 use std::sync::Arc;
 
 use gateway_core::config::{ScheduledTask, TaskRunStatus, TaskType};
-use gateway_core::support::clock::{ClockAction, ClockGate, NtpObservation, ReanchorReason};
+use gateway_core::shared::clock::{ClockAction, ClockGate, NtpObservation, ReanchorReason};
 
 use crate::web::types::AppState;
 
@@ -50,7 +50,7 @@ pub fn reanchor_all(state: &AppState, now_ms: i64) {
     let now_secs = now_ms / 1000;
     let mut changed = 0usize;
     for task in tasks.iter().filter(|t| t.enabled) {
-        let Some(next) = gateway_core::support::cron::next_run_ms(&task.cron, now_secs) else {
+        let Some(next) = gateway_core::shared::cron::next_run_ms(&task.cron, now_secs) else {
             continue;
         };
         if Some(next) == task.next_run_at {
@@ -89,7 +89,7 @@ pub async fn execute_and_record(state: &Arc<AppState>, task: &ScheduledTask) -> 
     };
     // 按 cron 从当前时刻重算下次执行时间（停用任务不排程）
     let next = if task.enabled {
-        gateway_core::support::cron::next_run_ms(&task.cron, chrono::Utc::now().timestamp())
+        gateway_core::shared::cron::next_run_ms(&task.cron, chrono::Utc::now().timestamp())
     } else {
         None
     };

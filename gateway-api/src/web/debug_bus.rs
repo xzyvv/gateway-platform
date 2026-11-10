@@ -15,7 +15,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use gateway_core::engine::util::crc::crc16;
+use gateway_core::engine::codec::crc::crc16;
 use gateway_core::south::bus::BusManager;
 use gateway_core::south::protocol::CollectorError;
 
@@ -296,7 +296,7 @@ pub fn clamp_scan_interval_ms(v: Option<u64>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_core::engine::util::crc::crc16;
+    use gateway_core::engine::codec::crc::crc16;
 
     #[test]
     fn parse_hex_接受空格与大小写混用() {

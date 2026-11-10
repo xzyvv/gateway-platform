@@ -25,7 +25,7 @@ use super::NorthServer;
 use crate::engine::audit::AuditLog;
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::model::DataPoint;
-use crate::support::app::GatewayRuntime;
+use crate::runtime::GatewayRuntime;
 
 use opcua::crypto::SecurityPolicy;
 use opcua::nodes::{AccessLevel, ObjectBuilder, Variable};

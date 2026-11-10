@@ -111,7 +111,7 @@ Prometheus 暴露（`gateway_core::engine::metrics::sim_consumer`）：
 
 本产品形态为**单机边缘网关**（无云平台、无双机热备），因此：
 
-- 历史数据的**唯一副本**在本机 `data_queue.db`（路径见 `gateway-core/src/support/paths.rs`
+- 历史数据的**唯一副本**在本机 `data_queue.db`（路径见 `gateway-core/src/shared/paths.rs`
   的 `default_db_path`，默认 `/var/lib/gateway/data_queue.db`，可由 `GATEWAY_DB_PATH` 覆盖）。
 - **不存在异地副本**，也不存在集群副本。设备磁盘或整机损坏时，
   该时段的历史数据**不可恢复**。

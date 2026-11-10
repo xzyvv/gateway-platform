@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::{do_transaction, write_timeout_for, TransactionParams};
-use crate::engine::error::GatewayResult;
 #[cfg(feature = "modbus")]
-use crate::engine::util::crc::crc16;
+use crate::engine::codec::crc::crc16;
+use crate::engine::error::GatewayResult;
 use crate::south::bus::serial::SerialHandle;
 use crate::south::bus::transport::GpioOutput;
 #[cfg(feature = "modbus")]

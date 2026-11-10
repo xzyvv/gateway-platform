@@ -40,7 +40,7 @@ use tokio::sync::{mpsc, Semaphore};
 
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::north::mqtt::MqttClient;
-use crate::support::app::GatewayRuntime;
+use crate::runtime::GatewayRuntime;
 
 /// r30-PS2: 客户端可指定 `timeout` 字段；硬上限 30 秒防止慢攻击占满总线/任务槽。
 pub(crate) const MAX_PASSTHROUGH_TIMEOUT_MS: u64 = 30_000;
@@ -576,7 +576,7 @@ mod r73_tests {
             Ok(c) => Arc::new(c),
             Err(_) => return None,
         };
-        let gateway = crate::support::app::gateway_runtime_without_buses_for_test();
+        let gateway = crate::runtime::gateway_runtime_without_buses_for_test();
         Some(MqttPacketPassthrough::new(mqtt, gateway, "gw/r73"))
     }
 }

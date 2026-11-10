@@ -3,7 +3,7 @@
 //! 与 config_versions 共用 `default_version_db()` 库文件（WAL + busy_timeout=5000）。
 //!
 //! 调度语义：
-//! - `cron` 为 5 段标准 cron 表达式（分 时 日 月 周），由 `support::cron` 解析
+//! - `cron` 为 5 段标准 cron 表达式（分 时 日 月 周），由 `shared::cron` 解析
 //!   计算下次执行时间；
 //! - 执行状态（last_run_at / run_count / last_status / last_error）由
 //!   gateway-api 的调度执行器在每次执行后回写；

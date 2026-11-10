@@ -17,8 +17,8 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::config::{BusConfig, ReconnectBackoffConfig};
+use crate::engine::codec::crc::crc16;
 use crate::engine::metrics::Metrics;
-use crate::engine::util::crc::crc16;
 use crate::south::protocol::modbus::transaction::{
     ModbusRequest, TransactionError, TransactionPool,
 };

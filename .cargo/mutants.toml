@@ -11,7 +11,7 @@ examine_globs = [
   # 队列：SQLite 存储、深度/容量、淘汰、WAL 与错误分类
   "gateway-core/src/queue/**",
   # 公式引擎：安全表达式求值
-  "gateway-core/src/engine/util/formula.rs",
+  "gateway-core/src/engine/formula.rs",
   "gateway-core/src/pipeline/vformula.rs",
   # 解码模块
   "gateway-core/src/south/protocol/common/decode.rs",

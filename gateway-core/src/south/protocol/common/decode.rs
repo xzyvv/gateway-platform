@@ -5,8 +5,8 @@
 
 use crate::config::point::{ratio_scope, RatioScope};
 use crate::config::PointConfig;
+use crate::engine::formula::apply_formula;
 use crate::engine::model::{ByteOrder, PointDataType, Quality};
-use crate::engine::util::formula::apply_formula;
 
 use super::super::CollectorError;
 use super::super::CollectorResult;

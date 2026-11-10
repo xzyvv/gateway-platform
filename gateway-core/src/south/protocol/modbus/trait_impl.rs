@@ -7,8 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::config::PointConfig;
+use crate::engine::codec::crc::crc16;
 use crate::engine::model::{DataPoint, Quality};
-use crate::engine::util::crc::crc16;
 
 use super::merge::WriteItem;
 use super::{

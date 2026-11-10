@@ -4,7 +4,7 @@
 //! / `disk_history` / `uplink_test_history` 四张表，它们都有行数 retention，但
 //! SQLite 默认（`auto_vacuum=NONE`）不会把 `DELETE` 释放的页还给文件系统 →
 //! 行数受控、**文件却只增不减**。队列主库（`data_queue.db`）走同一套逻辑，
-//! 公共实现收口在 [`crate::support::sqlite_maintenance`]；这里只管配置库这条链：
+//! 公共实现收口在 [`crate::shared::sqlite_maintenance`]；这里只管配置库这条链：
 //!
 //! 1. 启动时把 `auto_vacuum` 切到 `INCREMENTAL`（已有库必须跑一次 `VACUUM`
 //!    才会写进库头，这是 SQLite 的语义）；
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use rusqlite::Connection;
 
 use crate::engine::metrics::Metrics;
-use crate::support::sqlite_maintenance::{
+use crate::shared::sqlite_maintenance::{
     ensure_incremental_auto_vacuum as shared_ensure_auto_vacuum, file_size_and_freelist,
     open_short_lived, run_incremental_vacuum,
 };
@@ -43,7 +43,7 @@ const AGG_TABLE: &str = "data_queue_aggregated";
 
 /// 开启配置库的增量 vacuum（幂等）。
 ///
-/// 具体语义与队列主库共用 [`crate::support::sqlite_maintenance`]，
+/// 具体语义与队列主库共用 [`crate::shared::sqlite_maintenance`]，
 /// 这里只负责打开短生命周期连接。
 /// 失败不阻断启动：磁盘不足/库被占用时降级为「本次运行不回收」，下次启动重试。
 pub fn ensure_incremental_auto_vacuum(db_path: &Path) {

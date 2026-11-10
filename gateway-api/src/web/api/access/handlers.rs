@@ -339,7 +339,7 @@ fn validate_task(req: &SchedTaskReq) -> Result<(TaskType, Option<i64>), ApiError
         }
         _ => {}
     }
-    let schedule = gateway_core::support::cron::parse(req.cron.trim())
+    let schedule = gateway_core::shared::cron::parse(req.cron.trim())
         .ok_or_else(|| ApiError::bad_request(format!("cron 表达式无效: {}", req.cron)))?;
     let now_secs = chrono::Utc::now().timestamp();
     let next = schedule.next_after(now_secs);

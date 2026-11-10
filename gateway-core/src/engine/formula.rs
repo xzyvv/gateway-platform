@@ -8,8 +8,8 @@
 //! # 位置说明
 //!
 //! 本模块原先位于 `pipeline::formula`，被南向 `south::protocol::common::decode.rs`
-//! 消费，构成"协议层 → 处理层"的越层依赖。现上提至 `engine::util` 中立层，
-//! 与 [`crc`](super::crc)、[`model`](super::model) 同级：南向与处理层都允许
+//! 消费，构成"协议层 → 处理层"的越层依赖。现上提至 `engine::formula`，
+//! 与 [`codec`](super::codec)、[`model`](super::model) 同级：南向与处理层都允许
 //! 引用中立层，但中立层不反向依赖任何业务层。
 //!
 //! 与虚拟点位公式 [`pipeline::vformula`](crate::pipeline::vformula) 刻意不合并——

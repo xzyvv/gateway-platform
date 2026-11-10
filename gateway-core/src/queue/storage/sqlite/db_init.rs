@@ -137,7 +137,7 @@ pub(super) fn init_queue_db(
     // 主库文件因此只增不减。开启 `auto_vacuum=INCREMENTAL` 后，maintenance 周期
     // 调用 `PRAGMA incremental_vacuum(N)` 就能分小批把空闲页交还 OS。
     // 放在 WAL 设置与建表之前：已有库需要一次 VACUUM 才会把该设置写进库头。
-    crate::support::sqlite_maintenance::ensure_incremental_auto_vacuum(&conn, "队列主库");
+    crate::shared::sqlite_maintenance::ensure_incremental_auto_vacuum(&conn, "队列主库");
 
     // WAL 调优：综合设置 journal_mode + synchronous + busy_timeout + cache_size + wal_autocheckpoint + mmap_size
     // - journal_mode=WAL: 写入不阻塞读，崩溃恢复由 WAL 保证

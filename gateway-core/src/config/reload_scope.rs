@@ -6,7 +6,7 @@
 //!
 //! # 维护约定
 //!
-//! 本模块必须与 [`crate::support::app::GatewayRuntime::reload_config`] 的实际覆盖保持一致：
+//! 本模块必须与 [`crate::runtime::GatewayRuntime::reload_config`] 的实际覆盖保持一致：
 //! - 在 `reload_config` 新增在线应用逻辑时，把对应分节从 `restart_required` 移到 `applied`；
 //! - 新增顶层配置分节时，必须在 [`reload_scope`] 中显式归类（热更 / 需重启 / 纯元数据），
 //!   并补齐本文件底部单测，避免出现「保存成功但既不生效也无提示」的静默分节。

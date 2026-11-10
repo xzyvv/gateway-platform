@@ -68,7 +68,7 @@ fn bus_cfg(port: &str) -> BusConfig {
 
 fn rtu_frame(prefix: &[u8]) -> Vec<u8> {
     let mut v = prefix.to_vec();
-    v.extend_from_slice(&gateway_core::engine::util::crc::crc16(prefix).to_le_bytes());
+    v.extend_from_slice(&gateway_core::engine::codec::crc::crc16(prefix).to_le_bytes());
     v
 }
 

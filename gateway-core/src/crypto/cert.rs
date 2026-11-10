@@ -87,7 +87,7 @@ impl CertManager {
     }
 
     /// Bug r11-CERT8 (fix): 注入指标实例，用于 Windows ACL 加固失败计数。
-    /// 调用方（如 support/app.rs）可选用——若不注入，ACL 失败仅 warn 无 metric。
+    /// 调用方（如 runtime/gateway.rs）可选用——若不注入，ACL 失败仅 warn 无 metric。
     pub fn with_metrics(mut self, metrics: Arc<crate::engine::metrics::Metrics>) -> Self {
         self.metrics = Some(metrics);
         self

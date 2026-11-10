@@ -4,7 +4,7 @@
 //! 输出：criterion 统计报告 + target/criterion/html/index.html
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use gateway_core::engine::util::crc::crc16;
+use gateway_core::engine::codec::crc::crc16;
 
 /// 构造 Modbus RTU 请求帧（FC03 读保持寄存器）
 fn make_modbus_request(slave: u8, start: u16, count: u16) -> Vec<u8> {

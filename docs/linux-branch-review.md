@@ -214,7 +214,7 @@ Unix 下另有 `keyfile_is_owner_only_on_unix` 断言权限恰为 0600。
 | `gateway-core/src/crypto/secret.rs` | L293 / L330 | 机器指纹（`/etc/machine-id`、`/proc/cpuinfo`） | 否 |
 | `gateway-core/src/engine/monitor/host.rs` | L202–L360 | 主机指标采集（`/proc`、`/sys/class/thermal`、`/sys/class/net`） | 否（**解析逻辑已纯函数化，有单测**） |
 | `gateway-core/src/engine/monitor/health.rs` | L226–L257 | RSS 读取（`/proc/self/statm`） | 否 |
-| `gateway-core/src/support/paths.rs` | L27–L34 / L253 | FHS 部署路径 / 路径白名单逃逸目标 | 否 |
+| `gateway-core/src/shared/paths.rs` | L27–L34 / L253 | FHS 部署路径 / 路径白名单逃逸目标 | 否 |
 | `gateway-core/src/platform/mod.rs` | L12 | `Watchdog` 的平台导出 | 否 |
 | `gateway-core/src/south/protocol/modbus/transaction/tests.rs` | 整文件 | Modbus 写超时测试 | 否（整文件 `#![cfg(target_os="linux")]`） |
 | `gateway-api/src/web/api/system/handlers/status.rs` | L250–L272 | `dial_supported` 蜂窝拨号能力暴露 | 否 |
@@ -479,7 +479,7 @@ spawn 失败与退出码**。在 systemd 管理的容器 / minimal rootfs 上
 |---|---|
 | 扫描到的 Linux 分支点 | **60 处**（覆盖 `cfg(...)` 属性与 `cfg!(...)` 宏两种形态） |
 | §2 清单已覆盖 | 14 处 |
-| 本轮补审（§2 未列） | `support/cron.rs` / `crypto/cert.rs` / `config/loader.rs` / `engine/shutdown.rs` 等 4 个文件全读 |
+| 本轮补审（§2 未列） | `shared/cron.rs` / `crypto/cert.rs` / `config/loader.rs` / `engine/shutdown.rs` 等 4 个文件全读 |
 | 新发现的「错误被静默吞掉」缺陷 | **0 项** |
 | 新发现的其它缺陷 | 1 项（P2 权限，见 §9.2） |
 
@@ -575,7 +575,7 @@ Unix 默认权限 **0644**（同机其它用户可读可改）。
 
 | 环节 | 事实 |
 |---|---|
-| 默认落盘路径 | `/etc/gateway/config.json`（`gateway-core/src/support/paths.rs`） |
+| 默认落盘路径 | `/etc/gateway/config.json`（`gateway-core/src/shared/paths.rs`） |
 | 落盘实现 | `atomic_write()`，临时文件建在**目标同目录** `/etc/gateway/`，需要该目录对 `gateway` 用户**可写** |
 | 目录权限（修复前） | `chown -R root:gateway` + `chmod -R g+rX,o-rwx` → 组只有 `r-x`，**无 `w`** |
 | systemd 沙箱（修复前） | `ProtectSystem=strict` 令 `/etc` 只读，而 `ReadWritePaths` 只含 `/var/lib/gateway /var/log/gateway /tmp`，**不含 `/etc/gateway`** |

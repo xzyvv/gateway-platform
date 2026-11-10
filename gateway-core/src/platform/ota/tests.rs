@@ -469,7 +469,7 @@ fn test_pending_reboot_keeps_full_progress() {
 /// Bug C8: 配置的 base64 签名密钥解析——合法 base64 通过，非法 base64 fail-closed。
 #[test]
 fn parse_signing_key_base64() {
-    let encoded = crate::engine::util::encoding::b64_encode(b"secret-key");
+    let encoded = crate::engine::codec::encoding::b64_encode(b"secret-key");
     let key = parse_signing_key(&encoded).expect("valid base64 应通过");
     assert_eq!(key, b"secret-key");
 

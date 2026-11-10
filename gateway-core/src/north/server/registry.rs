@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::config::{GatewayConfig, PointConfig};
 use crate::crypto::cert::{CertManager, CertPair};
 use crate::north::NorthDispatcher;
-use crate::support::app::GatewayRuntime;
+use crate::runtime::GatewayRuntime;
 
 use super::NorthServer;
 

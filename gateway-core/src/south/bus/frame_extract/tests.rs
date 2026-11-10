@@ -6,7 +6,7 @@ use super::*;
 /// 构造合法 Modbus RTU FC03 单寄存器响应帧。
 #[cfg(feature = "modbus")]
 fn modbus_fc03_response(value: u16) -> Vec<u8> {
-    use crate::engine::util::crc::crc16;
+    use crate::engine::codec::crc::crc16;
     let mut f = vec![0x01, 0x03, 0x02];
     f.extend_from_slice(&value.to_be_bytes());
     let crc = crc16(&f);

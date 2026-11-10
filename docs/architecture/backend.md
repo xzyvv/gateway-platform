@@ -77,18 +77,21 @@ gateway-core/src/      # 引擎库（lib）
 ├── crypto/          # 证书 / 密码 / 密钥 / base64 / sha256
 ├── domain/          # 中立领域常量（VALID_PROTOCOLS）
 ├── engine/          # 引擎基础设施：日志/指标/事件总线/健康监控/告警/审计/优雅停机
-│   └── util/        # encoding.rs 二进制编解码 + model.rs 公共模型
+│   ├── codec/       # crc.rs 校验 + encoding.rs 二进制编解码
+│   ├── formula.rs   # 点位级换算公式（与 pipeline/vformula 区分）
+│   └── model.rs     # 公共领域模型（DataPoint 等）
 ├── license/         # Ed25519 离线验签 + 机器指纹
 ├── north/           # 北向：MQTT / webhook.rs / dispatch.rs（RealtimeBus 分发）/ server/（被动服务端）/ server_adapters/（数据推送适配器）
 ├── pipeline/        # 处理管道：边缘过滤 → 公式 → 入队 → 实时广播
-├── platform/        # 平台服务：NTP / OTA / GPIO / 蜂窝 / 看门狗（含 watchdog_flush.rs 队列落盘冲刷）
+├── platform/        # 平台/系统集成层：NTP 客户端 / OTA / GPIO / 蜂窝 / 看门狗（含 watchdog_flush.rs 队列落盘冲刷）
 ├── queue/           # 断点续传队列（SQLite WAL）
 ├── south/           # 南向：总线管理 / 协议栈 / 调度器
 │   ├── bus/         # 串口/TCP 总线 + 帧缓冲（frame_extract.rs 仅做分发，实现归各协议 frames.rs）
 │   ├── protocol/    # 各协议采集器（modbus/dlt645/cjt188/iec101/iec104/bacnet/bacnet_mstp/s7comm/mc/fins/opcua/gpio）
-│   │   └── common/  # 协议通用工具（decode/model/util/frame_extract）
+│   │   └── common/  # 协议通用工具（codec/decode/model/frame_extract）
 │   └── scheduler/   # 按协议+总线分组的定时调度
-└── support/         # 启动支撑：app（Gateway 组件管理器）+ paths（路径解析）
+├── runtime/         # 运行时组件聚合（GatewayRuntime 热更新入口）
+└── shared/          # 跨层共享工具：clock / cron / paths / sqlite_maintenance
 
 gateway-api/src/web/   # Web API 面（axum + tower，原 gateway-core/src/web）：types.rs / error.rs / middleware.rs / api/
 gatewayd/src/          # bin：main.rs 入口（#[tokio::main]）+ bootstrap/ 13 步启动流程

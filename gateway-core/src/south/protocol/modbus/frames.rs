@@ -1,7 +1,7 @@
 //! Modbus RTU 帧构建与响应解析
 
 use super::{CollectorError, CollectorResult};
-use crate::engine::util::crc::crc16;
+use crate::engine::codec::crc::crc16;
 use crate::south::bus::FrameBuffer;
 
 // ===== Modbus RTU 帧处理 =====

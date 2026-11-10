@@ -152,7 +152,7 @@ pub(crate) fn modbus_read_request_frame(slave: u8, fc: u8, addr: u16, count: u16
     frame.push(fc);
     frame.extend_from_slice(&addr.to_be_bytes());
     frame.extend_from_slice(&count.to_be_bytes());
-    frame.extend_from_slice(&gateway_core::engine::util::crc::crc16(&frame).to_le_bytes());
+    frame.extend_from_slice(&gateway_core::engine::codec::crc::crc16(&frame).to_le_bytes());
     frame
 }
 

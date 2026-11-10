@@ -22,7 +22,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 目录 | `GATEWAY_CERT_DIR`；Linux 默认 `/var/lib/gateway/certs`，Windows 默认 `./certs`（`gateway-core/src/support/paths.rs:126-132`） |
+| 目录 | `GATEWAY_CERT_DIR`；Linux 默认 `/var/lib/gateway/certs`，Windows 默认 `./certs`（`gateway-core/src/shared/paths.rs:126-132`） |
 | 文件 | `gateway.pem`（证书）+ `gateway_key.pem`（私钥），由 `gatewayd/src/bootstrap/helpers/north.rs:111` 初始化 |
 | 算法 / 有效期 | ECDSA P-256 + SHA-256；`当前年-1` ~ `当前年+10`；CN `Gateway Device`；SAN 仅 `localhost` |
 | 生成开关 | `GATEWAY_REQUIRE_EXTERNAL_CERT=1` 禁止自签；缺文件/不配对时启动失败（`crypto/cert.rs:44`、`bootstrap/helpers/north.rs:347`） |

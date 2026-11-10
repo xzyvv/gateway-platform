@@ -2,7 +2,7 @@
 //!
 //! 模板唯一源在**仓库根** `templates/builtin/*.json` 与 `templates/custom/*.json`
 //! （运行时再按 `GATEWAY_TEMPLATE_BUILTIN` / `/etc/gateway/templates` 等路径查找，
-//! 见 `support::paths`）。启动时加载所有模板，将 DeviceConfig 展开为等效的 PointConfig 列表。
+//! 见 `shared::paths`）。启动时加载所有模板，将 DeviceConfig 展开为等效的 PointConfig 列表。
 
 use std::collections::{HashMap, HashSet};
 use std::fs;

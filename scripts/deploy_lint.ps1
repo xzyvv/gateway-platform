@@ -255,9 +255,9 @@ Write-Host ""
 # C4  配置路径一致（代码默认值 vs 脚本里的硬编码）
 # ══════════════════════════════════════════════════════════
 Write-Host "[C4] 部署脚本里的配置路径 = 代码 default_config_path" -ForegroundColor Cyan
-$pathsText = ReadText "gateway-core/src/support/paths.rs"
+$pathsText = ReadText "gateway-core/src/shared/paths.rs"
 if ($null -eq $pathsText) {
-    Warn "找不到 gateway-core/src/support/paths.rs（跳过配置路径断言）"
+    Warn "找不到 gateway-core/src/shared/paths.rs（跳过配置路径断言）"
 }
 else {
     $m = [regex]::Match($pathsText, '(?s)default_config_path,\s*"[^"]*",\s*"([^"]+)"')
@@ -1905,9 +1905,9 @@ else {
 }
 
 # 一致性：文档与脚本里的数据路径必须等于代码里的默认值
-$pathsText = ReadText "gateway-core/src/support/paths.rs"
+$pathsText = ReadText "gateway-core/src/shared/paths.rs"
 if ($null -eq $pathsText) {
-    Fail "找不到 gateway-core/src/support/paths.rs —— 无法核对数据路径"
+    Fail "找不到 gateway-core/src/shared/paths.rs —— 无法核对数据路径"
 }
 else {
     $dbDefault = $null

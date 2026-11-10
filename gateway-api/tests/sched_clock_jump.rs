@@ -35,7 +35,7 @@ fn cst(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> i64 {
 fn pin_timezone() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        std::env::set_var(gateway_core::support::cron::TZ_ENV, "+08:00");
+        std::env::set_var(gateway_core::shared::cron::TZ_ENV, "+08:00");
     });
 }
 

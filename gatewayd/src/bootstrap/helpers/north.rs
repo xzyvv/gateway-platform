@@ -17,9 +17,9 @@ use gateway_core::north::server::NorthServer;
 use gateway_core::north::sim_consumer::SimConsumer;
 use gateway_core::pipeline::{EdgeProcessor, PipelineSpawnInputs, ProcessingPipeline, RealtimeBus};
 use gateway_core::queue::DataQueue;
-use gateway_core::support::app::GatewayRuntime;
+use gateway_core::runtime::GatewayRuntime;
 
-use gateway_core::support::{default_cert_dir, default_db_path, default_outbox_db};
+use gateway_core::shared::{default_cert_dir, default_db_path, default_outbox_db};
 
 use super::super::{CollectionChain, NorthProcessing};
 use super::NorthChannel;

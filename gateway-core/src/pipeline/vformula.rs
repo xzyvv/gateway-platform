@@ -19,7 +19,7 @@
 //! `tests.rs` 的 `test_shared_cross_language_cases` 与前端
 //! `formulaEngine.spec.ts` 读的是同一个文件——改语义请改契约，只改单侧会立刻在另一侧转红。
 //!
-//! # 与 `engine::util::formula::apply_formula` 的区别
+//! # 与 `engine::formula::apply_formula` 的区别
 //!
 //! `apply_formula` 是**点位级**换算公式：单变量 `raw`、白名单只放行
 //! `0-9 . + - * / ( )` 与 `raw`，由 `south/protocol/common/decode.rs` 消费。

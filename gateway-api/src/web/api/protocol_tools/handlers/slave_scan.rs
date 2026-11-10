@@ -494,7 +494,7 @@ pub(crate) async fn scan_slaves(
 mod tests {
     use super::*;
     use crate::web::debug_bus::{DebugBusTrait, ExchangeOutcome};
-    use gateway_core::engine::util::crc::crc16;
+    use gateway_core::engine::codec::crc::crc16;
     use std::future::Future;
     use std::pin::Pin;
 

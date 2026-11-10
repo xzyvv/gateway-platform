@@ -521,12 +521,12 @@ fn test_build_exception_response() {
 
 /// 仅测试用：构建一个「不含任何总线」的 GatewayRuntime，用于驱动透传的 `None` 异常分支。
 ///
-/// 装配实现已移至 `crate::support::app::gateway_runtime_without_buses_for_test`：装配整机必须
+/// 装配实现已移至 `crate::runtime::gateway_runtime_without_buses_for_test`：装配整机必须
 /// 具名 `Scheduler` / `SerialManager` 等南向类型，而架构守护
 /// `north_must_not_depend_on_south`（gateway-core/tests/arch_deps.rs）禁止 north 出现
 /// `crate::south::` 引用。装配属 support 层职责（`GatewayComponents` 定义于此），故收敛到该层。
-fn test_gateway_runtime_without_buses() -> std::sync::Arc<crate::support::app::GatewayRuntime> {
-    crate::support::app::gateway_runtime_without_buses_for_test()
+fn test_gateway_runtime_without_buses() -> std::sync::Arc<crate::runtime::GatewayRuntime> {
+    crate::runtime::gateway_runtime_without_buses_for_test()
 }
 
 /// 回归缺陷维度：修复前异常分支直接返回 `build_exception_response` 生成的 **TCP** 帧，

@@ -2,7 +2,7 @@
 //!
 //! 用于 Web 登录密码的哈希存储与校验。PHC 风格字符串 `pbkdf2$<iter>$<salt_b64>$<hash_b64>`。
 
-use crate::engine::encoding::{b64_decode, b64_encode};
+use crate::engine::codec::encoding::{b64_decode, b64_encode};
 
 const PBKDF2_ITERATIONS: u32 = 100_000;
 // D5: 编译期常量对应的 NonZeroU32。const 上下文下 NonZeroU32::new 不可用,
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn oversized_salt_rejected_fast() {
         // 构造超大 salt（10KB，超过 4KB 上限）
-        use crate::engine::encoding::b64_encode;
+        use crate::engine::codec::encoding::b64_encode;
         let big_salt = vec![0u8; 10 * 1024];
         let tampered = format!(
             "pbkdf2$100000${}${}",

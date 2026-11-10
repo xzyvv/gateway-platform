@@ -15,7 +15,7 @@ use super::judge::{
 use super::{initial_steps, AutoDetectResult};
 use crate::web::api::protocol_tools::DebugLease;
 use crate::web::debug_bus::{BusErrorKind, DebugBusTrait, ExchangeOutcome};
-use gateway_core::engine::util::crc::crc16;
+use gateway_core::engine::codec::crc::crc16;
 
 fn with_crc(prefix: &[u8]) -> Vec<u8> {
     let mut v = prefix.to_vec();

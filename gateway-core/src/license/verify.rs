@@ -15,7 +15,7 @@ use ring::signature;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::license::Tier;
-use crate::engine::util::encoding::{b64_decode, b64_encode};
+use crate::engine::codec::encoding::{b64_decode, b64_encode};
 
 /// `Quota` 原先定义在本模块，下沉到中立层 `crate::domain::license` 后
 /// 这里转出以保持既有公开路径 `gateway_core::license::verify::Quota` 不变

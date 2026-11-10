@@ -238,7 +238,7 @@ async fn max_concurrency_serial_is_one_and_tcp_follows_config() {
 // 采集器，也没有 modbus 帧提取器，桩帧无法被解析成合法响应。故整节随 feature 门控。
 
 #[cfg(feature = "modbus")]
-use crate::engine::util::crc::crc16;
+use crate::engine::codec::crc::crc16;
 #[cfg(feature = "modbus")]
 use crate::south::bus::serial::SerialHandle;
 #[cfg(feature = "modbus")]

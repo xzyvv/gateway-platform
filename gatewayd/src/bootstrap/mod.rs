@@ -1,7 +1,7 @@
 //! 网关启动流程（gatewayd 二进制：main.rs 仅保留入口，启动逻辑在此）
 //!
 //! 启动编排整体位于 gatewayd；gateway-core 引擎侧仅保留启动期共享支撑
-//! （`gateway_core::support::{app, paths}`），避免引擎反向依赖二进制。
+//! （`gateway_core::runtime::GatewayRuntime` 与 `gateway_core::shared::*`），避免引擎反向依赖二进制。
 //!
 //! 13 步启动（§11）：
 //!  1. 加载配置（ConfigLoader + validate_all）
@@ -30,7 +30,7 @@ use tracing::info;
 
 use gateway_core::config::ConfigLoader;
 use gateway_core::engine::shutdown::wait_for_shutdown;
-use gateway_core::support::default_config_path;
+use gateway_core::shared::default_config_path;
 
 mod helpers;
 use helpers::*;
@@ -132,7 +132,7 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     // 在创建任何 Store 长驻连接之前做一次性 auto_vacuum 转换
     // （已有库需要跑一次 VACUUM），之后由 storage_maintenance 周期回收。
     gateway_core::engine::monitor::db_maintenance::ensure_incremental_auto_vacuum(
-        std::path::Path::new(gateway_core::support::default_version_db()),
+        std::path::Path::new(gateway_core::shared::default_version_db()),
     );
 
     // ===== Step 2-7: 采集链初始化（logging/watchdog/NTP/GPIO/串口/采集器）=====
@@ -202,8 +202,8 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     // 暴露 gateway_db_size_bytes / gateway_db_freelist_pages / gateway_aggregated_rows，
     // 让「删除是否真的把空间还给了文件系统」在现场可见。
     gateway_core::engine::monitor::db_maintenance::spawn_storage_maintenance(
-        gateway_core::support::default_db_path().to_string(),
-        gateway_core::support::default_version_db().to_string(),
+        gateway_core::shared::default_db_path().to_string(),
+        gateway_core::shared::default_version_db().to_string(),
         metrics.clone(),
     );
 
@@ -212,7 +212,7 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     // 采样任务自己持有一条指向共享 outbox 文件的连接，统计全协议合计待发数，
     // 与 MQTT / Webhook 的启用组合解耦（任一协议积压都能被看到）。
     gateway_core::north::outbox_monitor::spawn_outbox_pending_monitor(
-        std::path::PathBuf::from(gateway_core::support::default_outbox_db()),
+        std::path::PathBuf::from(gateway_core::shared::default_outbox_db()),
         metrics.clone(),
     );
 

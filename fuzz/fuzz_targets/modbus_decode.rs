@@ -4,7 +4,7 @@
 //! 2. 环形缓冲区解帧 —— 残帧、噪声前缀下不得死循环；
 //! 3. 合法帧 round-trip —— 真实 CRC 打通被校验挡住的大端寄存器解码路径。
 
-use gateway_core::engine::util::crc::crc16;
+use gateway_core::engine::codec::crc::crc16;
 use gateway_core::fuzz_api as api;
 use gateway_core::south::bus::FrameBuffer;
 use libfuzzer_sys::fuzz_target;

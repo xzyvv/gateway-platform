@@ -147,7 +147,7 @@ fn test_build_write_multi_registers_single() {
 fn modbus_response(slave: u8, fc: u8, data: &[u8]) -> Vec<u8> {
     let mut f = vec![slave, fc, data.len() as u8];
     f.extend_from_slice(data);
-    let crc = crate::engine::util::crc::crc16(&f);
+    let crc = crate::engine::codec::crc::crc16(&f);
     f.push((crc & 0xFF) as u8);
     f.push((crc >> 8) as u8);
     f

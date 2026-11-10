@@ -24,7 +24,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 
 use super::sha256::sha256;
 use crate::config::GatewayConfig;
-use crate::engine::encoding::{b64_decode, b64_encode};
+use crate::engine::codec::encoding::{b64_decode, b64_encode};
 use zeroize::{Zeroize, Zeroizing};
 
 /// 加密字段前缀

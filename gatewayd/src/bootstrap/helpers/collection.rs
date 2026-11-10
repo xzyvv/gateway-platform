@@ -19,7 +19,7 @@ use gateway_core::platform::{GpioController, NtpManager};
 use gateway_core::south::bus::{BusManager, SerialManager};
 use gateway_core::south::protocol::Collector;
 
-use gateway_core::support::{default_template_builtin, default_template_custom};
+use gateway_core::shared::{default_template_builtin, default_template_custom};
 
 use super::super::CollectionChain;
 
@@ -288,7 +288,7 @@ pub(crate) async fn init_collection_chain(
     // 设备时区与客户预期差 8 小时会导致「每天 02:00」整体偏移，且无任何报错。
     info!(
         "device timezone: {}",
-        gateway_core::support::cron::tz_description()
+        gateway_core::shared::cron::tz_description()
     );
 
     // ===== Step 3: Watchdog =====

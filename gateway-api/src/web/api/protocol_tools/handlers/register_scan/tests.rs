@@ -15,7 +15,7 @@ use super::{insert_entry, ScanEntry, ScanResult};
 use super::super::MAX_RESULT_ENTRIES;
 use crate::web::api::protocol_tools::DebugLease;
 use crate::web::debug_bus::{BusErrorKind, DebugBusTrait, ExchangeOutcome};
-use gateway_core::engine::util::crc::crc16;
+use gateway_core::engine::codec::crc::crc16;
 
 #[test]
 fn read_frame_四种寄存器类型的功能码与crc正确() {

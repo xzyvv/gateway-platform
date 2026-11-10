@@ -15,13 +15,13 @@ use gateway_core::engine::supervision::spawn_supervised;
 use gateway_core::engine::Diagnostics;
 use gateway_core::north::server::{MqttPacketPassthrough, NorthServer};
 use gateway_core::platform::ota::OtaManager;
+use gateway_core::runtime::{GatewayComponents, GatewayRuntime};
 use gateway_core::south::bus::SerialManager;
 use gateway_core::south::scheduler::Scheduler;
-use gateway_core::support::app::{GatewayComponents, GatewayRuntime};
 
 use super::super::{CollectionChain, GatewayHandles, NorthProcessing};
 use super::*;
-use gateway_core::support::{
+use gateway_core::shared::{
     default_audit_log, default_diag_log, default_license_clock_db, default_ota_staging,
     default_outbox_db, default_version_db,
 };
@@ -705,11 +705,11 @@ pub(crate) async fn assemble_and_start_services(
     gateway_core::platform::watchdog_flush::install_watchdog_flush(
         north.queue.clone(),
         deps.ota.clone(),
-        std::path::PathBuf::from(gateway_core::support::default_watchdog_state()),
+        std::path::PathBuf::from(gateway_core::shared::default_watchdog_state()),
     );
     info!(
         "watchdog flush callback installed (state={})",
-        gateway_core::support::default_watchdog_state()
+        gateway_core::shared::default_watchdog_state()
     );
 
     spawn_software_watchdog(gateway_metrics.clone());

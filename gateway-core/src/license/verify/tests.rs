@@ -292,7 +292,7 @@ fn test_verify_with_fingerprint_passes() {
 /// r34-LV1 (回归)：payload 段超 64KB 时直接拒（防 OOM）。
 #[test]
 fn test_oversized_payload_rejected() {
-    use crate::engine::util::encoding::b64_encode;
+    use crate::engine::codec::encoding::b64_encode;
     // 构造 70KB 随机数据作为 payload 段，附 64B 有效 sig（64B base64 编码 ~88 字符）
     let big = vec![0xABu8; 70 * 1024];
     let seg0 = b64_encode(&big);
@@ -307,7 +307,7 @@ fn test_oversized_payload_rejected() {
 /// r34-LV1 (回归)：sig 段超 1KB 时也拒。
 #[test]
 fn test_oversized_signature_rejected() {
-    use crate::engine::util::encoding::b64_encode;
+    use crate::engine::codec::encoding::b64_encode;
     // 合法小 payload + 2KB sig（base64 ~2700 字符）
     let p = payload();
     let seg0 = b64_encode(&serde_json::to_vec(&p).expect("serialize"));
