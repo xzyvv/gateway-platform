@@ -341,6 +341,7 @@ pub struct MqttClient {
 mod alarm_publisher;
 mod connection;
 mod event_loop;
+mod event_loop_inputs;
 mod state;
 
 #[cfg(test)]

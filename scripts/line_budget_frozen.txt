@@ -21,7 +21,6 @@ gateway-api/src/web/traits.rs	714
 gateway-core/src/config/bus.rs	551
 gateway-core/src/config/template.rs	654
 gateway-core/src/config/validate/gate.rs	731
-gateway-core/src/config/validate/report.rs	641
 gateway-core/src/crypto/cert.rs	732
 gateway-core/src/engine/monitor/health.rs	714
 gateway-core/src/license/mod.rs	785

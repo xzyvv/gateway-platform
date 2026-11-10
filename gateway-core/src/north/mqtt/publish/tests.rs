@@ -1,4 +1,6 @@
-use super::{circuit_cooldown_active, throttle_wait_ms, token_bucket_cap, token_bucket_refill};
+use super::throttle::{
+    circuit_cooldown_active, throttle_wait_ms, token_bucket_cap, token_bucket_refill,
+};
 
 /// r41-MQTT2 回归：冷却判定对时钟回拨（now < opened_at）必须安全。
 /// 旧实现 `now - opened_at` 在 u64 下溢（debug panic / release 回绕误判冷却已过）。
