@@ -498,7 +498,11 @@ async fn test_max_rows_set_get_and_clamp() {
     assert_eq!(queue.max_rows(), 4321, "设置后应读回同一值");
 
     queue.set_max_rows(0);
-    assert_eq!(queue.max_rows(), 1, "0 必须被夹到 1，避免每次写入都全表淘汰");
+    assert_eq!(
+        queue.max_rows(),
+        1,
+        "0 必须被夹到 1，避免每次写入都全表淘汰"
+    );
 
     queue.set_max_rows(-9);
     assert_eq!(queue.max_rows(), 1, "负数同样必须夹到 1");
