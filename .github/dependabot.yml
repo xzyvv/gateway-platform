@@ -47,6 +47,12 @@ updates:
       time: "04:30"
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 5
+    ignore:
+      # dtolnay/rust-toolchain 的 tag 是「Rust 工具链版本号」，不是 action 版本号，
+      # 由 rust-toolchain.toml 与各 workflow 刻意钉死。Dependabot 会把它当普通
+      # action 升 minor/patch，曾把 1.98.1 升到根本不存在的 1.120.0
+      # （static.rust-lang.org 返回 404），使 PR 上的 security 恒为红。
+      - dependency-name: "dtolnay/rust-toolchain"
     commit-message:
       prefix: "chore(ci)"
     labels:
