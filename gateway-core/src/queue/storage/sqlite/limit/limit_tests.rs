@@ -286,3 +286,40 @@ fn enqueue_batch_empty_early_returns_without_opening_tx() {
     insert_rows(&conn, 3, 0);
     assert_eq!(row_count(&conn), 3);
 }
+
+/// 保留期换算必须是 `hours * 3600 * 1000` 毫秒。
+///
+/// 现有用例插入的时间戳都是 `1000`（远早于当前时间），任何把乘号写成加号的
+/// 变异都还是「远早于 cutoff」，照样全删，测不出问题。这里用真实相对时间
+/// 卡住边界：`3600 * 1000` 若变成 `3600 + 1000`，cutoff 会从 1 小时缩到
+/// 4.6 秒，30 分钟前刚写的数据会被当场删掉。
+#[test]
+fn cleanup_old_records_cutoff_is_hours_in_millis() {
+    let mut conn = setup_conn();
+    let now = DataPoint::now();
+    // 2 小时前（超期 → 删）、30 分钟前（未超期 → 留）
+    for (point, ts) in [("old", now - 2 * 3600 * 1000), ("fresh", now - 30 * 60 * 1000)] {
+        conn.execute(
+            "INSERT INTO data_queue (point_id, value, raw_value, raw_type, quality, timestamp, in_flight, delivered)
+             VALUES (?1, 0.0, 0.0, 'f64', 'good', ?2, 0, 0)",
+            params![point, ts],
+        )
+        .expect("insert row");
+    }
+    let depth = AtomicI64::new(2);
+    let rows_total = AtomicI64::new(2);
+
+    let deleted = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
+
+    assert_eq!(deleted, 1, "只有 2 小时前那行超过 1 小时保留期");
+    assert_eq!(row_count(&conn), 1, "30 分钟前的数据必须保留");
+    let left: String = conn
+        .query_row("SELECT point_id FROM data_queue", [], |r| r.get(0))
+        .expect("query remaining");
+    assert_eq!(left, "fresh");
+    assert_eq!(
+        rows_total.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "rows_total 只应扣掉真正删掉的那 1 行"
+    );
+}

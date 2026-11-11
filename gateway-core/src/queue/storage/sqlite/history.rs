@@ -423,6 +423,108 @@ mod tests {
         assert_eq!(result.items[0].timestamp % MINUTE_MS, 0);
     }
 
+    /// 双段（旧段读聚合表 + 新段原始分桶）同时命中且总量超过 limit 时，
+    /// `total` 必须是两段计数的**精确和**，不能靠 items.len() 凑。
+    ///
+    /// 这条用例专门覆盖「只有截断时才跑 COUNT」的路径：不截断时 total 直接取
+    /// items.len()，两个 count_* 函数根本不会被调用，它们的返回值改成常量
+    /// （Ok(0)/Ok(1)/Ok(-1)）也就测不出来。
+    #[test]
+    fn query_ex_two_segments_truncated_total_is_exact() {
+        let conn = mem_db();
+        let now = 1_700_000_000_000i64;
+        let horizon = now - AGG_HORIZON_MS;
+        // 旧段：3 个不同的分钟桶，且相隔 15 分钟以保证在 10 分钟桶下仍各占一格
+        let old = now - 30 * 3600 * 1000;
+        insert_raw(&conn, old, 1.0);
+        insert_raw(&conn, old + 15 * 60_000, 2.0);
+        insert_raw(&conn, old + 30 * 60_000, 3.0);
+        // 新段：2 个不同的 10 分钟桶（都落在 24h 之内，只能原始行分桶）
+        insert_raw(&conn, now - 60 * 60 * 1000, 7.0);
+        insert_raw(&conn, now - 80 * 60 * 1000, 8.0);
+        assert_eq!(aggregate_minute_windows(&conn, now).unwrap(), 3);
+
+        // 桶宽 10 分钟（≥ 1 分钟，旧段走聚合表）；limit=3 < 总桶数 5 → 截断
+        let r = query_history_ex(&conn, "p", now - 48 * 3600 * 1000, now, 3, Some(600), now).unwrap();
+        assert!(r.truncated, "5 个桶超过 limit=3，必须判为截断");
+        assert_eq!(r.returned, 3);
+        assert_eq!(r.total, 5, "total 应为聚合段 3 桶 + 原始段 2 桶");
+        assert_eq!(r.granularity, "second:600");
+        // 截断保留的是**最新**的 3 个桶：新段 2 个 + 旧段里最晚的 1 个
+        let horizon_bucket = (horizon / MINUTE_MS) * MINUTE_MS;
+        assert!(
+            r.items.iter().any(|s| s.timestamp >= horizon_bucket),
+            "截断后应保留新段（24h 内）的桶"
+        );
+    }
+
+    /// 桶宽细于 1 分钟时不读聚合表，整段退回原始行分桶——即使窗口跨过 24h。
+    ///
+    /// 这条用例把 `旧段条件` 里的 `bucket_ms >= MINUTE_MS` 与 `start_ms < older_end`
+    /// 两半分别钉住：桶宽 5 秒时两个条件都应为「不读聚合表」。
+    #[test]
+    fn query_ex_sub_minute_bucket_skips_aggregated_table() {
+        let conn = mem_db();
+        let now = 1_700_000_000_000i64;
+        let old = now - 30 * 3600 * 1000;
+        insert_raw(&conn, old, 1.0);
+        insert_raw(&conn, old + 5_000, 3.0);
+        insert_raw(&conn, now - 60 * 60 * 1000, 9.0);
+        aggregate_minute_windows(&conn, now).unwrap();
+
+        // 5 秒桶：三行原始数据分别在 3 个不同的 5 秒桶里
+        let r = query_history_ex(&conn, "p", now - 48 * 3600 * 1000, now, 100, Some(5), now).unwrap();
+        assert_eq!(r.items.len(), 3, "细桶必须扫原始表，不能走聚合表");
+        assert_eq!(r.granularity, "second:5");
+        assert_eq!(r.total, 3);
+        assert!(!r.truncated);
+    }
+
+    /// 原始行查询：条数正好等于 limit 时不算截断（`>` 不能写成 `>=`）。
+    #[test]
+    fn query_raw_ex_exact_limit_is_not_truncated() {
+        let conn = mem_db();
+        let now = 1_700_000_000_000i64;
+        for i in 0..6 {
+            insert_raw(&conn, now - (6 - i) * 1_000, i as f64);
+        }
+        let r = query_history_ex(&conn, "p", now - 60_000, now, 6, None, now).unwrap();
+        assert_eq!(r.returned, 6);
+        assert_eq!(r.total, 6);
+        assert!(!r.truncated, "正好 limit 条不算截断");
+    }
+
+    /// 原始行查询：limit=1 且只有溢出 1 条时，只丢弃溢出那一行（`-` 不能写成 `/`）。
+    #[test]
+    fn query_raw_ex_drops_only_overflow_row() {
+        let conn = mem_db();
+        let now = 1_700_000_000_000i64;
+        insert_raw(&conn, now - 2_000, 1.0);
+        insert_raw(&conn, now - 1_000, 2.0);
+        let r = query_history_ex(&conn, "p", now - 60_000, now, 1, None, now).unwrap();
+        assert_eq!(r.returned, 1, "只应丢掉溢出的 1 行，保留 1 行");
+        assert_eq!(r.total, 2);
+        assert!(r.truncated);
+        assert_eq!(r.items[0].value, 2.0, "保留的应是最新那行");
+    }
+
+    /// 增量聚合：已有水位时只重算「水位所在的桶」，不回头重扫更早的桶。
+    ///
+    /// 水位减的是 `MINUTE_MS`（毫秒偏移），若误写成除法会退化成从
+    /// 「时间戳/60000」这么小的位置重扫，把所有历史桶都重算一遍。
+    #[test]
+    fn aggregate_minute_windows_recomputes_only_watermark_bucket() {
+        let conn = mem_db();
+        let now = 1_700_000_000_000i64;
+        let old = now - 30 * 3600 * 1000;
+        insert_raw(&conn, old, 1.0);
+        insert_raw(&conn, old + 180_000, 3.0); // 相隔 3 分钟 → 2 个桶
+        assert_eq!(aggregate_minute_windows(&conn, now).unwrap(), 2, "首次聚合两个桶");
+
+        // 第二次：水位 = 较晚那个桶，只重算它自己 → 写入 1 行
+        assert_eq!(aggregate_minute_windows(&conn, now).unwrap(), 1, "只重算水位桶");
+    }
+
     #[test]
     fn query_ex_raw_and_bucket_limits() {
         let conn = mem_db();

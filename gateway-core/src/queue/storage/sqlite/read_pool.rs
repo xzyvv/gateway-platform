@@ -77,5 +77,11 @@ mod tests {
             .expect("read busy_timeout");
         assert_eq!(timeout, 5000, "只读池连接应设置 busy_timeout=5000");
         pool.release(conn);
+        // release 必须把连接真的放回池里：归还不进去，池会越用越空，
+        // 最终所有 /api/history 查询退化成串行短连接。
+        assert!(
+            pool.get().is_some(),
+            "release 后的连接应能被再次借出"
+        );
     }
 }

@@ -217,4 +217,36 @@ mod tests {
         run_retention_cleanup(&mut conn, None, DiskLevel::Ok, 0);
         assert_eq!(count(&conn), 6);
     }
+
+    /// 时间界的换算必须是 `days * 24 * 3600 * 1000` 毫秒。
+    ///
+    /// 任何一个乘号被写错，cutoff 都会从「30 天前」缩成「几十分钟前」，
+    /// 30 天保留期形同虚设，整张聚合表被无差别清空。
+    #[test]
+    fn retention_cutoff_is_exact_days_in_millis() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.execute_batch(AGG_SCHEMA).expect("create agg table");
+        let now = DataPoint::now();
+        let day = 24 * 3600 * 1000i64;
+        // 31 天前（超界 → 删）、29 天前与 1 天前（未超界 → 留）
+        for ts in [now - 31 * day, now - 29 * day, now - day] {
+            conn.execute(
+                "INSERT INTO data_queue_aggregated
+                 (point_id, window_start, avg_value, min_value, max_value, sample_count)
+                 VALUES ('p', ?1, 0.0, 0.0, 0.0, 1)",
+                params![ts],
+            )
+            .expect("insert agg row");
+        }
+
+        run_retention_cleanup(&mut conn, Some(30), DiskLevel::Ok, 0);
+
+        assert_eq!(count(&conn), 2, "只有超过 30 天的聚合行应被删");
+        let oldest: i64 = conn
+            .query_row("SELECT MIN(window_start) FROM data_queue_aggregated", [], |r| {
+                r.get(0)
+            })
+            .expect("query oldest");
+        assert_eq!(oldest, now - 29 * day, "29 天前的行必须保留");
+    }
 }
