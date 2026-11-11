@@ -129,7 +129,16 @@ jobs:
       - name: Fuzz ${{ matrix.target }}
         # 单目标 60s 冒烟预算；crash / OOM / 超时都会以非零码退出。
         # 想跑得更深：本地去掉 -max_total_time 或调大该值。
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -rss_limit_mb=2048
+        #
+        # --target x86_64-unknown-linux-gnu 必须显式给：
+        # cargo-fuzz 的 Linux 发行包只有 musl 一个产物，而它的默认目标三元组
+        # 取自编译 cargo-fuzz 自身的平台（current_platform::CURRENT_PLATFORM），
+        # 于是不传就会用 x86_64-unknown-linux-musl 去编译被测目标，带来两个硬错：
+        #   1) E0463 can't find crate for `core`：nightly 工具链没装 musl 目标的 std；
+        #   2) sanitizer is incompatible with statically linked libc：musl 默认静态链接，
+        #      与 AddressSanitizer 互斥。
+        # 换成宿主三元组（gnu 动态链接）两个问题一起消失。
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=60 -rss_limit_mb=2048
 
       - name: Upload crash artifacts
         if: failure()
