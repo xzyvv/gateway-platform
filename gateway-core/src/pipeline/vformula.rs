@@ -273,16 +273,12 @@ impl<'a> Parser<'a> {
         t
     }
 
-    /// 循环防御：每轮至少消费一个记号。
-    ///
-    /// 递降解析器靠 `pos` 单调前进来保证收敛。若某处逻辑让 `pos` 原地不动
-    /// （例如 `take` 里误写 `pos -= 1`，与外层循环的 `pos += 1` 互相抵消），
-    /// 下面的 `loop` 会无限拼接语法树直到内存耗尽。此处把「挂死」降级为
-    /// 一次语法错误，让调用方能正常拿到失败结果。
+    /// 循环防御：每轮至少消费一个记号，否则按语法错误返回。
+    /// 递降解析器靠 `pos` 单调前进收敛；`pos` 原地不动会让语法树无限膨胀。
     fn ensure_progress(&self, before: usize) -> Result<(), FormulaError> {
         if self.pos <= before {
             return Err(FormulaError::Syntax(format!(
-                "公式解析未前进（第 {} 个记号处），拒绝继续",
+                "公式解析未前进（第 {} 个记号）",
                 self.pos
             )));
         }
