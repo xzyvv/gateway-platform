@@ -1222,6 +1222,32 @@ else {
     else {
         Fail "ci.yml 调用方的触发条件被改动 —— 原本手动触发即可跑全量重作业的行为丢失"
     }
+    # 3b) 反向断言：push 到 main 必须跑重作业。
+    #     此前的门禁只有 workflow_dispatch / vars.RUN_HEAVY，而仓库变量从未创建
+    #     （Actions variables 为空），于是 push 路径下 heavy 恒 skipped ——
+    #     主干合并完全没有 cross-arm / coverage / chaos / soak 覆盖，
+    #     坏在主干里最长要等 7 天后的 release-gate 才发现。
+    #     这条断言把「push 到 main 也跑」钉成契约，防止被改回恒 skipped。
+    if ($null -ne $ciHeavy -and $ciHeavy -match "github\.event_name == 'push'" -and $ciHeavy -match 'refs/heads/main') {
+        Ok "ci.yml 的 heavy 覆盖 push 到 main —— 主干合并不会再恒 skipped"
+    }
+    else {
+        Fail "ci.yml 的 heavy 未覆盖 push 到 main —— 主干提交的重作业会恒 skipped（仓库变量 RUN_HEAVY 默认不存在）"
+    }
+    # 3c) 重作业必须与变异分片串行：public 仓并发配额 20 个 job，
+    #     13 个重作业 + 7 个快门禁已顶满，再叠 mutation 的 8 片就超限，
+    #     runner 被回收（表现为 "The runner has received a shutdown signal"）。
+    #     三处必须用同一个 heavy-farm 并发组，缺一处就会重新出现并行超限。
+    $fuzzText = ReadText ".github/workflows/fuzz-mutation.yml"
+    $farmOk = ($null -ne $ciHeavy -and $ciHeavy -match 'group:\s*heavy-farm') -and
+              ($gateText -match 'group:\s*heavy-farm') -and
+              ($null -ne $fuzzText -and $fuzzText -match 'group:\s*heavy-farm')
+    if ($farmOk) {
+        Ok "重作业与变异分片共用 heavy-farm 并发组 —— 不会同时占满 20 个并发配额"
+    }
+    else {
+        Fail "heavy-farm 并发组未在 ci.yml / release-gate.yml / fuzz-mutation.yml 三处齐全 —— 重作业与变异分片会并行超限，runner 被回收"
+    }
     if ($null -ne $ciHeavy -and $ciHeavy -match '(?m)^\s*needs:\s*check\s*$') {
         Ok "ci.yml 的 heavy 调用仍依赖 check（重作业在快门禁通过后才起跑）"
     }

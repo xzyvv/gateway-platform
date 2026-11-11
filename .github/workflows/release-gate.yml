@@ -45,6 +45,12 @@ jobs:
   heavy:
     name: heavy suite (all-features / cross-arm / static-musl / coverage / chaos / bench / soak / sku-size)
     # 无条件执行 —— 门禁在这里，不在被调用的 heavy.yml 里
+    # 与 ci.yml 的 heavy、fuzz-mutation 的分片共用 heavy-farm 并发组：
+    # public 仓并发配额 20 个 job，两套重作业并行会超限导致 runner 被回收。
+    # cancel-in-progress: false —— 发布门禁绝不能被后来的运行顶掉。
+    concurrency:
+      group: heavy-farm
+      cancel-in-progress: false
     uses: ./.github/workflows/heavy.yml
 
   gate:

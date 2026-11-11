@@ -22,6 +22,15 @@ on:
     - cron: "0 18 * * 0"
   workflow_dispatch:
 
+# 与 ci.yml / release-gate.yml 的重作业共用 heavy-farm 并发组，串行执行：
+# public 仓的并发配额只有 20 个 job，变异分片（最多 8 片）+ 3 个 fuzz 与
+# 13 个重作业并行必然超限，超限时 runner 被回收，表现为
+#   ERROR interrupted / The runner has received a shutdown signal
+# cancel-in-progress: false —— 已经派发的变异测试不该被后来的运行顶掉。
+concurrency:
+  group: heavy-farm
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
