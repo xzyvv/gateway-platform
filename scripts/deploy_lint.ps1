@@ -1248,6 +1248,24 @@ else {
     else {
         Fail "heavy-farm 并发组未在 ci.yml / release-gate.yml / fuzz-mutation.yml 三处齐全 —— 重作业与变异分片会并行超限，runner 被回收"
     }
+    # 3d) runner 版本必须显式钉住，禁止 ubuntu-latest。
+    #     GitHub 自 2026-10-19 起把 ubuntu-latest 迁移到 Ubuntu 26.04；2026-11-11
+    #     核实我们的 job 早已实际跑在 ubuntu-26.04/20261101.186 上（heavy run
+    #     43015859884 里 release package 与 static musl 三个 job 全部 success），
+    #     因此全仓统一钉 ubuntu-26.04 属于「保持现状」，不是换环境。
+    #     这条断言防止有人再写回 ubuntu-latest：那会重新开始刷迁移提示，
+    #     并且运行环境会随 GitHub 单方面滚动镜像而漂移。
+    $latestHits = @()
+    foreach ($wf in Get-ChildItem (Join-Repo ".github/workflows") -Filter "*.yml" -ErrorAction SilentlyContinue) {
+        $wt = ReadText (".github/workflows/" + $wf.Name)
+        if ($null -ne $wt -and $wt -match '(?m)^\s*runs-on:\s*ubuntu-latest\s*$') { $latestHits += $wf.Name }
+    }
+    if ($latestHits.Count -eq 0) {
+        Ok "所有工作流的 Linux runner 都显式钉住版本（无 ubuntu-latest）"
+    }
+    else {
+        Fail ("以下工作流仍在用 ubuntu-latest，会刷 Ubuntu 26 迁移提示且镜像会漂移：" + ($latestHits -join ", "))
+    }
     if ($null -ne $ciHeavy -and $ciHeavy -match '(?m)^\s*needs:\s*check\s*$') {
         Ok "ci.yml 的 heavy 调用仍依赖 check（重作业在快门禁通过后才起跑）"
     }

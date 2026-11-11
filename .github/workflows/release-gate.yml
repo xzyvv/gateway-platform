@@ -60,7 +60,7 @@ jobs:
     # 而跳过的 job 在 required checks 里同样算失败，但日志上看不出原因。
     # 显式 always() 才能把真实结论写进摘要。
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: publish conclusion
         env:

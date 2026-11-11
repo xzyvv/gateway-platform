@@ -39,7 +39,7 @@ env:
 jobs:
   perf:
     name: perf baseline (4 vCPU / 16 GB)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 构建 + 3 档短场景（3+5+3 min）+ 60 min 长稳 + 对比，留足余量。
     timeout-minutes: 150
     steps:

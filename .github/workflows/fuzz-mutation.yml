@@ -37,7 +37,7 @@ env:
 jobs:
   mutation:
     name: mutation (queue/formula/decode) shard ${{ matrix.idx }}/16
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -144,7 +144,7 @@ jobs:
 
   fuzz:
     name: fuzz ${{ matrix.target }} (60s)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false

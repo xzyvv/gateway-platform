@@ -29,7 +29,7 @@ env:
 jobs:
   chaos:
     name: chaos scenarios
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -67,7 +67,7 @@ jobs:
   # gateway-desktop 已冻结（Tauri 依赖需要 Linux sysroot），显式排除。
   all-features:
     name: all-features test matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -108,7 +108,7 @@ jobs:
   # 对标前端 gateway-web/vitest.config.ts 的分目录 thresholds 口径。
   coverage:
     name: backend coverage (baseline)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -187,7 +187,7 @@ jobs:
   # RUSTFLAGS 变化会让缓存全失效，耗时翻倍；严格版已包含普通版的覆盖）。
   cross-arm:
     name: cross build (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -480,7 +480,7 @@ jobs:
   static-musl:
     # 本作业最贵（3 个架构各自 cross 编译 + QEMU 真启动）
     name: static musl (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -647,7 +647,7 @@ jobs:
   # bundled-sqlcipher 需要 OpenSSL 头文件与 perl，故先安装依赖再单独 check 两个库 crate。
   bench:
     name: performance benchmarks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
@@ -691,7 +691,7 @@ jobs:
   # 门禁形同虚设。600s / 4 总线 × 10 从站 × 25 点 = 1000 点，是本地实测全绿的一组参数。
   soak-smoke:
     name: soak smoke (memory leak gate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       RUSTFLAGS: ""
@@ -771,7 +771,7 @@ jobs:
   # 仅在 main 合并后 / 手动触发时运行，不阻塞 PR。
   sku-size-matrix:
     name: sku size matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       RUSTFLAGS: ""
@@ -874,7 +874,7 @@ jobs:
   # 这里跑真脚本（cross 交叉编译到 ARM64 musl），并逐项断言包内容齐全。
   release-package:
     name: release package (arm64 musl)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       RUSTFLAGS: ""

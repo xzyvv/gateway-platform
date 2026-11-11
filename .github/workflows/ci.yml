@@ -66,7 +66,7 @@ env:
 jobs:
   check:
     name: check / clippy / fmt / test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -440,7 +440,7 @@ jobs:
   # armv7 用 gnueabihf（硬浮点 ABI），与网关板卡的软硬浮点约定一致。
   encryption-check:
     name: encryption feature tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -504,7 +504,7 @@ jobs:
   # Linux 专用：硬件 watchdog / gpiod / 串口权限测试
   linux-runtime:
     name: linux runtime checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -584,7 +584,7 @@ jobs:
   # 与 vite:5199，测试结束自动回收。
   e2e:
     name: e2e smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -669,7 +669,7 @@ jobs:
   # 这里把它们钉进 CI：deploy-lint 做静态检查，deploy-smoke 在 runner 上真跑一遍。
   deploy-lint:
     name: deploy script lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -747,7 +747,7 @@ jobs:
   # 因此 install.sh 的 useradd/systemctl/健康检查都是真跑，不是打桩。
   deploy-smoke:
     name: deploy smoke (install + verify)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: check
     steps:
       - uses: actions/checkout@v4
