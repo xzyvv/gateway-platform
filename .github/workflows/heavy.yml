@@ -31,7 +31,7 @@ jobs:
     name: chaos scenarios
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -69,7 +69,7 @@ jobs:
     name: all-features test matrix
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -110,7 +110,7 @@ jobs:
     name: backend coverage (baseline)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -207,7 +207,7 @@ jobs:
             sysroot: /usr/arm-linux-gnueabihf
             loader: ld-linux-armhf.so.3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -495,7 +495,7 @@ jobs:
             emu: qemu-arm
             pkg: qemu-user-static
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -649,7 +649,7 @@ jobs:
     name: performance benchmarks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: actions/cache@v4
         with:
@@ -703,7 +703,7 @@ jobs:
       SOAK_SAMPLE_MS: "10000"
       SOAK_OUT_DIR: gateway-core/soak-out
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: actions/cache@v4
         with:
@@ -776,7 +776,7 @@ jobs:
     env:
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: actions/cache@v4
         with:
@@ -879,7 +879,7 @@ jobs:
     env:
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: actions/cache@v4
         with:
@@ -1028,7 +1028,7 @@ jobs:
     env:
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 原生构建 musl 静态产物：目标架构 == 宿主架构时 build-release.sh 走裸 cargo，
       # 由宿主 musl-gcc 编译 bundled sqlite3.c（不经过 cross 容器）。

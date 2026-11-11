@@ -43,7 +43,7 @@ jobs:
     # 构建 + 3 档短场景（3+5+3 min）+ 60 min 长稳 + 对比，留足余量。
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |

@@ -61,7 +61,7 @@ jobs:
           - { shard: 14, idx: 15 }
           - { shard: 15, idx: 16 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -131,7 +131,7 @@ jobs:
       matrix:
         target: [modbus_decode, dlt645_decode, bacnet_mstp_decode]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
