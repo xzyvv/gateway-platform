@@ -298,7 +298,10 @@ fn cleanup_old_records_cutoff_is_hours_in_millis() {
     let mut conn = setup_conn();
     let now = DataPoint::now();
     // 2 小时前（超期 → 删）、30 分钟前（未超期 → 留）
-    for (point, ts) in [("old", now - 2 * 3600 * 1000), ("fresh", now - 30 * 60 * 1000)] {
+    for (point, ts) in [
+        ("old", now - 2 * 3600 * 1000),
+        ("fresh", now - 30 * 60 * 1000),
+    ] {
         conn.execute(
             "INSERT INTO data_queue (point_id, value, raw_value, raw_type, quality, timestamp, in_flight, delivered)
              VALUES (?1, 0.0, 0.0, 'f64', 'good', ?2, 0, 0)",

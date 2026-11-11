@@ -445,7 +445,8 @@ mod tests {
         assert_eq!(aggregate_minute_windows(&conn, now).unwrap(), 3);
 
         // 桶宽 10 分钟（≥ 1 分钟，旧段走聚合表）；limit=3 < 总桶数 5 → 截断
-        let r = query_history_ex(&conn, "p", now - 48 * 3600 * 1000, now, 3, Some(600), now).unwrap();
+        let r =
+            query_history_ex(&conn, "p", now - 48 * 3600 * 1000, now, 3, Some(600), now).unwrap();
         assert!(r.truncated, "5 个桶超过 limit=3，必须判为截断");
         assert_eq!(r.returned, 3);
         assert_eq!(r.total, 5, "total 应为聚合段 3 桶 + 原始段 2 桶");
@@ -473,7 +474,8 @@ mod tests {
         aggregate_minute_windows(&conn, now).unwrap();
 
         // 5 秒桶：三行原始数据分别在 3 个不同的 5 秒桶里
-        let r = query_history_ex(&conn, "p", now - 48 * 3600 * 1000, now, 100, Some(5), now).unwrap();
+        let r =
+            query_history_ex(&conn, "p", now - 48 * 3600 * 1000, now, 100, Some(5), now).unwrap();
         assert_eq!(r.items.len(), 3, "细桶必须扫原始表，不能走聚合表");
         assert_eq!(r.granularity, "second:5");
         assert_eq!(r.total, 3);
@@ -519,10 +521,18 @@ mod tests {
         let old = now - 30 * 3600 * 1000;
         insert_raw(&conn, old, 1.0);
         insert_raw(&conn, old + 180_000, 3.0); // 相隔 3 分钟 → 2 个桶
-        assert_eq!(aggregate_minute_windows(&conn, now).unwrap(), 2, "首次聚合两个桶");
+        assert_eq!(
+            aggregate_minute_windows(&conn, now).unwrap(),
+            2,
+            "首次聚合两个桶"
+        );
 
         // 第二次：水位 = 较晚那个桶，只重算它自己 → 写入 1 行
-        assert_eq!(aggregate_minute_windows(&conn, now).unwrap(), 1, "只重算水位桶");
+        assert_eq!(
+            aggregate_minute_windows(&conn, now).unwrap(),
+            1,
+            "只重算水位桶"
+        );
     }
 
     #[test]

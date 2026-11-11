@@ -243,9 +243,11 @@ mod tests {
 
         assert_eq!(count(&conn), 2, "只有超过 30 天的聚合行应被删");
         let oldest: i64 = conn
-            .query_row("SELECT MIN(window_start) FROM data_queue_aggregated", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT MIN(window_start) FROM data_queue_aggregated",
+                [],
+                |r| r.get(0),
+            )
             .expect("query oldest");
         assert_eq!(oldest, now - 29 * day, "29 天前的行必须保留");
     }
