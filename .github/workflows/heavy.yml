@@ -42,7 +42,7 @@ jobs:
           EOF
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Cache cargo registry
         uses: actions/cache@v6
@@ -79,7 +79,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - uses: actions/cache@v6
         with:
@@ -120,7 +120,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Add llvm-tools-preview
         run: rustup component add llvm-tools-preview
@@ -217,7 +217,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.target }}
 
@@ -505,7 +505,7 @@ jobs:
           git-fetch-with-cli = true
           EOF
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.target }}
 
@@ -650,7 +650,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v6
         with:
           path: |
@@ -704,7 +704,7 @@ jobs:
       SOAK_OUT_DIR: gateway-core/soak-out
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v6
         with:
           path: |
@@ -777,7 +777,7 @@ jobs:
       RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v6
         with:
           path: |
@@ -880,7 +880,7 @@ jobs:
       RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: actions/cache@v6
         with:
           path: |
@@ -1032,7 +1032,7 @@ jobs:
 
       # 原生构建 musl 静态产物：目标架构 == 宿主架构时 build-release.sh 走裸 cargo，
       # 由宿主 musl-gcc 编译 bundled sqlite3.c（不经过 cross 容器）。
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: aarch64-unknown-linux-musl
 
