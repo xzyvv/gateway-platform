@@ -336,7 +336,7 @@ jobs:
 
       - name: Upload web coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-coverage-report
           path: gateway-web/coverage/
@@ -351,7 +351,7 @@ jobs:
 
       - name: Upload web dist artifact
         # 交付包构建 / 本地复现按需取用（desktop 已冻结，不再消费此 artifact）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gateway-web-dist
           path: ui-dist/
@@ -625,7 +625,7 @@ jobs:
       # test-results 仅失败时有内容，用 if-no-files-found: ignore 兜底
       - name: Upload Playwright report & traces
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-playwright-report
           path: |
@@ -1069,7 +1069,7 @@ jobs:
 
       - name: Upload delivery checklist
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: delivery-checklist
           path: |
