@@ -12,8 +12,15 @@
 判定口径（可用命令行参数覆盖）：
   1. 稳定性（绝对值）：采集失败 = 0 且协议解码错误 = 0；
   2. 吞吐回退：本次吞吐 ≥ 基线 × --throughput-ratio（默认 0.8）；
-  3. 延迟回退：本次 p99 ≤ max(基线 p99 × --latency-ratio（默认 1.5）,
-     --latency-floor-ms（默认 50）)——基线很小时按绝对下限判，避免自然抖动假红；
+  3. 延迟回退：双判据，任一成立即通过——
+       A 绝对：p99 ≤ max(基线 p99 × --latency-ratio（默认 1.5）,
+                --latency-floor-ms（默认 50））；
+       B 形状：p99/p50 ≤ 基线 p99/p50 × --latency-tail-ratio（默认 2.0）。
+     为什么要 B：GitHub 的 4 vCPU runner 是共享的，整机被抢占时**所有**
+     延迟同比例放大——实测同一份代码 s8000 的 p50 从 75ms 抖到 300ms、
+     p99 从 100ms 抖到 496ms，而 p99/p50 只从 1.33 变到 1.66。
+     只比 p99 绝对值时这 5 倍抖动必然假红；B 看的是尾部相对 p50 的
+     拉长倍数，整机缩放被约掉，真回归（p50 平稳而 p99 拉长）两个都拦。
   4. 长稳泄漏：duration_min ≥ 30 的场景，RSS **尾段**拟合斜率（最后 20 min）
      ≤ --max-rss-mb-per-hour（默认 50 MB/h），且峰值 RSS ≤ 512 MB。
 
@@ -50,6 +57,16 @@ RSS_PEAK_LIMIT_MB = 512.0
 # 只有 15ms，而同一场景历史抖动区间是 10~50ms——纯比例阈值必然假红。实际阈值
 # 取「基线 × 比例」与下限中的较大者，下限之内只记录不拦截。
 LATENCY_FLOOR_MS = 50.0
+
+# 尾部形状判据（p99/p50）相对基线的放大倍数上限。共享 runner 上整机被抢占时
+# p50 与 p99 同比例放大，形状几乎不变（实测 1.33 → 1.66）；而真正的尾延迟
+# 劣化（锁竞争、排队、长事务）只抬 p99 不抬 p50，形状会成倍恶化。
+LATENCY_TAIL_RATIO = 2.0
+
+# CPU 占用相对基线的漂移带。超出说明这次跑的机器状态与基线不同（被抢占、
+# 降频、邻居吵闹），延迟数字不具备可比性——只记 NOTE 并在摘要里点明，
+# 不判失败：把它判红等于让环境噪声决定门禁。
+CPU_DRIFT_TOLERANCE = 0.40
 
 PASS, FAIL, SKIP, NOTE = "PASS", "FAIL", "SKIP", "NOTE"
 
@@ -111,16 +128,44 @@ def judge_scenario(name: str, base: dict, cur: dict, args) -> dict:
         None if (tp_base is None or tp_cur is None)
         else tp_cur >= tp_base * args.throughput_ratio)
 
-    # 3) 延迟：只比 p99——p50 会被采集周期掩盖，p99 才反映尾部长事务与排队。
-    #    阈值 = max(基线 × 比例, 绝对下限)：基线很小时避免被自然抖动打成假红。
-    p99_base = (base.get("latency_ms") or {}).get("p99")
-    p99_cur = (cur.get("latency_ms") or {}).get("p99")
+    # 3) 延迟：双判据（绝对 or 尾部形状），见文件头「判定口径」第 3 条。
+    #    只比 p99 绝对值时，共享 runner 的整机抢占会把它整体放大 5 倍而假红。
+    lat_b = base.get("latency_ms") or {}
+    lat_c = cur.get("latency_ms") or {}
+    p99_base, p99_cur = lat_b.get("p99"), lat_c.get("p99")
+    p50_base, p50_cur = lat_b.get("p50"), lat_c.get("p50")
     p99_limit = (None if p99_base is None
                  else max(p99_base * args.latency_ratio, args.latency_floor_ms))
+    # 形状 = p99/p50。任一为 0/None 时形状不可算，此时只走绝对判据。
+    shape_base = (p99_base / p50_base) if (p99_base and p50_base) else None
+    shape_cur = (p99_cur / p50_cur) if (p99_cur and p50_cur) else None
+    shape_limit = (None if shape_base is None
+                   else shape_base * args.latency_tail_ratio)
+
+    if p99_limit is None or p99_cur is None:
+        ok_lat = None
+    elif shape_limit is not None and shape_cur is not None:
+        ok_lat = p99_cur <= p99_limit or shape_cur <= shape_limit
+    else:
+        ok_lat = p99_cur <= p99_limit
+    rule = (f"≤ {fmt(p99_limit, 1)}（基线×{args.latency_ratio:.1f}，下限 "
+            f"{args.latency_floor_ms:.0f}）")
+    if shape_limit is not None:
+        rule += f" 或 形状 ≤ {fmt(shape_limit, 2)}（基线形状×{args.latency_tail_ratio:.1f}）"
     add("p99 延迟（ms）", fmt(p99_base), f"{fmt(p99_cur)}（{ratio(p99_cur, p99_base)}）",
-        f"≤ {fmt(p99_limit, 1)}（基线×{args.latency_ratio:.1f}，下限 {args.latency_floor_ms:.0f}）",
-        None if (p99_limit is None or p99_cur is None)
-        else p99_cur <= p99_limit)
+        rule, ok_lat)
+
+    # 3b) 形状单独记一行：判红后第一眼要能看出是「整机变慢」还是「尾部劣化」。
+    add("p99/p50 形状", fmt(shape_base, 2), fmt(shape_cur, 2),
+        "仅供参考（整机缩放时形状不变）", None)
+
+    # 3c) CPU 漂移：环境是否可比。超出容忍带只提示，不拦——见 CPU_DRIFT_TOLERANCE。
+    cpu_base = (base.get("cpu_pct") or {}).get("avg")
+    cpu_cur = (cur.get("cpu_pct") or {}).get("avg")
+    if cpu_base and cpu_cur:
+        drift = cpu_cur / cpu_base - 1.0
+        add("CPU 漂移", f"{fmt(cpu_base, 2)}%", f"{fmt(cpu_cur, 2)}%（{drift * 100:+.0f}%）",
+            f"±{CPU_DRIFT_TOLERANCE * 100:.0f}% 内延迟可比", None)
 
     # 4) 长稳：RSS 尾段拟合斜率 + 峰值。短场景只记录数值，不判。
     slope = cur.get("rss_mb_per_hour")
@@ -179,6 +224,9 @@ def main() -> int:
     p.add_argument("--latency-floor-ms", type=float, default=LATENCY_FLOOR_MS,
                    help=f"p99 门禁的绝对下限 ms，阈值取「基线×比例」与该值较大者"
                         f"（默认 {LATENCY_FLOOR_MS:.0f}）")
+    p.add_argument("--latency-tail-ratio", type=float, default=LATENCY_TAIL_RATIO,
+                   help=f"p99/p50 形状判据相对基线的放大倍数上限（默认 "
+                        f"{LATENCY_TAIL_RATIO:.1f}）；与绝对判据是「或」关系")
     p.add_argument("--max-rss-mb-per-hour", type=float, default=50.0,
                    help="长稳 RSS 尾段（最后 20 min）斜率上限 MB/h（默认 50）")
     p.add_argument("--out", default=None, help="Markdown 摘要输出路径（同时打印到 stdout）")
