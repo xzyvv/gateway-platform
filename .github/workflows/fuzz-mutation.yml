@@ -27,16 +27,22 @@ env:
 
 jobs:
   mutation:
-    name: mutation (queue/formula/decode) shard ${{ matrix.idx }}/8
+    name: mutation (queue/formula/decode) shard ${{ matrix.idx }}/16
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         # cargo-mutants 的 --shard k/n 中 k 是 0-based 且要求 k < n，
-        # 所以 shard 必须是 0..7。展示用的 1-based 序号单独用 idx 带出：
+        # 所以 shard 必须是 0..15。展示用的 1-based 序号单独用 idx 带出：
         # GitHub Actions 表达式只有比较/逻辑运算符，没有加法，
         # 写 ${{ matrix.shard + 1 }} 会让整个工作流文件解析失败。
+        #
+        # 分片数为什么是 16：全量 1634 个变异体，实测单个变异体约 81s
+        # （cargo test --no-run 编译 40s + 跑测试 43s），
+        #   8 路 -> 每片 204 个 -> 约 274 分钟，贴着 300 分钟上限，
+        #           上一轮 8 路实测有 4 片被 runner 取消在 140~217 分钟；
+        #  16 路 -> 每片约 102 个 -> 约 138 分钟，留出一倍以上的抖动余量。
         include:
           - { shard: 0, idx: 1 }
           - { shard: 1, idx: 2 }
@@ -45,7 +51,15 @@ jobs:
           - { shard: 4, idx: 5 }
           - { shard: 5, idx:  6 }
           - { shard: 6, idx: 7 }
-          - { shard: 7, idx: 8 }
+          - { shard: 7, idx:  8 }
+          - { shard: 8, idx: 9 }
+          - { shard: 9, idx: 10 }
+          - { shard: 10, idx: 11 }
+          - { shard: 11, idx: 12 }
+          - { shard: 12, idx: 13 }
+          - { shard: 13, idx: 14 }
+          - { shard: 14, idx: 15 }
+          - { shard: 15, idx: 16 }
     steps:
       - uses: actions/checkout@v4
 
@@ -74,17 +88,31 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-mutants-
 
       - name: cargo mutants
-        # 变异范围由仓库根的 mutants.toml 收敛到 queue / formula / 解码模块。
+        # 变异范围由仓库根的 .cargo/mutants.toml 收敛到 queue / formula / 解码模块。
         # --in-place：直接在工作树内变异，省掉每个变异体复制整个 workspace 的开销；
         # CI 是一次性环境，不存在污染工作区的风险。
-        # --shard 的分母必须与上面的 matrix 长度一致（8 路并行）：cargo-mutants
-        # 要求 k < n，写成 /4 时 shard 4~8 会直接报 "shard k must be less than n"
-        # 而一个变异体都没跑，白白烧掉 5 个 runner。
-        # 有存活变异体时命令以非零码退出，作为质量信号。
-        run: cargo mutants -p gateway-core --in-place --shard ${{ matrix.shard }}/8
+        # --shard 的分母必须与上面的 matrix 长度一致（16 路并行）：cargo-mutants
+        # 要求 k < n，写成 /8 时 shard 8~15 会直接报 "shard k must be less than n"
+        # 而一个变异体都没跑，白白烧掉 8 个 runner。
+        #
+        # 这里不用 cargo-mutants 自己的退出码当门禁：只要还有一条存活变异体，
+        # 它就返回非零码（FoundProblems），在补齐断言之前这条工作流永远是红的。
+        # 真正的判定交给下面的 scripts/mutation_gate.py：
+        #   · 超时变异体 / 分片没跑完 / 新增漏网 -> 拦下；
+        #   · 已登记在基线里的存量漏网 -> 只报告。
+        # 所以这一步即便非零退出也要继续跑，产物先上传、门禁照常判定。
+        id: mutants
+        continue-on-error: true
+        run: cargo mutants -p gateway-core --in-place --shard ${{ matrix.shard }}/16
         env:
           RUSTFLAGS: ""
           CARGO_INCREMENTAL: "0"
+
+      - name: mutation gate
+        # 门禁判定：见 scripts/mutation_gate.py 的说明。
+        # 存量漏网登记在 scripts/mutation_baseline.txt，与行数预算一个口径：
+        # 存量只减不增，新增漏网立刻拦下。
+        run: python3 scripts/mutation_gate.py --out mutants.out --baseline scripts/mutation_baseline.txt
 
       - name: Upload mutants report
         if: always()

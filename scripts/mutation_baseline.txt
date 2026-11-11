@@ -1,0 +1,9 @@
+# 变异测试存量漏网基线（由 scripts/mutation_gate.py --update 生成）
+#
+# 每一行是一个「测试抓不到」的变异体（cargo-mutants 判定为 missed）。
+# 门禁只拦「不在本文件里的新增漏网」，所以本文件只应缩小、不应变大：
+# 补了断言的变异体会从 missed 变成 caught，届时应从本文件里删掉对应行。
+#
+# 不要手工编辑本文件，用下面的命令重建：
+#   python3 scripts/mutation_gate.py --update <各分片 missed.txt> \
+#       --baseline scripts/mutation_baseline.txt
