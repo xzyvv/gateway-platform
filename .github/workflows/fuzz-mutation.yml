@@ -32,6 +32,17 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
+      # 并发上限 8 而不是 16：GitHub public 仓库的并发配额是 20 个 job，
+      # 16 个分片 + 3 个 fuzz 已经把额度占到 19，任何别的分支再起一轮 CI
+      # 就会超限，runner 直接被回收——表现为日志里的
+      #   ERROR interrupted
+      #   The runner has received a shutdown signal
+      #   The operation was canceled.
+      # 这种取消发生在 baseline 刚跑完、一个变异体都没测的时候（实测 5 分钟），
+      # 跟超时和内存都无关。
+      # 16 片分两批跑，单片仍需约 138 分钟，两批合计约 276 分钟：
+      # 总时长没有变大，但始终给别的 workflow 留出 9 个 job 的余量。
+      max-parallel: 8
       matrix:
         # cargo-mutants 的 --shard k/n 中 k 是 0-based 且要求 k < n，
         # 所以 shard 必须是 0..15。展示用的 1-based 序号单独用 idx 带出：
