@@ -27,15 +27,25 @@ env:
 
 jobs:
   mutation:
-    name: mutation (queue/formula/decode) shard ${{ matrix.shard + 1 }}/8
+    name: mutation (queue/formula/decode) shard ${{ matrix.idx }}/8
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         # cargo-mutants 的 --shard k/n 中 k 是 0-based 且要求 k < n，
-        # 所以这里的 matrix 必须从 0 开始；展示用的序号统一 +1。
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        # 所以 shard 必须是 0..7。展示用的 1-based 序号单独用 idx 带出：
+        # GitHub Actions 表达式只有比较/逻辑运算符，没有加法，
+        # 写 ${{ matrix.shard + 1 }} 会让整个工作流文件解析失败。
+        include:
+          - { shard: 0, idx: 1 }
+          - { shard: 1, idx: 2 }
+          - { shard: 2, idx: 3 }
+          - { shard: 3, idx: 4 }
+          - { shard: 4, idx: 5 }
+          - { shard: 5, idx:  6 }
+          - { shard: 6, idx: 7 }
+          - { shard: 7, idx: 8 }
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +90,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutants-out-shard-${{ matrix.shard + 1 }}
+          name: mutants-out-shard-${{ matrix.idx }}
           path: mutants.out
           if-no-files-found: ignore
 
