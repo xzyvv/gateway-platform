@@ -10,7 +10,7 @@
 #   - 测试文件（*tests.rs / */tests/*）不计入，测试本来就该长。
 #
 # 格式：<仓库相对路径><TAB><行数上限>，一行一个，# 开头为注释。
-gateway-api/src/web/api/config/handlers/points.rs	640
+gateway-api/src/web/api/config/handlers/points.rs	561
 gateway-api/src/web/api/protocol_tools/handlers/slave_scan.rs	680
 gateway-api/src/web/api/protocol_tools/handlers/slave_simulator.rs	666
 gateway-api/src/web/api/system/handlers/status.rs	921
@@ -18,10 +18,10 @@ gateway-api/src/web/config_apply.rs	824
 gateway-api/src/web/heal.rs	834
 gateway-api/src/web/middleware/auth.rs	793
 gateway-core/src/config/bus.rs	551
-gateway-core/src/config/template.rs	654
-gateway-core/src/config/validate/gate.rs	731
+gateway-core/src/config/template.rs	553
+gateway-core/src/config/validate/gate.rs	547
 gateway-core/src/crypto/cert.rs	732
-gateway-core/src/engine/monitor/health.rs	714
+gateway-core/src/engine/monitor/health.rs	693
 gateway-core/src/license/mod.rs	785
 gateway-core/src/north/mqtt/mod.rs	879
 gateway-core/src/north/mqtt/outbox.rs	1042
@@ -36,9 +36,9 @@ gateway-core/src/platform/cellular/modem.rs	628
 gateway-core/src/platform/ota/apply.rs	555
 gateway-core/src/platform/ota/bootenv.rs	634
 gateway-core/src/queue/core/task.rs	722
-gateway-core/src/queue/mod.rs	790
-gateway-core/src/queue/storage/sqlite/limit.rs	859
-gateway-core/src/queue/storage/sqlite/sqlite_storage.rs	626
+gateway-core/src/queue/mod.rs	756
+gateway-core/src/queue/storage/sqlite/limit.rs	856
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs	586
 gateway-core/src/south/bus/serial_task.rs	745
 gateway-core/src/south/protocol/fins/mod.rs	537
 gateway-core/src/south/protocol/mc/frames.rs	623
