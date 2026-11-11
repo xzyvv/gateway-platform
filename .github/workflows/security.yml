@@ -18,10 +18,23 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+# ── runner 版本：显式钉住 ubuntu-24.04，不用 ubuntu-latest ──
+# GitHub 从 2026-10-19 起把 ubuntu-latest 迁到 Ubuntu 26.04：2026-11-11 的
+# security run 已经实际跑在镜像 ubuntu-26.04/20261101.186 上，每个 job 都会带
+# 一条 notice「The ubuntu-latest label will migrate to Ubuntu 26...」。
+# 本工作流只做依赖审计 —— cargo-audit / cargo-deny 走 taiki-e 的预编译静态
+# 二进制，npm audit 只读 package-lock，完全不耦合宿主发行版的系统库与工具链，
+# 版本差异对结论零影响。显式钉住的理由：
+#   · 去掉每次运行都刷的迁移提示（告警疲劳会让真正的告警被忽略）；
+#   · 审计结论不随 GitHub 单方面滚动镜像而漂移，可复现；
+#   · 升级时机由我们决定 —— 镜像退役时会直接报「找不到 runner」，
+#     而不是悄悄换掉运行环境。
+# 需要换版本时只改下面三处 runs-on；heavy.yml 的 ARM64 原生装机验证同样
+# 用的是显式版本（ubuntu-24.04-arm）。
 jobs:
   cargo-audit:
     name: cargo audit (RustSec)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +59,7 @@ jobs:
 
   cargo-deny:
     name: cargo deny (licenses / bans / sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +84,7 @@ jobs:
 
   npm-audit:
     name: npm audit (frontend deps)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
