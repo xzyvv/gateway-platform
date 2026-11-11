@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # 需要完整历史才能读到主分支最后一次提交的时间
           fetch-depth: 0

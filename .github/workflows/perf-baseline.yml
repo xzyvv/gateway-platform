@@ -43,7 +43,7 @@ jobs:
     # 构建 + 3 档短场景（3+5+3 min）+ 60 min 长稳 + 对比，留足余量。
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -56,7 +56,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.98.1
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -162,7 +162,7 @@ jobs:
 
       - name: Upload baseline candidate
         if: github.event_name == 'workflow_dispatch' && inputs.update_baseline
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: perf-baseline-candidate
           path: ${{ env.PERF_OUT }}/perf-baseline-ci.json
@@ -173,7 +173,7 @@ jobs:
       # 都依赖逐场景 JSON 与 Markdown，光看作业日志不够。
       - name: Upload perf artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: perf-baseline-out
           path: ${{ env.PERF_OUT }}/

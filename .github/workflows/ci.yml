@@ -68,7 +68,7 @@ jobs:
     name: check / clippy / fmt / test
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -83,7 +83,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -307,7 +307,7 @@ jobs:
           test -f gateway-desktop/src-tauri/Cargo.toml || { echo "::error::missing gateway-desktop/src-tauri/Cargo.toml"; exit 1; }
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # vitest 5 的 engines 要求 node ^22.12：Node 20 上 vmThreads 池会
           # 整批报 ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING（212 个文件起不来）。
@@ -342,7 +342,7 @@ jobs:
 
       - name: Upload web coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-coverage-report
           path: gateway-web/coverage/
@@ -357,7 +357,7 @@ jobs:
 
       - name: Upload web dist artifact
         # 交付包构建 / 本地复现按需取用（desktop 已冻结，不再消费此 artifact）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gateway-web-dist
           path: ui-dist/
@@ -414,9 +414,9 @@ jobs:
       matrix:
         os: [windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -443,7 +443,7 @@ jobs:
     runs-on: ubuntu-26.04
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -455,7 +455,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.98.1
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -507,9 +507,9 @@ jobs:
     runs-on: ubuntu-26.04
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -586,7 +586,7 @@ jobs:
     name: e2e smoke
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -601,7 +601,7 @@ jobs:
 
       # 独立 key（-cargo-e2e-）：与其他 job 的 target 缓存互不干扰
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -616,7 +616,7 @@ jobs:
           RUSTFLAGS: ""
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # 与前端作业保持一致：vite 8 / vitest 5 都要求 node ≥ 22.12
           node-version: '22'
@@ -645,7 +645,7 @@ jobs:
       # test-results 仅失败时有内容，用 if-no-files-found: ignore 兜底
       - name: Upload Playwright report & traces
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-playwright-report
           path: |
@@ -671,7 +671,7 @@ jobs:
     name: deploy script lint
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 工作流 YAML 语法检查。
       # P1-3 之后工作流文件从 3 个变成 5 个（新增 heavy.yml / release-gate.yml），
@@ -750,7 +750,7 @@ jobs:
     runs-on: ubuntu-26.04
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -763,7 +763,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -786,7 +786,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends musl-tools
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # vite 8 要求 node ≥ 22.12（与前端作业同一运行时）
           node-version: '22'
@@ -1089,7 +1089,7 @@ jobs:
 
       - name: Upload delivery checklist
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: delivery-checklist
           path: |

@@ -31,7 +31,7 @@ jobs:
     name: chaos scenarios
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -45,7 +45,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -69,7 +69,7 @@ jobs:
     name: all-features test matrix
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -81,7 +81,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.98.1
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -110,7 +110,7 @@ jobs:
     name: backend coverage (baseline)
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -125,7 +125,7 @@ jobs:
       - name: Add llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -157,7 +157,7 @@ jobs:
 
       - name: Upload backend coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage-report
           path: |
@@ -207,7 +207,7 @@ jobs:
             sysroot: /usr/arm-linux-gnueabihf
             loader: ld-linux-armhf.so.3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -221,7 +221,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -495,7 +495,7 @@ jobs:
             emu: qemu-arm
             pkg: qemu-user-static
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -509,7 +509,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -629,7 +629,7 @@ jobs:
           done
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gatewayd-${{ matrix.target }}
           path: |
@@ -649,9 +649,9 @@ jobs:
     name: performance benchmarks
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -674,7 +674,7 @@ jobs:
 
       - name: Upload criterion HTML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: criterion-bench-report
           path: target/criterion/
@@ -703,9 +703,9 @@ jobs:
       SOAK_SAMPLE_MS: "10000"
       SOAK_OUT_DIR: gateway-core/soak-out
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -757,7 +757,7 @@ jobs:
 
       - name: Upload soak artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-smoke-report
           path: gateway-core/soak-out/
@@ -776,9 +776,9 @@ jobs:
     env:
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -857,7 +857,7 @@ jobs:
 
       - name: Upload size matrix
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sku-size-matrix
           path: ${{ runner.temp }}/sku-size/
@@ -879,9 +879,9 @@ jobs:
     env:
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -900,7 +900,7 @@ jobs:
       # cross 自带 aarch64 musl 工具链（宿主 apt 只有 x86_64 musl-gcc）
       - uses: taiki-e/install-action@cross
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -1008,7 +1008,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/gatewayd-arm64-musl-release.tar.gz"
 
       - name: Upload release package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gatewayd-arm64-musl-release
           path: ${{ runner.temp }}/gatewayd-arm64-musl-release.tar.gz
@@ -1028,7 +1028,7 @@ jobs:
     env:
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 原生构建 musl 静态产物：目标架构 == 宿主架构时 build-release.sh 走裸 cargo，
       # 由宿主 musl-gcc 编译 bundled sqlite3.c（不经过 cross 容器）。
@@ -1036,7 +1036,7 @@ jobs:
         with:
           targets: aarch64-unknown-linux-musl
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -1064,7 +1064,7 @@ jobs:
           fi
           aarch64-linux-musl-gcc --version | head -1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -1152,7 +1152,7 @@ jobs:
 
       - name: Upload delivery checklist
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arm64-delivery-checklist
           path: deploy/out/delivery-checklist-*.md

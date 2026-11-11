@@ -1266,6 +1266,36 @@ else {
     else {
         Fail ("以下工作流仍在用 ubuntu-latest，会刷 Ubuntu 26 迁移提示且镜像会漂移：" + ($latestHits -join ", "))
     }
+    # 3e) action 的运行时也要跟上 —— 禁止 Node 20 世代版本。
+    #     GitHub 已把这些 action 强制跑在 node24 上，每个 job 都会刷一条
+    #       Node.js 20 is deprecated ... actions/checkout@v4, actions/setup-node@v4
+    #     2026-11-11 核实各 action 的首个 node24 版本：
+    #       checkout v5 / setup-node v5 / cache v5 / upload-artifact v6
+    #     注意 upload-artifact@v5 的 action.yml 仍是 node20，必须 v6 起。
+    #     当前全仓已统一到 checkout@v7 / setup-node@v7 / cache@v6 /
+    #     upload-artifact@v7（上游当时的最新稳定大版本）。这条断言防止新增
+    #     步骤照抄旧版本，把已经清掉的告警又带回来。
+    $node20Patterns = @(
+        'actions/checkout@v4',
+        'actions/setup-node@v4',
+        'actions/cache@v4',
+        'actions/upload-artifact@v4',
+        'actions/upload-artifact@v5'
+    )
+    $node20Hits = @()
+    foreach ($wf in Get-ChildItem (Join-Repo ".github/workflows") -Filter "*.yml" -ErrorAction SilentlyContinue) {
+        $wt = ReadText (".github/workflows/" + $wf.Name)
+        if ($null -eq $wt) { continue }
+        foreach ($pat in $node20Patterns) {
+            if ($wt.Contains($pat)) { $node20Hits += "$($wf.Name):$pat" }
+        }
+    }
+    if ($node20Hits.Count -eq 0) {
+        Ok "所有工作流都不再使用 Node 20 世代的 action 版本"
+    }
+    else {
+        Fail ("以下位置仍在用 Node 20 世代 action，会刷 Node.js 20 弃用告警：" + ($node20Hits -join ", "))
+    }
     if ($null -ne $ciHeavy -and $ciHeavy -match '(?m)^\s*needs:\s*check\s*$') {
         Ok "ci.yml 的 heavy 调用仍依赖 check（重作业在快门禁通过后才起跑）"
     }

@@ -81,7 +81,7 @@ jobs:
           - { shard: 14, idx: 15 }
           - { shard: 15, idx: 16 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -98,7 +98,7 @@ jobs:
         uses: taiki-e/install-action@cargo-mutants
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload mutants report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants-out-shard-${{ matrix.idx }}
           path: mutants.out
@@ -151,7 +151,7 @@ jobs:
       matrix:
         target: [modbus_decode, dlt645_decode, bacnet_mstp_decode]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Override cargo config for CI
         run: |
@@ -190,7 +190,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
