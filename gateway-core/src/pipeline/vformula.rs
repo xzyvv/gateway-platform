@@ -273,6 +273,22 @@ impl<'a> Parser<'a> {
         t
     }
 
+    /// 循环防御：每轮至少消费一个记号。
+    ///
+    /// 递降解析器靠 `pos` 单调前进来保证收敛。若某处逻辑让 `pos` 原地不动
+    /// （例如 `take` 里误写 `pos -= 1`，与外层循环的 `pos += 1` 互相抵消），
+    /// 下面的 `loop` 会无限拼接语法树直到内存耗尽。此处把「挂死」降级为
+    /// 一次语法错误，让调用方能正常拿到失败结果。
+    fn ensure_progress(&self, before: usize) -> Result<(), FormulaError> {
+        if self.pos <= before {
+            return Err(FormulaError::Syntax(format!(
+                "公式解析未前进（第 {} 个记号处），拒绝继续",
+                self.pos
+            )));
+        }
+        Ok(())
+    }
+
     fn expect(&mut self, want: Token) -> Result<(), FormulaError> {
         match self.take() {
             Some(t) if t == want => Ok(()),
@@ -300,6 +316,7 @@ impl<'a> Parser<'a> {
     fn parse_expr(&mut self) -> Result<Expr, FormulaError> {
         let mut left = self.parse_term()?;
         loop {
+            let before = self.pos;
             match self.peek() {
                 Some(Token::Op('+')) => {
                     self.pos += 1;
@@ -313,6 +330,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => return Ok(left),
             }
+            self.ensure_progress(before)?;
         }
     }
 
@@ -320,6 +338,7 @@ impl<'a> Parser<'a> {
     fn parse_term(&mut self) -> Result<Expr, FormulaError> {
         let mut left = self.parse_power()?;
         loop {
+            let before = self.pos;
             let op = match self.peek() {
                 Some(Token::Op(c @ ('*' | '/' | '%'))) => *c,
                 _ => return Ok(left),
@@ -332,6 +351,7 @@ impl<'a> Parser<'a> {
                 _ => BinOp::Rem,
             };
             left = Expr::Binary(bin, Box::new(left), Box::new(right));
+            self.ensure_progress(before)?;
         }
     }
 
@@ -375,8 +395,10 @@ impl<'a> Parser<'a> {
                 if !matches!(self.peek(), Some(Token::RParen)) {
                     args.push(self.parse_expr()?);
                     while matches!(self.peek(), Some(Token::Comma)) {
+                        let before = self.pos;
                         self.pos += 1;
                         args.push(self.parse_expr()?);
+                        self.ensure_progress(before)?;
                     }
                 }
                 self.expect(Token::RParen)?;

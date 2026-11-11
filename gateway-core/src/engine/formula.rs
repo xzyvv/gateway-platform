@@ -24,6 +24,10 @@ fn is_formula_safe(formula: &str) -> bool {
     let bytes = formula.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        // 本轮必须至少前进一个字节：白名单扫描没有「原地重试」语义，
+        // 索引一旦不动就会无限循环，把调用线程卡死。这里显式兜底，
+        // 让异常情况退化成「公式被拒绝」而不是「挂住」。
+        let before = i;
         let b = bytes[i];
         if b == b'r' && i + 3 <= bytes.len() && &bytes[i..i + 3] == b"raw" {
             if i + 3 < bytes.len() {
@@ -35,15 +39,18 @@ fn is_formula_safe(formula: &str) -> bool {
                 }
             }
             i += 3;
-            continue;
+        } else {
+            let ok = b.is_ascii_digit()
+                || matches!(b, b'.' | b'+' | b'-' | b'*' | b'/' | b'(' | b')')
+                || b.is_ascii_whitespace();
+            if !ok {
+                return false;
+            }
+            i += 1;
         }
-        let ok = b.is_ascii_digit()
-            || matches!(b, b'.' | b'+' | b'-' | b'*' | b'/' | b'(' | b')')
-            || b.is_ascii_whitespace();
-        if !ok {
+        if i <= before {
             return false;
         }
-        i += 1;
     }
     true
 }

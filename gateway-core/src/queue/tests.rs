@@ -442,6 +442,68 @@ async fn test_oldest_data_timestamp_memory_backend_is_none() {
     assert_eq!(queue.oldest_data_timestamp().await, None);
 }
 
+/// `DataQueue` 的包装层必须如实透传存储后端的时间戳。
+///
+/// 单测 `SqliteStorage` 只能证明后端本身正确；包装层若写成恒返回 `None`，
+/// 配额用量会被永久判成 0，商业侧的保留天数约束就形同失效。
+#[tokio::test]
+async fn test_dataqueue_oldest_data_timestamp_forwards_storage_value() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("queue_forward.db");
+    let storage = SqliteStorage::new(db_path.to_str().unwrap(), Arc::new(Metrics::new())).unwrap();
+    let queue = DataQueue::with_storage(Arc::new(storage)).unwrap();
+
+    let ts = DataPoint::now() - 86_400_000;
+    queue
+        .enqueue(vec![make_point_at("p-old", 1.0, ts)])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        queue.oldest_data_timestamp().await,
+        Some(ts),
+        "包装层应透传存储后端的最旧时间戳，不能恒为 None"
+    );
+}
+
+/// 磁盘可用标志的读-写往返：两个方向都要能翻转。
+///
+/// 只断言默认值 `true` 无法区分「真实读取」与「恒返回 true」，
+/// 降级路径（磁盘压力时停止写库）就可能在实现被改坏后静默失效。
+#[tokio::test]
+async fn test_disk_ok_flag_round_trip() {
+    let queue = DataQueue::new_memory().unwrap();
+    assert!(queue.is_disk_ok(), "默认应允许写库");
+
+    queue.set_disk_ok(false);
+    assert!(
+        !queue.is_disk_ok(),
+        "置为 false 后必须能读到 false，否则降级路径永不生效"
+    );
+
+    queue.set_disk_ok(true);
+    assert!(queue.is_disk_ok(), "恢复后必须能读到 true");
+}
+
+/// 行数上限的读-写往返，且小于 1 的输入必须被夹到 1。
+///
+/// 上限为 0 会让存储层每次写入都触发全表淘汰；这里把夹取行为钉死。
+#[tokio::test]
+async fn test_max_rows_set_get_and_clamp() {
+    let queue = DataQueue::new_memory().unwrap();
+
+    queue.set_max_rows(4321);
+    assert_eq!(queue.max_rows(), 4321, "设置后应读回同一值");
+
+    queue.set_max_rows(0);
+    assert_eq!(queue.max_rows(), 1, "0 必须被夹到 1，避免每次写入都全表淘汰");
+
+    queue.set_max_rows(-9);
+    assert_eq!(queue.max_rows(), 1, "负数同样必须夹到 1");
+}
+
 /// P0-2 回归：`storage_days` 配额必须对**未送达**行同样生效。
 ///
 /// 旧实现要求 `delivered = 1`，直连调试（没有北向消费者，delivered 恒为 0）时
