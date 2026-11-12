@@ -80,3 +80,113 @@ pub(crate) fn push_into_fallback(
     }
     (n_in - new_evicted, dropped)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::model::DataPoint;
+    use crate::engine::model::Quality;
+
+    /// 构造一个指定质量与 stale 次数的数据点。
+    fn point(quality: Quality, stale_count: u32) -> DataPoint {
+        let now = DataPoint::now();
+        DataPoint {
+            point_id: "p1".into(),
+            device_id: "dev1".into(),
+            value: 1.0,
+            raw_value: 1.0,
+            raw_type: "u16".into(),
+            quality,
+            quality_reason: "".into(),
+            timestamp: now,
+            source_ts: now,
+            stale_count,
+            value_text: None,
+        }
+    }
+
+    /// 优先级分数的**具体数值**是契约的一部分：质量每降一级扣 1000 分，
+    /// stale_count 每多 1 再扣 1 分。
+    ///
+    /// 这条断言盯住 `base * 1000 - stale_count` 里的乘号与减号：
+    /// 只比较相对顺序抓不到 —— 乘号改成加号后（Good=1003、Bad=1000）
+    /// 顺序照样成立，但「坏点分数为负、可以被整体垫底」这一语义已经变了。
+    #[test]
+    fn priority_score_has_stable_absolute_values() {
+        assert_eq!(priority_score(&point(Quality::Good, 0)), 3000);
+        assert_eq!(priority_score(&point(Quality::Uncertain, 0)), 2000);
+        assert_eq!(priority_score(&point(Quality::Stale, 0)), 1000);
+        assert_eq!(priority_score(&point(Quality::Bad, 0)), 0);
+        // stale_count 越多，分数越低（且可以降到 0 以下）
+        assert_eq!(priority_score(&point(Quality::Good, 7)), 2993);
+        assert_eq!(priority_score(&point(Quality::Bad, 3)), -3);
+    }
+
+    /// 淘汰时应挑出分数最低的那一个（坏点先走、好点后走）。
+    #[test]
+    fn find_lowest_priority_idx_picks_worst_point() {
+        let mut buf = std::collections::VecDeque::new();
+        buf.push_back(point(Quality::Good, 0));
+        buf.push_back(point(Quality::Bad, 0));
+        buf.push_back(point(Quality::Uncertain, 0));
+        assert_eq!(find_lowest_priority_idx(&buf), Some(1));
+    }
+
+    /// 超容量时只淘汰到**恰好等于容量**为止，并且返回值的语义是
+    /// `(本批留下数, 本批被淘汰数)`。
+    ///
+    /// 这条断言盯住三处：
+    /// - `while buf.len() > capacity` 的边界（改成 >= 会多淘汰一个）；
+    /// - `new_evicted += 1` 的累加（改成 *= 1 在初值为 0 时等价，掩盖了淘汰数）；
+    /// - `n_in - new_evicted` 的减法（改成加法会让「留下数」凭空翻倍）。
+    #[test]
+    fn fallback_evicts_exactly_one_when_over_capacity() {
+        let mut buf = std::collections::VecDeque::new();
+        let mut retry = 0u32;
+        let pts = vec![
+            point(Quality::Bad, 0),
+            point(Quality::Bad, 0),
+            point(Quality::Good, 0),
+        ];
+        let (retained, dropped) = push_into_fallback(&mut buf, 2, pts, &mut retry);
+        assert_eq!(dropped, 1, "容量 2 装 3 个，只该淘汰 1 个");
+        assert_eq!(retained, 2, "留下数 = 批内总数 - 本批被淘汰数");
+        assert_eq!(buf.len(), 2, "淘汰后长度应恰好等于容量");
+    }
+
+    /// 淘汰的是**旧的低优先级点**时，本批新点应全部留下。
+    /// 这条断言盯住「区间下标统计」那段：`new_start` 的递减与
+    /// `new_evicted` 的累加一旦被改写，日志里的 retained 会误报为 0
+    /// （运维会以为新数据全丢了）。
+    #[test]
+    fn fallback_keeps_new_points_when_old_worst_is_evicted() {
+        let mut buf = std::collections::VecDeque::new();
+        let mut retry = 0u32;
+
+        let (retained, dropped) =
+            push_into_fallback(&mut buf, 2, vec![point(Quality::Bad, 0)], &mut retry);
+        assert_eq!((retained, dropped), (1, 0), "未超容量，不该淘汰");
+
+        let (retained, dropped) = push_into_fallback(
+            &mut buf,
+            2,
+            vec![point(Quality::Good, 0), point(Quality::Good, 0)],
+            &mut retry,
+        );
+        assert_eq!(dropped, 1, "被淘汰的是旧的坏点");
+        assert_eq!(retained, 2, "本批两个新点都应留下");
+        assert_eq!(buf.len(), 2);
+    }
+
+    /// 反弹轮次达到上限后强制丢弃本批点，并重置计数（给下一批机会）。
+    #[test]
+    fn fallback_drops_batch_after_max_retries() {
+        let mut buf = std::collections::VecDeque::new();
+        let mut retry = FALLBACK_MAX_RETRIES;
+        let (retained, dropped) =
+            push_into_fallback(&mut buf, 10, vec![point(Quality::Good, 0)], &mut retry);
+        assert_eq!((retained, dropped), (0, 1), "达到上限应整批丢弃");
+        assert_eq!(retry, 0, "计数应重置，给下一批机会");
+        assert!(buf.is_empty(), "被丢弃的点不应进缓冲");
+    }
+}

@@ -149,3 +149,20 @@ impl QueueStorage for MemoryStorage {
         "memory"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 内存后端不做容量淘汰，累计淘汰数必须是 (0, 0)。
+    ///
+    /// 这条断言盯住 `QueueStorage::evicted_stats` 的**默认实现**：它是
+    /// 「到底丢了多少数据」的唯一对外凭据（告警 / 前端 / 指标都读它），
+    /// 返回任何固定非零值都会让运维误判数据丢失。旧用例没有任何断言，
+    /// 默认实现被改成 (0, 1) 之类也照样全绿。
+    #[test]
+    fn memory_storage_reports_zero_evictions() {
+        let store = MemoryStorage::new();
+        assert_eq!(store.evicted_stats(), (0, 0));
+    }
+}

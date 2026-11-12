@@ -258,4 +258,28 @@ mod tests {
             mode & 0o777
         );
     }
+
+    /// 启用加密时，`ensure_key` 必须返回 **keyfile 实际内容的 hex**。
+    ///
+    /// 这条断言盯住 `Ok(to_hex(&ensure_key_bytes(db_path)?))` 这一层封装：
+    /// 它一旦被改成返回固定值（或跳过读 keyfile），密钥就与落盘内容不一致，
+    /// SQLCipher 会用错误密钥开库——现象是「数据丢了」，而不是「打不开」。
+    /// 旧用例只覆盖 `ensure_key_bytes`，这一层没有任何断言。
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn ensure_key_returns_hex_of_keyfile() {
+        let (_dir, dir) = tmp_dir();
+        let db = dir.join("data.db");
+        let key = ensure_key(&db).expect("ensure_key");
+        assert_eq!(key.len(), KEY_LEN * 2, "hex 编码长度应为密钥字节数的两倍");
+        assert!(
+            key.chars().all(|c| c.is_ascii_hexdigit()),
+            "返回值必须是 hex 字符: {}",
+            key
+        );
+        let raw = std::fs::read(keyfile_path(&db)).expect("read keyfile");
+        assert_eq!(key, to_hex(&raw), "返回值必须与 keyfile 内容一致");
+        // 幂等：二次调用不得换密钥
+        assert_eq!(ensure_key(&db).expect("ensure_key again"), key);
+    }
 }

@@ -195,3 +195,6 @@ pub(crate) fn extract_dlt645_cjt188_frame(
         return Some(fb.pop(total));
     }
 }
+
+#[cfg(test)]
+mod tests;
