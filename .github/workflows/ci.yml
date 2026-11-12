@@ -445,6 +445,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
+
       - name: Override cargo config for CI
         run: |
           mkdir -p .cargo
@@ -588,6 +593,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
+
       - name: Override cargo config for CI
         run: |
           mkdir -p .cargo
@@ -673,6 +683,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
+
       # 工作流 YAML 语法检查。
       # P1-3 之后工作流文件从 3 个变成 5 个（新增 heavy.yml / release-gate.yml），
       # 而一个缩进错误会让整个工作流**静默不执行** —— 不报错，只是"这个 job
@@ -751,6 +766,11 @@ jobs:
     needs: check
     steps:
       - uses: actions/checkout@v7
+
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
 
       - name: Override cargo config for CI
         run: |

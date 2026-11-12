@@ -71,6 +71,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
+
       - name: Override cargo config for CI
         run: |
           mkdir -p .cargo
@@ -208,6 +213,11 @@ jobs:
             loader: ld-linux-armhf.so.3
     steps:
       - uses: actions/checkout@v7
+
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
 
       - name: Override cargo config for CI
         run: |
@@ -496,6 +506,11 @@ jobs:
             pkg: qemu-user-static
     steps:
       - uses: actions/checkout@v7
+
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
 
       - name: Override cargo config for CI
         run: |
@@ -1029,6 +1044,11 @@ jobs:
       RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v7
+
+      # apt 源多路 fallback：官方源优先、国内镜像兜底，避免 ubuntu.com 域
+      # 整体 DNS 故障时这一串装包步骤一起失败
+      - name: Setup apt mirrors
+        uses: ./.github/actions/setup-apt
 
       # 原生构建 musl 静态产物：目标架构 == 宿主架构时 build-release.sh 走裸 cargo，
       # 由宿主 musl-gcc 编译 bundled sqlite3.c（不经过 cross 容器）。

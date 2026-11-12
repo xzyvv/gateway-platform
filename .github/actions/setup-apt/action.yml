@@ -1,0 +1,11 @@
+name: Setup apt mirrors
+description: >
+  配置 apt 多路 fallback 源：官方源优先（贴近 runner 的 Azure CDN），国内镜像
+  兜底。避免 ubuntu.com 域整体 DNS 故障时所有装包步骤一起失败。
+
+runs:
+  using: composite
+  steps:
+    - name: Configure apt sources (official first, fallback mirrors)
+      shell: bash
+      run: sudo python3 "$GITHUB_ACTION_PATH/apt_sources.py"

@@ -1296,6 +1296,31 @@ else {
     else {
         Fail ("以下位置仍在用 Node 20 世代 action，会刷 Node.js 20 弃用告警：" + ($node20Hits -join ", "))
     }
+    # 3f) 任何用到 apt 的作业都必须先接入多路 fallback 源。
+    #     2026-11-11 实测：Canonical 侧 ubuntu.com 权威 DNS 整族 SERVFAIL
+    #     （archive / azure.archive / security 全部 Temporary failure resolving），
+    #     apt-get update 拿不到任何索引 → 装字体、装 musl-tools 一起失败，
+    #     而同批不依赖 apt 的作业全绿，说明与本仓改动无关。
+    #     .github/actions/setup-apt 把官方源排最前、国内镜像排后面兜底，
+    #     这条断言防止新增作业绕过它、又直接依赖官方源。
+    $aptNoMirror = @()
+    foreach ($wf in Get-ChildItem (Join-Repo ".github/workflows") -Filter "*.yml" -ErrorAction SilentlyContinue) {
+        $wt = ReadText (".github/workflows/" + $wf.Name)
+        if ($null -eq $wt) { continue }
+        $jobBlocks = [regex]::Matches($wt, '(?ms)^  (?<job>[a-zA-Z0-9_-]+):\s*\r?\n(?<body>.*?)(?=^  [a-zA-Z0-9_-]+:\s*$|\z)')
+        foreach ($jb in $jobBlocks) {
+            $body = $jb.Groups['body'].Value
+            if ($body -match 'apt-get\s+(install|update)' -and $body -notmatch '\./\.github/actions/setup-apt') {
+                $aptNoMirror += "$($wf.Name):$($jb.Groups['job'].Value)"
+            }
+        }
+    }
+    if ($aptNoMirror.Count -eq 0) {
+        Ok "所有用到 apt 的作业都已接入 setup-apt 多路 fallback 源"
+    }
+    else {
+        Fail ("以下作业直接用 apt 但没接入 setup-apt，官方源整体故障时会整片失败：" + ($aptNoMirror -join ", "))
+    }
     if ($null -ne $ciHeavy -and $ciHeavy -match '(?m)^\s*needs:\s*check\s*$') {
         Ok "ci.yml 的 heavy 调用仍依赖 check（重作业在快门禁通过后才起跑）"
     }
