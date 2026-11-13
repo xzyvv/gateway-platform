@@ -55,7 +55,10 @@ ring = "0.17"
 # 默认使用标准 SQLite（开发机无 OpenSSL/Perl）
 # 生产构建启用加密：cargo build -p gateway-core --features encryption
 # （workspace 根不支持 `--features gateway-core/encryption` 写法；构建 gatewayd 时用 -p gatewayd）
-rusqlite = { version = "0.41", features = ["bundled"] }
+# 0.42 起 libsqlite3-sys 升到 0.40，bundled-sqlcipher 路径跟随
+# sqlcipher-src 420.0.0（SQLite 3.54.1），闭合 RUSTSEC-2026-0502
+# （C SQLite CVE-2026-119375，修复版本 SQLite 3.54.0）。
+rusqlite = { version = "0.42", features = ["bundled"] }
 tokio-serial = "5"
 rsntp = "3"
 thiserror = "1"
