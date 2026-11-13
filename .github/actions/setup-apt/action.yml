@@ -2,6 +2,9 @@ name: Setup apt mirrors
 description: >
   配置 apt 多路 fallback 源：官方源优先（贴近 runner 的 Azure CDN），国内镜像
   兜底。避免 ubuntu.com 域整体 DNS 故障时所有装包步骤一起失败。
+  兜底源按本机架构限定并逐个实测可用性：镜像缺该架构时宁可不写，
+  也不留必然 404 的源——那会让 apt-get update 以 exit 100 收场，
+  把本来可用的官方源也一起弄挂。
 
 runs:
   using: composite
