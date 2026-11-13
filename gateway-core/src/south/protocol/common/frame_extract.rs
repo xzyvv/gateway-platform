@@ -165,7 +165,18 @@ pub(crate) fn extract_dlt645_cjt188_frame(
         }
         // DLT645 需校验第二个 0x68（在 start+7 位置）
         if check_second_header && buf[start + 7] != 0x68 {
-            let _ = fb.pop(start + 1);
+            // 重同步：丢弃「帧头之前的垃圾」+「帧头 0x68 本身」两段。
+            //
+            // 终止性保证：帧头 0x68 必须被移除，否则下一轮 `position()` 会在
+            // 同一位置再次找到它，重同步分支原地打转——串口采集任务卡死、
+            // 采集中断，而且不报错（最难排查的一类故障）。
+            //
+            // 刻意拆成「先丢前缀垃圾、再丢帧头 1 字节」两步，而不是写成
+            // `pop(start + 1)`：后者把「每轮至少前进 1 字节」押在某个加减法
+            // 的具体取值上，该表达式一旦被改错（哪怕只差 1），循环就永不退出。
+            // 拆开后前进量只依赖「无条件弹出 1 字节」这一条，不依赖任何算术。
+            let _ = fb.pop(start); // 帧头之前的垃圾
+            let _ = fb.pop(1); // 帧头 0x68 本身
             continue;
         }
         let data_len = buf[start + 9] as usize;
@@ -179,12 +190,17 @@ pub(crate) fn extract_dlt645_cjt188_frame(
         // 校验和 CS = 帧首到 CS 前所有字节之和 mod 256
         let cs_pos = start + 10 + data_len;
         if checksum8(&buf[start..cs_pos]) != buf[cs_pos] {
-            let _ = fb.pop(start + 1);
+            // 重同步：与上方「第二头字节不对」分支同构——丢弃前缀垃圾 + 帧头，
+            // 保证每轮至少前进 1 字节（终止性理由见上方注释）。
+            let _ = fb.pop(start); // 帧头之前的垃圾
+            let _ = fb.pop(1); // 帧头 0x68 本身
             continue;
         }
         // 结束字节 0x16
         if buf[start + total - 1] != 0x16 {
-            let _ = fb.pop(start + 1);
+            // 重同步：同上，丢弃前缀垃圾 + 帧头。
+            let _ = fb.pop(start); // 帧头之前的垃圾
+            let _ = fb.pop(1); // 帧头 0x68 本身
             continue;
         }
         // 只返回帧本身：重同步跳过的前缀垃圾必须丢弃，否则 parse_68_response

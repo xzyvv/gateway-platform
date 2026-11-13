@@ -69,7 +69,13 @@ pub(crate) fn push_into_fallback(
     let mut new_evicted = 0usize;
     let mut dropped = 0usize;
     while buf.len() > capacity {
-        let idx = find_lowest_priority_idx(buf).unwrap_or(0);
+        // 缓冲区非空时一定能找到淘汰对象；找不到说明缓冲已被抽空，
+        // 此时必须退出：旧写法用 `unwrap_or(0)` 兜底，会拿一个无效下标去
+        // `VecDeque::remove`——对空队列而言 remove 是空操作，len 永不下降，
+        // 循环原地打转直到进程被拖死（现场表现：采集线程占满 CPU、队列不再上报）。
+        let Some(idx) = find_lowest_priority_idx(buf) else {
+            break;
+        };
         if idx >= new_start {
             new_evicted += 1;
         } else {
