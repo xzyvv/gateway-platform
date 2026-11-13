@@ -437,15 +437,29 @@ mod tests {
             MAX_READ_BYTES
         );
 
-        // 现在用 AuditLog::list 查询：不应 OOM，且能返回尾部记录
-        let log = AuditLog::new(path.clone());
-        // 写入一条哨兵（在已有大文件之后）
-        log.log("sentinel.action", "sentinel.target", "d", "test");
-        // 等待哨兵落盘
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        drop(log);
+        // 哨兵行：在已有大文件之后追加一条，用于验证「尾部读取能拿到最新记录」。
+        //
+        // 这里刻意不走 AuditLog::log()：它只是异步入队，真正落盘的时刻不由
+        // 调用方控制，早期实现靠固定 sleep(200ms) 等待——并行负载下写线程
+        // 可能 200ms 内没被调度，哨兵就没进文件，用例随机失败。
+        // 该随机失败会连带污染变异测试：cargo-mutants 判定某变异体「已被杀死」
+        // 只看测试是否失败，于是无关变异体会被误判为已杀死（实测已发生一次）。
+        // 改为同步 append + flush：落盘状态确定，用例不再有竞态。
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("open audit for append");
+            writeln!(
+                f,
+                r#"{{"ts":1700000000999,"action":"sentinel.action","target":"sentinel.target","detail":"d","source":"test"}}"#
+            )
+            .expect("write sentinel");
+            f.flush().expect("flush sentinel");
+        }
 
-        // 重新打开读取（绕开异步队列行为，直接验证 read_tail_lines）
+        // 重新打开读取（直接验证 read_tail_lines）
         let tail = read_tail_lines(&path, MAX_READ_BYTES).expect("read tail");
         // 读到的字节不超过 MAX_READ_BYTES 的一个常数倍
         assert!(!tail.is_empty(), "tail 读取应至少包含部分行，实际为空");
