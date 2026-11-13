@@ -34,6 +34,13 @@ exclude_globs = [
 #   --features bacnet-mstp                MSTP 不在默认 all-protocols 集合里，
 #                                          不开这个 feature 时 bacnet_mstp 根本不编译，
 #                                          该文件的变异体会全部「假存活」
+#   --features ...,encryption             加密分支（queue/core/key.rs 的 ensure_key）
+#                                          同样「不开就根本不编译」：不开这个 feature 时
+#                                          #[cfg(feature = "encryption")] 的代码不存在，
+#                                          其变异体永远「假存活」（实测 7 个存活变异体）。
+#                                          打开后该分支才真正参与变异并被断言覆盖。
+#                                          代价：CI 需装 libssl-dev/pkg-config/perl，
+#                                          且每个 job 多一次 SQLCipher 编译。
 # 刻意不跑 chaos / load / soak / north_*：逐变异体执行会把 CI 时长拉爆，
 # 且它们覆盖的代码不在本配置的变异范围内。
 additional_cargo_test_args = [
@@ -45,7 +52,7 @@ additional_cargo_test_args = [
   "--test",
   "virtual_point_pipeline",
   "--features",
-  "bacnet-mstp",
+  "bacnet-mstp,encryption",
 ]
 timeout_multiplier = 3.0
 # 单位：秒（此字段要求数值，不接受 "60s" 这类字符串）

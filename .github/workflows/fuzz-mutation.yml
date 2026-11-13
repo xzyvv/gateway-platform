@@ -83,6 +83,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # apt 源兜底：官方源不可达时自动切到国内镜像（见 .github/actions/setup-apt）。
+      # 变异 job 要装 SQLCipher 编译依赖（--features encryption），必须先把源修好。
+      - uses: ./.github/actions/setup-apt
+
+      - name: Install OpenSSL build deps
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config perl
+
       - name: Override cargo config for CI
         run: |
           mkdir -p .cargo
