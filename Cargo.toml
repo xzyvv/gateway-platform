@@ -91,7 +91,7 @@ gpiod = "0.2"
 # feature-gated：OTLP 远程 trace 导出（tracing-otlp 启用时；版本与 tracing-opentelemetry 对齐需 cargo check 验证）
 opentelemetry = "0.28"
 opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic"] }
-tracing-opentelemetry = "0.29"
+tracing-opentelemetry = "0.34"
 opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
 # 基准测试：cargo bench --workspace（criterion 输出统计 + HTML 报告）
 criterion = { version = "0.5", features = ["html_reports"] }
