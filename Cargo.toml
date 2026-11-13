@@ -62,7 +62,7 @@ rusqlite = { version = "0.42", features = ["bundled"] }
 tokio-serial = "5"
 rsntp = "3"
 thiserror = "1"
-evalexpr = "11"
+evalexpr = "13"
 validator = { version = "0.21", features = ["derive"] }
 flate2 = "1.0"
 # OTA 差分升级：bsdiff 4.x 兼容的补丁应用（纯 Rust，无 C/交叉编译负担）
