@@ -170,7 +170,10 @@ fn lex(src: &str) -> Result<Vec<Token>, FormulaError> {
                 }
             }
         }
-        if i == before {
+        // 守卫必须判「没有严格前进」，而不是「没有变化」：
+        // 下标倒退（本轮 i < before）同样会让 while 循环永不退出，
+        // 而且每轮都会往 tokens 里塞一个记号，内存持续膨胀直到进程被 OOM 杀掉。
+        if i <= before {
             return Err(FormulaError::Syntax("词法扫描未前进".into()));
         }
     }
