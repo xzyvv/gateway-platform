@@ -22,6 +22,9 @@
 #                       行为不可观察 -> 主 job 排除，本 job 也不碰
 #   · key.rs 其余变异体（路径推导 / 长度校验 / 安全落盘 / 权限收紧）
 #     两边都能编译 -> 全部由主 job 负责，本 job 不碰
+#   · key.rs:134:5 = to_hex 的返回值变异
+#                    -> to_hex 两边都编译，但唯一调用点在 encryption 分支，
+#                       默认构建里从未被调用 -> 主 job 里不可观察 -> 交本 job
 #   · db_init.rs:342:8 = open_with_key 里 `if !key_hex.is_empty()` 的否定号删除
 #                    -> 主 job（key_hex 恒空）里不可观察，窄 job（key_hex 非空）
 #                       里可观察 -> 由本 job 独占
@@ -40,6 +43,11 @@ examine_globs = [
 examine_re = [
   "key\\.rs:45:5:",
   "db_init\\.rs:342:8:",
+  # to_hex 的返回值变异（2 条）：to_hex 在默认构建里从未被调用（唯一调用点
+  # #[cfg(feature = "encryption")] ensure_key），主 job 里不可观察 -> 主 job 排除。
+  # 本 job 带 encryption 编译，key.rs 里 ensure_key_returns_hex_of_keyfile
+  # 会断言 key == to_hex(&raw) 且全为 hex 字符 -> 变异能被抓住。
+  "key\\.rs:134:5:",
 ]
 
 # 测试代码本身不参与变异

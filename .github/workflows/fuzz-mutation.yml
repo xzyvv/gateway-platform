@@ -58,12 +58,13 @@ jobs:
         # GitHub Actions 表达式只有比较/逻辑运算符，没有加法，
         # 写 ${{ matrix.shard + 1 }} 会让整个工作流文件解析失败。
         #
-        # 分片数为什么是 16：主 job 全量 1601 个变异体，实测单个变异体约 81s
+        # 分片数为什么是 16：主 job 全量 1565 个变异体（1601 - 36 条按
+        # .cargo/mutants.toml 的 exclude_re 划出变异范围），实测单个变异体约 81s
         # （cargo test --no-run 编译 40s + 跑测试 43s），
         #   8 路 -> 每片约 200 个 -> 约 270 分钟，贴着 300 分钟上限，
         #           上一轮 8 路实测有 4 片被 runner 取消在 140~217 分钟；
-        #  16 路 -> 每片约 100 个 -> 约 135 分钟，留出一倍以上的抖动余量。
-        # （另有 8 条加密分支的变异体由下面的 mutation-encryption 窄 job 独占，
+        #  16 路 -> 每片约 98 个 -> 约 133 分钟，留出一倍以上的抖动余量。
+        # （另有 10 条加密分支的变异体由下面的 mutation-encryption 窄 job 独占，
         #   不参与这里的分片。）
         include:
           - { shard: 0, idx: 1 }
@@ -156,7 +157,8 @@ jobs:
   # queue/storage/sqlite/consistency_tests.rs 整个文件都不参与编译，
   # sqlite 存储的变异体会失去断言保护（实测多出 15 条「假存活」）。
   # 拆开之后：主 job 保住 sqlite 断言，窄 job 保住 encryption 分支的覆盖。
-  # 变体范围由 .cargo/mutants-encryption.toml 精确圈定（当前 8 条）。
+  # 变体范围由 .cargo/mutants-encryption.toml 精确圈定（当前 10 条：
+  #   key.rs:45:5 的 7 条 + key.rs:134:5 的 2 条 + db_init.rs:342:8 的 1 条）。
   mutation-encryption:
     name: mutation (encryption branch)
     runs-on: ubuntu-26.04

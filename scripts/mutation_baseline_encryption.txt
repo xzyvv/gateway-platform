@@ -1,9 +1,17 @@
 # 变异测试存量漏网基线 —— 加密分支专用（由 scripts/mutation_gate.py --update 生成）
 #
 # 本清单只服务于 .github/workflows/fuzz-mutation.yml 的 mutation-encryption 窄 job，
-# 覆盖范围共 8 条变异体：
+# 覆盖范围共 10 条变异体：
 #   · gateway-core/src/queue/core/key.rs:45:5 的 7 条
 #     （#[cfg(feature = "encryption")] 分支里 ensure_key 的函数体）
+#   · gateway-core/src/queue/core/key.rs:134:5 的 2 条
+#     （to_hex 的返回值变异）
+#     to_hex 本身无条件编译，但唯一调用点是 #[cfg(feature = "encryption")]
+#     的 ensure_key -> 主 job（不开 encryption）里这个函数从未被调用，
+#     变异后没有任何可观察差异，所以主 job 用 exclude_re 划出去，
+#     由本 job 独占（本 job 带 encryption 编译，
+#     key.rs 里 ensure_key_returns_hex_of_keyfile 断言 key == to_hex(&raw)
+#     且全为 hex 字符 -> 变异能被抓住）。
 #   · gateway-core/src/queue/storage/sqlite/db_init.rs:342:8 的 1 条
 #     （open_with_key 里 `if !key_hex.is_empty()` 的否定号删除）
 #     这条在主 job 里行为不可观察（key_hex 恒空 -> 未链接 SQLCipher 的 SQLite
@@ -18,9 +26,10 @@
 # 为什么这个文件当前是空的（只有注释）：
 # 拆分方式是「按 cfg 分支的行号正则精确切分」，每个变异体都只在它
 # 真正参与编译的那套构建里被测一次：
-#   · 主 job（不开 encryption）跑 1601 条（key.rs 的其余 33 条 + 整个主范围）；
-#   · 窄 job（开 encryption）跑上面列的 8 条。
-# 两边都没有「变异体落在未编译分支上 → 编译产物不变 → 假存活」的情况，
+#   · 主 job（不开 encryption）跑 1565 条（1601 - 36 条已按 exclude_re 划出
+#     变异范围：它们在默认构建里要么不参与编译，要么与原代码行为等价）；
+#   · 窄 job（开 encryption）跑上面列的 10 条。
+# 两边都不存在「变异体落在未编译分支上 → 编译产物不变 → 假存活」的情况，
 # 所以这里不存在需要登记的存量漏网。文件保持空基线即可：
 # gate 处于「初始化模式：只报告，不拦」，一旦真的出现漏网会先写进这里，
 # 下次再收紧为拦截。

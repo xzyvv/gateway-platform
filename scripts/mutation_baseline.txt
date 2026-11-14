@@ -7,3 +7,210 @@
 # 不要手工编辑本文件，用下面的命令重建：
 #   python3 scripts/mutation_gate.py --update <各分片 missed.txt> \
 #       --baseline scripts/mutation_baseline.txt
+gateway-core/src/engine/formula.rs:32:22: replace && with || in is_formula_safe
+gateway-core/src/engine/formula.rs:33:18: replace + with * in is_formula_safe
+gateway-core/src/engine/formula.rs:33:22: replace < with > in is_formula_safe
+gateway-core/src/pipeline/vformula.rs:293:24: replace match guard t == want with true in Parser<'a>::expect
+gateway-core/src/pipeline/vformula.rs:376:13: delete match arm Some(Token::Op('+')) in Parser<'a>::parse_factor
+gateway-core/src/pipeline/vformula.rs:491:32: replace || with && in eval_call
+gateway-core/src/pipeline/vformula.rs:50:9: replace <impl fmt::Display for FormulaError>::fmt -> fmt::Result with Ok(Default::default())
+gateway-core/src/queue/core/key.rs:143:5: replace set_file_permissions with ()
+gateway-core/src/queue/core/limit.rs:108:9: replace QueueHealth::label -> &'static str with ""
+gateway-core/src/queue/core/limit.rs:108:9: replace QueueHealth::label -> &'static str with "xyzzy"
+gateway-core/src/queue/core/limit.rs:20:5: replace update_queue_depth_metric with ()
+gateway-core/src/queue/core/limit.rs:26:5: replace update_in_flight_metric with ()
+gateway-core/src/queue/core/limit.rs:89:14: replace / with * in capacity_pressure_rows
+gateway-core/src/queue/core/task.rs:125:42: replace - with + in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:125:42: replace - with / in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:125:46: replace * with + in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:125:46: replace * with / in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:125:51: replace * with + in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:125:51: replace * with / in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:149:21: replace > with < in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:149:21: replace > with == in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:149:21: replace > with >= in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:156:42: replace >= with < in dequeue_with_backpressure
+gateway-core/src/queue/core/task.rs:209:5: replace collapse_quietly with ()
+gateway-core/src/queue/core/task.rs:211:22: replace match guard r.superseded == 0 with false in collapse_quietly
+gateway-core/src/queue/core/task.rs:211:22: replace match guard r.superseded == 0 with true in collapse_quietly
+gateway-core/src/queue/core/task.rs:211:35: replace == with != in collapse_quietly
+gateway-core/src/queue/core/task.rs:99:9: replace || with && in is_disk_full_error
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (-1, -1)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (-1, 0)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (-1, 1)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (0, -1)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (0, 0)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (0, 1)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (1, -1)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (1, 0)
+gateway-core/src/queue/mod.rs:147:9: replace DataQueue::evicted_stats -> (i64, i64) with (1, 1)
+gateway-core/src/queue/mod.rs:267:9: replace DataQueue::set_storage_retention_days with ()
+gateway-core/src/queue/mod.rs:287:29: delete ! in DataQueue::enqueue
+gateway-core/src/queue/mod.rs:307:31: replace > with >= in DataQueue::enqueue
+gateway-core/src/queue/mod.rs:322:23: delete ! in DataQueue::enqueue
+gateway-core/src/queue/mod.rs:387:24: replace > with < in DataQueue::flush_fallback
+gateway-core/src/queue/mod.rs:387:24: replace > with == in DataQueue::flush_fallback
+gateway-core/src/queue/mod.rs:431:29: replace < with <= in DataQueue::flush_fallback_sync
+gateway-core/src/queue/mod.rs:431:29: replace < with == in DataQueue::flush_fallback_sync
+gateway-core/src/queue/mod.rs:431:29: replace < with > in DataQueue::flush_fallback_sync
+gateway-core/src/queue/mod.rs:446:28: replace > with < in DataQueue::flush_fallback_sync
+gateway-core/src/queue/mod.rs:446:28: replace > with == in DataQueue::flush_fallback_sync
+gateway-core/src/queue/mod.rs:573:9: replace DataQueue::spawn_backlog_alarm_monitor with ()
+gateway-core/src/queue/mod.rs:596:38: replace > with < in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:596:38: replace > with == in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:596:38: replace > with >= in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:597:51: replace - with + in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:597:51: replace - with / in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:617:28: replace == with != in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:628:49: replace match guard has_consumer with false in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:628:49: replace match guard has_consumer with true in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:632:25: delete match arm QueueHealth::Backlog in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:636:25: delete match arm QueueHealth::Backpressure in DataQueue::spawn_backlog_alarm_monitor
+gateway-core/src/queue/mod.rs:725:9: replace <impl crate::engine::ports::DiskHealthSink for DataQueue>::set_disk_ok with ()
+gateway-core/src/queue/storage/memory.rs:113:9: replace <impl QueueStorage for MemoryStorage>::in_flight_count -> i64 with -1
+gateway-core/src/queue/storage/memory.rs:113:9: replace <impl QueueStorage for MemoryStorage>::in_flight_count -> i64 with 0
+gateway-core/src/queue/storage/memory.rs:113:9: replace <impl QueueStorage for MemoryStorage>::in_flight_count -> i64 with 1
+gateway-core/src/queue/storage/memory.rs:145:9: replace <impl QueueStorage for MemoryStorage>::needs_maintenance -> bool with true
+gateway-core/src/queue/storage/memory.rs:149:9: replace <impl QueueStorage for MemoryStorage>::name -> &str with ""
+gateway-core/src/queue/storage/memory.rs:149:9: replace <impl QueueStorage for MemoryStorage>::name -> &str with "xyzzy"
+gateway-core/src/queue/storage/sqlite/aggregated_trim.rs:41:29: replace - with + in enforce_aggregated_row_cap
+gateway-core/src/queue/storage/sqlite/aggregated_trim.rs:50:28: replace >= with < in enforce_aggregated_row_cap
+gateway-core/src/queue/storage/sqlite/aggregated_trim.rs:60:16: replace > with < in enforce_aggregated_row_cap
+gateway-core/src/queue/storage/sqlite/aggregated_trim.rs:60:16: replace > with == in enforce_aggregated_row_cap
+gateway-core/src/queue/storage/sqlite/aggregated_trim.rs:60:16: replace > with >= in enforce_aggregated_row_cap
+gateway-core/src/queue/storage/sqlite/db_init.rs:22:5: replace rebuild_on_corruption_allowed -> bool with false
+gateway-core/src/queue/storage/sqlite/db_init.rs:22:5: replace rebuild_on_corruption_allowed -> bool with true
+gateway-core/src/queue/storage/sqlite/db_init.rs:295:15: replace > with < in ensure_dedup_unique_index
+gateway-core/src/queue/storage/sqlite/db_init.rs:319:16: replace > with < in ensure_dedup_unique_index
+gateway-core/src/queue/storage/sqlite/db_init.rs:319:16: replace > with == in ensure_dedup_unique_index
+gateway-core/src/queue/storage/sqlite/db_init.rs:319:16: replace > with >= in ensure_dedup_unique_index
+gateway-core/src/queue/storage/sqlite/db_init/migrate.rs:175:19: replace match guard e.to_string().contains("duplicate column name") with true in ensure_column
+gateway-core/src/queue/storage/sqlite/db_init/migrate.rs:52:13: replace < with <= in migrate_schema
+gateway-core/src/queue/storage/sqlite/db_init/migrate.rs:56:13: replace < with <= in migrate_schema
+gateway-core/src/queue/storage/sqlite/history.rs:105:26: replace - with / in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:111:17: replace < with <= in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:118:18: replace + with * in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:118:18: replace + with - in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:135:18: replace + with * in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:135:18: replace + with - in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:140:33: replace > with >= in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:147:35: replace && with || in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:147:47: replace < with <= in query_history_ex
+gateway-core/src/queue/storage/sqlite/history.rs:170:33: replace > with >= in query_raw_ex
+gateway-core/src/queue/storage/sqlite/history.rs:97:24: replace > with >= in query_history_ex
+gateway-core/src/queue/storage/sqlite/limit.rs:251:34: replace > with >= in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:260:74: replace > with < in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:260:74: replace > with == in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:313:24: replace < with <= in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:313:24: replace < with == in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:313:24: replace < with > in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:344:30: replace > with >= in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:345:27: replace / with * in SqliteStorage::enforce_queue_limit_with
+gateway-core/src/queue/storage/sqlite/limit.rs:35:5: replace is_fatal_storage_error -> bool with true
+gateway-core/src/queue/storage/sqlite/limit.rs:440:43: replace * with + in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:440:43: replace * with / in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:442:77: replace + with * in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:442:77: replace + with - in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:445:47: replace += with *= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:445:47: replace += with -= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:446:50: replace += with *= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:446:50: replace += with -= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:451:40: replace += with *= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:451:40: replace += with -= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:465:19: replace > with < in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:465:19: replace > with == in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:465:19: replace > with >= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:474:24: replace > with < in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:474:24: replace > with == in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:474:24: replace > with >= in SqliteStorage::enqueue_batch
+gateway-core/src/queue/storage/sqlite/limit.rs:77:18: replace > with < in insert_sql_for_rows
+gateway-core/src/queue/storage/sqlite/limit.rs:77:18: replace > with == in insert_sql_for_rows
+gateway-core/src/queue/storage/sqlite/limit.rs:77:18: replace > with >= in insert_sql_for_rows
+gateway-core/src/queue/storage/sqlite/limit.rs:799:20: replace > with >= in SqliteStorage::cleanup_old_records
+gateway-core/src/queue/storage/sqlite/limit.rs:811:24: replace > with < in SqliteStorage::cleanup_old_records
+gateway-core/src/queue/storage/sqlite/limit.rs:811:24: replace > with == in SqliteStorage::cleanup_old_records
+gateway-core/src/queue/storage/sqlite/limit.rs:811:24: replace > with >= in SqliteStorage::cleanup_old_records
+gateway-core/src/queue/storage/sqlite/limit.rs:825:9: replace SqliteStorage::wal_checkpoint_truncate with ()
+gateway-core/src/queue/storage/sqlite/retention.rs:64:22: replace match guard n > 0 with false in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/retention.rs:64:22: replace match guard n > 0 with true in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/retention.rs:64:24: replace > with < in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/retention.rs:64:24: replace > with == in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/retention.rs:64:24: replace > with >= in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/retention.rs:84:22: replace > with < in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/retention.rs:84:22: replace > with == in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/retention.rs:84:22: replace > with >= in run_retention_cleanup
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:179:14: replace <= with > in SqliteStorage::saturating_add
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:179:9: replace SqliteStorage::saturating_add with ()
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:195:16: replace - with + in SqliteStorage::unsent_estimate
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:203:30: replace > with >= in SqliteStorage::refresh_unsent_overflow
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:210:21: replace && with || in SqliteStorage::refresh_unsent_overflow
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:210:24: delete ! in SqliteStorage::refresh_unsent_overflow
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:218:19: delete ! in SqliteStorage::refresh_unsent_overflow
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:218:29: replace && with || in SqliteStorage::refresh_unsent_overflow
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:264:39: replace - with / in <impl QueueStorage for SqliteStorage>::enqueue_batch
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:29:36: replace * with +
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:29:41: replace * with +
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:313:31: replace > with >= in <impl QueueStorage for SqliteStorage>::enqueue_batch
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:427:21: replace > with < in <impl QueueStorage for SqliteStorage>::cleanup_stale_in_flight
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:427:21: replace > with == in <impl QueueStorage for SqliteStorage>::cleanup_stale_in_flight
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (-1, -1)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (-1, 0)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (-1, 1)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (0, -1)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (0, 0)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (0, 1)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (1, -1)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (1, 0)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:442:9: replace <impl QueueStorage for SqliteStorage>::evicted_stats -> (i64, i64) with (1, 1)
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:504:9: replace <impl QueueStorage for SqliteStorage>::needs_maintenance -> bool with false
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:542:9: replace <impl QueueStorage for SqliteStorage>::name -> &str with ""
+gateway-core/src/queue/storage/sqlite/sqlite_storage.rs:542:9: replace <impl QueueStorage for SqliteStorage>::name -> &str with "xyzzy"
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:102:81: replace * with + in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:132:43: replace > with < in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:132:43: replace > with == in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:136:31: replace > with < in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:136:31: replace > with == in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:146:39: replace && with || in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:146:42: delete ! in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:151:23: delete ! in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:151:47: replace && with || in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:22:39: replace - with + in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/sqlite_storage/maintenance.rs:22:39: replace - with / in SqliteStorage::maintenance_impl
+gateway-core/src/queue/storage/sqlite/wal.rs:58:38: replace * with +
+gateway-core/src/queue/storage/sqlite/wal.rs:58:45: replace * with +
+gateway-core/src/queue/storage/sqlite/wal.rs:58:45: replace * with /
+gateway-core/src/queue/storage/sqlite/wal.rs:68:43: replace * with +
+gateway-core/src/queue/storage/sqlite/wal.rs:68:50: replace * with +
+gateway-core/src/queue/storage/sqlite/wal.rs:68:50: replace * with /
+gateway-core/src/queue/storage/sqlite/wal.rs:98:5: replace check_wal_size with ()
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:120:34: replace + with - in parse_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:121:20: replace < with > in parse_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:160:34: replace || with && in extract_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:173:21: replace > with == in extract_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:173:21: replace > with >= in extract_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:195:21: replace > with < in extract_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:87:32: replace || with && in parse_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:99:17: replace > with == in parse_mstp_frame
+gateway-core/src/south/protocol/bacnet_mstp/frames.rs:99:17: replace > with >= in parse_mstp_frame
+gateway-core/src/south/protocol/common/decode.rs:161:24: replace < with == in encode_value_by_type
+gateway-core/src/south/protocol/common/decode.rs:161:24: replace < with > in encode_value_by_type
+gateway-core/src/south/protocol/common/decode.rs:197:21: replace * with + in convert_value
+gateway-core/src/south/protocol/common/decode.rs:197:21: replace * with / in convert_value
+gateway-core/src/south/protocol/common/decode.rs:197:35: replace + with * in convert_value
+gateway-core/src/south/protocol/common/decode.rs:197:35: replace + with - in convert_value
+gateway-core/src/south/protocol/common/decode.rs:319:39: replace - with + in parse_bcd_address
+gateway-core/src/south/protocol/common/decode.rs:52:35: replace == with != in reorder_bytes
+gateway-core/src/south/protocol/dlt645/frames.rs:136:42: replace * with / in parse_data_id
+gateway-core/src/south/protocol/dlt645/frames.rs:145:24: replace << with >> in parse_data_id
+gateway-core/src/south/protocol/modbus/frames.rs:149:23: replace < with <= in parse_coils_response
+gateway-core/src/south/protocol/modbus/frames.rs:158:27: replace | with & in parse_coils_response
+gateway-core/src/south/protocol/modbus/frames.rs:218:22: replace < with <= in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:226:26: replace < with <= in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:226:26: replace < with == in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:230:42: replace | with & in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:230:61: replace << with >> in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:245:36: replace || with && in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:245:50: replace > with == in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:245:50: replace > with >= in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:272:13: delete match arm 0x05 | 0x06 | 0x0F | 0x10 | 0x16 in extract_modbus_frame
+gateway-core/src/south/protocol/modbus/frames.rs:42:31: replace * with / in build_write_multi_coils

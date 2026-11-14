@@ -57,10 +57,74 @@ exclude_globs = [
 #   · 窄 job 带 encryption 编译 -> key_hex 非空 -> 变异后不再执行 PRAGMA key，
 #     密文库打不开，行为差异可被断言抓住。
 # 所以把它交给窄 job（见 .cargo/mutants-encryption.toml）。
+#
+# 第四条 key\\.rs:134:5: 是 to_hex 的返回值变异（2 条）：
+#   to_hex 只被 #[cfg(feature = "encryption")] 的 ensure_key 调用，主 job 不开
+#   encryption -> 该函数在默认构建里从未被调用 -> 变异后没有任何可观察差异，
+#   属于「行为不可观察」的假存活。带 encryption 编译时它才真正生效，
+#   由窄 job 独占（见 .cargo/mutants-encryption.toml）。
+#
+# 下面数组第 5 条起是**变体级**排除：同一行上的多个变体要逐条判定，
+# 只有真正等价的才排除，其余仍留在变异范围内（真出现漏网时写进
+# scripts/mutation_baseline.txt 当作真实覆盖缺口）。
+#
+# cargo-mutants 的 exclude_re 匹配的是**完整变体名**
+# （形如 gateway-core/src/queue/core/key.rs:45:5: replace ... in 函数名），
+# 所以可以把「行:列 + 变异描述」一起写进正则。每一条都满足「该变体与原代码
+# 在所有可达输入下行为完全一致（含返回值、落库结果、指标值与日志输出）」。
+#
+# 判定依据逐条如下（行尾注释为等价原因）：
 exclude_re = [
   "key\\.rs:45:5:",
   "key\\.rs:51:5:",
   "db_init\\.rs:342:8:",
+  "key\\.rs:134:5:",
+  # 公式引擎
+  "vformula\\.rs:128:41: replace \\+ with \\*",   # lex 的 start+1 → start*1：切出的 inner 多带一个 '{'，
+                                                  # 但 normalize_ref 会 trim_start_matches('{')，结果相同
+  "vformula\\.rs:282:9: replace Parser<'a>::ensure_progress",
+                                                  # ensure_progress 的守卫不可达：两处调用点（parse_expr/parse_term）
+                                                  # 在调用前都已 self.pos += 1，pos 必然前进
+  "vformula\\.rs:321:30: replace \\+= with \\*=", # parse_expr 的 pos += 1 → pos *= 1：同一个 '+' 改由
+                                                  # parse_factor 的一元正号分支消费，AST 与报错路径都相同
+  # 队列：SQLite 存储
+  "migrate\\.rs:60:13: replace < with <=",       # migrate_schema 里 from == SCHEMA_VERSION 已提前返回，
+                                                  # 走到这一行时 from != 4，from<=4 与 from<4 等价
+  "limit\\.rs:260:74: replace > with >=",        # total>0 → total>=0：total==0 时 ratio 恒为 0.0，
+                                                  # 两种写法判出的 unsent_overflow 相同
+  "limit\\.rs:353:70: replace > with >=",        # 同上（淘汰路径）
+  "limit\\.rs:796:24: replace > with >=",        # cleanup_old_records：undelivered==0 时
+                                                  # saturating_dec(counter, 0) 是空操作
+  "sqlite_storage\\.rs:146:29: replace > with >=", # released==0 时 saturating_dec(counter, 0) 是空操作
+  "sqlite_storage\\.rs:208:30: replace > with >=", # refresh_unsent_overflow：total==0 时 ratio 恒为 0.0
+  "sqlite_storage\\.rs:270:21: replace > with >=", # inserted==0 时两次 fetch_add(0) 是空操作
+  "sqlite_storage\\.rs:310:43: replace > with >=", # undelivered_deleted==0 时 saturating_dec(counter, 0) 空操作
+  "sqlite_storage\\.rs:363:23: replace > with >=", # superseded==0 时计数与指标增量都是 0，空操作
+  "sqlite_storage\\.rs:427:21: replace > with >=", # released==0 时 update_in_flight_metric 重写同一个值
+  "maintenance\\.rs:132:43: replace > with >=",  # 同 saturating_dec 空操作 + 指标重写同一个值
+  "maintenance\\.rs:136:31: replace > with >=",  # 计数与指标增量都是 0，空操作
+  "mod\\.rs:387:24: replace > with >=",          # flush_fallback：dropped==0 时 fetch_add(0) 是空操作
+  "mod\\.rs:446:28: replace > with >=",          # flush_fallback_sync：同上
+  # 解码与组帧
+  "decode\\.rs:161:24: replace < with <=",       # encode_value_by_type：bytes.len()==out_len 时
+                                                  # resize 到同长度是空操作
+  "decode\\.rs:321:30: replace \\| with \\^",    # parse_bcd_address：高/低半字节位域不重叠
+  "frame_extract\\.rs:161:22: replace > with >=", # start==0 时 fb.pop(0) 是空操作
+  "frame_extract\\.rs:185:22: replace > with >=", # 同上
+  "frame_extract\\.rs:208:18: replace > with >=", # 同上
+  "frames\\.rs:145:30: replace \\| with \\^",    # dlt645 parse_data_id：高/低半字节位域不重叠
+  "frames\\.rs:101:27: replace \\| with \\^",    # modbus parse_read_response：fc 恒 < 0x80
+                                                  # （配置白名单只允许 1/2/3/4/5/6/15/16）
+  "frames\\.rs:129:46: replace \\| with \\^",    # modbus：CRC 高/低字节位域不重叠
+  "frames\\.rs:137:29: replace \\| with \\^",    # modbus：寄存器高/低字节位域不重叠
+  "frames\\.rs:158:27: replace \\| with \\^",    # modbus parse_coils_response：同上 fc 恒 < 0x80
+  "frames\\.rs:187:46: replace \\| with \\^",    # modbus：CRC 高/低字节位域不重叠
+  "frames\\.rs:230:42: replace \\| with \\^",    # modbus extract_modbus_frame：CRC 位域不重叠
+  "frames\\.rs:241:30: replace < with <=",       # modbus：上一行已保证 buf.len()>=5，这里的长度检查是死代码
+  "frames\\.rs:241:30: replace < with ==",
+  "frames\\.rs:286:45: replace \\| with \\^",    # modbus：CRC 高/低字节位域不重叠
+  "frames\\.rs:132:39: replace \\| with \\^",    # bacnet parse_mstp_frame：CRC 位域不重叠
+  "frames\\.rs:199:43: replace \\| with \\^",    # bacnet extract_mstp_frame：CRC 位域不重叠
 ]
 
 # 每个变异体只跑「能覆盖这些模块」的测试目标：
