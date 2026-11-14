@@ -92,35 +92,36 @@ fn normalize_ref(raw: &str) -> String {
     stripped.trim().to_string()
 }
 
+/// 扫描一段连续字符：返回首个不满足 `keep` 的下标（找不到则返回串尾）；推进交给迭代器，杜绝下标原地不动。
+fn scan_end(s: &[char], from: usize, keep: impl Fn(char) -> bool) -> usize {
+    match s[from..].iter().position(|&c| !keep(c)) {
+        Some(p) => from + p,
+        None => s.len(),
+    }
+}
+
 fn lex(src: &str) -> Result<Vec<Token>, FormulaError> {
     let s: Vec<char> = src.chars().collect();
     let mut tokens = Vec::new();
     let mut i = 0usize;
     while i < s.len() {
+        // 本轮必须严格前进：下标一旦原地不动，扫描会无限循环并把 tokens 撑爆内存。
+        let before = i;
         let c = s[i];
         if c.is_whitespace() {
             i += 1;
-            continue;
-        }
-        // 数字
-        if c.is_ascii_digit() || c == '.' {
+        } else if c.is_ascii_digit() || c == '.' {
             let start = i;
-            while i < s.len() && (s[i].is_ascii_digit() || s[i] == '.') {
-                i += 1;
-            }
+            i = scan_end(&s, i, |ch| ch.is_ascii_digit() || ch == '.');
             let text: String = s[start..i].iter().collect();
             let v = text
                 .parse::<f64>()
                 .map_err(|_| FormulaError::Syntax(format!("非法数字 \"{}\"", text)))?;
             tokens.push(Token::Number(v));
-            continue;
-        }
-        // 引用 {point_id} / {point_id.Value}
-        if c == '{' {
+        } else if c == '{' {
+            // 引用 {point_id} / {point_id.Value}
             let start = i;
-            while i < s.len() && s[i] != '}' {
-                i += 1;
-            }
+            i = scan_end(&s, i, |ch| ch != '}');
             if i >= s.len() {
                 return Err(FormulaError::Syntax("点位引用缺少右花括号 '}'".into()));
             }
@@ -131,14 +132,10 @@ fn lex(src: &str) -> Result<Vec<Token>, FormulaError> {
                 return Err(FormulaError::Syntax("点位引用为空".into()));
             }
             tokens.push(Token::Ident(name));
-            continue;
-        }
-        // 标识符：函数名 / 常量 / 裸点位名
-        if c.is_ascii_alphabetic() || c == '_' {
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            // 标识符：函数名 / 常量 / 裸点位名
             let start = i;
-            while i < s.len() && (s[i].is_ascii_alphanumeric() || s[i] == '_') {
-                i += 1;
-            }
+            i = scan_end(&s, i, |ch| ch.is_ascii_alphanumeric() || ch == '_');
             let text: String = s[start..i].iter().collect();
             let upper = text.to_uppercase();
             if FUNCTIONS.contains(&upper.as_str()) {
@@ -150,28 +147,31 @@ fn lex(src: &str) -> Result<Vec<Token>, FormulaError> {
             } else {
                 tokens.push(Token::Ident(text));
             }
-            continue;
+        } else {
+            match c {
+                '(' => {
+                    tokens.push(Token::LParen);
+                    i += 1;
+                }
+                ')' => {
+                    tokens.push(Token::RParen);
+                    i += 1;
+                }
+                ',' => {
+                    tokens.push(Token::Comma);
+                    i += 1;
+                }
+                '+' | '-' | '*' | '/' | '%' | '^' => {
+                    tokens.push(Token::Op(c));
+                    i += 1;
+                }
+                other => {
+                    return Err(FormulaError::Syntax(format!("非法字符 '{}'", other)));
+                }
+            }
         }
-        match c {
-            '(' => {
-                tokens.push(Token::LParen);
-                i += 1;
-            }
-            ')' => {
-                tokens.push(Token::RParen);
-                i += 1;
-            }
-            ',' => {
-                tokens.push(Token::Comma);
-                i += 1;
-            }
-            '+' | '-' | '*' | '/' | '%' | '^' => {
-                tokens.push(Token::Op(c));
-                i += 1;
-            }
-            other => {
-                return Err(FormulaError::Syntax(format!("非法字符 '{}'", other)));
-            }
+        if i == before {
+            return Err(FormulaError::Syntax("词法扫描未前进".into()));
         }
     }
     Ok(tokens)

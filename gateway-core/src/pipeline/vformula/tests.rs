@@ -272,6 +272,39 @@ fn test_case_insensitive_function_names() {
     );
 }
 
+// ===== 词法扫描终止性回归（mutation 防线）=====
+//
+// 词法扫描一旦「下标原地不动」就会无限循环，并把 tokens 撑到内存爆掉。
+// 下面两条用例把「扫描必须有界收敛」钉死：实现一旦退回按下标死循环的写法，
+// 这里会直接挂住（测试超时）而不是安静通过。
+#[test]
+fn test_surrounding_whitespace_is_ignored() {
+    assert_eq!(
+        apply_formula_multi("  1 + 2  ", &HashMap::new()).unwrap(),
+        3.0
+    );
+    assert_eq!(
+        apply_formula_multi("\t1\t+\t2\n", &HashMap::new()).unwrap(),
+        3.0
+    );
+}
+
+#[test]
+fn test_pathological_inputs_terminate_within_bounded_scan() {
+    // 退化输入（纯空白 / 长数字串 / 长运算符串 / 未闭合引用）必须快速收敛：
+    // 要么编译成功，要么返回语法错误，不允许卡死。
+    let cases = [
+        " ".repeat(1024),
+        "1".repeat(1024),
+        "+".repeat(512),
+        "{".repeat(256),
+        "{a".repeat(256),
+    ];
+    for src in &cases {
+        let _ = compile(src);
+    }
+}
+
 // ===== 跨语言用例契约（O-7）=====
 //
 // 用例集在仓库根 `shared/formula_cases.json`，前端
