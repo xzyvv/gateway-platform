@@ -27,6 +27,42 @@ exclude_globs = [
   "gateway-core/src/**/tests/**",
 ]
 
+# 排除 key.rs 里两个 cfg 变体函数的函数体（各 7 条变异体）：
+#   key.rs:45:5 -> #[cfg(feature = "encryption")] fn ensure_key 的函数体
+#   key.rs:51:5 -> #[cfg(not(feature = "encryption"))] fn ensure_key 的函数体
+#
+# 为什么 45:5 必须排除：主 job 不开 encryption，这个函数根本不参与编译，
+# 变异后编译产物逐字节相同 -> 测试照过 -> 判定为「漏网」，但它其实测不到。
+# 这 7 条改由 .cargo/mutants-encryption.toml 的窄 job 负责（那边带 encryption
+# 编译，分支真实存在，且 key.rs 里有对应的 hex 断言）。
+#
+# 为什么 51:5 也排除：默认分支的 ensure_key 恒返回空串，这个值唯一的去处是
+# `PRAGMA key = <值>`，而未链接 SQLCipher 的 SQLite 会直接忽略未知 pragma
+# （不是错误）——把它改成任意非空串，在默认构建里都**没有任何可观测差异**，
+# 这些变异体本质上无法被任何断言区分。与其把它们写成「存量漏网」污染基线，
+# 不如明确划出变异范围。
+#
+# 注意这里**没有**排除整个 key.rs 文件：key.rs 里其余逻辑（路径推导、
+# 长度校验、安全落盘、权限收紧、hex 编码）是无条件编译的，在默认构建里
+# 真实生效且有断言，必须留在主 job 的变异范围内。
+#
+# 行号会随 key.rs 上方增删行而漂移：改动 key.rs 前 51 行时必须同步更新
+# 这里与窄配置，否则会出现「某个分支一个变异体都没跑到」的静默 coverage 丢失。
+#
+# 第三条 db_init\\.rs:342:8: 是 storage/sqlite/db_init.rs 里 open_with_key 的
+# `if !key_hex.is_empty()` 的否定号删除变异：
+#   · 主 job 不开 encryption -> key_hex 恒为空串 -> 原逻辑「不设 PRAGMA key」，
+#     变异后变成「设 PRAGMA key = ''」；未链接 SQLCipher 的 SQLite 会忽略未知
+#     pragma（不是错误），于是两种行为**完全不可区分**，属于假存活。
+#   · 窄 job 带 encryption 编译 -> key_hex 非空 -> 变异后不再执行 PRAGMA key，
+#     密文库打不开，行为差异可被断言抓住。
+# 所以把它交给窄 job（见 .cargo/mutants-encryption.toml）。
+exclude_re = [
+  "key\\.rs:45:5:",
+  "key\\.rs:51:5:",
+  "db_init\\.rs:342:8:",
+]
+
 # 每个变异体只跑「能覆盖这些模块」的测试目标：
 #   --lib                                 队列/公式/解码的单元测试都在这里
 #   --test power_loss                     队列断电一致性（崩溃恢复路径）
@@ -34,15 +70,17 @@ exclude_globs = [
 #   --features bacnet-mstp                MSTP 不在默认 all-protocols 集合里，
 #                                          不开这个 feature 时 bacnet_mstp 根本不编译，
 #                                          该文件的变异体会全部「假存活」
-#   --features ...,encryption             加密分支（queue/core/key.rs 的 ensure_key）
-#                                          同样「不开就根本不编译」：不开这个 feature 时
-#                                          #[cfg(feature = "encryption")] 的代码不存在，
-#                                          其变异体永远「假存活」（实测 7 个存活变异体）。
-#                                          打开后该分支才真正参与变异并被断言覆盖。
-#                                          代价：CI 需装 libssl-dev/pkg-config/perl，
-#                                          且每个 job 多一次 SQLCipher 编译。
 # 刻意不跑 chaos / load / soak / north_*：逐变异体执行会把 CI 时长拉爆，
 # 且它们覆盖的代码不在本配置的变异范围内。
+#
+# 为什么这里不开 encryption：
+#   开了 encryption 就等于用 SQLCipher 打开数据库，于是
+#   queue/storage/sqlite/consistency_tests.rs 整个文件
+#   （#![cfg(not(feature = "encryption"))]）都不参与编译——
+#   sqlite 存储的变异体就此失去断言保护，实测多出 15 条「假存活」。
+#   加密分支的覆盖改由 .cargo/mutants-encryption.toml 的窄 job 单独负责：
+#   它只变异 queue/core/key.rs，既让 encryption 分支真正参与变异并被断言覆盖，
+#   又不牺牲 sqlite 存储的一致性断言。
 additional_cargo_test_args = [
   "-p",
   "gateway-core",
@@ -52,7 +90,7 @@ additional_cargo_test_args = [
   "--test",
   "virtual_point_pipeline",
   "--features",
-  "bacnet-mstp,encryption",
+  "bacnet-mstp",
 ]
 timeout_multiplier = 3.0
 # 单位：秒（此字段要求数值，不接受 "60s" 这类字符串）

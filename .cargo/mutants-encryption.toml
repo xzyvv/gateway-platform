@@ -1,0 +1,67 @@
+# cargo-mutants 配置（加密分支窄 job）
+#
+# 背景：主配置 .cargo/mutants.toml 刻意不开 encryption——开了它就等于用
+# SQLCipher 打开数据库，queue/storage/sqlite/consistency_tests.rs 整个文件
+# （#![cfg(not(feature = "encryption"))]）都不参与编译，sqlite 存储的变异体
+# 因此失去断言保护（实测多出 15 条「假存活」）。
+#
+# 但 encryption 分支本身（queue/core/key.rs 的 ensure_key）确实需要被变异：
+# 不开这个 feature 时 #[cfg(feature = "encryption")] 的代码根本不编译，
+# 变异后编译产物逐字节相同，测试照过 -> 判定为「漏网」，但它其实测不到。
+#
+# 于是拆成两个 job：
+#   主 job  -> .cargo/mutants.toml        不开 encryption，sqlite 断言齐全
+#   窄 job  -> 本文件                      带 encryption 编译
+#
+# 切分方式：按 cfg 分支的**行号正则**精确切分，而不是按文件切分。
+#   · key.rs:45:5  = #[cfg(feature = "encryption")] fn ensure_key 的函数体
+#                    -> 只在带 encryption 的构建里存在，由本 job 负责
+#   · key.rs:51:5  = #[cfg(not(feature = "encryption"))] fn ensure_key 的函数体
+#                    -> 只在默认构建里存在，且返回值恒为空串，唯一的去处是
+#                       `PRAGMA key`，未链接 SQLCipher 的 SQLite 会忽略它 ->
+#                       行为不可观察 -> 主 job 排除，本 job 也不碰
+#   · key.rs 其余变异体（路径推导 / 长度校验 / 安全落盘 / 权限收紧）
+#     两边都能编译 -> 全部由主 job 负责，本 job 不碰
+#   · db_init.rs:342:8 = open_with_key 里 `if !key_hex.is_empty()` 的否定号删除
+#                    -> 主 job（key_hex 恒空）里不可观察，窄 job（key_hex 非空）
+#                       里可观察 -> 由本 job 独占
+# 这样每个变异体都在「它真的参与编译」的那套构建里被测一次，
+# 不会出现「两套编译产物各覆盖一半」的空洞，也不需要登记任何假存活。
+#
+# examine_re 的正则匹配的是 --list 打印的变异体名字
+# （形如 gateway-core/src/queue/core/key.rs:45:5: replace ...），
+# 行号会随 key.rs 上方增删行而漂移：改动 key.rs 前 51 行时必须同步更新
+# .cargo/mutants.toml 与本文件，否则会出现「某个分支一个变异体都没跑」的
+# 静默 coverage 丢失。
+examine_globs = [
+  "gateway-core/src/queue/core/key.rs",
+  "gateway-core/src/queue/storage/sqlite/db_init.rs",
+]
+examine_re = [
+  "key\\.rs:45:5:",
+  "db_init\\.rs:342:8:",
+]
+
+# 测试代码本身不参与变异
+exclude_globs = [
+  "gateway-core/src/**/tests.rs",
+  "gateway-core/src/**/tests/**",
+]
+
+# 只跑 --lib：key.rs 的单测都在单元测试里，且带 encryption 编译时
+# sqlite 的一致性/迁移用例整体不参与编译，多跑集成测试没有收益。
+# --features bacnet-mstp 与主配置保持一致，避免 feature 组合不同导致行为漂移。
+#
+# 注意：加进 examine_globs 的 db_init.rs 只贡献 1 条变异体（342:8），
+# 其余 db_init.rs 变异体由 examine_re 过滤掉——它们的可观察性与构建配置无关，
+# 交给主 job 即可。
+additional_cargo_test_args = [
+  "-p",
+  "gateway-core",
+  "--lib",
+  "--features",
+  "bacnet-mstp,encryption",
+]
+timeout_multiplier = 3.0
+# 单位：秒（此字段要求数值，不接受 "60s" 这类字符串）
+minimum_test_timeout = 60.0
