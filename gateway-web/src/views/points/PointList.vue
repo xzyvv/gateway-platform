@@ -159,8 +159,9 @@
           <ModbusAddressInput v-if="isModbus && !modbusAddrOverflow" v-model="modbusAddr" />
           <el-input v-else v-model="pointForm.address" :placeholder="protocolAddressPlaceholder(pointForm.protocol)" />
           <div v-if="isModbus && !modbusAddrOverflow" class="point-inherit-hint">
-            区段决定读功能码（0xxxx→FC01、1xxxx→FC02、3xxxx→FC03、4xxxx→FC04），保存时把地址写成上面的 5 位串；
-            1xxxx / 4xxxx 为只读区段。
+            区段首位即功能码数字（0xxxx→FC01、1xxxx→FC02、3xxxx→FC03、4xxxx→FC04），1xxxx / 4xxxx 为只读区段。
+            注意这与部分厂商手册的写法可能相反：手册里标成「保持寄存器 40001」的地址，本系统要填 30001，
+            填 40001 会按 FC04 去读输入寄存器。
           </div>
           <div v-else-if="isModbus" class="point-inherit-hint">
             地址偏移超过 9998，5 位地址装不下，请直接填写下方「地址偏移」与展示地址。
