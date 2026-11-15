@@ -6,6 +6,7 @@
 //! - PUT    /api/devices/:id   -> update_device
 //! - DELETE /api/devices/:id   -> delete_device
 
+use super::points::cascade_points_of_device;
 use super::*;
 use gateway_core::engine::error::{GatewayError, GatewayResult};
 // ===== 设备 CRUD =====
@@ -177,13 +178,14 @@ pub async fn delete_device(
     if !removed {
         return Ok(ApiResponse::err(4004, "device not found"));
     }
-    // 级联删除该设备下所有测点（依赖 PointConfig.device_id 字段）
-    let removed_points = cfg.points.len();
-    cfg.points.retain(|p| p.device_id.as_deref() != Some(&id));
-    let cascade_count = removed_points - cfg.points.len();
+    // 级联删除该设备下所有测点（依赖 PointConfig.device_id 字段）。
+    // 走 cascade_points_of_device 而非直接 retain：点位先进回收站，
+    // 误删设备后仍可按 id 逐个恢复。原实现直接丢弃，配置永久消失，
+    // 而 delete_point / edit_points 是软删，两条删除路径保护级别不一致。
+    let cascade_count = cascade_points_of_device(&mut cfg, &id);
     if cascade_count > 0 {
         tracing::warn!(
-            "device '{}' deleted with cascade: {} point(s) removed",
+            "device '{}' deleted with cascade: {} point(s) moved to trash",
             id,
             cascade_count
         );

@@ -30,6 +30,32 @@ pub(crate) fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// 把某设备下的全部点位移入回收站，返回移入数量（其余点位原样保留）。
+///
+/// 删除设备时的级联清理必须走这里，而不是直接 `retain` 丢弃：
+/// 与 `delete_point` / `edit_points` 保持同一套软删语义，误删设备后
+/// 点位仍可按 id 逐个恢复。
+pub(crate) fn cascade_points_of_device(cfg: &mut GatewayConfig, device_id: &str) -> usize {
+    let mut moved = 0usize;
+    let mut kept = Vec::with_capacity(cfg.points.len());
+    for point in std::mem::take(&mut cfg.points) {
+        if point.device_id.as_deref() == Some(device_id) {
+            push_trash(
+                cfg,
+                PointTrashEntry {
+                    point,
+                    deleted_at_ms: now_ms(),
+                },
+            );
+            moved += 1;
+        } else {
+            kept.push(point);
+        }
+    }
+    cfg.points = kept;
+    moved
+}
+
 /// 写入回收站，并顺带执行 TTL + 容量清理（所有软删除入口共用）。
 ///
 /// 容量裁剪在写入时做（而非读取时），保证落盘配置文件本身不无限膨胀。
@@ -311,6 +337,27 @@ pub async fn restore_point(
     };
     if cfg.points.iter().any(|p| p.id == id) {
         return Ok(ApiResponse::err(4009, "点位 id 已存在，无法恢复"));
+    }
+    // 恢复前校验所属设备仍在：否则会产出 device_id 指向不存在设备的孤儿点位，
+    // 采集端找不到设备、表单里设备下拉为空，用户很难看出根因。
+    // 创建路径有 validate_point_inherits_device 拦这种组合，恢复路径原先绕过了它。
+    // 拒绝而非自动补建设备：补建出的设备没有总线/协议，仍是错配置。
+    let owner_device = cfg
+        .point_trash
+        .as_ref()
+        .and_then(|t| t.get(pos))
+        .and_then(|e| e.point.device_id.clone());
+    if let Some(did) = owner_device {
+        let exists = cfg
+            .devices
+            .as_ref()
+            .is_some_and(|ds| ds.iter().any(|d| d.id == did));
+        if !exists {
+            return Ok(ApiResponse::err(
+                4004,
+                format!("所属设备 '{}' 已删除，请先重新创建该设备再恢复点位", did),
+            ));
+        }
     }
     let entry = match cfg.point_trash.as_mut() {
         Some(t) if pos < t.len() => t.remove(pos),

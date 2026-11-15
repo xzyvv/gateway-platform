@@ -208,6 +208,36 @@ fn push_trash_keeps_newest_entries_within_capacity() {
     );
 }
 
+/// 删除设备时的级联清理必须进回收站，而不是直接丢弃：误删设备后点位仍可恢复。
+#[test]
+fn cascade_device_points_goes_to_trash() {
+    let mut cfg = GatewayConfig {
+        points: vec![
+            PointConfig {
+                id: "p1".to_string(),
+                device_id: Some("d1".to_string()),
+                ..Default::default()
+            },
+            PointConfig {
+                id: "p2".to_string(),
+                device_id: Some("d2".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let moved = cascade_points_of_device(&mut cfg, "d1");
+
+    assert_eq!(moved, 1, "只应影响目标设备下的点位");
+    assert_eq!(cfg.points.len(), 1, "其它设备的点位必须原样保留");
+    assert_eq!(cfg.points[0].id, "p2");
+    let trash = cfg.point_trash.as_ref().expect("回收站应已创建");
+    assert_eq!(trash.len(), 1);
+    assert_eq!(trash[0].point.id, "p1");
+    assert_eq!(trash[0].point.device_id.as_deref(), Some("d1"));
+}
+
 /// TTL 清理：写入时顺带丢弃超过 30 天的历史条目。
 #[test]
 fn push_trash_drops_entries_older_than_ttl() {
