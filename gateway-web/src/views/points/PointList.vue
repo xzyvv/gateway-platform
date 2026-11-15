@@ -44,6 +44,20 @@
                 <el-button v-if="canWritePoint" size="small" @click="router.push('/devices?tab=batch-import')"><el-icon><Upload /></el-icon> 批量导入</el-button>
               </span>
             </el-tooltip>
+            <!-- 导出是只读操作，不受 point.write 限制；CSV 可直接改完走批量导入 -->
+            <el-tooltip content="导出全部配置点位（模板设备展开出的点位不在导出范围）" placement="bottom">
+              <span>
+                <el-dropdown trigger="click" :disabled="exportingPoints" @command="doExportPoints">
+                  <el-button size="small" :loading="exportingPoints"><el-icon><Download /></el-icon> 批量导出</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="csv">导出 CSV（Excel 编辑，10 列）</el-dropdown-item>
+                      <el-dropdown-item command="json">导出 JSON（完整字段，可粘贴导入）</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </span>
+            </el-tooltip>
             <!-- 低频操作收进"更多"，避免主操作被同权重按钮淹没 -->
             <el-dropdown v-if="canWritePoint" trigger="click" :disabled="!selectedDevice" @command="onMoreCommand">
               <el-button size="small" :disabled="!selectedDevice">
@@ -300,7 +314,7 @@ import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import {
   ElButton, ElDropdown, ElDropdownItem, ElDropdownMenu, ElIcon, ElSwitch, ElTag,
 } from 'element-plus'
-import { ArrowDown, CopyDocument, Edit, MagicStick, Reading, Refresh, Search, Upload, Plus } from '@element-plus/icons-vue'
+import { ArrowDown, CopyDocument, Download, Edit, MagicStick, Reading, Refresh, Search, Upload, Plus } from '@element-plus/icons-vue'
 import { usePoints } from '@/composables/devices/usePoints'
 import { protocolAddressPlaceholder } from '@/composables/devices/useProtocol'
 import { useTablePager } from '@/composables/core/useTablePager'
@@ -335,6 +349,7 @@ const {
   northInterval, selection,
   pointForm, pointFormRef, pointRules, formMode, submitting, showForm,
   showCopy, showBatchEdit, showGen,
+  exportingPoints, doExportPoints,
   protocolLabel,
   onSelectionChange, loadPoints, loadDevices,
   readPoint, removePoint, batchDelete,

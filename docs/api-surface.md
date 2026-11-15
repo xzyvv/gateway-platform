@@ -6,7 +6,7 @@
 
 **数据来源**：`gateway-api/src/web/mod.rs`（health 探针）+ `gateway-api/src/web/api/*/routes.rs`（各业务子域）。
 
-**统计**：16 个路由组 / 144 条唯一路径 / 173 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
+**统计**：16 个路由组 / 145 条唯一路径 / 174 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
 
 **鉴权说明**：`token` = 始终需要 `Authorization: Bearer <token>`；`token（allow_anon_read=true 时可匿名）` = 匿名只读开关打开时可不带 token；
 `admin / exec scope` = 需要管理员或 `exec` scope 的 API 密钥；`无` = 公开端点。
@@ -159,7 +159,7 @@
 
 ## `points` — 点位域（CRUD / 回收站 / 即时读写 / 虚拟点位 / 批量）
 
-入口函数：`points_routes`；端点数：20
+入口函数：`points_routes`；端点数：21
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
@@ -177,6 +177,7 @@
 | POST | `/api/point-tools/virtual/:id/recalc` | token | `recalc_virtual_point` |
 | PUT | `/api/point-tools/virtual/:id` | token | `update_virtual_point` |
 | DELETE | `/api/point-tools/virtual/:id` | token | `delete_virtual_point` |
+| GET | `/api/point-tools/export` | token（`allow_anon_read=true` 时可匿名） | `export_points` |
 | GET | `/api/point-tools/offset` | token（`allow_anon_read=true` 时可匿名） | `offset_list` |
 | GET | `/api/point-tools/clone/devices` | token（`allow_anon_read=true` 时可匿名） | `clone_devices` |
 | POST | `/api/point-tools/find-replace/search` | token | `find_replace_search` |

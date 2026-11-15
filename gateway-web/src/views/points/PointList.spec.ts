@@ -17,6 +17,7 @@ const mockBatchDelete = vi.fn()
 const mockDoImport = vi.fn()
 const mockOnSelectionChange = vi.fn()
 const mockSavePointField = vi.fn().mockResolvedValue(true)
+const mockDoExportPoints = vi.fn()
 
 // 列表加载失败原因：默认空串（无错误）；失败态用例按需置为错误文案
 const loadErrorState = ref('')
@@ -79,6 +80,8 @@ vi.mock('@/composables/devices/usePoints', () => ({
     showCopy: ref(false),
     showBatchEdit: ref(false),
     showGen: ref(false),
+    exportingPoints: ref(false),
+    doExportPoints: mockDoExportPoints,
     protocolLabel: { modbus: 'Modbus', dlt645: 'DLT645', cjt188: 'CJT188' },
     protocolType: () => 'info',
     protocolOptions: [
@@ -173,7 +176,9 @@ describe('Points.vue', () => {
   it('更多操作 → 复制到其他设备，弹窗真正打开', async () => {
     const wrapper = mount(Points)
     await settle()
-    wrapper.findComponent(ElDropdown).vm.$emit('command', 'copy')
+    // 页面上有多个下拉（批量导出 / 更多操作），按触发文案定位，避免下标耦合
+    const more = wrapper.findAllComponents(ElDropdown).find((d) => d.text().includes('更多操作'))
+    more!.vm.$emit('command', 'copy')
     await settle()
     const dialog = wrapper.findComponent(PointsCopyDialog)
     expect(dialog.exists()).toBe(true)
@@ -184,12 +189,23 @@ describe('Points.vue', () => {
   it('更多操作 → 批量生成，弹窗真正打开', async () => {
     const wrapper = mount(Points)
     await settle()
-    wrapper.findComponent(ElDropdown).vm.$emit('command', 'generate')
+    const more = wrapper.findAllComponents(ElDropdown).find((d) => d.text().includes('更多操作'))
+    more!.vm.$emit('command', 'generate')
     await settle()
     const dialog = wrapper.findComponent(PointsGenerateDialog)
     expect(dialog.exists()).toBe(true)
     expect(dialog.props('modelValue')).toBe(true)
     expect(wrapper.text()).toContain('批量生成点位')
+  })
+
+  it('批量导出下拉把 csv / json 命令透传给导出逻辑', async () => {
+    const wrapper = mount(Points)
+    await settle()
+    const exporter = wrapper.findAllComponents(ElDropdown).find((d) => d.text().includes('批量导出'))
+    expect(exporter, '工具栏应有批量导出下拉').toBeTruthy()
+    exporter!.vm.$emit('command', 'csv')
+    await settle()
+    expect(mockDoExportPoints).toHaveBeenCalledWith('csv')
   })
 
   it('双击名称单元格就地修改并提交，无需打开弹窗', async () => {

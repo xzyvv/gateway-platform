@@ -22,6 +22,22 @@ export function listPoints(deviceId: string): Promise<PointConfig[]> {
   return request<PointConfig[]>({ url: `/api/devices/${deviceId}/points`, method: 'GET' })
 }
 
+/**
+ * 点位导出结果（`GET /api/point-tools/export`）。
+ *
+ * `points` 只含**配置点位**（配置文件里的 `points`），不含模板设备展开出来的点位。
+ * 导出后改完再导回走的是同一份配置点位，模板点位由设备模板负责。
+ */
+export interface PointsExportResult {
+  total: number
+  points: PointConfig[]
+}
+
+/** 导出全部配置点位（与批量导入的落库范围一致，可直接回灌） */
+export function exportPoints(): Promise<PointsExportResult> {
+  return request<PointsExportResult>({ url: '/api/point-tools/export', method: 'GET' })
+}
+
 /** 创建点位 */
 export function createPoint(deviceId: string, point: PointPayload): Promise<PointConfig> {
   return request<PointConfig>({

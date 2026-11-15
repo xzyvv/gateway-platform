@@ -10,9 +10,10 @@
 //! - POST   /api/points/{id}/restore                  -> restore_point（config）
 //! - GET    /api/points/{id}/read                     -> point_read_now
 //!
-//! 点位工具（批量写 / 虚拟点位 / 批量偏移 / 克隆 / 查找替换）：
+//! 点位工具（批量写 / 导出 / 虚拟点位 / 批量偏移 / 克隆 / 查找替换）：
 //! - POST   /api/point-tools/write                    -> points_write_unified（唯一写入口）
 //! - POST   /api/point-tools/batch                    -> points_batch
+//! - GET    /api/point-tools/export                   -> export_points
 //! - GET    /api/point-tools/virtual                  -> list_virtual_points
 //! - POST   /api/point-tools/virtual                  -> create_virtual_point
 //! - PUT    /api/point-tools/virtual/{id}             -> update_virtual_point
@@ -71,7 +72,7 @@ use axum::{
     Router,
 };
 
-use super::{point_read_now, points_batch, points_write_unified};
+use super::{export_points, point_read_now, points_batch, points_write_unified};
 // CRUD handler 来自 `config`，批量/虚拟点位 handler 来自 `points_ops`，
 // 均由 `web::api` 扁平重导出（见 `web/api/mod.rs`）。
 use crate::web::api::{
@@ -139,6 +140,7 @@ pub fn points_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
 
     // === 批量运维（v2.0 全部免费，无中间件）===
     let batch_read = Router::new()
+        .route("/api/point-tools/export", get(export_points))
         .route("/api/point-tools/offset", get(offset_list))
         .route("/api/point-tools/clone/devices", get(clone_devices))
         .route_layer(from_fn_with_state(

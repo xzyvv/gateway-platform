@@ -35,6 +35,25 @@ pub async fn points_batch(
     }
 }
 
+/// 点位导出（`GET /api/point-tools/export`）
+///
+/// 返回**配置点位**（`cfg.points`）快照，供前端另存为 CSV / JSON。
+///
+/// 只导 `cfg.points`、不导模板设备展开出来的点位，是刻意的：
+/// 导入端点 `POST /api/point-tools/batch` 是 upsert 进 `cfg.points`，
+/// 若把展开点位一并导出，用户改完再导回就会把它们固化成显式点位，
+/// 运行期同一批点位出现两份（模板展开一份 + 显式一份）。
+/// 模板点位随设备模板走，整份工程用 `/api/project/export` 搬运。
+pub async fn export_points(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<PointsExportResp>> {
+    let cfg = state.config.load_full();
+    Json(ApiResponse::ok(PointsExportResp {
+        total: cfg.points.len(),
+        points: cfg.points.clone(),
+    }))
+}
+
 /// 批量导入点位（同 id 覆盖）
 async fn upsert_points(
     state: &Arc<AppState>,

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::extract::{Json, Path, State};
 
 use axum::response::IntoResponse;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::web::types::{ApiError, ApiResponse, AppState};
 
@@ -42,6 +42,16 @@ pub enum PointsBatchAction {
         #[serde(default)]
         delete: Vec<String>,
     },
+}
+
+/// 点位导出响应体（`GET /api/point-tools/export`）
+#[derive(Debug, Serialize)]
+pub struct PointsExportResp {
+    /// 导出的配置点位总数
+    pub total: usize,
+
+    /// 配置点位快照（**不含**模板设备展开出来的点位）
+    pub points: Vec<gateway_core::config::PointConfig>,
 }
 
 /// 点位写入请求体（唯一写入口 `POST /api/point-tools/write`）

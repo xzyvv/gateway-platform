@@ -619,6 +619,91 @@ mod validation_integration {
 }
 
 // ============================================================
+// D2: 点位批量导出 —— 只导配置点位，且是只读端点
+// ============================================================
+// 导出用于「Excel 改完 → 批量导入」的回灌闭环，所以导出的集合必须与
+// 导入的落库集合一致（都是 cfg.points），不能混进模板设备展开出来的点位。
+
+mod points_export_integration {
+    use super::common::mock_state::mock_app_state;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use gateway_api::web::build_router;
+    use tower::ServiceExt;
+
+    fn authed(method: &str, uri: &str, body: Option<String>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", "Bearer test-token-0123456789abcdef");
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        builder
+            .body(body.map_or_else(Body::empty, Body::from))
+            .expect("构建请求")
+    }
+
+    #[tokio::test]
+    async fn export_returns_config_points_only() {
+        let app = build_router(mock_app_state());
+
+        let body = serde_json::json!([
+            {
+                "id": "p1", "name": "电压", "device_id": "d1", "bus": "bus1",
+                "protocol": "modbus", "address": "40001", "address_num": 0,
+                "slave_id": 1, "interval": 10
+            },
+            {
+                "id": "p2", "name": "电流", "device_id": "d1", "bus": "bus1",
+                "protocol": "modbus", "address": "40002", "address_num": 1,
+                "slave_id": 1, "interval": 10
+            }
+        ])
+        .to_string();
+        let res = app
+            .clone()
+            .oneshot(authed("POST", "/api/point-tools/batch", Some(body)))
+            .await
+            .unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), 65536).await.unwrap();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        assert_eq!(status, StatusCode::OK, "批量导入应成功：{text}");
+
+        let res = app
+            .oneshot(authed("GET", "/api/point-tools/export", None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), 65536).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("导出响应应为 JSON");
+
+        assert_eq!(v["data"]["total"], 2, "导出的总数应与配置点位一致");
+        let ids: Vec<&str> = v["data"]["points"]
+            .as_array()
+            .expect("points 应为数组")
+            .iter()
+            .map(|p| p["id"].as_str().expect("点位应带 id"))
+            .collect();
+        assert_eq!(ids, vec!["p1", "p2"], "导出的点位应与写入的一致");
+    }
+
+    /// 导出是只读端点：mock 夹具开了 allow_anon_read，匿名请求也应放行
+    #[tokio::test]
+    async fn export_is_read_only_and_anon_readable() {
+        let app = build_router(mock_app_state());
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/point-tools/export")
+            .body(Body::empty())
+            .expect("构建请求");
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "只读导出不该被写权限拦下");
+    }
+}
+
+// ============================================================
 // D3: 审计日志覆盖 —— 敏感操作必须写入真实 AuditLog 且可查询
 // ============================================================
 // 回归：原先 web 层仅调用 tracing 桩 `audit_log_imported()`，真实 AuditLog

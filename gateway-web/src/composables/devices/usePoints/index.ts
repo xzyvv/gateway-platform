@@ -6,6 +6,7 @@ import { createPointValues } from './values'
 import { createPointCrud } from './crud'
 import { createPointForm } from './form'
 import { createPointBatchImport } from './batchImport'
+import { createPointExport } from './export'
 
 export type { PointRow, PointForm, InlinePatch, BatchDeleteResult, BatchImportResult } from './types'
 
@@ -17,7 +18,7 @@ export type { PointRow, PointForm, InlinePatch, BatchDeleteResult, BatchImportRe
  *
  * 本文件是 barrel：具体实现按职责拆分到同目录下的
  * state（共享状态）/ query（列表加载）/ values（读值）/ crud（增删改）/
- * form（单点表单）/ batchImport（批量导入）/ validation（校验与取值收敛）/ types（类型）。
+ * form（单点表单）/ batchImport（批量导入）/ export（批量导出）/ validation（校验与取值收敛）/ types（类型）。
  */
 export function usePoints() {
   const state = createPointsState()
@@ -26,6 +27,7 @@ export function usePoints() {
   const crud = createPointCrud(state, query.loadPoints)
   const form = createPointForm(state, query.loadPoints)
   const batchImport = createPointBatchImport(state, query.loadPoints)
+  const pointExport = createPointExport()
 
   onMounted(query.loadDevices)
 
@@ -43,6 +45,8 @@ export function usePoints() {
     showImport: batchImport.showImport, importText: batchImport.importText,
     importing: batchImport.importing, importProgress: batchImport.importProgress,
     showCopy: state.showCopy, showBatchEdit: state.showBatchEdit, showGen: state.showGen,
+    // export
+    exportingPoints: pointExport.exporting, doExportPoints: pointExport.doExport,
     // protocol labels
     protocolLabel, protocolType, protocolOptions,
     // actions

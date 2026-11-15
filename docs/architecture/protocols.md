@@ -63,6 +63,7 @@
 | GET | `/api/history/export` | 历史数据 CSV 导出 |
 | GET | `/api/points/{id}/read` | 立即读取单个点位 |
 | POST | `/api/point-tools/batch` | 点位批量导入 |
+| GET | `/api/point-tools/export` | 配置点位批量导出（CSV/JSON 的前端另存数据源） |
 | POST | `/api/point-tools/write` | 点位统一写入口 |
 | POST | `/api/discover` | 设备发现 |
 | GET/POST | `/api/io/status`、`/api/io/{index}` | GPIO 状态 / 控制 |
