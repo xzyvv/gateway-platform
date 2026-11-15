@@ -119,7 +119,7 @@
 | `value` | Option\<f64\> | 最近一次成功采集值（`last_good_value`） |
 | `quality` | String | 见下方质量码映射 |
 | `consecutive_failures` | u32 | 连续失败次数 |
-| `last_update_at` | i64 | 毫秒；真实最后成功采集时刻（scheduler 快照 `last_good_ts`），从未成功时回退为请求时刻 |
+| `last_update_at` | i64 | 毫秒；真实最后成功采集时刻（scheduler 快照 `last_good_ts`）；从未成功为 `0`（前端显示「无上报」，不回填请求时刻） |
 
 **质量码映射**（`map_quality`，注意与内部原始码不同）：
 
@@ -288,7 +288,7 @@ score = 100
 | 节点类型 | `id` / `name` | `meta` | `status` |
 |---|---|---|---|
 | bus | `bus.port_name` / 同 | `"{protocol} @ {baud_rate} baud"` | 恒为 `null` |
-| device | `device.id` / `device.name` | `"slave: {slave_id}"`，缺省 0 | `online`（任一点位 good）/ `warning`（无 good 但有 stale）/ `offline`（其余，含无点位设备） |
+| device | `device.id` / `device.name` | `"slave: {slave_id}"`，缺省 0 | `online`（任一点位 good）/ `warning`（无 good，且最差为 1~2 次失败 `bad`）/ `offline`（无 good 且有 ≥3 次失败 `stale`，或其余含无点位/无快照） |
 | point | `point.id` / 点位名（空回退 id） | `"addr: {address}"` | `online`（quality == good）/ `offline`（其余）；快照缺失为 `null` |
 
 `TopoLink`：`{ source, target }`。连线规则：`device.bus → device.id`；`point.device_id → point.id`

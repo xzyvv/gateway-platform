@@ -193,7 +193,7 @@ const pointColumns: ColumnDef<PointQuality>[] = [
     cell: (row) => h(ElTag, { size: 'small', type: qColor(row.quality) as TagType }, () => qLabel(row.quality)),
   },
   { key: 'consecutive_failures', title: '连续失败', width: 90 },
-  { key: 'last_update_at', title: '更新时间', width: 160, cell: (row) => formatTimeOfDay(row.last_update_at) },
+  { key: 'last_update_at', title: '更新时间', width: 160, cell: (row) => (row.last_update_at > 0 ? formatTimeOfDay(row.last_update_at) : '无上报') },
 ]
 
 async function loadRules() {

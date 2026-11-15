@@ -93,6 +93,8 @@ impl NtpManager {
     /// 启动后台同步循环
     ///
     /// 每次循环重新读取 config.sync_interval，因此在线修改同步间隔可立即生效。
+    /// 启动时先立即校时一次：默认周期是 3600s，若先睡满周期，网关启动后一小时
+    /// 内 `/api/ntp/status` 恒为 idle/RTC，自检与运维面板看不到时钟偏差。
     pub fn start(self: &Arc<Self>) {
         let self_arc = self.clone();
         drop(crate::engine::supervision::spawn_supervised(
@@ -100,6 +102,10 @@ impl NtpManager {
             move || {
                 let self_arc = self_arc.clone();
                 async move {
+                    tokio::select! {
+                        _ = self_arc.shutdown.notified() => return,
+                        _ = self_arc.sync_now() => {}
+                    }
                     loop {
                         let interval = Duration::from_secs(self_arc.config.lock().sync_interval);
                         tokio::select! {

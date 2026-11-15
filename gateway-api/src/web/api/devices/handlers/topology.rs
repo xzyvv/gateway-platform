@@ -71,22 +71,30 @@ pub(crate) async fn device_topology(
     let mut offline = 0usize;
     let mut device_count = 0usize;
     for dev in devices {
-        // 计算设备状态：如果该设备下有点位 quality=good 则 online，否则 offline
-        // （含模板展开点位，否则模板化设备恒误判 offline）
+        // 设备状态按失败严重度单调递进：任一点位 good → 在线；否则 1~2 次失败
+        // （quality=bad）→ 告警；≥3 次失败（quality=stale）或没有质量快照 → 离线。
+        // 原实现是 stale→warning、bad→offline：刚失败一次显示红色离线，连续失败
+        // 反而退回黄色告警，与质量码严重度相反。
+        // 判定含模板展开点位，否则模板化设备恒误判 offline。
         let dev_points = owner_index.point_ids_of(dev);
         let mut has_good = false;
-        let mut has_warning = false;
+        let mut has_bad = false;
+        let mut has_stale = false;
         for pid in &dev_points {
             match point_quality.get(pid.as_str()).copied() {
                 Some("good") => has_good = true,
-                Some("stale") => has_warning = true,
+                Some("bad") => has_bad = true,
+                Some("stale") => has_stale = true,
                 _ => {}
             }
         }
         let status = if has_good {
             online += 1;
             "online"
-        } else if has_warning {
+        } else if has_stale {
+            offline += 1;
+            "offline"
+        } else if has_bad {
             warning += 1;
             "warning"
         } else {

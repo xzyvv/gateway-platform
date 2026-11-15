@@ -163,6 +163,8 @@ describe('DataQuality 质量概览', () => {
     expect(wrapper.text()).toMatch(/\d{1,2}:\d{2}:\d{2}/)
     // 未上报的点位不能渲染成 1970 年的时间
     expect(wrapper.text()).not.toContain('1970')
+    // 从未成功采集（last_update_at=0/null）应显示「无上报」，不能伪装成当前时刻
+    expect(wrapper.text()).toContain('无上报')
   })
 
   it('规则启停失败：开关拨回原状态，并提示失败原因', async () => {

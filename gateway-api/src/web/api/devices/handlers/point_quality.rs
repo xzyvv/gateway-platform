@@ -51,7 +51,6 @@ pub(crate) async fn list_point_quality(
 ) -> Result<Json<ApiResponse<Vec<PointQuality>>>, ApiError> {
     let cfg = state.config.load_full();
     let statuses = state.south.scheduler.device_status();
-    let now = chrono::Utc::now().timestamp_millis();
     let (point_by_id, device_by_id) = build_index(&cfg.points, cfg.devices.as_deref());
 
     let mut result: Vec<PointQuality> = Vec::with_capacity(statuses.len());
@@ -60,13 +59,10 @@ pub(crate) async fn list_point_quality(
         let cf = s.consecutive_failures;
         let quality_raw = s.quality.as_str();
         let last_good = s.last_good_value;
-        // 最后成功采集时刻用 scheduler 快照的真实 last_good_ts（0 = 从未成功，
-        // 回退 now 避免前端把时间渲染成 1970）；此前恒为 now 属桩行为。
-        let last_good_ts = if s.last_good_ts > 0 {
-            s.last_good_ts
-        } else {
-            now
-        };
+        // 最后成功采集时刻直接用 scheduler 快照的 last_good_ts：0 = 从未成功，
+        // 原样下发由前端渲染「无上报」。不要回填 now——否则新加点位会显示
+        // 「更新于刚刚」，与 HealthScore 页的「无上报」口径冲突。
+        let last_good_ts = s.last_good_ts;
 
         let point = point_by_id.get(pid).copied();
         let point_name = point
