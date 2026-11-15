@@ -160,6 +160,7 @@
           <el-input v-else v-model="pointForm.address" :placeholder="protocolAddressPlaceholder(pointForm.protocol)" />
           <div v-if="isModbus && !modbusAddrOverflow" class="point-inherit-hint">
             区段首位即功能码数字（0xxxx→FC01、1xxxx→FC02、3xxxx→FC03、4xxxx→FC04），1xxxx / 4xxxx 为只读区段。
+            0xxxx 从 00001 起算，00000 与 00001 等价（都指向 0 号寄存器）。
             注意这与部分厂商手册的写法可能相反：手册里标成「保持寄存器 40001」的地址，本系统要填 30001，
             填 40001 会按 FC04 去读输入寄存器。
           </div>

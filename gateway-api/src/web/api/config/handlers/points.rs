@@ -168,47 +168,11 @@ pub async fn update_point(
     let _guard = state.config.config_reload_lock.lock().await;
     let old = state.config.load_full();
     let mut cfg = old.as_ref().clone();
-    // Bug 39: validate payload fields (skip uniqueness check, ID unchanged)
-    if payload.protocol.is_empty() {
-        return Ok(ApiResponse::err(4002, "protocol 不能为空"));
-    }
-    if payload.interval == 0 {
-        return Ok(ApiResponse::err(4002, "interval 必须大于 0"));
-    }
-    // Bug 228: 显式 scale=0 会让采集值恒等于 offset，拒绝而非静默归零。
-    if payload.scale == Some(0.0) {
-        return Ok(ApiResponse::err(
-            4002,
-            "scale 不能为 0（会使采集值恒等于 offset；如需 1:1 透传请省略或设为 1.0）",
-        ));
-    }
-    // CT/PT 变比必须 > 0：0 会把一次侧值乘成 0，负数反号，NaN/Inf 污染上送。
-    if let Some(msg) = invalid_ratio_message(payload.ct_ratio, payload.pt_ratio) {
-        return Ok(ApiResponse::err(4002, msg));
-    }
-    // 功能码必须符合所属协议的语义（与 create_point 同源）。
-    if let Some(msg) =
-        invalid_function_code_message(payload.protocol.as_str(), payload.function_code)
-    {
-        return Ok(ApiResponse::err(4002, msg));
-    }
-    // 采集周期必须小于北向上报周期：与 GatewayConfig::validate_cycle_conflict 同源。
-    // 不再硬编码 60s——北向周期本身可配，硬编码会导致「把上报周期改大后仍按 60 拦截」。
-    if cfg.mqtt.enabled && payload.interval >= cfg.mqtt.publish_interval {
-        return Ok(ApiResponse::err(
-            4002,
-            format!(
-                "采集周期必须小于北向上报周期（当前 {}s）",
-                cfg.mqtt.publish_interval
-            ),
-        ));
-    }
-    // Bug 109: 复用 VALID_PROTOCOLS 常量，避免与 update_device 不同步。
-    if !VALID_PROTOCOLS.contains(&payload.protocol.as_str()) {
-        return Ok(ApiResponse::err(
-            4002,
-            format!("不支持的协议: {}", payload.protocol),
-        ));
+    // 字段级校验与创建同源（protocol/interval/scale/变比/功能码/周期冲突），
+    // 只保留一份实现：此前这里内联复制了 7 条规则，改一边忘另一边就会
+    // 出现「新增能过、改成同样值被拒」。
+    if let Err(e) = validate_point(&payload, &cfg) {
+        return Ok(ApiResponse::err(4002, e.message()));
     }
     // Bug 39: validate device_id existence if specified
     if let Some(did) = &payload.device_id {
@@ -423,7 +387,7 @@ pub async fn purge_all_point_trash(
     Ok(ApiResponse::ok(()))
 }
 
-/// 测点创建请求校验（create_point 用）
+/// 测点新建 / 修改请求共用的字段级校验。
 fn validate_point(payload: &PointPayload, cfg: &GatewayConfig) -> GatewayResult<()> {
     if payload.protocol.is_empty() {
         return Err(GatewayError::Config("protocol 不能为空".into()));
