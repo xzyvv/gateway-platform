@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeNorthHealth, verdictAlertType, QUEUE_BACKLOG_THRESHOLD } from './northHealth'
+import { computeNorthHealth, verdictAlertType } from './northHealth'
 import type { NorthChannel, NorthServer } from '@/api/uplink'
 
 const channel = (over: Partial<NorthChannel> = {}): NorthChannel => ({
@@ -99,15 +99,41 @@ describe('computeNorthHealth —— 统一结论', () => {
     expect(h.issues.some(i => i.text.includes('丢帧 7 批次'))).toBe(true)
   })
 
-  it(`队列积压超过 ${QUEUE_BACKLOG_THRESHOLD} 条时 degraded`, () => {
+  it('待发消息达到后端预警阈值时 degraded（warning 级）', () => {
     const h = computeNorthHealth({
       channels: [channel()],
       servers: [],
       passthrough: noPassthrough,
-      pendingMessages: QUEUE_BACKLOG_THRESHOLD + 1,
+      pendingMessages: 10_000,
+      queueThresholds: { warning: 10_000, error: 100_000 },
     })
     expect(h.verdict).toBe('degraded')
-    expect(h.issues.some(i => i.text.includes('队列积压'))).toBe(true)
+    const issue = h.issues.find(i => i.text.includes('北向待发消息积压'))
+    expect(issue?.level).toBe('warning')
+    expect(issue?.text).toContain('10000')
+  })
+
+  it('待发消息达到后端告警阈值时升为 error 级', () => {
+    const h = computeNorthHealth({
+      channels: [channel()],
+      servers: [],
+      passthrough: noPassthrough,
+      pendingMessages: 100_000,
+      queueThresholds: { warning: 10_000, error: 100_000 },
+    })
+    expect(h.verdict).toBe('degraded')
+    expect(h.issues.find(i => i.text.includes('北向待发消息积压'))?.level).toBe('error')
+  })
+
+  it('后端未下发阈值时不做积压判定（不猜测口径）', () => {
+    const h = computeNorthHealth({
+      channels: [channel()],
+      servers: [],
+      passthrough: noPassthrough,
+      pendingMessages: 999_999,
+    })
+    expect(h.verdict).toBe('ok')
+    expect(h.issues.some(i => i.text.includes('积压'))).toBe(false)
   })
 
   it('通道全部停用时为 idle 而不是故障', () => {

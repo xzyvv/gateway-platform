@@ -42,7 +42,14 @@ pub(crate) struct NorthStatusParams {
     pub webhook_url: String,
     pub wh_success: u64,
     pub wh_failure: u64,
+    /// 数据队列未 ack 行数（同时充当本地历史库深度，参考用，不等于北向积压）
     pub queue_len: usize,
+    /// outbox 待发条数（`protocol='mqtt'`）
+    pub mqtt_pending: i64,
+    /// outbox 待发条数（`protocol='http'`，即 webhook）
+    pub http_pending: i64,
+    /// outbox 待发条数（全部协议）
+    pub total_pending: i64,
     pub mqtt_success: u64,
     /// N-7：RealtimeBus 广播溢出（背压）累计丢弃批次数（north 类别，兼容旧字段）
     pub lagged_dropped_batches: u64,
@@ -71,7 +78,8 @@ pub(crate) fn build_north_status_json(
         "type": "mqtt",
         "enabled": p.mqtt_enabled,
         "connected": p.mqtt_connected,
-        "queue_length": p.queue_len,
+        // 真实待发量（outbox status=0），不是数据队列深度
+        "queue_length": p.mqtt_pending,
         "extra": {
             "broker": p.mqtt_broker,
             "circuit_open": p.mqtt_circuit_open,
@@ -83,7 +91,8 @@ pub(crate) fn build_north_status_json(
         "type": "http",
         "enabled": p.webhook_enabled,
         "connected": p.webhook_connected,
-        "queue_length": 0,
+        // 原实现硬编码 0，webhook 积压永远显示为 0
+        "queue_length": p.http_pending,
         "extra": {
             "url": p.webhook_url,
             "success_count": p.wh_success,
@@ -120,7 +129,14 @@ pub(crate) fn build_north_status_json(
         "http": if p.webhook_enabled { 1 } else { 0 },
         "mqtt_connected": mqtt_connected_i,
         "http_connected": http_connected_i,
-        "pending_messages": p.queue_len,
+        "pending_messages": p.total_pending,
+        // 数据队列深度单独下发：它同时充当本地历史库，未启用北向时仍随采集增长，
+        // 不能当作「还没发出去多少」。阈值同时下发，前端只消费不猜测。
+        "data_queue_length": p.queue_len,
+        "queue_thresholds": {
+            "warning": crate::web::services::BACKLOG_WARN_ROWS,
+            "error": crate::web::services::BACKPRESSURE_ROWS,
+        },
         "total_messages_sent": total_sent,
         // N-7：背压丢帧累计（RealtimeBus Lagged）。持续增长 = 实时推送存在数据缺口。
         // lagged_by_consumer 按消费端拆分：north=上行 fan-out、websocket=看板、
@@ -190,6 +206,9 @@ mod north_tests {
             wh_success: 10,
             wh_failure: 2,
             queue_len: 5,
+            mqtt_pending: 11,
+            http_pending: 7,
+            total_pending: 18,
             mqtt_success: 100,
             lagged_dropped_batches: 0,
             lagged_by_consumer: LaggedCounts::default(),
@@ -237,7 +256,8 @@ mod north_tests {
             "tcp://broker:1883"
         );
         assert!(!mqtt["extra"]["circuit_open"].as_bool().unwrap());
-        assert_eq!(mqtt["queue_length"].as_u64().unwrap(), 5u64);
+        // 真实待发量（outbox status=0），不是数据队列深度（queue_len=5）
+        assert_eq!(mqtt["queue_length"].as_u64().unwrap(), 11u64);
     }
 
     #[test]
@@ -260,7 +280,8 @@ mod north_tests {
         assert_eq!(agg["http"].as_u64().unwrap(), 1u64);
         assert_eq!(agg["mqtt_connected"].as_u64().unwrap(), 1u64);
         assert_eq!(agg["http_connected"].as_u64().unwrap(), 1u64);
-        assert_eq!(agg["pending_messages"].as_u64().unwrap(), 5u64);
+        // 全部协议 outbox 待发量（mqtt 11 + http 7），不是数据队列深度
+        assert_eq!(agg["pending_messages"].as_u64().unwrap(), 18u64);
         assert_eq!(agg["total_messages_sent"].as_u64().unwrap(), 110u64);
     }
 
@@ -334,6 +355,9 @@ mod north_tests {
                 wh_success: 0,
                 wh_failure: 0,
                 queue_len: 0,
+                mqtt_pending: 0,
+                http_pending: 0,
+                total_pending: 0,
                 mqtt_success: 0,
                 lagged_dropped_batches: 0,
                 lagged_by_consumer: LaggedCounts::default(),
@@ -360,6 +384,9 @@ mod north_tests {
                 wh_success: 7,
                 wh_failure: 3,
                 queue_len: 0,
+                mqtt_pending: 0,
+                http_pending: 0,
+                total_pending: 0,
                 mqtt_success: 50,
                 lagged_dropped_batches: 0,
                 lagged_by_consumer: LaggedCounts::default(),
@@ -389,6 +416,9 @@ mod north_tests {
                 wh_success: 0,
                 wh_failure: 0,
                 queue_len: 0,
+                mqtt_pending: 0,
+                http_pending: 0,
+                total_pending: 0,
                 mqtt_success: 0,
                 lagged_dropped_batches: 0,
                 lagged_by_consumer: LaggedCounts::default(),
@@ -397,5 +427,36 @@ mod north_tests {
             &gateway_core::engine::metrics::Metrics::new(),
         );
         assert!(v["channels"][0]["extra"]["circuit_open"].as_bool().unwrap());
+    }
+
+    /// 北向积压必须用 outbox 待发量，不能用数据队列深度冒充
+    /// （后者同时充当本地历史库，未启用 MQTT 时仍随采集增长）。
+    /// webhook 通道此前还硬编码 0。
+    #[test]
+    fn test_queue_length_uses_outbox_pending_not_data_queue() {
+        let p = default_args();
+        let v = build_north_status_json(&p, &gateway_core::engine::metrics::Metrics::new());
+
+        assert_eq!(v["channels"][0]["queue_length"].as_i64().unwrap(), 11);
+        assert_eq!(v["channels"][1]["queue_length"].as_i64().unwrap(), 7);
+        assert_eq!(v["aggregated"]["pending_messages"].as_i64().unwrap(), 18);
+        assert_eq!(
+            v["aggregated"]["data_queue_length"].as_i64().unwrap(),
+            5,
+            "数据队列深度必须单独下发"
+        );
+        // 阈值随响应下发，前端只消费不猜测
+        assert_eq!(
+            v["aggregated"]["queue_thresholds"]["warning"]
+                .as_i64()
+                .unwrap(),
+            10_000
+        );
+        assert_eq!(
+            v["aggregated"]["queue_thresholds"]["error"]
+                .as_i64()
+                .unwrap(),
+            100_000
+        );
     }
 }

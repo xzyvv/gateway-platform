@@ -104,8 +104,8 @@
               </div>
               <div class="channel-meta">
                 <span class="meta-label">队列长度</span>
-                <span class="meta-value" :class="{ 'queue-warn': ch.queue_length! > 100 }">
-                  {{ ch.queue_length! }}
+                <span class="meta-value" :class="{ 'queue-warn': queueWarn(ch) }">
+                  {{ ch.queue_length ?? 0 }}
                 </span>
               </div>
 
@@ -274,8 +274,15 @@ const health = computed(() =>
     passthrough: { enabled: passthrough.enabled, sessions: passthrough.sessions },
     laggedDropped: laggedDropped.value,
     pendingMessages: status.aggregated?.pending_messages ?? 0,
+    queueThresholds: status.aggregated?.queue_thresholds,
   }),
 )
+
+/** 通道待发量是否达预警线：阈值来自后端，未下发时不着色（不猜测口径） */
+function queueWarn(ch: NorthChannel): boolean {
+  const warn = status.aggregated?.queue_thresholds?.warning
+  return warn != null && (ch.queue_length ?? 0) >= warn
+}
 
 /** 会话开始时间：后端可能给秒或毫秒，统一按毫秒展示 */
 function formatSessionTime(t: number) {

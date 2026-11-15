@@ -381,6 +381,12 @@ pub(crate) async fn north_status(State(state): State<Arc<AppState>>) -> impl Int
         None => false,
     };
     let queue_len = state.south.queue.len().await;
+    // outbox 真实待发量：按协议分桶 + 全量合计。死信箱不可用（Noop）时降级为 0，
+    // 只影响积压展示，不阻断状态页；数据队列长度另作 data_queue_length 下发。
+    let dead = &state.north.dead_letter;
+    let mqtt_pending = dead.pending_count(Some("mqtt")).await.unwrap_or(0);
+    let http_pending = dead.pending_count(Some("http")).await.unwrap_or(0);
+    let total_pending = dead.pending_count(None).await.unwrap_or(0);
     let webhook_enabled = cfg.webhook.as_ref().map(|w| w.enabled).unwrap_or(false);
     let webhook_url = cfg
         .webhook
@@ -436,6 +442,9 @@ pub(crate) async fn north_status(State(state): State<Arc<AppState>>) -> impl Int
             wh_success,
             wh_failure,
             queue_len,
+            mqtt_pending,
+            http_pending,
+            total_pending,
             mqtt_success,
             // N-7：把实时广播丢帧接入状态响应，Ops 可在页面/接口直接看到背压缺口。
             lagged_dropped_batches: lagged.north,

@@ -43,6 +43,17 @@ pub trait DeadLetterTrait: Send + Sync {
         protocol: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = gateway_core::engine::error::GatewayResult<i64>> + Send + 'a>>;
 
+    /// 统计某协议（`None` = 全部）**待发**（outbox `status=0`）条数。
+    ///
+    /// 北向状态页用它展示真实积压：数据队列长度同时充当本地历史库，
+    /// 与「还有多少条没发出去」不是一回事（未启用 MQTT 时队列仍随采集增长）；
+    /// webhook 通道此前还硬编码为 0。这里复用同一个 outbox 连接，
+    /// 不必把 north 运行时的句柄穿透到 Web 层。
+    fn pending_count<'a>(
+        &'a self,
+        protocol: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = gateway_core::engine::error::GatewayResult<i64>> + Send + 'a>>;
+
     /// 重投一条死信，返回新 outbox 行 id；`0` 表示同一 data_id 已有在途记录。
     fn replay<'a>(
         &'a self,
@@ -117,6 +128,13 @@ impl DeadLetterTrait for NoopDeadLetter {
         Box::pin(async { Ok(Vec::new()) })
     }
     fn count<'a>(
+        &'a self,
+        _protocol: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = gateway_core::engine::error::GatewayResult<i64>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(0) })
+    }
+    fn pending_count<'a>(
         &'a self,
         _protocol: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = gateway_core::engine::error::GatewayResult<i64>> + Send + 'a>>
@@ -236,6 +254,24 @@ impl DeadLetterTrait for SqliteDeadLetter {
                     "join count dead letters: {e}"
                 ))
             })?
+        })
+    }
+
+    fn pending_count<'a>(
+        &'a self,
+        protocol: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = gateway_core::engine::error::GatewayResult<i64>> + Send + 'a>>
+    {
+        let outbox = self.outbox.clone();
+        let protocol = protocol.map(|p| p.to_string());
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || outbox.lock().pending_count(protocol.as_deref()))
+                .await
+                .map_err(|e| {
+                    gateway_core::engine::error::GatewayError::Message(format!(
+                        "join count pending outbox: {e}"
+                    ))
+                })?
         })
     }
 

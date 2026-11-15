@@ -67,6 +67,26 @@ describe('UplinkNorthStatus.vue — C1 北向服务统一状态', () => {
     expect(text).toContain('110')
   })
 
+  it('通道待发量按后端阈值标红（不写死 100）', async () => {
+    mockGetNorthStatus.mockResolvedValue({
+      ...fullStatus,
+      channels: [
+        { ...fullStatus.channels[0], queue_length: 10_000 },
+        { ...fullStatus.channels[1], queue_length: 50 },
+      ],
+      aggregated: {
+        ...fullStatus.aggregated,
+        pending_messages: 10_050,
+        queue_thresholds: { warning: 10_000, error: 100_000 },
+      },
+    })
+    const wrapper = mount(UplinkNorthStatus)
+    await flushPromises()
+
+    // 只有达到 10,000 预警线的 mqtt 通道被标红
+    expect(wrapper.findAll('.queue-warn')).toHaveLength(1)
+  })
+
   it('MQTT 通道展示 broker 与断路器状态', async () => {
     mockGetNorthStatus.mockResolvedValue(fullStatus)
     const wrapper = mount(UplinkNorthStatus)

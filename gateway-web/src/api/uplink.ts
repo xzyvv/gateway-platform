@@ -194,7 +194,7 @@ export async function getPassthroughSessions(): Promise<{enabled: boolean; sessi
 /** C1 北向通道状态（自 network.ts 归拢） */
 export interface NorthChannelExtra { broker?: string; circuit_open?: boolean; url?: string; success_count?: number; failed_count?: number; avg_latency_ms?: number | null; topic?: string; build_supported?: boolean; /** 最近一次失败原因（连接器真实记录，成功后清空） */ last_error?: string }
 export interface NorthChannel { name: string; type: string; enabled: boolean; connected: boolean | null; queue_length?: number; extra: NorthChannelExtra }
-export interface NorthAggregated { mqtt: number; http: number; mqtt_connected: number; http_connected: number; pending_messages: number; total_messages_sent: number; /** 扇出订阅 Lagged 累计丢帧批次数 */ lagged_dropped_batches?: number }
+export interface NorthAggregated { mqtt: number; http: number; mqtt_connected: number; http_connected: number; /** outbox 待发消息数（mqtt + http，status=0） */ pending_messages: number; total_messages_sent: number; /** 扇出订阅 Lagged 累计丢帧批次数 */ lagged_dropped_batches?: number; /** 数据队列未 ack 行数（同时充当本地历史库深度，不代表北向积压） */ data_queue_length?: number; /** 队列健康阈值（后端单一来源）；旧服务端不带该字段时前端不做积压判定 */ queue_thresholds?: { warning: number; error: number } }
 /** C2 北向 Server 存活状态（OPC UA / Modbus / 透传 Server） */
 export interface NorthServer { name: string; running: boolean }
 /**

@@ -39,8 +39,13 @@ export interface NorthHealthInput {
   passthrough: { enabled: boolean; sessions: PassthroughSession[] }
   /** 扇出订阅累计丢帧批次（aggregated.lagged_dropped_batches） */
   laggedDropped?: number
-  /** 消息队列积压（aggregated.pending_messages） */
+  /** outbox 待发消息数（aggregated.pending_messages） */
   pendingMessages?: number
+  /**
+   * 队列健康阈值（aggregated.queue_thresholds，后端单一来源）。
+   * 未下发时不判定积压——前端不猜测口径，避免与后端 10,000 / 100,000 冲突。
+   */
+  queueThresholds?: { warning: number; error: number }
 }
 
 export interface NorthHealth {
@@ -52,9 +57,6 @@ export interface NorthHealth {
   issues: NorthHealthIssue[]
   stats: NorthHealthStats
 }
-
-/** 队列积压告警阈值：与通道卡片上 `queue-warn` 的阈值一致，避免两处口径不一致 */
-export const QUEUE_BACKLOG_THRESHOLD = 100
 
 /**
  * 把北向各组件的原始状态折算成统一健康结论。
@@ -119,8 +121,19 @@ export function computeNorthHealth(input: NorthHealthInput): NorthHealth {
   if (laggedDropped > 0) {
     issues.push({ level: 'warning', text: `上行扇出累计丢帧 ${laggedDropped} 批次（通道处理不及）` })
   }
-  if (pendingMessages > QUEUE_BACKLOG_THRESHOLD) {
-    issues.push({ level: 'warning', text: `消息队列积压 ${pendingMessages} 条` })
+  // 积压阈值由后端下发（与队列内核 BACKLOG_WARN_ROWS / BACKPRESSURE_ROWS 同源），
+  // 达到 warning 记 warning、达到 error 记 error；未下发则不判定。
+  const thresholds = input.queueThresholds
+  if (thresholds && pendingMessages >= thresholds.error) {
+    issues.push({
+      level: 'error',
+      text: `北向待发消息积压 ${pendingMessages} 条（超过告警阈值 ${thresholds.error}）`,
+    })
+  } else if (thresholds && pendingMessages >= thresholds.warning) {
+    issues.push({
+      level: 'warning',
+      text: `北向待发消息积压 ${pendingMessages} 条（超过预警阈值 ${thresholds.warning}）`,
+    })
   }
 
   const hasAnyConfig = channels.length > 0 || servers.length > 0
