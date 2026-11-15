@@ -310,6 +310,51 @@ async fn opcua_server_start_reaches_running() {
     );
 }
 
+/// 写回调集成测试：真实写结果必须映射成对应 StatusCode，不能乐观返回 Good。
+///
+/// 用可控假总线（`gateway_runtime_with_fake_bus_for_test`）驱动完整写链路：
+/// 点位白名单 → `collector.write` → `write_error_status` → 审计。
+/// 必须 multi_thread：写回调内部用 `block_in_place` 同步等待，单线程 runtime 会
+/// 退化成「异步下发 + 乐观 Good」，测不到真实状态码。
+#[cfg(feature = "opcua-server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opcua_write_returns_real_status_from_bus() {
+    use crate::engine::audit::AuditLog;
+    use opcua::types::StatusCode;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = std::sync::Arc::new(AuditLog::new(dir.path().join("audit.log")));
+
+    // 设备写成功：Good
+    let ok_handler = OpcUaWriteHandler {
+        gateway: crate::runtime::gateway_runtime_with_fake_bus_for_test(true),
+        audit: audit.clone(),
+    };
+    assert_eq!(
+        OpcUaServer::execute_write(&ok_handler, "p1", "温度", "b1", 12.5),
+        StatusCode::Good,
+        "设备确认写入时必须返回 Good"
+    );
+
+    // 设备无应答（CollectorError::Timeout）：BadDeviceFailure，绝不能是 Good
+    let fail_handler = OpcUaWriteHandler {
+        gateway: crate::runtime::gateway_runtime_with_fake_bus_for_test(false),
+        audit: audit.clone(),
+    };
+    assert_eq!(
+        OpcUaServer::execute_write(&fail_handler, "p1", "温度", "b1", 12.5),
+        StatusCode::BadDeviceFailure,
+        "下位机写入失败必须把真实失败码返回给客户端"
+    );
+
+    // 点位不存在：BadNodeIdUnknown，而不是设备故障或 Good
+    assert_eq!(
+        OpcUaServer::execute_write(&fail_handler, "missing", "温度", "b1", 1.0),
+        StatusCode::BadNodeIdUnknown,
+        "未知点位必须映射为 BadNodeIdUnknown"
+    );
+}
+
 #[cfg(feature = "opcua-server")]
 #[test]
 fn apply_points_batch() {

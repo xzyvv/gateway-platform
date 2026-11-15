@@ -117,6 +117,113 @@ pub fn gateway_runtime_without_buses_for_test() -> Arc<GatewayRuntime> {
     }))
 }
 
+/// 测试专用：构建一个挂有「写结果可控」假总线（`b1`）与可写点位 `p1` 的运行时。
+///
+/// 供北向写回集成测试使用：写命令立即返回 `write_ok` 决定的结果，不需要真实
+/// 串口/网口。与 [`gateway_runtime_without_buses_for_test`] 同理，装配收敛在
+/// runtime 层，避免 `north` 侧测试出现 `crate::south::` 引用（架构守护禁止）。
+#[cfg(test)]
+pub fn gateway_runtime_with_fake_bus_for_test(write_ok: bool) -> Arc<GatewayRuntime> {
+    use crate::config::NtpConfig;
+    use crate::engine::metrics::Metrics;
+    use crate::engine::model::DataPoint;
+    use crate::engine::monitor::health::DiskStatus;
+    use crate::pipeline::{
+        ConvertEngine, EdgeProcessor, PipelineSpawnInputs, ProcessingPipeline, VirtualPointEngine,
+    };
+    use crate::queue::{MemoryStorage, QueueStorage};
+    use crate::south::protocol::{Collector, CollectorError, CollectorResult};
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct FakeCollector {
+        bus: String,
+        write_ok: bool,
+    }
+
+    impl Collector for FakeCollector {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        fn bus_name(&self) -> &str {
+            &self.bus
+        }
+
+        fn read<'a>(
+            &'a self,
+            _point: &'a crate::config::PointConfig,
+        ) -> Pin<Box<dyn Future<Output = CollectorResult<DataPoint>> + Send + 'a>> {
+            Box::pin(async { Err(CollectorError::Unsupported("fake bus has no data".into())) })
+        }
+
+        fn write<'a>(
+            &'a self,
+            _point: &'a crate::config::PointConfig,
+            _value: f64,
+        ) -> Pin<Box<dyn Future<Output = CollectorResult<()>> + Send + 'a>> {
+            let write_ok = self.write_ok;
+            Box::pin(async move {
+                if write_ok {
+                    Ok(())
+                } else {
+                    Err(CollectorError::Timeout(std::time::Duration::from_millis(1)))
+                }
+            })
+        }
+    }
+
+    let metrics = Arc::new(Metrics::new());
+    let queue = Arc::new(
+        DataQueue::with_storage(Arc::new(MemoryStorage::new()) as Arc<dyn QueueStorage>)
+            .expect("build queue"),
+    );
+    let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
+        edge: Arc::new(EdgeProcessor::new()),
+        convert: ConvertEngine::empty(),
+        virtual_points: VirtualPointEngine::empty(),
+        queue: queue.clone(),
+        realtime_bus: None,
+        north_tx: None,
+        buffer: 16,
+        metrics: metrics.clone(),
+    });
+
+    let bus = "b1".to_string();
+    let mut collectors: HashMap<String, Arc<dyn Collector>> = HashMap::new();
+    collectors.insert(
+        bus.clone(),
+        Arc::new(FakeCollector {
+            bus: bus.clone(),
+            write_ok,
+        }),
+    );
+    let point = crate::config::PointConfig {
+        id: "p1".to_string(),
+        bus,
+        writable: true,
+        ..Default::default()
+    };
+    let scheduler = Arc::new(Scheduler::new(
+        collectors,
+        vec![point],
+        pipeline,
+        metrics.clone(),
+    ));
+    Arc::new(GatewayRuntime::new(GatewayComponents {
+        bus_managers: HashMap::new(),
+        mqtt: None,
+        scheduler,
+        queue,
+        ntp: Arc::new(NtpManager::new(NtpConfig::default())),
+        serial_mgr: SerialManager::new(),
+        metrics,
+        disk_status: Arc::new(DiskStatus::new()),
+        convert: ConvertEngine::empty(),
+        virtual_points: VirtualPointEngine::empty(),
+    }))
+}
+
 /// 判断某条总线是否应被**强制重建**（自愈 `ResetSerial` 语义）。
 ///
 /// 规则：
