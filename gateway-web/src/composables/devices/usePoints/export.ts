@@ -1,10 +1,11 @@
 /**
- * 批量导出 · 点位配置（CSV / JSON）
+ * 批量导出 · 点位配置（CSV 精简 / CSV 完整 / JSON）
  *
- * 两个格式对应批量导入页的两条回灌路径，导出后可直接改完再导回：
- * - CSV：10 列表头与「批量导入」模板完全一致，适合 Excel 批量改地址/变比。
- *   注意导入侧只读这 10 列，其余字段（scale/unit/data_type/writable 等）
- *   会被补默认值 —— 需要完整保真请用 JSON。
+ * 三种格式对应批量导入页的三条回灌路径，导出后可直接改完再导回：
+ * - CSV 精简档：10 列，与「批量导入」的精简模板逐列一致，Excel 里改地址/变比最顺手。
+ *   配合导入页的**合并**模式，导回时未出现的列保留原值，不丢 scale/unit/公式等字段。
+ * - CSV 完整档：全部可平铺字段（含 scale、unit、公式、告警阈值、可写标记等），
+ *   用于「导出 → 改 → 原样导回」的闭环。聚合配置是嵌套结构，CSV 装不下，不在其中。
  * - JSON：`PointConfig[]` 原样快照，可整体粘贴到批量导入页的「粘贴 JSON」。
  *
  * 导出范围是**配置点位**（后端 `GET /api/point-tools/export` 读 `cfg.points`），
@@ -15,35 +16,43 @@ import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { exportPoints } from '@/api/points'
 import { downloadTableCsv, triggerDownload } from '@/utils/exportCsv'
+import {
+  POINT_FIELDS_BASIC,
+  POINT_FIELDS_FULL,
+  formatPointCell,
+  type PointFieldSpec,
+} from '@/utils/pointFields'
 
-/** 与批量导入 CSV 模板逐列一致（见 views/devices/batchImport/pointCsv.ts） */
-const EXPORT_CSV_HEADER = [
-  'id', 'name', 'device_id', 'bus', 'protocol', 'address',
-  'slave_id', 'address_num', 'ct_ratio', 'pt_ratio',
-]
+/** 导出格式：精简 CSV / 完整 CSV / JSON 快照 */
+export type PointsExportFormat = 'csv-basic' | 'csv-full' | 'json'
 
-/** 导出格式：CSV（Excel 编辑）/ JSON（完整保真） */
-export type PointsExportFormat = 'csv' | 'json'
-
-/** CSV 导出的有损风险提示（导入侧只读这 10 列，其余字段会被补默认值） */
-const CSV_LOSSY_WARNING =
-  'CSV 只含 id / 名称 / 设备 / 总线 / 协议 / 地址 / 从站 / 地址偏移 / CT / PT 共 10 列。'
-  + '改完导回时，scale、offset、unit、data_type、writable、公式等其余字段会被重置为默认值。'
-  + '需要完整保真请改用「导出 JSON」。'
+/** 各档位的字段清单与列语义说明 */
+const CSV_PRESETS: Record<'csv-basic' | 'csv-full', { fields: PointFieldSpec[]; hint: string }> = {
+  'csv-basic': {
+    fields: POINT_FIELDS_BASIC,
+    hint: '精简 10 列（id / 名称 / 设备 / 总线 / 协议 / 地址 / 从站 / 地址偏移 / CT / PT）。'
+      + '导回时若选「合并」模式，未出现的列保留原值；出现的列留空表示清空该字段。',
+  },
+  'csv-full': {
+    fields: POINT_FIELDS_FULL,
+    hint: '完整字段导出（含 scale、offset、unit、公式、告警阈值、可写标记等）。'
+      + '导回时同样是按列覆盖，出现的列留空表示清空该字段；聚合配置是嵌套结构，不在 CSV 内。',
+  },
+}
 
 /** 导出中的状态 + 触发入口 */
 export function createPointExport() {
   const exporting = ref(false)
 
   /**
-   * CSV 导出前二次确认。
+   * CSV 导出前的语义说明。
    *
    * @returns true = 用户确认继续；false = 取消（含直接关闭弹窗）
    */
-  async function confirmCsvLossy(): Promise<boolean> {
+  async function confirmCsvSemantics(format: 'csv-basic' | 'csv-full'): Promise<boolean> {
     try {
-      await ElMessageBox.confirm(CSV_LOSSY_WARNING, '导出 CSV 前请确认', {
-        type: 'warning',
+      await ElMessageBox.confirm(CSV_PRESETS[format].hint, '导出 CSV 说明', {
+        type: 'info',
         confirmButtonText: '继续导出',
         cancelButtonText: '取消',
       })
@@ -55,9 +64,9 @@ export function createPointExport() {
 
   /** @param format 下拉菜单回传的是字符串，非法值直接忽略 */
   async function doExport(format: string): Promise<void> {
-    if (format !== 'csv' && format !== 'json') return
+    if (format !== 'csv-basic' && format !== 'csv-full' && format !== 'json') return
     if (exporting.value) return
-    if (format === 'csv' && !(await confirmCsvLossy())) return
+    if (format !== 'json' && !(await confirmCsvSemantics(format))) return
     exporting.value = true
     try {
       const { points } = await exportPoints()
@@ -66,18 +75,16 @@ export function createPointExport() {
         return
       }
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-      if (format === 'csv') {
-        const rows = points.map((p) => [
-          p.id, p.name ?? '', p.device_id ?? '', p.bus, p.protocol, p.address,
-          p.slave_id ?? '', p.address_num ?? '', p.ct_ratio ?? '', p.pt_ratio ?? '',
-        ])
-        // 走统一出口：公式注入防护 + RFC 4180 转义 + UTF-8 BOM
-        downloadTableCsv([...EXPORT_CSV_HEADER], rows, `points-${stamp}.csv`)
-      } else {
+      if (format === 'json') {
         triggerDownload(
           new Blob([JSON.stringify(points, null, 2)], { type: 'application/json' }),
           `points-${stamp}.json`,
         )
+      } else {
+        const { fields } = CSV_PRESETS[format]
+        const rows = points.map((p) => fields.map((f) => formatPointCell(f, p[f.key])))
+        // 走统一出口：公式注入防护 + RFC 4180 转义 + UTF-8 BOM
+        downloadTableCsv(fields.map((f) => f.column), rows, `points-${stamp}.csv`)
       }
       ElMessage.success(`已导出 ${points.length} 个点位`)
     } catch (e) {

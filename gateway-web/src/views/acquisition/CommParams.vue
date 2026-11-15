@@ -48,8 +48,7 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import { getConfig, postConfig } from '@/api/config'
 import { batchEditPoints } from '@/api/points'
 import type { DeviceConfig, BusConfig, PointConfig } from '@/api/types'
-
-const BYTE_ORDERS = ['ABCD', 'DCBA', 'CDAB', 'BADC']
+import { BYTE_ORDERS } from '@/composables/devices/decodeParams'
 
 /** 总线行：一行对应一条总线（而非一台设备），行内字段与 cfg.buses 字段一一对应 */
 interface BusRow {
@@ -144,7 +143,7 @@ const devColumns: ColumnDef<DevRow>[] = [
           'onUpdate:modelValue': (v: unknown) => { row.byteOrder = String(v) },
           onChange: () => saveByteOrder(row),
         },
-        { default: () => BYTE_ORDERS.map((b) => h(ElOption, { key: b, label: b, value: b })) },
+        { default: () => BYTE_ORDERS.map((b) => h(ElOption, { key: b.value, label: b.label, value: b.value })) },
       ),
   },
 ]

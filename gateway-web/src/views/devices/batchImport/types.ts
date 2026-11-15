@@ -17,6 +17,8 @@ export interface PointRow extends Partial<PointConfig> {
   line: number
   valid: boolean
   error?: string
+  /** CSV 原始单元格（列名小写 → 原始文本）：合并模式按「列是否出现」决定覆盖与否 */
+  cells?: Record<string, string>
 }
 
 /** 点位校验结果汇总 */

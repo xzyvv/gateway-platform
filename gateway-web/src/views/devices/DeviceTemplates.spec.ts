@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { ElMessage, ElInput } from 'element-plus'
+import { ElMessage, ElInput, ElSelect } from 'element-plus'
 
 /**
  * D1：设备管理 › 设备模板（DeviceTemplates）行为测试。
@@ -103,9 +103,15 @@ async function setIntervalField(wrapper: ReturnType<typeof mountPage>, value: nu
   await settle()
 }
 
-/** 点位行内：名称 / 地址 / 单位 是 ElInput，CT / PT 是 ElInputNumber */
+/** 点位行内：名称 / 地址 是 ElInput，CT / PT 是 ElInputNumber */
 async function setPointField(wrapper: ReturnType<typeof mountPage>, row: number, which: 0 | 1, value: string) {
   wrapper.findAll('.point-row')[row]!.findAllComponents(ElInput)[which]!.vm.$emit('update:modelValue', value)
+  await settle()
+}
+
+/** 点位行内的单位：ElSelect（功能码 / 数据类型 / 单位 依次为 0 / 1 / 2） */
+async function setPointUnit(wrapper: ReturnType<typeof mountPage>, row: number, value: string) {
+  wrapper.findAll('.point-row')[row]!.findAllComponents(ElSelect)[2]!.vm.$emit('update:modelValue', value)
   await settle()
 }
 
@@ -214,9 +220,8 @@ describe('DeviceTemplates 设备模板', () => {
     await setField(wrapper, 1, '适配 XX 固件')
     await setPointField(wrapper, 0, 0, '电量')
     await setPointField(wrapper, 0, 1, '0')
-    // 单位决定变比是否生效：同一行的第 3 个 ElInput
-    wrapper.findAll('.point-row')[0]!.findAllComponents(ElInput)[2]!.vm.$emit('update:modelValue', 'kWh')
-    await settle()
+    // 单位决定变比是否生效：单位是下拉（功能码 / 数据类型 / 单位 依次为 0 / 1 / 2）
+    await setPointUnit(wrapper, 0, 'kWh')
 
     await setPointRatio(wrapper, 0, 0, 0)
     await button(wrapper, '创建').trigger('click')

@@ -23,7 +23,10 @@
     <div class="step-content">
       <!-- CSV Step 1: 下载模板 -->
       <div v-if="pointMode === 'csv' && pointStep === 0" class="step-body">
-        <PointCsvTemplateStep @download-template="downloadPointTpl" />
+        <PointCsvTemplateStep
+          @download-template="downloadPointTpl()"
+          @download-full-template="downloadPointTpl('full')"
+        />
       </div>
 
       <!-- CSV Step 2: 上传文件 -->
@@ -55,6 +58,14 @@
 
       <!-- 确认导入 -->
       <div v-else-if="pointConfirmStep" class="step-body">
+        <div v-if="pointMode === 'csv' && !pointImportDone" class="write-mode">
+          <span class="write-mode-label">写入模式</span>
+          <el-radio-group v-model="pointWriteMode" size="small" aria-label="写入模式">
+            <el-radio-button value="merge">合并</el-radio-button>
+            <el-radio-button value="replace">覆盖</el-radio-button>
+          </el-radio-group>
+          <span class="write-mode-hint">{{ pointWriteModeHint }}</span>
+        </div>
         <ImportResultPanel
           :icon="pointImportDone ? 'success' : 'info'"
           :title="pointImportDone ? `成功导入 ${pointImportedCount} 个点位` : '确认导入以下有效数据'"
@@ -102,17 +113,18 @@ import { ElMessage, type UploadFile } from 'element-plus'
 import { Check } from '@element-plus/icons-vue'
 import { downloadCsvText } from '@/utils/exportCsv'
 import { parseImportPoints } from '@/utils/importPoints'
-import { batchImportPoints } from '@/api/points'
+import { batchImportPoints, exportPoints } from '@/api/points'
 import type { PointConfig } from '@/api/types'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { protocolColumn, addressColumn, tagColumn } from '@/utils/commonColumns'
+import { POINT_FIELDS_BASIC, POINT_FIELDS_FULL } from '@/utils/pointFields'
 import SectionHeader from '@/components/SectionHeader.vue'
 import ImportFileUpload from './ImportFileUpload.vue'
 import ImportValidatePreview from './ImportValidatePreview.vue'
 import ImportResultPanel from './ImportResultPanel.vue'
 import PointCsvTemplateStep from './PointCsvTemplateStep.vue'
 import PointJsonInputStep from './PointJsonInputStep.vue'
-import { parsePointCsvRows } from './pointCsv'
+import { buildMergedPayload, parsePointCsvRows, type PointWriteMode } from './pointCsv'
 import type { PointParseResult, PointRow } from './types'
 
 const router = useRouter()
@@ -129,6 +141,17 @@ const pointPayload = ref<PointConfig[]>([])
 const pointImporting = ref(false)
 const pointImportDone = ref(false)
 const pointImportedCount = ref(0)
+/** 写入语义：合并（默认，只改 CSV 里出现过的列）/ 覆盖（整点替换） */
+const pointWriteMode = ref<PointWriteMode>('merge')
+/** CSV 表头里真正出现过的可映射列（合并模式据此判断覆盖范围） */
+const pointPresentColumns = ref<string[]>([])
+
+/** 写入模式的说明文案：把「留空」与「没出现」两种语义讲清楚 */
+const pointWriteModeHint = computed(() =>
+  pointWriteMode.value === 'merge'
+    ? '合并：CSV 中出现的列覆盖现有点位，没出现的列（scale、unit、公式等）保留原值；出现的列留空表示清空该字段。'
+    : '覆盖：整点替换，CSV 未提到的字段会被重置为默认值（如 scale 归 1、公式清空）。',
+)
 
 const pointStepTitles = computed(() =>
   pointMode.value === 'csv'
@@ -185,13 +208,20 @@ const pointRowColumns: ColumnDef<PointRow>[] = [
   },
 ]
 
-/** 生成点位 CSV 模板 */
-function downloadPointTpl() {
-  const header = 'id,name,device_id,bus,protocol,address,slave_id,address_num,ct_ratio,pt_ratio\n'
-  const example = 'temp_001,温度传感器1,dev_001,bus1,modbus,40001,1,1,,\n'
-  const example2 = 'voltage_001,电压采样1,dev_002,bus2,dlt645,09000001,,1,,100\n'
+/** 生成点位 CSV 模板（精简 10 列 / 完整字段两档，列名与导出保持一致） */
+function downloadPointTpl(kind: 'basic' | 'full' = 'basic') {
+  const fields = kind === 'full' ? POINT_FIELDS_FULL : POINT_FIELDS_BASIC
+  const header = fields.map((f) => f.column).join(',')
+  const example: Record<string, string> = {
+    id: 'temp_001', name: '温度传感器1', device_id: 'dev_001', bus: 'bus1',
+    protocol: 'modbus', address: '40001', slave_id: '1', address_num: '1',
+    function_code: '3', data_type: 'f32', byte_order: 'ABCD', register_count: '2',
+    interval: '10', scale: '1', offset: '0', deadband: '0', on_change: 'false',
+    unit: '℃', writable: 'false',
+  }
+  const row = fields.map((f) => example[f.column] ?? '')
   // 走统一入口：BOM 由 downloadCsvText 附加，否则 Excel 打开示例里的中文是乱码
-  downloadCsvText(header + example + example2, 'points_template.csv')
+  downloadCsvText(`${header}\n${row.join(',')}\n`, kind === 'full' ? 'points_template_full.csv' : 'points_template.csv')
   ElMessage.success('模板已开始下载，填好后点「下一步：上传文件」')
 }
 
@@ -217,6 +247,7 @@ function parseAndValidatePointCsv() {
   if (!outcome.ok) { ElMessage.warning(outcome.message); return }
   pointResult.value = outcome.result
   pointPayload.value = outcome.payload
+  pointPresentColumns.value = outcome.presentColumns
   pointMaxStep.value = 3
   pointStep.value = 2
 }
@@ -236,14 +267,34 @@ function parsePointJson() {
   pointStep.value = 1
 }
 
+/**
+ * 按写入语义组装最终提交的数据。
+ *
+ * - 覆盖模式 / JSON 粘贴：直接用校验阶段归一好的 payload（历史行为不变）；
+ * - 合并模式：先拉现场现有点位，以其为基底，只覆盖 CSV 里出现过的列。
+ *   现有点位取的是**配置点位**（cfg.points），与导出范围一致；
+ *   模板设备展开出来的点位不在其中，若 CSV 里出现同名 id 会被当成新增点位写入。
+ */
+async function resolvePointPayload(): Promise<PointConfig[]> {
+  if (pointMode.value !== 'csv' || pointWriteMode.value !== 'merge') return pointPayload.value
+  const { points } = await exportPoints()
+  const existing = new Map(points.map((p) => [p.id, p]))
+  return buildMergedPayload(
+    pointResult.value.rows.filter((r) => r.valid),
+    existing,
+    new Set(pointPresentColumns.value),
+  )
+}
+
 async function doImportPoints() {
   if (pointPayload.value.length === 0) { ElMessage.warning('没有有效数据可导入'); return }
   pointImporting.value = true
   try {
-    await batchImportPoints(pointPayload.value)
-    pointImportedCount.value = pointPayload.value.length
+    const payload = await resolvePointPayload()
+    await batchImportPoints(payload)
+    pointImportedCount.value = payload.length
     pointImportDone.value = true
-    ElMessage.success(`成功导入 ${pointPayload.value.length} 个点位`)
+    ElMessage.success(`成功导入 ${payload.length} 个点位`)
   } catch {
     ElMessage.error('导入失败，请检查数据后重试')
   } finally {
@@ -260,6 +311,8 @@ function resetPoint() {
   pointResult.value = { total: 0, valid: 0, invalid: 0, rows: [] }
   pointImportDone.value = false
   pointImportedCount.value = 0
+  pointPresentColumns.value = []
+  pointWriteMode.value = 'merge'
 }
 </script>
 
@@ -270,4 +323,7 @@ function resetPoint() {
 .json-body { align-items: stretch; }
 .step-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .is-clickable { cursor: pointer; }
+.write-mode { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; margin-bottom: 14px; font-size: 0.8125rem; }
+.write-mode-label { color: var(--text-regular); font-weight: 600; }
+.write-mode-hint { color: var(--text-secondary); flex-basis: 100%; }
 </style>

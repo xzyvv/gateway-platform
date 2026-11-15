@@ -47,7 +47,10 @@
               <el-select v-model="p.data_type" style="width: 92px">
                 <el-option v-for="t in DATA_TYPES" :key="t" :label="t" :value="t" />
               </el-select>
-              <el-input v-model="p.unit" placeholder="单位" style="width: 72px" />
+              <!-- 单位纯下拉：与点位表单共用清单，禁止自定义同义写法 -->
+              <el-select v-model="p.unit" filterable clearable placeholder="单位" style="width: 96px">
+                <el-option v-for="u in unitChoices(p.unit)" :key="u" :label="u" :value="u" />
+              </el-select>
               <!-- 变比留空=不启用；电流/功率/电量吃 CT，电压/功率/电量吃 PT -->
               <el-input-number v-model="p.ct_ratio" :min="0" :controls="false" placeholder="CT" style="width: 84px" />
               <el-input-number v-model="p.pt_ratio" :min="0" :controls="false" placeholder="PT" style="width: 84px" />
@@ -80,6 +83,7 @@ import {
 import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
 import DurationSelect from '@/components/industrial/DurationSelect.vue'
 import { DATA_TYPES } from '@/composables/devices/decodeParams'
+import { unitChoices } from '@/composables/devices/useUnits'
 import { formatDateTime } from '@/utils/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'

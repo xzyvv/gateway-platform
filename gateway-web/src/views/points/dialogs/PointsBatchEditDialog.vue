@@ -108,6 +108,7 @@
           </template>
           <el-option v-for="o in BYTE_ORDERS" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
+        <div class="batch-hint">只对多字节类型（f32 / u32 等）有意义：留空按 ABCD（大端）解码，与设备手册的字节序一致即可；填错会导致数值乱码或明显偏离。</div>
       </el-form-item>
       <el-form-item label="寄存器数" prop="register_count">
         <el-input-number
@@ -449,5 +450,6 @@ async function submitBatchEdit() {
 <style scoped>
 .batch-tip { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--color-primary-bg); border-radius: var(--radius-small); margin-bottom: 16px; color: var(--color-primary); }
 .batch-check-side { margin-left: 8px; }
+.batch-hint { font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.6; margin-top: 4px; }
 .bus-opt-meta { margin-left: 8px; color: var(--text-secondary); font-size: 0.75rem; }
 </style>

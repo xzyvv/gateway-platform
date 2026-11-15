@@ -23,11 +23,15 @@ vi.mock('element-plus', async () => {
 })
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
 vi.mock('@/utils/exportCsv', () => ({ downloadCsvText: downloadCsvTextMock }))
-vi.mock('@/api/points', () => ({ batchImportPoints: batchImportPointsMock }))
+vi.mock('@/api/points', () => ({
+  batchImportPoints: batchImportPointsMock,
+  exportPoints: exportPointsMock,
+}))
 
 const routerPush = vi.hoisted(() => vi.fn())
 const downloadCsvTextMock = vi.hoisted(() => vi.fn())
 const batchImportPointsMock = vi.hoisted(() => vi.fn())
+const exportPointsMock = vi.hoisted(() => vi.fn())
 
 import PointImportBranch from './PointImportBranch.vue'
 import ImportFileUpload from './ImportFileUpload.vue'
@@ -91,8 +95,10 @@ async function csvToPreview(wrapper: ReturnType<typeof mountPage>, csv: string) 
   await settle()
   const file = new File([csv], 'points.csv', { type: 'text/csv' })
   wrapper.findComponent(ImportFileUpload).vm.$emit('file-change', { name: 'points.csv', raw: file })
+  // 表头以实际传入的 CSV 为准（不同用例可能用不同的列集合）
+  const firstColumn = csv.split('\n')[0]!.split(',')[0]!
   await vi.waitFor(() =>
-    expect(wrapper.findComponent(ImportFileUpload).props('rawText')).toContain('id,name'),
+    expect(wrapper.findComponent(ImportFileUpload).props('rawText')).toContain(firstColumn),
   )
   await settle()
   await button(wrapper, '下一步：校验').trigger('click')
@@ -108,10 +114,21 @@ async function jsonToPreview(wrapper: ReturnType<typeof mountPage>, text: string
   await settle()
 }
 
+/** 写入模式的 radio-group 只在确认步渲染，按文案定位，避免与「导入方式」混淆 */
+async function switchWriteMode(wrapper: ReturnType<typeof mountPage>, mode: 'merge' | 'replace') {
+  const groups = wrapper.findAllComponents({ name: 'ElRadioGroup' })
+  const target = groups.find((g) => g.attributes('aria-label') === '写入模式')
+  expect(target, '确认步应给出写入模式选择').toBeTruthy()
+  target!.vm.$emit('update:modelValue', mode)
+  await settle()
+}
+
 describe('PointImportBranch 点位批量导入', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     batchImportPointsMock.mockResolvedValue({ status: 'ok' })
+    // 默认现场没有已存在的配置点位：合并模式退化为「新增」，与覆盖模式结果一致
+    exportPointsMock.mockResolvedValue({ total: 0, points: [] })
   })
 
   it('CSV 首步必须给出前进路径：下载模板提示后能进入上传步', async () => {
@@ -291,5 +308,84 @@ describe('PointImportBranch 点位批量导入', () => {
     expect(button(wrapper, '下载 CSV 模板').exists()).toBe(true)
     expect(wrapper.findComponent(ImportValidatePreview).exists()).toBe(false)
     expect(wrapper.findAll('button').some((b) => b.text().trim() === '确认导入')).toBe(false)
+  })
+
+  // ===== 写入模式：合并（默认）/ 覆盖 =====
+
+  /** 现场已存在的点位：带 scale / unit / 公式，CSV 里不会出现这些列 */
+  const EXISTING_POINT = {
+    id: 'p1', name: '温度', bus: 'bus1', protocol: 'modbus', address: '40001',
+    slave_id: 1, interval: 10, scale: 0.1, unit: 'kV', formula: 'a * 2',
+    on_change: true, writable: true,
+  }
+
+  it('写入模式默认是合并，且确认步给出模式选择', async () => {
+    const wrapper = mountPage()
+    await csvToPreview(wrapper, CSV_OK)
+    await button(wrapper, '下一步：确认导入').trigger('click')
+    await settle()
+
+    const groups = wrapper.findAllComponents({ name: 'ElRadioGroup' })
+    const target = groups.find((g) => g.attributes('aria-label') === '写入模式')
+    expect(target, '确认步应给出写入模式选择').toBeTruthy()
+    expect(target!.props('modelValue')).toBe('merge')
+    expect(wrapper.text()).toContain('合并')
+  })
+
+  it('合并模式：CSV 没出现的列保留现有点位原值（scale / unit / 公式不丢）', async () => {
+    exportPointsMock.mockResolvedValue({ total: 1, points: [EXISTING_POINT] })
+    const wrapper = mountPage()
+    await csvToPreview(
+      wrapper,
+      ['id,bus,protocol,address,slave_id', 'p1,bus1,modbus,40010,1'].join('\n'),
+    )
+    await button(wrapper, '下一步：确认导入').trigger('click')
+    await settle()
+    await button(wrapper, '确认导入').trigger('click')
+    await vi.waitFor(() => expect(batchImportPointsMock).toHaveBeenCalledOnce())
+
+    const payload = batchImportPointsMock.mock.calls[0]![0] as PointConfig[]
+    expect(payload).toHaveLength(1)
+    // CSV 里出现的列被覆盖
+    expect(payload[0]).toMatchObject({ id: 'p1', address: '40010' })
+    // CSV 里没出现的列保留现场原值
+    expect(payload[0]).toMatchObject({ scale: 0.1, unit: 'kV', formula: 'a * 2', interval: 10, writable: true })
+  })
+
+  it('合并模式：CSV 里出现但留空的列清空该字段，不可清空字段保留原值', async () => {
+    exportPointsMock.mockResolvedValue({ total: 1, points: [EXISTING_POINT] })
+    const wrapper = mountPage()
+    await csvToPreview(
+      wrapper,
+      ['id,bus,protocol,address,slave_id,unit,scale', 'p1,bus1,modbus,40010,1,,'].join('\n'),
+    )
+    await button(wrapper, '下一步：确认导入').trigger('click')
+    await settle()
+    await button(wrapper, '确认导入').trigger('click')
+    await vi.waitFor(() => expect(batchImportPointsMock).toHaveBeenCalledOnce())
+
+    const payload = batchImportPointsMock.mock.calls[0]![0] as PointConfig[]
+    // unit 可清空 → 留空即清空
+    expect(payload[0]!.unit).toBeNull()
+    // scale 不可清空 → 留空保留原值（填 0 会把测点值乘成 0）
+    expect(payload[0]!.scale).toBe(0.1)
+  })
+
+  it('覆盖模式：CSV 没提到的字段重置为默认值', async () => {
+    exportPointsMock.mockResolvedValue({ total: 1, points: [EXISTING_POINT] })
+    const wrapper = mountPage()
+    await csvToPreview(
+      wrapper,
+      ['id,bus,protocol,address,slave_id', 'p1,bus1,modbus,40010,1'].join('\n'),
+    )
+    await button(wrapper, '下一步：确认导入').trigger('click')
+    await settle()
+    await switchWriteMode(wrapper, 'replace')
+    await button(wrapper, '确认导入').trigger('click')
+    await vi.waitFor(() => expect(batchImportPointsMock).toHaveBeenCalledOnce())
+
+    const payload = batchImportPointsMock.mock.calls[0]![0] as PointConfig[]
+    expect(payload[0]).toMatchObject({ address: '40010', scale: 1, unit: null, formula: null, interval: 1 })
+    expect(exportPointsMock).not.toHaveBeenCalled()
   })
 })

@@ -51,8 +51,9 @@
                   <el-button size="small" :loading="exportingPoints"><el-icon><Download /></el-icon> 批量导出</el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item command="csv">导出 CSV（Excel 编辑，10 列）</el-dropdown-item>
-                      <el-dropdown-item command="json">导出 JSON（完整字段，可粘贴导入）</el-dropdown-item>
+                      <el-dropdown-item command="csv-basic">导出 CSV（精简 10 列）</el-dropdown-item>
+                      <el-dropdown-item command="csv-full">导出 CSV（完整字段）</el-dropdown-item>
+                      <el-dropdown-item command="json">导出 JSON（完整快照，可粘贴导入）</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
@@ -189,6 +190,7 @@
           <el-select v-model="pointForm.byte_order" clearable placeholder="默认 ABCD（大端）" style="width: 100%">
             <el-option v-for="b in BYTE_ORDERS" :key="b.value" :label="b.label" :value="b.value" />
           </el-select>
+          <div class="point-inherit-hint">只对多字节类型（f32 / u32 等）有意义：留空按 ABCD（大端）解码，与设备手册的字节序一致即可；填错会导致数值乱码或明显偏离。</div>
         </el-form-item>
         <el-form-item label="采集周期" prop="interval">
           <!-- 上界跟随北向上报周期；已有大周期点位保留原值（编辑不应静默改频率） -->
@@ -211,17 +213,15 @@
              用户填的告警/死区/聚合会被后端静默丢弃。 -->
         <el-divider content-position="left">量程与告警</el-divider>
         <el-form-item label="单位" prop="unit">
-          <!-- 常用单位下拉 + 可输入：避免「℃ / C」「kWh / KWH」这类同义写法导致上送端分组混乱 -->
+          <!-- 纯下拉、禁止自定义：避免「℃ / C」「kWh / KWH」这类同义写法导致上送端分组混乱 -->
           <el-select
             v-model="pointForm.unit"
             filterable
-            allow-create
-            default-first-option
             clearable
-            placeholder="选择或输入单位（可留空）"
+            placeholder="选择单位（可留空）"
             style="width: 100%"
           >
-            <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+            <el-option v-for="u in unitChoices(pointForm.unit)" :key="u" :label="u" :value="u" />
           </el-select>
         </el-form-item>
         <el-form-item label="倍率 / 偏移">
@@ -335,7 +335,7 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn, protocolColumn } from '@/utils/commonColumns'
 import type { PointRow } from '@/composables/devices/usePoints'
 /** 常用工程单位与虚拟点位共用同一份清单 */
-import { unitOptions } from '@/composables/devices/useUnits'
+import { unitChoices } from '@/composables/devices/useUnits'
 import { ratioScopeOf } from '@/composables/devices/useRatio'
 import { modbusAddressOf, parseModbusAddress } from '@/composables/devices/usePoints/modbusAddress'
 import { BYTE_ORDERS, DATA_TYPES } from '@/composables/devices/decodeParams'

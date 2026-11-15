@@ -58,9 +58,9 @@ describe('createPointExport（点位批量导出）', () => {
     ]
   })
 
-  it('CSV：表头与导入模板一致，缺失字段留空', async () => {
+  it('CSV 精简档：表头与导入模板一致，缺失字段留空', async () => {
     const { doExport, exporting } = createPointExport()
-    await doExport('csv')
+    await doExport('csv-basic')
 
     expect(exporting.value).toBe(false)
     expect(confirmState.confirm).toHaveBeenCalledTimes(1)
@@ -68,11 +68,35 @@ describe('createPointExport（点位批量导出）', () => {
     const [header, rows, filename] = downloadState.csv.mock.calls[0] as [string[], unknown[][], string]
     expect(header).toEqual(CSV_HEADER)
     expect(rows).toHaveLength(2)
-    expect(rows[0]).toEqual(['p1', '电压', 'd1', 'bus1', 'modbus', '40001', 1, 0, 1, 1])
+    expect(rows[0]).toEqual(['p1', '电压', 'd1', 'bus1', 'modbus', '40001', '1', '0', '1', '1'])
     // 可选字段缺失时补空串，保证列数与表头对齐
     expect(rows[1]).toEqual(['p2', '电流', '', 'bus2', 'dlt645', '02010100', '', '', '', ''])
     expect(filename).toMatch(/^points-.+\.csv$/)
     expect(messageState.success).toHaveBeenCalledWith('已导出 2 个点位')
+  })
+
+  it('CSV 完整档：带 scale / unit / 公式等列，列名与导入模板一致', async () => {
+    apiState.points = [
+      {
+        id: 'p1', name: '电压', device_id: 'd1', bus: 'bus1', protocol: 'modbus',
+        address: '40001', slave_id: 1, address_num: 0, scale: 0.1, offset: 2,
+        unit: 'kV', formula: 'a * 2', interval: 10, writable: true, on_change: true,
+      },
+    ]
+    const { doExport } = createPointExport()
+    await doExport('csv-full')
+
+    const [header, rows] = downloadState.csv.mock.calls[0] as [string[], unknown[][]]
+    expect(header).toContain('scale')
+    expect(header).toContain('unit')
+    expect(header).toContain('formula')
+    expect(header).toContain('writable')
+    // 聚合配置是嵌套结构，CSV 装不下，不在列里
+    expect(header).not.toContain('aggregation')
+    expect(rows[0]).toContain('0.1')
+    expect(rows[0]).toContain('kV')
+    expect(rows[0]).toContain('a * 2')
+    expect(rows[0]).toContain('true')
   })
 
   it('JSON：整体快照，文件名带 .json，不弹有损警告', async () => {
@@ -91,7 +115,7 @@ describe('createPointExport（点位批量导出）', () => {
   it('CSV：用户在警告弹窗点取消则不导出', async () => {
     confirmState.confirm.mockRejectedValueOnce(new Error('cancel'))
     const { doExport, exporting } = createPointExport()
-    await doExport('csv')
+    await doExport('csv-basic')
 
     expect(exporting.value).toBe(false)
     expect(downloadState.csv).not.toHaveBeenCalled()
@@ -102,7 +126,7 @@ describe('createPointExport（点位批量导出）', () => {
   it('没有配置点位时只提示、不落文件', async () => {
     apiState.points = []
     const { doExport } = createPointExport()
-    await doExport('csv')
+    await doExport('csv-basic')
 
     expect(downloadState.csv).not.toHaveBeenCalled()
     expect(downloadState.blob).not.toHaveBeenCalled()
@@ -112,7 +136,7 @@ describe('createPointExport（点位批量导出）', () => {
   it('接口失败时提示错误且不落文件', async () => {
     apiState.fail = new Error('boom')
     const { doExport, exporting } = createPointExport()
-    await doExport('csv')
+    await doExport('csv-basic')
 
     expect(exporting.value).toBe(false)
     expect(downloadState.csv).not.toHaveBeenCalled()
