@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { unitOptions, unitChoices } from './useUnits'
+import { applyUnits, unitOptions, unitChoices } from './useUnits'
 
 /**
  * 单位下拉的两条不变量：
@@ -47,5 +47,27 @@ describe('useUnits 单位下拉', () => {
     expect(unitChoices('')).toEqual(unitOptions)
     expect(unitChoices(null)).toEqual(unitOptions)
     expect(unitChoices('  ')).toEqual(unitOptions)
+  })
+})
+
+describe('applyUnits 后端字段字典', () => {
+  const snapshot = [...unitOptions]
+  afterEach(() => {
+    unitOptions.splice(0, unitOptions.length, ...snapshot)
+  })
+
+  it('用后端清单替换本地下拉', () => {
+    applyUnits(['V', 'kWh', 'furlong'])
+    expect(unitOptions).toEqual(['V', 'kWh', 'furlong'])
+  })
+
+  it('空列表保留兜底，不清空下拉', () => {
+    applyUnits([])
+    expect(unitOptions).toEqual(snapshot)
+  })
+
+  it('替换后存量值仍能被补进选项', () => {
+    applyUnits(['V', 'kWh'])
+    expect(unitChoices('m³')).toEqual(['V', 'kWh', 'm³'])
   })
 })

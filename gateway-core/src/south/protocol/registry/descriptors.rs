@@ -21,6 +21,11 @@ pub struct ProtocolDescriptor {
     pub variants: &'static [(&'static str, &'static str)],
     pub tag_color: &'static str,
     pub capabilities: ProtocolCapabilities,
+    /// 是否使用统一数值解码（`data_type` 取 u16/i16/… + 字节序）。
+    ///
+    /// 前端据此决定点位表单是否露出「数据类型 / 字节序」，与后端
+    /// `config::validate::uses_numeric_decode` 同源，避免前端另写一份协议清单。
+    pub numeric_decode: bool,
 }
 
 /// S3: 返回所有协议描述符（注册表是 Web UI 协议清单的单一来源）。
@@ -40,6 +45,7 @@ pub fn all_protocol_descriptors() -> Vec<ProtocolDescriptor> {
             variants: e.variants,
             tag_color: e.tag_color,
             capabilities: e.capabilities,
+            numeric_decode: crate::config::uses_numeric_decode(e.name),
         })
         .collect();
     list.push(ProtocolDescriptor {
@@ -52,6 +58,7 @@ pub fn all_protocol_descriptors() -> Vec<ProtocolDescriptor> {
         variants: &[],
         tag_color: "info",
         capabilities: ProtocolCapabilities::gpio(),
+        numeric_decode: false,
     });
     list
 }

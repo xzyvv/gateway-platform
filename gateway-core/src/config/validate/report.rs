@@ -360,6 +360,31 @@ impl GatewayConfig {
             }
         }
 
+        // 单位不在推荐清单：只告警不阻断。
+        //
+        // 前端下拉已限制为规范写法，但 CSV / JSON / API 仍可能写入历史写法
+        // （kVar / m³ / KWH）。这类值不影响采集，但上行数据的量纲维度会按字面值
+        // 分裂成多份（kVar 与 kvar 被当成两个量纲），看板统计对不上。
+        // 存量配置不能硬拒（见 `config::unit`），所以只在这里提示。
+        for p in &self.points {
+            let Some(unit) = p.unit.as_deref() else {
+                continue;
+            };
+            if unit.is_empty() || crate::config::is_recommended_unit(unit) {
+                continue;
+            }
+            push_level(
+                &mut issues,
+                "warning",
+                "unit_not_recommended",
+                format!("points[{}].unit", p.id),
+                format!(
+                    "点位 {} 的单位为 {unit}，不在推荐清单内：采集不受影响，但上行维度会按字面值分组（如 kVar 与 kvar 会被当成两个量纲），建议改为规范写法",
+                    p.id
+                ),
+            );
+        }
+
         // 遥测采样率推荐范围（0.0~1.0）。
         if let Some(t) = &self.telemetry {
             if t.enabled && !(0.0..=1.0).contains(&t.sample_ratio) {

@@ -14,6 +14,8 @@ mod gate;
 mod report;
 
 pub use gate::validate_collection_config;
+// 字段合法值清单对外公开：Web `GET /api/point-fields` 直接下发，前端不再自维护一份
+pub use field::{DATA_TYPE_NAMES, VALID_BYTE_ORDERS};
 
 #[allow(unused_imports)]
 pub(crate) use field::*;

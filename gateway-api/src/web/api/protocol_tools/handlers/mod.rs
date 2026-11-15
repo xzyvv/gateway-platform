@@ -69,6 +69,26 @@ pub(crate) async fn list_protocols(State(_state): State<Arc<AppState>>) -> Json<
     Json(serde_json::json!({ "code": 0, "message": "ok", "data": data }))
 }
 
+/// GET /api/point-fields — 点位字段字典（数据类型 / 字节序 / 推荐单位）。
+///
+/// 前端三张下拉的**取值集**都从这里来，与后端校验读同一份常量：
+/// 后端新增一个数据类型或单位，前端下拉自动出现，不会再出现
+/// 「后端已接受但前端下拉里没有、存了就显示空白」这类分叉。
+/// 前端仍保留兜底清单，供离线调试 / 旧后端时使用。
+pub(crate) async fn get_point_fields(
+    State(_state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "code": 0,
+        "message": "ok",
+        "data": {
+            "data_types": gateway_core::config::DATA_TYPE_NAMES,
+            "byte_orders": gateway_core::config::VALID_BYTE_ORDERS,
+            "units": gateway_core::config::RECOMMENDED_UNITS,
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -281,6 +281,9 @@ pub(crate) fn protocol_capabilities() -> Vec<Value> {
                     .collect::<Vec<_>>(),
                 "tag_color": d.tag_color,
                 "capabilities": d.capabilities,
+                // 前端据此决定点位表单是否露出「数据类型 / 字节序」，
+                // 与后端 uses_numeric_decode 同源，前端不再硬编码协议清单
+                "numeric_decode": d.numeric_decode,
             })
         })
         .collect()

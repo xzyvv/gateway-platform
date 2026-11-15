@@ -26,6 +26,7 @@ mod sim_consumer;
 mod store;
 mod telemetry;
 mod template;
+mod unit;
 mod validate;
 mod web;
 mod webhook;
@@ -66,7 +67,9 @@ pub use store::{
 };
 pub use telemetry::TelemetryConfig;
 pub use template::{DeviceTemplate, TemplateManager};
-pub(crate) use validate::validate_protocol;
+pub use unit::{is_recommended as is_recommended_unit, validate_unit, RECOMMENDED_UNITS};
+pub(crate) use validate::{uses_numeric_decode, validate_protocol};
+pub use validate::{DATA_TYPE_NAMES, VALID_BYTE_ORDERS};
 pub use virtual_point::VirtualPoint;
 pub use web::{
     default_realtime_max_subscribers, UserRole, WebConfig, WebUser, REALTIME_MAX_SUBSCRIBERS_MAX,

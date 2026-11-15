@@ -21,11 +21,12 @@ use axum::{
 use super::{
     clear_packets, create_convert_rule, delete_convert_rule, delete_register_scan_result,
     delete_replay_session, execute_replay, generate_register_suggestions, get_auto_detect_result,
-    get_protocol_diag, get_register_scan_result, get_replay_session, get_simulator_status,
-    list_convert_rules, list_packets, list_presets, list_protocols, list_register_scan_results,
-    list_replay_sessions, list_sim_registers, read_iec104_ioas, save_replay_session, scan_slaves,
-    send_frame, start_auto_detect, start_register_scan, start_simulator, stop_auto_detect,
-    stop_simulator, toggle_convert_rule, update_convert_rule, update_sim_register,
+    get_point_fields, get_protocol_diag, get_register_scan_result, get_replay_session,
+    get_simulator_status, list_convert_rules, list_packets, list_presets, list_protocols,
+    list_register_scan_results, list_replay_sessions, list_sim_registers, read_iec104_ioas,
+    save_replay_session, scan_slaves, send_frame, start_auto_detect, start_register_scan,
+    start_simulator, stop_auto_detect, stop_simulator, toggle_convert_rule, update_convert_rule,
+    update_sim_register,
 };
 use crate::web::types::{require_auth, require_auth_if_anon_disabled, AppState};
 
@@ -202,6 +203,8 @@ pub fn protocol_tools_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // 调用方，能力位 supports_diag 下发却没入口 —— 这里与协议清单同组暴露，同样免费。
     let public_read = Router::new()
         .route("/api/protocols", get(list_protocols))
+        // 点位字段字典：数据类型 / 字节序 / 推荐单位的唯一来源，前端下拉据此填充
+        .route("/api/point-fields", get(get_point_fields))
         .route("/api/protocols/:name/diag", get(get_protocol_diag))
         .route_layer(from_fn_with_state(
             state.clone(),

@@ -121,7 +121,8 @@ pub(crate) fn validate_ratio(ratio: f64) -> Result<(), ValidationError> {
 ///
 /// 短四字码按 Modbus 约定大写；长写法（`big-endian` 等）是模板字段的历史取值，
 /// 两者都由 [`crate::config::PointConfig::byte_order_enum`] 解析，必须与本表同步。
-pub(crate) const VALID_BYTE_ORDERS: &[&str] = &[
+/// Web 端经 `GET /api/point-fields` 下发本表，前端不再自维护一份取值集。
+pub const VALID_BYTE_ORDERS: &[&str] = &[
     "big-endian",
     "little-endian",
     "big-endian-byte-swapped",
@@ -131,6 +132,12 @@ pub(crate) const VALID_BYTE_ORDERS: &[&str] = &[
     "CDAB",
     "DCBA",
 ];
+
+/// 统一数值解码的**规范**类型名（不含 `float` / `uint16` 这类别名）。
+///
+/// 必须与 [`super::super::point::parse_data_type`] 接受的全部别名一一对应；
+/// Web 端经 `GET /api/point-fields` 下发，前端下拉不再自维护一份清单。
+pub const DATA_TYPE_NAMES: &[&str] = &["u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64"];
 
 /// 校验字节序字段：先精确匹配（ABCD 等大写四字码），再忽略大小写匹配（兼容长写法）。
 pub(crate) fn validate_byte_order(b: &str) -> Result<(), ValidationError> {

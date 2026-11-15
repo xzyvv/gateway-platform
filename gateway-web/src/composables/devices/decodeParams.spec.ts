@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest'
-import { BYTE_ORDERS, DATA_TYPES, usesNumericDecode } from './decodeParams'
+import { describe, it, expect, afterEach } from 'vitest'
+import {
+  BYTE_ORDERS,
+  DATA_TYPES,
+  applyByteOrders,
+  applyDataTypes,
+  usesNumericDecode,
+} from './decodeParams'
 
 /**
  * 数值解码族的判定口径必须与后端一致：
@@ -41,5 +47,39 @@ describe('decodeParams 数值解码族', () => {
 
   it('数据类型只用规范名，不含别名', () => {
     expect(DATA_TYPES).toEqual(['u16', 'i16', 'u32', 'i32', 'u64', 'i64', 'f32', 'f64'])
+  })
+})
+
+/**
+ * 三张下拉的取值集以 `GET /api/point-fields` 为准，前端常量只是兜底。
+ * 这里钉住「后端新值不会被前端清单吃掉」——那正是之前字节序缺 2 个值
+ * 导致下拉空白（配置里有值但选不中）的根因。
+ */
+describe('applyPointFields 后端字段字典', () => {
+  const typesSnapshot = [...DATA_TYPES]
+  const ordersSnapshot = BYTE_ORDERS.map((o) => ({ ...o }))
+
+  afterEach(() => {
+    DATA_TYPES.splice(0, DATA_TYPES.length, ...typesSnapshot)
+    BYTE_ORDERS.splice(0, BYTE_ORDERS.length, ...ordersSnapshot.map((o) => ({ ...o })))
+  })
+
+  it('数据类型按后端顺序替换', () => {
+    applyDataTypes(['u16', 'f32', 'f128'])
+    expect(DATA_TYPES).toEqual(['u16', 'f32', 'f128'])
+  })
+
+  it('字节序已知值按本地顺序排列，后端新增值追加并保留原值作文案', () => {
+    applyByteOrders(['new-order', 'ABCD', 'DCBA'])
+    expect(BYTE_ORDERS.map((o) => o.value)).toEqual(['ABCD', 'DCBA', 'new-order'])
+    expect(BYTE_ORDERS[0]!.label).toBe('ABCD（大端）')
+    expect(BYTE_ORDERS[2]!.label).toBe('new-order')
+  })
+
+  it('空列表保留兜底，不清空可选项', () => {
+    applyDataTypes([])
+    applyByteOrders([])
+    expect(DATA_TYPES).toEqual(typesSnapshot)
+    expect(BYTE_ORDERS.map((o) => o.value)).toEqual(ordersSnapshot.map((o) => o.value))
   })
 })

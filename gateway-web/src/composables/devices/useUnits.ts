@@ -8,10 +8,17 @@
  * （W / MW / MVar / kvar / m3 / m3/h / yuan …），否则用模板建出来的点位
  * 在单位下拉里没有对应项，显示成空白。
  *
+ * 取值集的唯一来源是后端（`GET /api/point-fields`，读 `config::unit::RECOMMENDED_UNITS`），
+ * 这里的常量只是离线 / 旧后端时的兜底，登录后由 `applyUnits` 原地替换。
+ *
  * 注意：本清单同时决定 CT/PT 变比的适用范围（见 `useRatio.ts`）：
  * mV/kV/V → 只吃 PT，mA/kA/A → 只吃 CT，PF/cosφ → 两者都不吃，其余按 CT × PT。
  */
-export const unitOptions: string[] = [
+
+import { reactive } from 'vue'
+
+/** 兜底单位清单（与后端 `RECOMMENDED_UNITS` 保持一致） */
+export const unitOptions: string[] = reactive<string[]>([
   // 电压
   'V', 'kV', 'mV',
   // 电流
@@ -34,7 +41,19 @@ export const unitOptions: string[] = [
   's', 'min', 'h',
   // 其它
   'yuan',
-]
+])
+
+/**
+ * 用后端字典替换单位清单；空列表时保留兜底。
+ *
+ * 不做白名单裁剪：存量配置里的历史写法（kVar / m³）仍需能被选中回填，
+ * 「是否规范」只由配置体检告警，不在下拉层阻断。
+ */
+export function applyUnits(values: string[]): void {
+  const clean = values.map((v) => String(v).trim()).filter(Boolean)
+  if (clean.length === 0) return
+  unitOptions.splice(0, unitOptions.length, ...clean)
+}
 
 /**
  * 下拉选项 = 清单 + 当前值。

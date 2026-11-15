@@ -11,6 +11,8 @@
 import { reactive } from 'vue'
 
 import { listProtocolCapabilities, type ProtocolCapabilityEntry } from '@/api/protocols'
+import { applyNumericDecodeProtocols } from './decodeParams'
+import { loadPointFields } from './usePointFields'
 
 export type ProtocolTagType = 'primary' | 'success' | 'warning' | 'info' | 'danger'
 
@@ -175,6 +177,7 @@ export const DEFAULT_TAG_COLOR: ProtocolTagType = 'info'
 export function applyProtocolMetadata(entries: ProtocolCapabilityEntry[]): void {
   if (!Array.isArray(entries) || entries.length === 0) return
   const options: ProtocolOption[] = []
+  const numericDecode: string[] = []
   for (const entry of entries) {
     if (!entry?.name) continue
     const label = entry.label?.trim() || protocolLabel[entry.name] || entry.name.toUpperCase()
@@ -199,10 +202,15 @@ export function applyProtocolMetadata(entries: ProtocolCapabilityEntry[]): void 
     if (entry.tag_color) {
       protocolTagColor[entry.name] = entry.tag_color
     }
+    if (entry.numeric_decode) {
+      numericDecode.push(entry.name)
+    }
     if (!POINT_LEVEL_PROTOCOLS.has(entry.name)) {
       options.push({ label, value: entry.name })
     }
   }
+  // 只有后端明确下发过 numeric_decode 时才刷新；旧后端无此字段时保留兜底集合
+  applyNumericDecodeProtocols(numericDecode)
   if (options.length === 0) return
   protocolOptions.splice(0, protocolOptions.length, ...options)
 }
@@ -213,14 +221,20 @@ let metaInFlight: Promise<void> | null = null
 /**
  * 拉取协议元数据（进程级只拉一次，可 force 强制刷新）。
  *
+ * 同时刷新点位字段字典（数据类型 / 字节序 / 单位），两者都是「后端是唯一来源、
+ * 前端只留兜底」的下拉清单，一起拉可以省一次往返。
  * 失败静默：保留兜底清单，避免离线调试时弹错。
  */
 export async function loadProtocolMeta(force = false): Promise<void> {
   if (metaInFlight) return metaInFlight
   if (metaLoaded && !force) return
-  metaInFlight = listProtocolCapabilities()
-    .then(applyProtocolMetadata)
-    .catch(() => { /* 离线/旧后端：保留内置兜底 */ })
+  metaInFlight = Promise.all([
+    listProtocolCapabilities()
+      .then(applyProtocolMetadata)
+      .catch(() => { /* 离线/旧后端：保留内置兜底 */ }),
+    loadPointFields(force),
+  ])
+    .then(() => undefined)
     .finally(() => {
       metaLoaded = true
       metaInFlight = null

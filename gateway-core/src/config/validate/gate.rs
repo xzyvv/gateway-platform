@@ -153,6 +153,8 @@ impl GatewayConfig {
             errors.extend(msgs);
         }
         errors.extend(self.validate_convert_rules());
+        // 单位格式：只挡超长 / 控制字符 / 首尾空白，不做白名单（存量历史写法不能被拒）。
+        errors.extend(self.validate_units());
         // 队列行数上限：范围 + 与背压/容量压力阈值的顺序（阈值定义在队列内核）
         errors.extend(self.queue.semantic_errors());
         // `web` 是可省略分节，validator 0.18 无法对 `Option<T>` 做嵌套校验
@@ -165,6 +167,26 @@ impl GatewayConfig {
         } else {
             Err(errors)
         }
+    }
+
+    /// 单位格式校验：只挡明确有害的值（超长 / 控制字符 / 首尾空白），不做白名单。
+    ///
+    /// 存量配置里存在 `kVar` / `m³` / `℃` 这类历史写法，按白名单拒绝会让网关起不来；
+    /// 「不在推荐清单」只由配置体检给告警，见 `validate::report`。
+    fn validate_units(&self) -> Vec<String> {
+        let mut errs = Vec::new();
+        for p in &self.points {
+            if let Some(unit) = p.unit.as_deref() {
+                if let Err(msg) = crate::config::validate_unit(unit) {
+                    errs.push(format!(
+                        "points[{}] ({}) unit: {msg}",
+                        p.id,
+                        p.name.as_deref().unwrap_or("<未命名>")
+                    ));
+                }
+            }
+        }
+        errs
     }
 
     /// C1：协议转换规则 fail-closed 校验（规则体校验见 `ConvertRuleConfig::validate_rule`）。

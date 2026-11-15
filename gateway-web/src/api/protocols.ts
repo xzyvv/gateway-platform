@@ -18,6 +18,13 @@ export interface ProtocolCapabilityEntry {
   variants?: Array<{ value: string; label: string }>
   /** 协议标签色（`el-tag` 的 type），前端不再按协议名硬编码配色 */
   tag_color?: 'primary' | 'success' | 'warning' | 'info' | 'danger'
+  /**
+   * 是否使用统一数值解码（data_type 取 u16/i16/… + 字节序）。
+   *
+   * 由此决定点位表单是否露出「数据类型 / 字节序」两项，与后端
+   * `uses_numeric_decode` 同源；旧后端没有该字段时按 false 忽略、前端保留兜底集合。
+   */
+  numeric_decode?: boolean
   capabilities: ProtocolCapabilities
 }
 
