@@ -184,4 +184,16 @@ async fn rejects_invalid_condition_and_result_quality() {
     });
     let (status, _) = call_auth(&app, "POST", "/api/quality/rules", Some(missing_rate)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // stale（超时未更新）由调度器判定，不接受为可配置规则：
+    // 过去允许保存但管道永不执行，属于「保存成功却永不生效」的虚假配置。
+    let mut stale_rule = range_body("超时规则");
+    stale_rule["condition"] = serde_json::json!("stale");
+    stale_rule["staleSeconds"] = serde_json::json!(60);
+    let (status, body) = call_auth(&app, "POST", "/api/quality/rules", Some(stale_rule)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.to_string().contains("调度器"),
+        "应明确告知超时判定由调度器负责，实际响应: {body}"
+    );
 }

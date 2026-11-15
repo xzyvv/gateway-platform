@@ -9,6 +9,8 @@
 //!   `result_quality` 并写入 `quality_reason`。
 //! - `stale` 规则**不在管道执行**：超时未更新由调度器的连续失败/超时机制
 //!   （`Scheduler` 的 stale 计数与退避）负责，避免两套口径互相覆盖。
+//!   Web 写接口已拒绝新增/改成 `stale` 规则；库里若存在历史 `stale` 规则，
+//!   读取时仍会原样返回，但不生效。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -22,14 +24,15 @@ use super::conn::SharedConn;
 /// 质量规则
 ///
 /// 字段与前端 `gateway-web/src/api/dataQuality.ts` 的 `QualityRule` 一一对应
-/// （camelCase 序列化）：`condition` 取 `range|rate|stale|nan`，
+/// （camelCase 序列化）：`condition` 取 `range|rate|nan`（历史数据可能仍有
+/// `stale`，但写接口已拒绝、管道不执行），
 /// `result_quality` 取 `good|bad|uncertain|old`（`old` 映射核心质量码 `Stale`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityRule {
     pub id: String,
     pub name: String,
-    /// 检查条件：`range` 取值范围 / `rate` 变化率 / `stale` 超时 / `nan` 非有限值
+    /// 检查条件：`range` 取值范围 / `rate` 变化率 / `nan` 非有限值
     pub condition: String,
     /// range：合法下限
     #[serde(default)]
@@ -40,7 +43,7 @@ pub struct QualityRule {
     /// rate：相邻两次采样允许的最大绝对变化量
     #[serde(default)]
     pub max_rate: Option<f64>,
-    /// stale：超时秒数（仅调度器使用，管道不执行）
+    /// stale 历史字段：仅用于兼容旧库反序列化，管道不执行、写接口不接受
     #[serde(default)]
     pub stale_seconds: Option<u32>,
     /// 命中后的质量码：`good|bad|uncertain|old`

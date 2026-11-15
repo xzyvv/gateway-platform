@@ -36,13 +36,12 @@ pub struct ShadowPoint {
     pub last_value: Option<String>,
 }
 
-/// 快照质量码 → 影子三值（前端 mapQuality 只认 good/uncertain，其余归 bad）
+/// 快照质量码 → 影子三值（唯一口径见 [`gateway_core::engine::model::view_quality_code`]）
+///
+/// 影子里的点位一定有快照，不会出现 `unknown`；前端 `mapQuality` 只认
+/// good / uncertain，其余归 bad。
 fn map_snapshot_quality(s: &DeviceStatus) -> &'static str {
-    match s.quality.as_str() {
-        "good" => "good",
-        "stale" => "uncertain",
-        _ => "bad",
-    }
+    gateway_core::engine::model::view_quality_code(Some(s.quality.as_str()), s.consecutive_failures)
 }
 
 fn build_shadow(dev: &DeviceConfig, statuses: &[DeviceStatus]) -> DeviceShadow {

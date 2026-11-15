@@ -64,8 +64,8 @@ pub struct DeviceHealth {
 
 /// 点位质量码分布（四桶口径与 `/api/devices/point-quality/stats` 一致）
 ///
-/// - `unknown` 桶包含「数据过期但连续失败 < 3 次」的点位（质量码 `old`），
-///   与 [`QualityStats`] 的 `unknown` 含义保持不变，避免前端解释口径变化。
+/// `unknown` 桶只统计**无调度器快照**的点位（从未采集过），不再兼任
+/// 「过期」；失败次数在 1~2 次之间归入 `uncertain`，≥3 次归入 `bad`。
 #[derive(Debug, Clone, Copy, Default, Serialize, TS)]
 #[ts(export)]
 pub struct QualityBreakdown {
@@ -76,27 +76,25 @@ pub struct QualityBreakdown {
     pub total: i32,
 }
 
-/// 点位质量码（唯一口径，health / point-quality 两处共用）
+/// 点位质量码（唯一口径实现在 [`gateway_core::engine::model::view_quality_code`]）
 ///
-/// 返回 `good` / `uncertain` / `bad` / `old`：
-/// - scheduler 快照 quality 为 `good` → good；
-/// - `stale` → uncertain（数据未更新但设备可通）；
-/// - 其余按连续失败次数分：≥3 → bad，否则 old（未采集到但仍可重试）。
+/// 返回 `good` / `uncertain` / `bad` / `unknown`：
+/// - 快照 `good` → good；
+/// - 连续失败 1~2 次 → uncertain（偶发失败，仍可重试）；
+/// - 连续失败 ≥3 次 → bad（已进入退避，实际不可达）；
+/// - 无快照由 [`acc_quality`] 直接判为 unknown。
 pub(crate) fn quality_code(raw: &str, consecutive_failures: u32) -> &'static str {
-    match raw {
-        "good" => "good",
-        "stale" => "uncertain",
-        _ if consecutive_failures >= 3 => "bad",
-        _ => "old",
-    }
+    gateway_core::engine::model::view_quality_code(Some(raw), consecutive_failures)
 }
 
 /// 把一个点位（可选快照）计入质量分布
 pub(crate) fn acc_quality(bd: &mut QualityBreakdown, state: Option<&DeviceStatus>) {
     bd.total += 1;
-    let cf = state.map(|v| v.consecutive_failures).unwrap_or(0);
-    let raw = state.map(|v| v.quality.as_str()).unwrap_or("bad");
-    match quality_code(raw, cf) {
+    let code = gateway_core::engine::model::view_quality_code(
+        state.map(|v| v.quality.as_str()),
+        state.map(|v| v.consecutive_failures).unwrap_or(0),
+    );
+    match code {
         "good" => bd.good += 1,
         "uncertain" => bd.uncertain += 1,
         "bad" => bd.bad += 1,

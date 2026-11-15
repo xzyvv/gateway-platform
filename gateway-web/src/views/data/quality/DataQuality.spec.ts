@@ -117,18 +117,17 @@ describe('DataQuality 质量概览', () => {
     confirmDeleteMock.mockResolvedValue(true)
   })
 
-  it('统计卡与点位质量标签共用一套文案，颜色区分四档', async () => {
+  it('统计卡与点位质量标签共用一套文案，颜色区分三档', async () => {
     const wrapper = mountPage()
     await settle()
 
     expect(wrapper.findAll('.stat .lbl').map((n) => n.text())).toEqual([
-      QUALITY_LABEL.good, QUALITY_LABEL.uncertain, QUALITY_LABEL.old, QUALITY_LABEL.bad,
+      QUALITY_LABEL.good, QUALITY_LABEL.uncertain, QUALITY_LABEL.bad,
     ])
-    expect(wrapper.findAll('.stat .val').map((n) => n.text())).toEqual(['12', '3', '2', '5'])
+    expect(wrapper.findAll('.stat .val').map((n) => n.text())).toEqual(['12', '3', '5'])
     expect(wrapper.findAll('.stat .val').map((n) => n.classes())).toEqual([
       expect.arrayContaining(['good']),
       expect.arrayContaining(['uncertain']),
-      expect.arrayContaining(['old']),
       expect.arrayContaining(['bad']),
     ])
     const qualityTags = wrapper.findAll('.el-tag').filter((t) => [QUALITY_LABEL.good, QUALITY_LABEL.bad].includes(t.text()))
@@ -201,7 +200,7 @@ describe('DataQuality 质量概览', () => {
     await settle()
 
     expect(showToast).toHaveBeenCalledWith(new Error('rules 500'), '加载质量规则失败')
-    expect(wrapper.findAll('.stat .val').map((n) => n.text())).toEqual(['12', '3', '2', '5'])
+    expect(wrapper.findAll('.stat .val').map((n) => n.text())).toEqual(['12', '3', '5'])
     expect(tableData<PointQuality>(wrapper, 1)).toHaveLength(2)
   })
 
@@ -222,17 +221,18 @@ describe('DataQuality 质量概览', () => {
     expect(ElMessage.warning).toHaveBeenCalledWith('请输入规则名称')
     expect(createRuleMock).not.toHaveBeenCalled()
 
-    await wrapper.findAllComponents(ElInput)[0]!.vm.$emit('update:modelValue', '超时规则')
+    await wrapper.findAllComponents(ElInput)[0]!.vm.$emit('update:modelValue', '突变规则')
     const selects = wrapper.findAllComponents({ name: 'ElSelect' })
-    selects[0]!.vm.$emit('update:modelValue', 'stale')
+    selects[0]!.vm.$emit('update:modelValue', 'rate')
     await settle()
+    // rate 条件只需要一个数值参数（maxRate）
     expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(1)
 
     await button(wrapper, '保存').trigger('click')
     await vi.waitFor(() => expect(createRuleMock).toHaveBeenCalledOnce())
 
     expect(createRuleMock.mock.calls[0]![0]).toMatchObject({
-      name: '超时规则', condition: 'stale', resultQuality: 'bad', enabled: true,
+      name: '突变规则', condition: 'rate', resultQuality: 'bad', enabled: true,
     })
     expect(ElMessage.success).toHaveBeenCalledWith('已创建')
     expect(listRulesMock).toHaveBeenCalledTimes(2)

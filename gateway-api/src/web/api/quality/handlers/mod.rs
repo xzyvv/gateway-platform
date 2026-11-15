@@ -106,16 +106,18 @@ fn validate_rule(rule: &QualityRule) -> Result<(), ApiError> {
             }
         }
         "nan" => {}
+        // 「超时未更新」由调度器按连续失败次数/退避自动判定，处理管道只执行
+        // range / rate / nan（见 gateway-core/src/pipeline/quality_rules.rs）。
+        // 过去这里允许保存 stale 规则，但规则永远不会生效，属虚假配置，故拒绝。
         "stale" => {
-            if let Some(secs) = rule.stale_seconds {
-                if secs == 0 {
-                    return Err(ApiError::bad_request("staleSeconds 必须 >= 1"));
-                }
-            }
+            return Err(ApiError::bad_request(
+                "「超时未更新」由调度器自动判定（连续失败/退避），不支持配置为质量规则；\
+                 可选条件：range / rate / nan",
+            ))
         }
         other => {
             return Err(ApiError::bad_request(format!(
-                "未知检查条件: {}（可选 range/rate/stale/nan）",
+                "未知检查条件: {}（可选 range/rate/nan）",
                 other
             )))
         }

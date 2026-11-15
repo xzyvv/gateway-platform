@@ -19,30 +19,24 @@
       type="info"
       :closable="false"
       show-icon
-      title="本页是点位级明细：质量码与「设备健康评分」/「设备排行」使用同一套判定规则（good / stale→不确定 / 连续失败≥3→坏 / 其余→过期）。设备综合分请见设备健康评分。"
+      title="本页是点位级明细：质量码与「设备健康评分」/「设备排行」/「拓扑图」使用同一套判定规则（good / 连续失败 1~2 次→不确定 / ≥3 次→坏）。设备综合分请见设备健康评分。"
       style="margin-bottom:12px"
     />
 
     <el-row :gutter="16">
-      <el-col :span="6">
+      <el-col :span="8">
         <el-card shadow="never" class="stat">
           <div class="lbl">{{ QUALITY_LABEL.good }}</div>
           <div class="val good">{{ stats.good }}</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :span="8">
         <el-card shadow="never" class="stat">
           <div class="lbl">{{ QUALITY_LABEL.uncertain }}</div>
           <div class="val uncertain">{{ stats.stale }}</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
-        <el-card shadow="never" class="stat">
-          <div class="lbl">{{ QUALITY_LABEL.old }}</div>
-          <div class="val old">{{ stats.unknown }}</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
+      <el-col :span="8">
         <el-card shadow="never" class="stat">
           <div class="lbl">{{ QUALITY_LABEL.bad }}</div>
           <div class="val bad">{{ stats.bad }}</div>
@@ -76,7 +70,6 @@
           <el-select v-model="form.condition" style="width:100%">
             <el-option label="取值范围检查" value="range" />
             <el-option label="变化率检查" value="rate" />
-            <el-option label="超时未更新" value="stale" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="form.condition === 'range'" label="合法范围">
@@ -84,7 +77,6 @@
           <el-input-number v-model="form.max" controls-position="right" style="width:120px" />
         </el-form-item>
         <el-form-item v-if="form.condition === 'rate'" label="最大变化率"><el-input-number v-model="form.maxRate" controls-position="right" /></el-form-item>
-        <el-form-item v-if="form.condition === 'stale'" label="超时(秒)"><el-input-number v-model="form.staleSeconds" :min="1" controls-position="right" /></el-form-item>
         <el-form-item label="降级为">
           <el-select v-model="form.resultQuality" style="width:100%">
             <el-option v-for="(l,k) in QUALITY_LABEL" :key="k" :label="l" :value="k" />
@@ -143,7 +135,9 @@ const router = useRouter()
 function goCommProfile() {
   router.push('/acquisition/comm-tuning?tab=comm-profile')
 }
-const form = reactive({ name: '', condition: 'range', min: 0, max: 100, maxRate: 100, staleSeconds: 60, resultQuality: 'bad' as Quality })
+// 「超时未更新」不是可配置规则：数据超时由调度器的连续失败/退避机制判定，
+// 处理管道只执行 range / rate / nan（见 gateway-core/src/pipeline/quality_rules.rs）。
+const form = reactive({ name: '', condition: 'range', min: 0, max: 100, maxRate: 100, resultQuality: 'bad' as Quality })
 
 // 弹窗未保存修改守卫：X/ESC/取消关闭前对比基线，有改动先确认
 const formGuard = useDialogDirtyGuard(showForm, () => form)
@@ -213,7 +207,7 @@ async function loadPoints() {
   }
 }
 function resetForm() {
-  Object.assign(form, { name: '', condition: 'range', min: 0, max: 100, maxRate: 100, staleSeconds: 60, resultQuality: 'bad' })
+  Object.assign(form, { name: '', condition: 'range', min: 0, max: 100, maxRate: 100, resultQuality: 'bad' })
 }
 function openCreate() { resetForm(); showForm.value = true }
 async function toggleRule(row: QualityRule) {
@@ -230,7 +224,7 @@ async function save() {
   if (!form.name.trim()) { ElMessage.warning('请输入规则名称'); return }
   const payload: Omit<QualityRule, 'id'> = {
     name: form.name, condition: form.condition as QualityRule['condition'],
-    min: form.min, max: form.max, maxRate: form.maxRate, staleSeconds: form.staleSeconds,
+    min: form.min, max: form.max, maxRate: form.maxRate,
     resultQuality: form.resultQuality, enabled: true,
   }
   submitting.value = true

@@ -29,6 +29,33 @@ impl Quality {
     }
 }
 
+/// 对外展示质量码（**唯一口径**，健康评分 / 点位质量 / 设备影子 / 拓扑共用）
+///
+/// 输入是调度器快照的原始质量码与连续失败次数，输出固定为
+/// `good` / `uncertain` / `bad` / `unknown` 四值，与前端质量徽章一一对应。
+///
+/// 快照原始码由调度器 `DeviceState::current_quality` 生成，
+/// 只有 0 次失败 → `good`、1~2 次 → `bad`、≥3 次 → `stale` 三种：
+/// - `good` → `good`（采集正常）
+/// - 1~2 次失败 → `uncertain`（偶发失败，设备仍可重试）
+/// - ≥3 次失败 → `bad`（已进入指数退避，实际不可达）
+/// - 无快照（从未采集）→ `unknown`
+///
+/// 之前的实现按 `raw` 字面量分支（`stale` → uncertain、其余且失败 ≥3 → bad），
+/// 而 `stale` 恰好只在失败 ≥3 时出现，于是 `bad` 分支永远不可达、`bad` 桶恒为 0，
+/// 且「设备不可达」被标成黄色而「偶发一次失败」被标成灰色，严重度整体倒置。
+/// 现改为按连续失败次数单调递进，三处接口共用本函数。
+pub fn view_quality_code(raw: Option<&str>, consecutive_failures: u32) -> &'static str {
+    match raw {
+        None => "unknown",
+        Some("good") => "good",
+        // 采集成功但值可疑（BCD 非法值等），不是失败，直接沿用
+        Some("uncertain") => "uncertain",
+        _ if consecutive_failures >= 3 => "bad",
+        _ => "uncertain",
+    }
+}
+
 /// 点位数据类型（Modbus / FINS / MC / S7 等协议共用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -341,5 +368,25 @@ mod tests {
         assert_eq!(p.value, 10.0, "value 合法时应保留");
         assert_eq!(p.raw_value, 0.0);
         assert_eq!(p.quality_reason, "non_finite_raw_value");
+    }
+
+    /// 对外质量码按连续失败次数单调递进，且 `bad` 分支必须可达。
+    ///
+    /// 旧实现按原始码字面量分支（stale→uncertain 抢先匹配），导致
+    /// 「≥3 次失败」永远落不到 bad 桶，前端坏值卡恒为 0，严重度倒置。
+    #[test]
+    fn view_quality_code_is_monotonic_in_failures() {
+        // 0 次失败 → good
+        assert_eq!(view_quality_code(Some("good"), 0), "good");
+        // 1~2 次失败（快照原始码 bad）→ uncertain
+        assert_eq!(view_quality_code(Some("bad"), 1), "uncertain");
+        assert_eq!(view_quality_code(Some("bad"), 2), "uncertain");
+        // ≥3 次失败（快照原始码 stale，已进入退避）→ bad，必须可达
+        assert_eq!(view_quality_code(Some("stale"), 3), "bad");
+        assert_eq!(view_quality_code(Some("stale"), 10), "bad");
+        // 无快照 → unknown
+        assert_eq!(view_quality_code(None, 0), "unknown");
+        // 采集成功但值可疑，不按失败次数降级
+        assert_eq!(view_quality_code(Some("uncertain"), 5), "uncertain");
     }
 }

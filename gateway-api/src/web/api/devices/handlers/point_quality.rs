@@ -19,7 +19,8 @@ use crate::web::types::{ApiError, ApiResponse, AppState};
 use super::super::model::{PointBackoff, PointQuality, QualityStats};
 
 fn map_quality(q: &str, failures: u32) -> String {
-    // 质量码判定唯一口径在 health.rs，本页只做展示映射
+    // 质量码判定唯一口径在 gateway_core::engine::model::view_quality_code，
+    // 本页只做展示映射（与健康评分 / 设备影子 / 拓扑共用同一函数）
     quality_code(q, failures).to_string()
 }
 
@@ -174,6 +175,9 @@ pub(crate) async fn point_quality_stats(
     }
     Ok(Json(ApiResponse::ok(QualityStats {
         good: bd.good.max(0) as u32,
+        // 字段名沿用历史命名：`stale` 实际装 uncertain 桶（连续失败 1~2 次），
+        // `bad` 为连续失败 ≥3 次（退避中）。`unknown` 为保留字段：
+        // 本接口按调度器快照统计，快照内点位都带原始码，故恒为 0。
         bad: bd.bad.max(0) as u32,
         stale: bd.uncertain.max(0) as u32,
         unknown: bd.unknown.max(0) as u32,

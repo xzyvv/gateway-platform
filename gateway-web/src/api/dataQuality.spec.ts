@@ -182,7 +182,7 @@ describe('dataQuality 质量规则（远端优先）', () => {
 
     const rules = await listQualityRules()
 
-    expect(rules.map((r) => r.id)).toEqual(['q1', 'q2', 'q3'])
+    expect(rules.map((r) => r.id)).toEqual(['q1', 'q2'])
     expect(qualityRulesSource()).toBe('local')
   })
 })
@@ -195,15 +195,15 @@ describe('dataQuality 质量规则（本地回退）', () => {
     localStorage.clear()
   })
 
-  // 锁定默认规则契约：首次使用且远端不可用时返回内置 3 条规则
-  // （超量程 Bad / 突变 Uncertain / 60s Old）
-  it('远端不可用且未存储规则时返回内置默认 3 条并标记 local', async () => {
+  // 锁定默认规则契约：首次使用且远端不可用时返回内置 2 条规则
+  // （超量程 Bad / 突变 Uncertain）。超时未更新由调度器判定，不再作为默认规则。
+  it('远端不可用且未存储规则时返回内置默认 2 条并标记 local', async () => {
     const rules = await listQualityRules()
 
-    expect(rules).toHaveLength(3)
-    expect(rules.map((r) => r.id)).toEqual(['q1', 'q2', 'q3'])
-    expect(rules.map((r) => r.condition)).toEqual(['range', 'rate', 'stale'])
-    expect(rules.map((r) => r.resultQuality)).toEqual(['bad', 'uncertain', 'old'])
+    expect(rules).toHaveLength(2)
+    expect(rules.map((r) => r.id)).toEqual(['q1', 'q2'])
+    expect(rules.map((r) => r.condition)).toEqual(['range', 'rate'])
+    expect(rules.map((r) => r.resultQuality)).toEqual(['bad', 'uncertain'])
     expect(rules.every((r) => r.enabled)).toBe(true)
     expect(qualityRulesSource()).toBe('local')
   })
@@ -283,7 +283,7 @@ describe('dataQuality 质量规则（本地回退）', () => {
 
     const rules = await listQualityRules()
 
-    expect(rules.map((r) => r.id)).toEqual(['q1', 'q2', 'q3'])
+    expect(rules.map((r) => r.id)).toEqual(['q1', 'q2'])
   })
 })
 

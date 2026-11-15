@@ -85,11 +85,15 @@ export function listPointBackoff(): Promise<PointBackoff[]> {
 export interface QualityRule {
   id: string
   name: string
-  condition: 'range' | 'rate' | 'stale' | 'nan'
+  /**
+   * 检查条件。只有 range / rate / nan 会被处理管道真正执行；
+   * `stale`（超时未更新）由调度器的连续失败/退避机制判定，不是可配置规则。
+   * 历史数据里可能仍存在 condition=stale 的规则，但不会生效。
+   */
+  condition: 'range' | 'rate' | 'nan'
   min?: number
   max?: number
   maxRate?: number
-  staleSeconds?: number
   resultQuality: Quality
   enabled: boolean
 }
@@ -106,7 +110,6 @@ const RULES_URL = '/api/quality/rules'
 const DEFAULT_RULES: QualityRule[] = [
   { id: 'q1', name: '超量程标记 Bad', condition: 'range', min: -100, max: 9999, resultQuality: 'bad', enabled: true },
   { id: 'q2', name: '突变标记 Uncertain', condition: 'rate', maxRate: 100, resultQuality: 'uncertain', enabled: true },
-  { id: 'q3', name: '60秒未更新标记 Old', condition: 'stale', staleSeconds: 60, resultQuality: 'old', enabled: true },
 ]
 
 /** 最近一次操作实际使用的数据来源（页面据此显示「远端已落库 / 仅本机」） */

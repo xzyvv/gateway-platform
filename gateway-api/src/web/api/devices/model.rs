@@ -97,12 +97,22 @@ pub struct PointQuality {
     pub last_update_at: i64,
 }
 
+/// 点位质量统计（四桶，口径见 `gateway_core::engine::model::view_quality_code`）
+///
+/// 字段名沿用历史命名，语义以本注释为准：
+/// - `good`：采集正常（0 次连续失败）；
+/// - `stale`：实际存的是 `uncertain` 桶，即连续失败 1~2 次（偶发失败、仍可重试）；
+/// - `bad`：连续失败 ≥3 次（已进入指数退避，实际不可达）；
+/// - `unknown`：保留字段。本统计只遍历调度器快照，快照内点位都带原始质量码，
+///   故恒为 0；「从未采集」只在健康评分的 `qualityBreakdown` 中统计。
 #[derive(serde::Serialize, ts_rs::TS)]
 #[ts(export)]
 pub struct QualityStats {
     pub good: u32,
     pub bad: u32,
+    /// `uncertain` 桶（连续失败 1~2 次），非「数据过期」
     pub stale: u32,
+    /// 无快照（从未采集）点位
     pub unknown: u32,
     pub total: u32,
 }

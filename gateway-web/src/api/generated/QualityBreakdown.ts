@@ -3,7 +3,7 @@
 /**
  * 点位质量码分布（四桶口径与 `/api/devices/point-quality/stats` 一致）
  *
- * - `unknown` 桶包含「数据过期但连续失败 < 3 次」的点位（质量码 `old`），
- *   与 [`QualityStats`] 的 `unknown` 含义保持不变，避免前端解释口径变化。
+ * `unknown` 桶只统计**无调度器快照**的点位（从未采集过），不再兼任
+ * 「过期」；失败次数在 1~2 次之间归入 `uncertain`，≥3 次归入 `bad`。
  */
 export type QualityBreakdown = { good: number, uncertain: number, bad: number, unknown: number, total: number, };

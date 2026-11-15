@@ -121,21 +121,29 @@
 | `consecutive_failures` | u32 | 连续失败次数 |
 | `last_update_at` | i64 | 毫秒；真实最后成功采集时刻（scheduler 快照 `last_good_ts`）；从未成功为 `0`（前端显示「无上报」，不回填请求时刻） |
 
-**质量码映射**（`map_quality`，注意与内部原始码不同）：
+**质量码映射**（唯一口径 `gateway_core::engine::model::view_quality_code`，
+与设备健康评分、设备影子、拓扑图共用同一函数）：
 
-| 原始 `quality` | `consecutive_failures` | 对外返回值 |
+| 连续失败次数 | 对外返回值 | 含义 |
 |---|---|---|
-| `good` | 任意 | `good` |
-| `stale` | 任意 | `uncertain` |
-| 其它 | ≥ 3 | `bad` |
-| 其它 | < 3 | `old` |
+| 0 | `good` | 采集正常 |
+| 1 ~ 2 | `uncertain` | 偶发失败，设备仍可重试 |
+| ≥ 3 | `bad` | 已进入指数退避，实际不可达 |
+| 无调度器快照 | `unknown` | 从未采集（仅健康评分口径使用，见 §3.2） |
+
+> 早期版本按原始 `quality` 字面量分支（`stale` → `uncertain`、其余且失败 ≥3 → `bad`），
+> 而 `stale` 只在失败 ≥3 时出现，导致 `bad` 分支不可达、「坏值」恒为 0，
+> 且「设备不可达」被标为不确定、「偶发一次失败」被标为过期，严重度倒置。
 
 ### 3.2 GET `/api/devices/point-quality/stats`
 
 响应 `data: QualityStats`：`good`、`bad`、`stale`、`unknown`、`total`（均 u32）。
 
-统计口径：`stale` = 上面的 `uncertain` 数量；`unknown` = `old` 数量（失败 < 3 次）；
-`total` = 快照内点位总数。
+统计口径（字段名沿用历史命名，语义以本节为准）：`good` = 采集正常；
+`stale` 字段实际装的是 `uncertain` 桶（连续失败 1~2 次）；
+`bad` = 连续失败 ≥3 次（退避中）；`total` = 快照内点位总数。
+`unknown` 为保留字段：本接口只统计调度器快照内的点位，均带原始质量码，故恒为 0
+（「从未采集」的判定只在设备健康评分的 `qualityBreakdown` 中出现）。
 
 ### 3.3 GET `/api/devices/backoff`
 
@@ -288,8 +296,8 @@ score = 100
 | 节点类型 | `id` / `name` | `meta` | `status` |
 |---|---|---|---|
 | bus | `bus.port_name` / 同 | `"{protocol} @ {baud_rate} baud"` | 恒为 `null` |
-| device | `device.id` / `device.name` | `"slave: {slave_id}"`，缺省 0 | `online`（任一点位 good）/ `warning`（无 good，且最差为 1~2 次失败 `bad`）/ `offline`（无 good 且有 ≥3 次失败 `stale`，或其余含无点位/无快照） |
-| point | `point.id` / 点位名（空回退 id） | `"addr: {address}"` | `online`（quality == good）/ `offline`（其余）；快照缺失为 `null` |
+| device | `device.id` / `device.name` | `"slave: {slave_id}"`，缺省 0 | `online`（任一点位 good）/ `warning`（无 good，最差为连续失败 1~2 次的 `uncertain`）/ `offline`（无 good 且有 ≥3 次失败的 `bad`，或其余含无点位/无快照） |
+| point | `point.id` / 点位名（空回退 id） | `"addr: {address}"` | `online`（对外质量码 == good）/ `offline`（其余）；快照缺失为 `null` |
 
 `TopoLink`：`{ source, target }`。连线规则：`device.bus → device.id`；`point.device_id → point.id`
 （`device_id` 为空时按 `"{设备名}_"` 前缀反查模板展开点位的归属设备；仍查不到则不连线，点位成为游离节点）。

@@ -42,10 +42,16 @@ pub(crate) async fn device_topology(
     let expanded = expand_points(&state);
     let devices: &[DeviceConfig] = cfg.devices.as_deref().unwrap_or(&[]);
 
-    // 构建 point_id -> quality 映射
-    let mut point_quality: HashMap<&str, &str> = HashMap::new();
+    // 构建 point_id -> 对外质量码映射（唯一口径，与健康评分/点位质量页一致）
+    let mut point_quality: HashMap<&str, &'static str> = HashMap::new();
     for s in &statuses {
-        point_quality.insert(s.point_id.as_str(), s.quality.as_str());
+        point_quality.insert(
+            s.point_id.as_str(),
+            gateway_core::engine::model::view_quality_code(
+                Some(s.quality.as_str()),
+                s.consecutive_failures,
+            ),
+        );
     }
 
     // 点位归属索引：替代「每台设备线性扫描全部点位」的 O(D×P) 查找
@@ -71,30 +77,32 @@ pub(crate) async fn device_topology(
     let mut offline = 0usize;
     let mut device_count = 0usize;
     for dev in devices {
-        // 设备状态按失败严重度单调递进：任一点位 good → 在线；否则 1~2 次失败
-        // （quality=bad）→ 告警；≥3 次失败（quality=stale）或没有质量快照 → 离线。
-        // 原实现是 stale→warning、bad→offline：刚失败一次显示红色离线，连续失败
-        // 反而退回黄色告警，与质量码严重度相反。
+        // 设备状态按失败严重度单调递进（对外质量码，唯一口径见
+        // `gateway_core::engine::model::view_quality_code`）：
+        // 任一点位 good → 在线；否则有点位 bad（连续失败 ≥3 次，实际不可达）
+        // → 离线；只有 uncertain（1~2 次失败）→ 告警；无质量快照 → 离线。
+        // 原实现直接按原始码判定（stale→warning、bad→offline），刚失败一次
+        // 显示红色离线、连续失败反而退回黄色告警，与质量码严重度相反。
         // 判定含模板展开点位，否则模板化设备恒误判 offline。
         let dev_points = owner_index.point_ids_of(dev);
         let mut has_good = false;
+        let mut has_warn = false;
         let mut has_bad = false;
-        let mut has_stale = false;
         for pid in &dev_points {
             match point_quality.get(pid.as_str()).copied() {
                 Some("good") => has_good = true,
+                Some("uncertain") => has_warn = true,
                 Some("bad") => has_bad = true,
-                Some("stale") => has_stale = true,
                 _ => {}
             }
         }
         let status = if has_good {
             online += 1;
             "online"
-        } else if has_stale {
+        } else if has_bad {
             offline += 1;
             "offline"
-        } else if has_bad {
+        } else if has_warn {
             warning += 1;
             "warning"
         } else {
