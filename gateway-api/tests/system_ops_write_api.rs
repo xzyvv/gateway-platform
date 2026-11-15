@@ -159,6 +159,20 @@ async fn ota_upload_rejects_empty_and_classifies_full_and_delta() {
 }
 
 #[tokio::test]
+async fn ota_upload_accepts_firmware_larger_than_default_body_limit() {
+    let state = common::mock_state::mock_app_state();
+    let app = gateway_api::web::build_router(state);
+
+    // 回归：axum 对 Bytes 提取器默认只放行 2MB，真实固件会被框架直接 413
+    // （响应不是 API 信封，前端只会看到「升级失败」）。本路由必须单独放开上限。
+    let payload = vec![0x5Au8; 3 * 1024 * 1024];
+    let body = call_raw(&app, "POST", "/api/ota/upload", payload).await;
+    assert_eq!(body["code"], 0, "3MB 固件应被接收，不得 413: {body}");
+    assert_eq!(body["data"]["status"], "uploading");
+    assert_eq!(body["data"]["type"], "full");
+}
+
+#[tokio::test]
 async fn watchdog_restart_reloads_services_and_records_event() {
     let state = common::mock_state::mock_app_state();
     let app = gateway_api::web::build_router(state.clone());

@@ -22,6 +22,7 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::DefaultBodyLimit,
     middleware::from_fn_with_state,
     routing::{delete, get, post},
     Router,
@@ -35,6 +36,9 @@ use crate::web::api::{
     upload_certificate,
 };
 use crate::web::types::{require_auth, require_auth_if_anon_disabled, AppState};
+
+/// OTA 固件上传体上限（64MB，与前端 `Ota.vue` 的选择校验保持一致）
+pub(crate) const OTA_UPLOAD_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// 构建系统级路由组（read_routes + write_routes）
 ///
@@ -66,7 +70,13 @@ pub fn system_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
 
     // 写入路由（POST/PUT/DELETE）：始终要求鉴权
     let write_routes = Router::new()
-        .route("/api/ota/upload", post(ota_upload))
+        // OTA 固件整包上传：axum 对 `Bytes` 等缓冲型提取器默认只放行 2MB，
+        // 真实固件（kernel + rootfs + app）远超该值，会在 handler 之外直接 413。
+        // 只对本路由放开到与前端一致的上限（Ota.vue 的 64MB 校验），不要做成全局。
+        .route(
+            "/api/ota/upload",
+            post(ota_upload).layer(DefaultBodyLimit::max(OTA_UPLOAD_LIMIT_BYTES)),
+        )
         .route("/api/ota/rollback", post(ota_rollback))
         .route("/api/ntp/sync", post(ntp_sync))
         .route(
