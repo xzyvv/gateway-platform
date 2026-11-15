@@ -335,8 +335,18 @@ pub async fn restore_point(
     else {
         return Ok(ApiResponse::err(4004, "point not found"));
     };
-    if cfg.points.iter().any(|p| p.id == id) {
-        return Ok(ApiResponse::err(4009, "点位 id 已存在，无法恢复"));
+    // BUG-H 同源：模板展开出来的点位虽然不在 cfg.points 里，但同样占用 id 空间。
+    // 恢复路径原先只查 cfg.points，会把「与模板点位同 id」的手动点位恢复回来，
+    // 展开合并后同一地址重复采集（创建路径已拦，恢复路径漏了）。
+    if cfg.points.iter().any(|p| p.id == id)
+        || crate::web::config_apply::expand_points(&state, &cfg)
+            .iter()
+            .any(|p| p.id == id)
+    {
+        return Ok(ApiResponse::err(
+            4009,
+            "点位 id 已存在（含模板展开点位），无法恢复",
+        ));
     }
     // 恢复前校验所属设备仍在：否则会产出 device_id 指向不存在设备的孤儿点位，
     // 采集端找不到设备、表单里设备下拉为空，用户很难看出根因。

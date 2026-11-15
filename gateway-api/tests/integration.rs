@@ -1796,6 +1796,53 @@ mod point_trash_integration {
         assert_eq!(v["code"], 4009, "同 id 已存在应返回 4009, got {v}");
     }
 
+    /// 恢复点位 id 与「模板展开点位」冲突 → 4009
+    ///
+    /// 模板展开点位不在 `cfg.points` 里，创建路径已额外校验展开结果，
+    /// 恢复路径原先只查 `cfg.points`，会把同 id 手动点位放回来，
+    /// 展开合并后同一地址重复采集。
+    #[tokio::test]
+    async fn restore_id_colliding_with_template_point_returns_4009() {
+        let state = mock_app_state();
+        // dev1 使用模板 t1（点位 p1），展开后 id 为 dev1_p1
+        let mut v = serde_json::to_value(state.config.load_full().as_ref()).unwrap();
+        v["devices"] = serde_json::json!([{
+            "id": "dev1",
+            "name": "dev1",
+            "template": "t1",
+            "bus": "bus0",
+            "protocol": "modbus",
+            "address": "1",
+            "slave_id": 1,
+            "interval": 10
+        }]);
+        let mut cfg: gateway_core::config::GatewayConfig =
+            serde_json::from_value(v).expect("夹具配置应可反序列化");
+        cfg.points.clear();
+        cfg.point_trash = Some(vec![PointTrashEntry {
+            point: test_point("dev1_p1"),
+            deleted_at_ms: 1_000,
+        }]);
+        state.config.store(Arc::new(cfg));
+        let app = build_router(state.clone());
+
+        let res = app
+            .oneshot(req(
+                "POST",
+                "/api/points/dev1_p1/restore",
+                Some(TOKEN),
+                None,
+            ))
+            .await
+            .unwrap();
+        let v = body_json(res).await;
+        assert_eq!(v["code"], 4009, "与模板展开点位同 id 应拒绝恢复, got {v}");
+        assert!(
+            state.config.load_full().points.is_empty(),
+            "被拒绝时不应写入活动点位"
+        );
+    }
+
     /// 删除不存在的点位仍返回 4004
     #[tokio::test]
     async fn delete_unknown_point_returns_4004() {
