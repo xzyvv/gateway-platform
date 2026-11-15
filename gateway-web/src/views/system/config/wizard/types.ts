@@ -29,7 +29,13 @@ export interface DeviceFormModel {
 /** 手动补录点位的表单模型（第 3 步） */
 export interface ManualPointForm {
   name: string
-  addressNum: number
+  /**
+   * 5 位 Modbus 展示地址（区段首位 + 1 基序号），如 `40001`。
+   *
+   * 不能直接拿它当偏移用：采集按 `address_num`（0 基）+ `function_code` 寻址，
+   * 两者必须由 `parseModbusAddress` 从这串地址推导，否则填的地址与实际读取不符。
+   */
+  address: string
   dataType: string
 }
 
