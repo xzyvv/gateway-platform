@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::RwLock;
 
@@ -40,6 +41,13 @@ use opcua::types::{
 /// Gateway 自定义命名空间 URI
 const GATEWAY_NAMESPACE_URI: &str = "urn:gateway";
 
+/// 写回调内同步等待真实写结果的上限。
+///
+/// async-opcua 在持有地址空间写锁期间同步调用写回调，等待期间该 Server 的
+/// 所有读写/订阅都会被卡住，因此必须设上限：超时返回 `BadTimeout`（真实结果
+/// 仍会落审计），避免一个慢总线把整个 OPC UA 服务拖死。
+const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// OPC UA 节点条目（内存缓存最新值；测试与 handle 未就绪时使用）
 #[derive(Debug, Clone)]
 pub struct OpcUaNode {
@@ -58,7 +66,10 @@ pub struct OpcUaServerConfig {
     /// 关闭时（默认），一旦配置了证书就只暴露 Basic256Sha256/SignAndEncrypt，
     /// 避免遗留一个无需凭据、无加密的读取通道。仅本地调试可显式开启。
     pub allow_anonymous: bool,
-    /// 用户名/密码用户（用户名即 user token id）。为空时保持旧行为：匿名登录。
+    /// 用户名/密码用户（用户名即 user token id）。
+    ///
+    /// 为空时端点不再自动放行匿名：匿名登录只由 [`Self::allow_anonymous`] 决定
+    /// （无用户又未放行匿名时配置校验会拒绝启动）。
     pub users: Vec<(String, String)>,
     /// 是否自动信任未登记的客户端证书（对应 `opcua.trust_client_certs`）
     pub trust_client_certs: bool,
@@ -81,8 +92,9 @@ impl Default for OpcUaServerConfig {
 
 /// OPC UA 写回依赖：GatewayRuntime 写链路（白名单 + collector 下发）与审计落盘。
 ///
-/// 写回调是同步闭包（async-opcua 约束），实际下发通过 `tokio::spawn` 转异步，
-/// 回调本身只做「值解析 + 白名单预检 + 乐观返回 Good」。
+/// 写回调是同步闭包（async-opcua 约束），真实下发是异步的：回调内用
+/// `block_in_place` 同步等待写结果（上限 [`WRITE_TIMEOUT`]），返回给客户端的
+/// StatusCode 即真实写结果（超时为 `BadTimeout`）。
 pub struct OpcUaWriteHandler {
     pub gateway: Arc<GatewayRuntime>,
     pub audit: Arc<AuditLog>,
@@ -97,10 +109,11 @@ impl std::fmt::Debug for OpcUaWriteHandler {
 /// 计算端点支持的 user token id 列表。
 ///
 /// - 配置了用户名用户 → 各用户名（用户名即 token id）
-/// - `allow_anonymous` 为真，或未配置任何用户（旧配置，必须保留匿名通道）→ 追加匿名 id
+/// - 匿名 id 只由 `allow_anonymous` 决定；未配置用户不再隐式放行匿名
+///   （该组合已由 `OpcuaConfig::semantic_error` 在启动/保存时拦截）
 fn user_token_ids(users: &[(String, String)], allow_anonymous: bool) -> Vec<String> {
     let mut ids: Vec<String> = users.iter().map(|(u, _)| u.clone()).collect();
-    if allow_anonymous || users.is_empty() {
+    if allow_anonymous {
         ids.push(ANONYMOUS_USER_TOKEN_ID.to_string());
     }
     ids
@@ -286,24 +299,56 @@ impl OpcUaServer {
                 let Some(write_value) = variant_to_f64(&variant) else {
                     return StatusCode::BadTypeMismatch;
                 };
-                // 回调是同步的，真实写命令（持有总线 IO）转异步执行；
-                // 同步路径只做类型校验并乐观返回 Good，失败经审计暴露。
-                let handler = handler.clone();
-                let pid = pid.clone();
-                let display_name = display_name.clone();
-                let audit_target = audit_target.clone();
-                tokio::spawn(async move {
-                    let detail = match handler.gateway.write_point(&pid, write_value).await {
-                        Ok(()) => format!("{}={}", display_name, write_value),
-                        Err(e) => {
-                            format!("{}={} [失败: {}]", display_name, write_value, e)
-                        }
-                    };
-                    handler
-                        .audit
-                        .log("point.write", &audit_target, &detail, "opcua");
-                });
-                StatusCode::Good
+                // 回调是同步的，真实写命令（可能阻塞在总线 IO）必须在本线程内
+                // 同步等待：返回给客户端的状态码即真实写结果，而不是「已受理」。
+                let write = handler.gateway.write_point(&pid, write_value);
+                let outcome = run_write_blocking(tokio::time::timeout(WRITE_TIMEOUT, write));
+                let (status, detail) = match outcome {
+                    Some(Ok(Ok(()))) => {
+                        (StatusCode::Good, format!("{}={}", display_name, write_value))
+                    }
+                    Some(Ok(Err(e))) => (
+                        write_error_status(&e),
+                        format!("{}={} [失败: {}]", display_name, write_value, e),
+                    ),
+                    Some(Err(_)) => (
+                        StatusCode::BadTimeout,
+                        format!(
+                            "{}={} [失败: 等待写回超时 {}s]",
+                            display_name,
+                            write_value,
+                            WRITE_TIMEOUT.as_secs()
+                        ),
+                    ),
+                    None => {
+                        // 单线程 runtime（如 #[tokio::test] 默认）不能安全阻塞等待：
+                        // 退化为异步执行 + 乐观返回（生产 gatewayd 为 multi_thread）。
+                        tracing::warn!(
+                            "opcua: 当前 runtime 不支持阻塞等待，写回 {} 转异步（返回 Good 不代表写入成功）",
+                            pid
+                        );
+                        let handler = handler.clone();
+                        let pid = pid.clone();
+                        let display_name = display_name.clone();
+                        let audit_target = audit_target.clone();
+                        tokio::spawn(async move {
+                            let detail = match handler.gateway.write_point(&pid, write_value).await {
+                                Ok(()) => format!("{}={}", display_name, write_value),
+                                Err(e) => {
+                                    format!("{}={} [失败: {}]", display_name, write_value, e)
+                                }
+                            };
+                            handler
+                                .audit
+                                .log("point.write", &audit_target, &detail, "opcua");
+                        });
+                        return StatusCode::Good;
+                    }
+                };
+                handler
+                    .audit
+                    .log("point.write", &audit_target, &detail, "opcua");
+                status
             });
     }
 
@@ -476,6 +521,34 @@ fn variant_to_f64(v: &Variant) -> Option<f64> {
         Variant::Double(x) => Some(*x),
         _ => None,
     }
+}
+
+/// 把网关写回错误映射为 OPC UA 状态码，让客户端能区分失败原因。
+///
+/// 旧实现无论真实结果如何都返回 `Good`，客户端无法感知写失败；现在映射为
+/// 「不可写 / 点位不存在 / 设备失败 / 超时」，其余归为 `BadInternalError`。
+fn write_error_status(err: &GatewayError) -> StatusCode {
+    match err {
+        GatewayError::Config(_) => StatusCode::BadNotWritable,
+        GatewayError::NotFound(_) => StatusCode::BadNodeIdUnknown,
+        GatewayError::Protocol(_) | GatewayError::Io(_) => StatusCode::BadDeviceFailure,
+        GatewayError::NoReply => StatusCode::BadTimeout,
+        _ => StatusCode::BadInternalError,
+    }
+}
+
+/// 在同步写回调里同步等待异步写结果。
+///
+/// 返回 `None` 表示当前 runtime 无法安全阻塞（没有 runtime，或单线程 runtime
+/// ——`block_in_place` 在其上会 panic），调用方需退化为异步执行。
+fn run_write_blocking<F: Future>(fut: F) -> Option<F::Output> {
+    let handle = tokio::runtime::Handle::try_current().ok()?;
+    if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread {
+        return None;
+    }
+    // multi_thread 下用 block_in_place 让出当前 worker，避免阻塞同线程调度；
+    // 等待期间仍持有 async-opcua 的地址空间锁，故调用方必须带超时。
+    Some(tokio::task::block_in_place(|| handle.block_on(fut)))
 }
 
 /// 解析 OPC UA endpoint，返回 (host, port)
@@ -717,8 +790,8 @@ pub(crate) fn should_register_anonymous_none_endpoint(
 #[cfg(test)]
 mod tests {
     use super::{
-        should_register_anonymous_none_endpoint, user_token_ids, variant_to_f64, ActivePointSet,
-        NorthServer, OpcUaServer, OpcUaServerConfig,
+        should_register_anonymous_none_endpoint, user_token_ids, variant_to_f64,
+        write_error_status, ActivePointSet, NorthServer, OpcUaServer, OpcUaServerConfig,
     };
 
     /// 契约：未配证书时必须注册 None 端点（否则服务没有任何可用端点）；
@@ -758,11 +831,44 @@ mod tests {
         assert_eq!(with_anonymous.pop().as_deref(), Some("ANONYMOUS"));
     }
 
-    /// 契约：未配置用户时必须保留匿名通道（兼容存量配置/客户端）
+    /// 契约：匿名 token 只由 `allow_anonymous` 决定——未配置用户不再隐式放行
+    /// 匿名（该组合由配置校验拦截，否则端点将没有任何可登录方式）
     #[test]
-    fn user_token_ids_keep_anonymous_without_users() {
-        let ids = user_token_ids(&[], false);
-        assert_eq!(ids, vec!["ANONYMOUS"]);
+    fn user_token_ids_require_explicit_anonymous() {
+        assert!(user_token_ids(&[], false).is_empty());
+        assert_eq!(user_token_ids(&[], true), vec!["ANONYMOUS"]);
+    }
+
+    /// 契约：写失败必须映射为可区分的 OPC UA 状态码，客户端据此判断原因
+    #[test]
+    fn write_error_maps_to_specific_status_codes() {
+        use crate::engine::error::GatewayError;
+        use opcua::types::StatusCode;
+
+        assert_eq!(
+            write_error_status(&GatewayError::Config("not writable".into())),
+            StatusCode::BadNotWritable
+        );
+        assert_eq!(
+            write_error_status(&GatewayError::NotFound("no point".into())),
+            StatusCode::BadNodeIdUnknown
+        );
+        assert_eq!(
+            write_error_status(&GatewayError::Protocol("crc".into())),
+            StatusCode::BadDeviceFailure
+        );
+        assert_eq!(
+            write_error_status(&GatewayError::Io("port closed".into())),
+            StatusCode::BadDeviceFailure
+        );
+        assert_eq!(
+            write_error_status(&GatewayError::NoReply),
+            StatusCode::BadTimeout
+        );
+        assert_eq!(
+            write_error_status(&GatewayError::Queue("db".into())),
+            StatusCode::BadInternalError
+        );
     }
 
     /// 契约：写回调只接受数值型（含 Boolean 按 0/1），其它类型拒绝而非静默转 0

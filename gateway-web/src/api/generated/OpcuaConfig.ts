@@ -42,8 +42,9 @@ trust_client_certs: boolean,
 /**
  * 用户名/密码认证用户列表
  *
- * 为空时保持旧行为：加密端点仍注册匿名 token（便于兼容存量客户端）。
- * 非空时仅这些用户可登录；匿名是否放行由 `allow_anonymous` 决定。
+ * 非空时仅这些用户可登录，匿名是否放行由 `allow_anonymous` 决定。
+ * 为空时必须显式 `allow_anonymous = true`，否则启用后没有任何可用的
+ * 登录方式，配置校验会拒绝启动（不再隐式放行匿名）。
  */
 users: Array<OpcuaUserConfig>, 
 /**

@@ -55,8 +55,9 @@ pub struct OpcuaConfig {
 
     /// 用户名/密码认证用户列表
     ///
-    /// 为空时保持旧行为：加密端点仍注册匿名 token（便于兼容存量客户端）。
-    /// 非空时仅这些用户可登录；匿名是否放行由 `allow_anonymous` 决定。
+    /// 非空时仅这些用户可登录，匿名是否放行由 `allow_anonymous` 决定。
+    /// 为空时必须显式 `allow_anonymous = true`，否则启用后没有任何可用的
+    /// 登录方式，配置校验会拒绝启动（不再隐式放行匿名）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<OpcuaUserConfig>,
 
@@ -109,6 +110,16 @@ impl OpcuaConfig {
             }
             (None, None) => {}
         }
+        // 收紧旧行为：未配置用户时不再隐式放行匿名。启用后既无用户也未放行
+        // 匿名，端点将没有任何可登录方式（客户端一律 BadIdentityTokenRejected），
+        // 属于必然不可用的配置，启动/保存时直接拦截。
+        if self.enabled && !self.allow_anonymous && self.users.is_empty() {
+            return Some(
+                "已启用 OPC UA 但未配置任何用户且未放行匿名，客户端将无法登录：\
+                 请至少配置一个用户名/密码用户，或显式开启 allow_anonymous"
+                    .to_string(),
+            );
+        }
         let mut seen = std::collections::HashSet::new();
         for (i, u) in self.users.iter().enumerate() {
             if u.username.trim().is_empty() {
@@ -160,6 +171,43 @@ mod tests {
         assert!(cfg.users.is_empty(), "旧配置应无用户名认证用户");
         assert_eq!(cfg.cert_path, None);
         assert_eq!(cfg.key_path, None);
+        // 收紧后的行为：这种「启用 + 无用户 + 不放行匿名」的旧配置曾经隐式放行
+        // 匿名，现在必须被校验拦截（运维需补用户或显式开启 allow_anonymous）。
+        assert!(
+            cfg.semantic_error().is_some(),
+            "启用但无用户且不放行匿名的旧配置必须被拒绝"
+        );
+    }
+
+    /// 契约：启用 OPC UA 时，登录方式必须至少有一种（用户 或 显式匿名）
+    #[test]
+    fn enabled_requires_users_or_explicit_anonymous() {
+        let cfg = OpcuaConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(cfg.semantic_error().is_some(), "无用户且不放行匿名必须拒绝");
+
+        let cfg = OpcuaConfig {
+            enabled: true,
+            allow_anonymous: true,
+            ..Default::default()
+        };
+        assert!(cfg.semantic_error().is_none(), "显式放行匿名应通过");
+
+        let cfg = OpcuaConfig {
+            enabled: true,
+            users: vec![OpcuaUserConfig {
+                username: "op".into(),
+                password: "p".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(cfg.semantic_error().is_none(), "配置了用户应通过");
+
+        // 未启用时不做登录方式校验（配置节可先保留，服务不开）
+        let cfg = OpcuaConfig::default();
+        assert!(cfg.semantic_error().is_none());
     }
 
     /// 契约：证书路径必须成对配置

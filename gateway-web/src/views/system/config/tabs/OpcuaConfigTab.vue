@@ -20,7 +20,7 @@
     <el-form-item label="允许匿名/明文">
       <el-switch v-model="form.allow_anonymous" />
       <div class="form-hint">
-        配置证书后默认只暴露加密端点；仅在本地调试时打开。未配置任何用户时仍保留匿名登录。
+        配置证书后默认只暴露加密端点；仅在本地调试时打开。未配置用户时必须开启本项，否则无法登录也无法保存。
       </div>
     </el-form-item>
 
@@ -51,7 +51,9 @@
 
     <el-form-item label="用户名/密码用户">
       <div class="user-list">
-        <div v-if="form.users.length === 0" class="form-hint">未配置用户：保留匿名登录（兼容存量客户端）。</div>
+        <div v-if="form.users.length === 0" class="form-hint">
+          未配置用户：须开启「允许匿名/明文」，否则服务没有任何可用的登录方式（保存会被拦截）。
+        </div>
         <div v-for="(u, idx) in form.users" :key="idx" class="user-row">
           <el-input v-model="u.username" placeholder="用户名" />
           <el-input v-model="u.password" type="password" show-password placeholder="密码" />
@@ -89,12 +91,14 @@ const form = computed(() => opcua.value as OpcuaConfig)
 /** 高级分组（证书/信任）默认收起：多数部署沿用全局证书与默认信任策略 */
 const advancedOpen = ref<string[]>([])
 
-/** 新建配置节时补齐后端必填字段，避免生成缺字段的 JSON */
+/** 新建配置节时补齐后端必填字段，避免生成缺字段的 JSON。
+ *  allow_anonymous 默认开启：在添加用户前保证配置可通过后端校验（无用户又
+ *  不放行匿名会被拒绝）；添加用户后建议关闭该项。 */
 function createDefaultOpcua(): OpcuaConfig {
   return {
     enabled: true,
     endpoint: 'opc.tcp://0.0.0.0:4840',
-    allow_anonymous: false,
+    allow_anonymous: true,
     cert_path: null,
     key_path: null,
     trust_client_certs: true,
