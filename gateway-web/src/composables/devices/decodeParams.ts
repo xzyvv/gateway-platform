@@ -24,3 +24,15 @@ export const BYTE_ORDERS = [
   { value: 'big-endian-byte-swapped', label: 'big-endian-byte-swapped（兼容写法）' },
   { value: 'little-endian-byte-swapped', label: 'little-endian-byte-swapped（兼容写法）' },
 ]
+
+/**
+ * 是否使用统一数值解码族（数据类型 + 字节序）。
+ *
+ * 与后端 `config/validate/field.rs::uses_numeric_decode` 保持同一集：
+ * 这些协议的 `data_type` 取值是 u16/i16/… 这套统一编码，表单需要露出这两项；
+ * iec104（float/normalized/…）与 s7comm（word/int/real/…）自带独立语义，不适用。
+ */
+export function usesNumericDecode(protocol?: string | null): boolean {
+  const p = (protocol ?? '').trim().toLowerCase()
+  return p === 'modbus' || p === 'mc' || p === 'fins' || p === 'dlt645' || p === 'cjt188'
+}

@@ -175,18 +175,19 @@
           <el-input-number v-model="pointForm.address_num" :min="0" controls-position="right" style="width: 100%" />
           <div class="point-inherit-hint">0 基寄存器偏移（读寄存器 1 时填 0）。</div>
         </el-form-item>
-        <!-- Modbus 数值解码参数：多寄存器类型（float32/u32）必须知道类型与字节序，
-             且后端 PUT 会无条件覆盖这些字段，不展示就没法修正、编辑还会被清空。 -->
-        <el-form-item v-if="isModbus" label="数据类型">
+        <!-- 数值解码参数：modbus/mc/fins/dlt645/cjt188 共用同一套 data_type + byte_order，
+             后端 PUT 会无条件覆盖这些字段，不展示就没法修正、编辑还会被清空。
+             寄存器数只有 Modbus 有意义（单次读取上限 125），其余协议由类型/数据标识决定长度。 -->
+        <el-form-item v-if="numericDecode" label="数据类型">
           <div class="point-pair">
             <el-select v-model="pointForm.data_type" filterable allow-create default-first-option clearable placeholder="默认 u16" style="width: 100%">
               <el-option v-for="t in DATA_TYPES" :key="t" :label="t" :value="t" />
             </el-select>
-            <el-input-number v-model="pointForm.register_count" :min="1" :max="125" controls-position="right" placeholder="寄存器数，留空自动" style="width: 100%" />
+            <el-input-number v-if="isModbus" v-model="pointForm.register_count" :min="1" :max="125" controls-position="right" placeholder="寄存器数，留空自动" style="width: 100%" />
           </div>
-          <div class="point-inherit-hint">float32 / u32 等多寄存器类型需填寄存器数；留空按数据类型自动推断。</div>
+          <div class="point-inherit-hint">{{ dataTypeHint }}</div>
         </el-form-item>
-        <el-form-item v-if="isModbus" label="字节序">
+        <el-form-item v-if="numericDecode" label="字节序">
           <el-select v-model="pointForm.byte_order" clearable placeholder="默认 ABCD（大端）" style="width: 100%">
             <el-option v-for="b in BYTE_ORDERS" :key="b.value" :label="b.label" :value="b.value" />
           </el-select>
@@ -338,7 +339,7 @@ import type { PointRow } from '@/composables/devices/usePoints'
 import { unitChoices } from '@/composables/devices/useUnits'
 import { ratioScopeOf } from '@/composables/devices/useRatio'
 import { modbusAddressOf, parseModbusAddress } from '@/composables/devices/usePoints/modbusAddress'
-import { BYTE_ORDERS, DATA_TYPES } from '@/composables/devices/decodeParams'
+import { BYTE_ORDERS, DATA_TYPES, usesNumericDecode } from '@/composables/devices/decodeParams'
 
 const router = useRouter()
 const route = useRoute()
@@ -362,8 +363,24 @@ const {
  */
 const intervalMax = computed(() => Math.max(1, northInterval.value - 1))
 
-/** 协议继承自设备，Modbus 才需要区段寻址与数值解码参数 */
+/** 协议继承自设备，Modbus 才需要区段寻址与寄存器数 */
 const isModbus = computed(() => pointForm.protocol === 'modbus')
+
+/**
+ * 是否露出「数据类型 / 字节序」。
+ *
+ * 比 isModbus 宽：DLT645 / CJT188 电表同样用 u16/f32 + 字节序解码，
+ * 后端 `uses_numeric_decode` 也认这几个协议；只按 modbus 门控会让电表点位
+ * 在表单里根本填不了这两项，只能绕 CSV。
+ */
+const numericDecode = computed(() => usesNumericDecode(pointForm.protocol))
+
+/** 数据类型提示：寄存器数只有 Modbus 可填，其余协议的类型口径来自设备手册 */
+const dataTypeHint = computed(() =>
+  isModbus.value
+    ? 'float32 / u32 等多寄存器类型需填寄存器数；留空按数据类型自动推断。'
+    : '按设备手册的数据标识 / 类型填写；留空按 u16 解码。多字节类型的字节序在下方单独设置。',
+)
 
 /**
  * Modbus 地址输入（区段 + 1 基序号）。
