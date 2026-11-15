@@ -14,8 +14,8 @@ use validator::Validate;
 
 use super::point::parse_data_type;
 use super::{
-    validate_byte_order, validate_protocol, validate_ratio, AggregationConfig, DeviceConfig,
-    PointConfig,
+    uses_numeric_decode, validate_byte_order, validate_protocol, validate_ratio, AggregationConfig,
+    DeviceConfig, PointConfig,
 };
 use crate::engine::error::{GatewayError, GatewayResult};
 
@@ -143,13 +143,15 @@ fn modbus_display_address(function_code: Option<u8>, address_num: Option<u16>) -
 
 /// 把历史模板里的数据类型别名（`uint16` / `float` / `double` …）统一成规范名。
 ///
-/// 只处理 Modbus：`parse_data_type` 本来就接受这些别名，采集结果不受影响，
-/// 统一是为了让模板列表/表单与新下拉一致（否则下拉里没有该值，用户以为配错了）。
-/// IEC104 的 `float` / `single` / `normalized` 是该协议自己的语义，不能改名。
+/// 只处理统一数值解码族（modbus / mc / fins / dlt645 / cjt188）：`parse_data_type`
+/// 本来就接受这些别名，采集结果不受影响，统一是为了让模板列表/表单与新下拉一致
+/// （否则下拉里没有该值，用户以为配错了）。
+/// IEC104 的 `float` / `single` / `normalized`、S7 的 `word` / `real` 是该协议自己的
+/// 语义，不能改名。
 ///
 /// 返回被改写的点位数（0 表示无需迁移）。
 fn normalize_data_types(t: &mut DeviceTemplate) -> usize {
-    if !t.protocol.eq_ignore_ascii_case("modbus") {
+    if !uses_numeric_decode(&t.protocol) {
         return 0;
     }
     let mut changed = 0;

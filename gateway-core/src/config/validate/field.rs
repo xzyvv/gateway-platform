@@ -330,7 +330,10 @@ pub(crate) fn validate_protocol(p: &str) -> Result<(), validator::ValidationErro
 ///
 /// 仅这些协议的 `data_type` 取值是「u16/i16/…」这套统一编码；iec104（float/normalized/…）
 /// 与 s7comm（word/int/real/…）自带独立语义，不能套用同一校验。
-pub(super) fn uses_numeric_decode(protocol: &str) -> bool {
+///
+/// 模板加载/保存时把历史别名（`float` → `f32`）归一也按这个集合判定，
+/// 因此这里必须是唯一口径，不要在各处另写一份协议清单。
+pub(crate) fn uses_numeric_decode(protocol: &str) -> bool {
     matches!(
         protocol.to_ascii_lowercase().as_str(),
         "modbus" | "mc" | "fins" | "dlt645" | "cjt188"

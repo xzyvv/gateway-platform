@@ -191,6 +191,20 @@ fn normalize_data_types_rewrites_modbus_aliases() {
     assert_eq!(tpl.points[2].data_type.as_deref(), Some("f64"));
 }
 
+/// DLT645 / CJT188 电表同样用统一编码（u16/f32 + 字节序），
+/// 历史别名也要归一，否则前端规范名下拉里找不到该值、模板点位显示空白。
+#[test]
+fn normalize_data_types_rewrites_numeric_decode_family() {
+    for protocol in ["dlt645", "cjt188", "fins", "mc"] {
+        let mut tpl = build_template();
+        tpl.protocol = protocol.into();
+        tpl.points[0].data_type = Some("float".into());
+
+        assert_eq!(normalize_data_types(&mut tpl), 1, "{protocol} 应被归一");
+        assert_eq!(tpl.points[0].data_type.as_deref(), Some("f32"));
+    }
+}
+
 /// IEC104 的 float/single 是协议语义，不能被当成 Modbus 别名改写。
 #[test]
 fn normalize_data_types_leaves_other_protocols_alone() {
