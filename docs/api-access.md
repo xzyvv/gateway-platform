@@ -166,8 +166,8 @@ config:read   config:write   history:read
 |---|---|
 | `/api/devices`、`/api/device-groups`、`/api/io`、`/api/diagnostics`（诊断写，`/api/diagnostics/exec` 除外）、`/api/quality`（数据质量规则写） | `devices:write` |
 | `/api/points`、`/api/point-tools`（点位工具：批量写/虚拟点位/偏移/克隆/查找替换）、`/api/point-trash` | `points:write` |
-| `/api/config`、`/api/buses`、`/api/uplink`、`/api/templates`、`/api/project`、`/api/protocol-tools/conversion`、`/api/sim_consumer` | `config:write` |
-| `/api/protocol-tools` 中**真实发帧 / 占线**的写操作（`packet-editor/send`、`register-scan`、`auto-detect/run`、`packet-replay/*/execute`） | **仅主 token**（与系统域同级） |
+| `/api/config`、`/api/buses`、`/api/uplink`、`/api/north`（死信重投/清理）、`/api/templates`、`/api/project`、`/api/protocol-tools/convert`（转换规则落 config）、`/api/sim_consumer` | `config:write` |
+| `/api/protocol-tools` 中**真实发帧 / 占线**的写操作（`packet-editor/send`、`register-scan`、`slave-scan`、`iec104/ioa-read`、`auto-detect/run`、`packet-replay/*/execute`） | **仅主 token**（与系统域同级） |
 | `/api/protocol-tools` 其余写操作（presets、抓包清理、回放会话 CRUD） | `devices:write` |
 | `/api/access`、`/api/auth`、`/api/system`、`/api/ota`、`/api/ntp`、`/api/certificates`、`/api/network` 等系统域 | **仅主 token**（无可授予 scope） |
 | 其余未归类路径 | 任一 `*:write` |

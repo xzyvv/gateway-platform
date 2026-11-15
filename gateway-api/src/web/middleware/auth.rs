@@ -287,13 +287,17 @@ fn required_write_scope(path: &str) -> Option<&'static str> {
         // 归入 system:write（不可授予 API 密钥，只有主 token / admin 可通过）。
         // 纯本地操作（presets / 抓包清理 / 回放会话 CRUD）仍留在 devices:write。
         Some("system:write")
-    } else if path.starts_with("/api/protocol-tools/conversion") {
+    } else if path.starts_with("/api/protocol-tools/convert") {
         // F-13：protocol-convert 的开关/规则写会持久化到 config 并触发热更，
         // 实际是配置写操作，不能仅凭 devices:write 放行。
+        // 注意前缀必须与真实路由 `/api/protocol-tools/convert/rules*`（见
+        // protocol_tools/routes.rs 的 convert_write）一致：历史写成 `conversion`
+        // 导致本分支永不命中，该组写操作掉进 `/api/protocol-tools` 的 devices 域。
         Some("config:write")
     } else if path.starts_with("/api/config")
         || path.starts_with("/api/buses")
         || path.starts_with("/api/uplink")
+        || path.starts_with("/api/north")
         || path.starts_with("/api/templates")
         || path.starts_with("/api/project")
         // 模拟消费者的启停属运行期控制面操作，改的是队列数据的去向
@@ -340,6 +344,11 @@ fn is_bus_intrusive_tool(path: &str) -> bool {
     path.starts_with("/api/protocol-tools/packet-editor/send")
         || path.starts_with("/api/protocol-tools/register-scan")
         || path.starts_with("/api/protocol-tools/auto-detect/run")
+        // 从站扫描已改为真实发帧（逐地址 FC03 探测，见 handlers/slave_scan.rs），
+        // 与 register-scan 同风险，不能留在 devices:write。
+        || path.starts_with("/api/protocol-tools/slave-scan")
+        // iec104 按 IOA 直读会向从站发总召唤，同属真实占线操作。
+        || path.starts_with("/api/protocol-tools/iec104/ioa-read")
         // 仅"回放执行"会逐帧重发；会话的增删查仍按 devices:write。
         || (path.starts_with("/api/protocol-tools/packet-replay") && path.ends_with("/execute"))
 }
@@ -751,10 +760,46 @@ mod tests {
             &devices,
             "/api/protocol-tools/packet-replay/s-1/execute"
         ));
+        // 真实发帧的从站扫描 / iec104 直读同样不得由 devices:write 执行
+        assert!(!key_can_write(&devices, "/api/protocol-tools/slave-scan"));
+        assert!(!key_can_write(
+            &devices,
+            "/api/protocol-tools/iec104/ioa-read"
+        ));
+        // protocol-convert 规则写会落 config，属配置域而非设备域
+        assert!(!key_can_write(
+            &devices,
+            "/api/protocol-tools/convert/rules"
+        ));
+        // 死信清空/重投不得由设备域密钥执行
+        assert!(!key_can_write(
+            &devices,
+            "/api/north/dead-letters/dl-1/replay"
+        ));
         // remote-shell 下 /api/diagnostics/exec 还有路由级 exec 门控，
         // 全局 scope 分类只到 devices 域；exec 的最终拒绝由 8004 负责。
         assert!(key_can_write(&devices, "/api/diagnostics/bus-load/refresh"));
         assert!(key_can_write(&devices, "/api/diagnostics/task-diag/p-1"));
+    }
+
+    #[test]
+    fn config_write_covers_convert_rules_and_north_dead_letters() {
+        let config = vec!["config:write".to_string()];
+        // protocol-convert 规则写会持久化到 config.json
+        assert!(key_can_write(&config, "/api/protocol-tools/convert/rules"));
+        assert!(key_can_write(
+            &config,
+            "/api/protocol-tools/convert/rules/cv-1/toggle"
+        ));
+        // 死信重投 / 清理属北向通道运维
+        assert!(key_can_write(
+            &config,
+            "/api/north/dead-letters/dl-1/replay"
+        ));
+        // 反向：point 域密钥不得清空死信（破坏性、不可逆）
+        let points = vec!["points:write".to_string()];
+        assert!(!key_can_write(&points, "/api/north/dead-letters"));
+        assert!(!key_can_write(&config, "/api/points"));
     }
 
     #[test]
