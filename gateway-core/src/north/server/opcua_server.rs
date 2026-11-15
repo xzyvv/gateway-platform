@@ -41,12 +41,22 @@ use opcua::types::{
 /// Gateway 自定义命名空间 URI
 const GATEWAY_NAMESPACE_URI: &str = "urn:gateway";
 
-/// 写回调内同步等待真实写结果的上限。
+/// 写回调同步等待的下限。
+///
+/// 即使目标总线很快也至少等这么久，避免抖动把正常写判成超时；超时返回
+/// `BadTimeout`（真实结果仍会落审计）。上限见 [`WRITE_TIMEOUT_MAX`]。
+const WRITE_TIMEOUT_MIN: Duration = Duration::from_secs(3);
+
+/// 写回调同步等待的上限。
 ///
 /// async-opcua 在持有地址空间写锁期间同步调用写回调，等待期间该 Server 的
-/// 所有读写/订阅都会被卡住，因此必须设上限：超时返回 `BadTimeout`（真实结果
-/// 仍会落审计），避免一个慢总线把整个 OPC UA 服务拖死。
-const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+/// 所有读写/订阅都会被卡住，因此必须设上限，避免一个慢总线把整个 OPC UA
+/// 服务拖死。总线 `timeout_ms` 允许配置到 600000ms，若直接按总线超时推导会
+/// 长时间持锁；超过该上限一律截断（此时仍可能误报超时，但优先保证 Server 可读）。
+const WRITE_TIMEOUT_MAX: Duration = Duration::from_secs(10);
+
+/// 查不到目标总线时使用的 IO 超时兜底（与 `BusConfig::default().timeout_ms` 一致）。
+const DEFAULT_IO_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// OPC UA 节点条目（内存缓存最新值；测试与 handle 未就绪时使用）
 #[derive(Debug, Clone)]
@@ -93,7 +103,7 @@ impl Default for OpcUaServerConfig {
 /// OPC UA 写回依赖：GatewayRuntime 写链路（白名单 + collector 下发）与审计落盘。
 ///
 /// 写回调是同步闭包（async-opcua 约束），真实下发是异步的：回调内用
-/// `block_in_place` 同步等待写结果（上限 [`WRITE_TIMEOUT`]），返回给客户端的
+/// `block_in_place` 同步等待写结果（上限见 [`write_wait_budget`]），返回给客户端的
 /// StatusCode 即真实写结果（超时为 `BadTimeout`）。
 pub struct OpcUaWriteHandler {
     pub gateway: Arc<GatewayRuntime>,
@@ -291,6 +301,8 @@ impl OpcUaServer {
         let audit_target = point.device_id.clone().unwrap_or_else(|| point.bus.clone());
         let handler = handler.clone();
         let pid = point_id.to_string();
+        // 写等待上限按目标总线的单事务最坏耗时推导（见 write_wait_budget）。
+        let point_bus = point.bus.clone();
         nm.inner()
             .add_write_callback(node_id.clone(), move |value, _range| {
                 let Some(variant) = value.value else {
@@ -301,8 +313,14 @@ impl OpcUaServer {
                 };
                 // 回调是同步的，真实写命令（可能阻塞在总线 IO）必须在本线程内
                 // 同步等待：返回给客户端的状态码即真实写结果，而不是「已受理」。
+                let io_timeout = handler
+                    .gateway
+                    .bus_manager(&point_bus)
+                    .map(|bus| bus.io_timeout())
+                    .unwrap_or(DEFAULT_IO_TIMEOUT);
+                let budget = write_wait_budget(io_timeout);
                 let write = handler.gateway.write_point(&pid, write_value);
-                let outcome = run_write_blocking(tokio::time::timeout(WRITE_TIMEOUT, write));
+                let outcome = run_write_blocking(tokio::time::timeout(budget, write));
                 let (status, detail) = match outcome {
                     Some(Ok(Ok(()))) => {
                         (StatusCode::Good, format!("{}={}", display_name, write_value))
@@ -311,15 +329,26 @@ impl OpcUaServer {
                         write_error_status(&e),
                         format!("{}={} [失败: {}]", display_name, write_value, e),
                     ),
-                    Some(Err(_)) => (
-                        StatusCode::BadTimeout,
-                        format!(
-                            "{}={} [失败: 等待写回超时 {}s]",
-                            display_name,
+                    Some(Err(_)) => {
+                        // 超时只取消了「等待」，总线任务多半已把帧发给设备：真实结果
+                        // 无法得知。审计必须如实标注，否则运维会当成「没写进去」重试，
+                        // 造成重复写（对累计量/寄存器等点位是实质错误）。
+                        tracing::warn!(
+                            "opcua 写超时: point={} value={} 等待 {}ms 未返回，写命令可能已下发（结果未知）",
+                            pid,
                             write_value,
-                            WRITE_TIMEOUT.as_secs()
-                        ),
-                    ),
+                            budget.as_millis()
+                        );
+                        (
+                            StatusCode::BadTimeout,
+                            format!(
+                                "{}={} [超时: 等待写回 {}ms 未返回，结果未知（可能已写入，勿盲目重试）]",
+                                display_name,
+                                write_value,
+                                budget.as_millis()
+                            ),
+                        )
+                    }
                     None => {
                         // 单线程 runtime（如 #[tokio::test] 默认）不能安全阻塞等待：
                         // 退化为异步执行 + 乐观返回（生产 gatewayd 为 multi_thread）。
@@ -549,6 +578,19 @@ fn run_write_blocking<F: Future>(fut: F) -> Option<F::Output> {
     // multi_thread 下用 block_in_place 让出当前 worker，避免阻塞同线程调度；
     // 等待期间仍持有 async-opcua 的地址空间锁，故调用方必须带超时。
     Some(tokio::task::block_in_place(|| handle.block_on(fut)))
+}
+
+/// 计算写回调的同步等待预算。
+///
+/// 总线单事务最坏耗时是「入队 `io_timeout` + 应答 `2×io_timeout+100ms`」
+/// （见 `BusManager::transaction`），这里按 `3×io_timeout + 500ms` 留足余量。
+/// 下限 [`WRITE_TIMEOUT_MIN`] 覆盖默认 500ms 总线（推导值 2s 会被抬到 3s）；
+/// 上限 [`WRITE_TIMEOUT_MAX`] 保护地址空间锁。
+///
+/// 旧实现固定 3s：总线 `timeout_ms` 调到 1000ms 以上时，正常慢写会先于总线
+/// 自己判定超时，客户端收到 `BadTimeout` 但设备其实已写入（重试会重复写）。
+fn write_wait_budget(io_timeout: Duration) -> Duration {
+    (io_timeout * 3 + Duration::from_millis(500)).clamp(WRITE_TIMEOUT_MIN, WRITE_TIMEOUT_MAX)
 }
 
 /// 解析 OPC UA endpoint，返回 (host, port)
@@ -791,7 +833,8 @@ pub(crate) fn should_register_anonymous_none_endpoint(
 mod tests {
     use super::{
         should_register_anonymous_none_endpoint, user_token_ids, variant_to_f64,
-        write_error_status, ActivePointSet, NorthServer, OpcUaServer, OpcUaServerConfig,
+        write_error_status, write_wait_budget, ActivePointSet, NorthServer, OpcUaServer,
+        OpcUaServerConfig,
     };
 
     /// 契约：未配证书时必须注册 None 端点（否则服务没有任何可用端点）；
@@ -869,6 +912,32 @@ mod tests {
             write_error_status(&GatewayError::Queue("db".into())),
             StatusCode::BadInternalError
         );
+    }
+
+    /// 契约：写等待预算必须覆盖总线「入队 + 应答」的最坏耗时，同时受上下限约束。
+    /// 旧实现固定 3s，总线 `timeout_ms ≥ 1000ms` 时正常慢写会先被判超时，
+    /// 客户端重试会重复写。
+    #[test]
+    fn write_wait_budget_follows_bus_timeout() {
+        use std::time::Duration;
+
+        // 默认 500ms 总线：推导 2s 低于下限，抬到 3s（保持旧行为）
+        assert_eq!(
+            write_wait_budget(Duration::from_millis(500)),
+            Duration::from_secs(3)
+        );
+        // 总线调到 1500ms：必须覆盖 3×1500+100=4600ms 的最坏路径
+        assert_eq!(
+            write_wait_budget(Duration::from_millis(1500)),
+            Duration::from_millis(5000)
+        );
+        // 极端配置：按上限截断，避免长时间持有地址空间写锁
+        assert_eq!(
+            write_wait_budget(Duration::from_millis(600_000)),
+            Duration::from_secs(10)
+        );
+        // 任何取值都不得低于下限
+        assert!(write_wait_budget(Duration::from_millis(1)) >= Duration::from_secs(3));
     }
 
     /// 契约：写回调只接受数值型（含 Boolean 按 0/1），其它类型拒绝而非静默转 0

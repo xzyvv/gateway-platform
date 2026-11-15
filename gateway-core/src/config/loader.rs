@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::GatewayConfig;
+use super::{GatewayConfig, OpcuaConfig};
 use crate::engine::error::{GatewayError, GatewayResult};
 
 /// Bug T13: 同进程内 tmp 文件名唯一性计数器。
@@ -136,6 +136,7 @@ impl ConfigLoader {
         sanitize_legacy_ratios(&mut cfg);
         sanitize_legacy_snapshot_aggregation(&mut cfg);
         let _ = sanitize_legacy_consumer_exclusivity(&mut cfg);
+        let _ = sanitize_legacy_opcua_anonymous(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!("validate config failed: {}", errs.join("; ")))
         })?;
@@ -224,6 +225,7 @@ impl ConfigLoader {
         sanitize_legacy_ratios(&mut cfg);
         sanitize_legacy_snapshot_aggregation(&mut cfg);
         let _ = sanitize_legacy_consumer_exclusivity(&mut cfg);
+        let _ = sanitize_legacy_opcua_anonymous(&mut cfg);
         cfg.validate_all().map_err(|errs| {
             GatewayError::Config(format!(
                 "reload validate config failed: {}",
@@ -314,6 +316,40 @@ pub fn sanitize_legacy_consumer_exclusivity(cfg: &mut GatewayConfig) -> bool {
         return true;
     }
     false
+}
+
+/// 存量 OPC UA 配置的匿名登录兜底：启用但既无用户、又未显式 `allow_anonymous` 时放行匿名。
+///
+/// 收紧后的 [`OpcuaConfig::semantic_error`] 会拒绝这种组合；而历史配置依赖
+/// 「`users` 为空即隐式匿名」的旧行为（旧 `user_token_ids` 在用户列表为空时
+/// 无条件注册匿名 token）。若直接在加载处阻断，现场表现为**升级后网关起不来**：
+/// 配置加载是启动第 1 步，Web Server 尚未监听，连改配置的界面都没有。
+///
+/// 与 [`sanitize_legacy_ratios`] 同一策略：加载/热重载路径降级并留痕（写日志、
+/// 不改磁盘文件），Web 保存路径仍由 `validate_all()` 严格拒绝，避免新配置继续
+/// 写入「启用但不可登录」的组合。
+///
+/// 返回 `true` 表示发生了降级（调用方需向用户/接口响应说明这次被改了）。
+fn sanitize_legacy_opcua_anonymous(cfg: &mut GatewayConfig) -> bool {
+    // 只处理顶层 OPC UA Server 配置：`buses[*].opcua` 是南向客户端
+    // （`OpcUaClientConfig`），没有匿名登录概念，不在此兜底。
+    match cfg.opcua.as_mut() {
+        Some(opcua) => sanitize_one_opcua_anonymous(opcua),
+        None => false,
+    }
+}
+
+fn sanitize_one_opcua_anonymous(opcua: &mut OpcuaConfig) -> bool {
+    if !opcua.enabled || opcua.allow_anonymous || !opcua.users.is_empty() {
+        return false;
+    }
+    tracing::warn!(
+        "opcua: 已启用 OPC UA 但未配置用户且未显式放行匿名（旧版本按「用户列表为空即匿名」处理），\
+         为保证升级后网关能启动，本次加载已放行匿名；磁盘配置未改动，请在 Web 侧保存一次以固化，\
+         并建议先配置用户名/密码用户后再关闭匿名"
+    );
+    opcua.allow_anonymous = true;
+    true
 }
 
 /// 原子写入：tmp + fsync + rename，失败清理。

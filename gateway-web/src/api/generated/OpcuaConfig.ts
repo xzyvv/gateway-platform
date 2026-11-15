@@ -45,6 +45,9 @@ trust_client_certs: boolean,
  * 非空时仅这些用户可登录，匿名是否放行由 `allow_anonymous` 决定。
  * 为空时必须显式 `allow_anonymous = true`，否则启用后没有任何可用的
  * 登录方式，配置校验会拒绝启动（不再隐式放行匿名）。
+ * 旧配置（缺该字段且用户为空）在加载/热重载路径由
+ * `sanitize_legacy_opcua_anonymous` 兜底放行匿名并告警，避免升级后网关起不来；
+ * Web 保存路径仍严格拒绝。
  */
 users: Array<OpcuaUserConfig>, 
 /**

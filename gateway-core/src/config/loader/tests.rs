@@ -136,6 +136,108 @@ fn legacy_double_consumer_config_loads_via_loader() {
     assert!(loaded.mqtt.enabled, "MQTT 必须保留");
 }
 
+/// 存量配置：OPC UA 已启用、无用户、未显式放行匿名（旧版本按「用户列表为空即匿名」处理）。
+/// 加载路径必须降级为放行匿名，否则升级后网关直接起不来（Web UI 也在启动失败之后）。
+#[test]
+fn legacy_opcua_implicit_anonymous_is_sanitized() {
+    let mut cfg = GatewayConfig {
+        opcua: Some(OpcuaConfig {
+            enabled: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    assert!(
+        cfg.validate_all().is_err(),
+        "未兜底前必须被判非法（Web 保存路径依赖它）"
+    );
+
+    assert!(
+        sanitize_legacy_opcua_anonymous(&mut cfg),
+        "应返回「已降级」，调用方据此告知用户配置被改过"
+    );
+    let opcua = cfg.opcua.as_ref().expect("opcua should exist");
+    assert!(opcua.allow_anonymous, "顶层 opcua 必须放行匿名");
+    assert!(opcua.users.is_empty(), "不应凭空造用户");
+    assert!(
+        cfg.validate_all().is_ok(),
+        "兜底后必须通过校验，否则手工改配置会导致升级后网关起不来"
+    );
+
+    // 已有用户时不应改动：用户列表非空本来就能登录
+    let mut with_user = GatewayConfig {
+        opcua: Some(OpcuaConfig {
+            enabled: true,
+            users: vec![crate::config::OpcuaUserConfig {
+                username: "operator".to_string(),
+                password: "secret".to_string(),
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert!(
+        !sanitize_legacy_opcua_anonymous(&mut with_user),
+        "已配置用户时不应降级"
+    );
+    assert!(
+        !with_user
+            .opcua
+            .as_ref()
+            .expect("opcua should exist")
+            .allow_anonymous,
+        "已配置用户时不得擅自打开匿名"
+    );
+
+    // 显式放行匿名 / 未启用：均视为合法现状，不应报「已降级」
+    let mut explicit = GatewayConfig {
+        opcua: Some(OpcuaConfig {
+            enabled: true,
+            allow_anonymous: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert!(!sanitize_legacy_opcua_anonymous(&mut explicit));
+
+    let mut disabled = GatewayConfig {
+        opcua: Some(OpcuaConfig::default()),
+        ..Default::default()
+    };
+    assert!(!sanitize_legacy_opcua_anonymous(&mut disabled));
+}
+
+/// 端到端：磁盘上缺 `allow_anonymous` 字段的旧配置，`load()` 必须能起来。
+#[test]
+fn legacy_opcua_config_loads_via_loader() {
+    let dir = tempdir().expect("should succeed");
+    let path = dir.path().join("config.json");
+    let loader = ConfigLoader::new(&path);
+
+    let cfg = GatewayConfig {
+        opcua: Some(OpcuaConfig {
+            enabled: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut value = serde_json::to_value(&cfg).expect("serialize");
+    // 模拟旧版本配置：当时没有 allow_anonymous / users 字段，语义等价于隐式匿名
+    if let Some(opcua) = value.get_mut("opcua").and_then(|v| v.as_object_mut()) {
+        opcua.remove("allow_anonymous");
+        opcua.remove("users");
+    }
+    fs::write(&path, serde_json::to_string_pretty(&value).expect("json"))
+        .expect("write legacy config");
+
+    let loaded = loader.load().expect("旧 OPC UA 配置必须能加载");
+    assert!(
+        loaded.opcua.expect("opcua should exist").allow_anonymous,
+        "加载路径应降级为放行匿名"
+    );
+}
+
 #[test]
 fn save_creates_new_file() {
     let dir = tempdir().expect("should succeed");
