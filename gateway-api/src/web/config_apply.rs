@@ -22,6 +22,7 @@ use std::sync::Arc;
 use crate::web::error::ApiError;
 use crate::web::types::AppState;
 use gateway_core::config::{reload_scope, GatewayConfig, PointConfig, ReloadScope};
+use gateway_core::north::server::ActivePointSet;
 
 /// 一次配置变更的热更新结果。
 ///
@@ -432,6 +433,8 @@ pub(crate) async fn reload_then_save(
     // 契约层如实上报：本次变更哪些分节可在线生效、哪些需重启（基于还原后的真实配置比较）
     let scope = reload_scope(old, &new);
     let expanded = expand_points(state, &new);
+    // 活跃点位集在 reload 前按配置口径算好（expanded 随后会被 move 进 reload_config）。
+    let active_points = build_active_points(&expanded, &new);
     record_reload_attempt(state);
     let notes = match state.north.gateway.reload_config(old, &new, expanded).await {
         Ok(notes) => {
@@ -445,6 +448,9 @@ pub(crate) async fn reload_then_save(
         }
     };
     state.config.store(Arc::new(new.clone()));
+    // 北向节点集同步：按配置口径裁剪地址空间（清理删除/改名的点位节点）并刷新写权限。
+    // 放在 store 之后：此刻运行态配置已是新值，通知逻辑与配置口径一致。
+    notify_north_points_changed(state, &active_points);
     state.config.config_loader.save(&new).map_err(|e| {
         tracing::error!(
             "runtime reloaded & memory updated, but disk save failed: {}",
@@ -458,6 +464,34 @@ pub(crate) async fn reload_then_save(
         .audit
         .log("config.update", "gateway", "config update via api", "api");
     Ok((ReloadOutcome::new(notes, scope), new))
+}
+
+/// 组装配置口径的活跃点位集（纯函数，不依赖运行态）。
+///
+/// 口径：设备模板展开后的全部点位（`expanded`）∪ 启用中的虚拟点位——虚拟点位经
+/// 处理管道派生后同样进入北向、建立节点，不纳入清理口径就会变成僵尸节点。
+/// 写权限只取普通点位的 `writable`（虚拟点位由公式派生，不接受外部写入）。
+fn build_active_points(expanded: &[PointConfig], cfg: &GatewayConfig) -> ActivePointSet {
+    let mut active = ActivePointSet::default();
+    for p in expanded {
+        active.ids.insert(p.id.clone());
+        if p.writable {
+            active.writable_ids.insert(p.id.clone());
+        }
+    }
+    if let Some(virtual_points) = &cfg.virtual_points {
+        for vp in virtual_points.iter().filter(|v| v.enabled) {
+            active.ids.insert(vp.id.clone());
+        }
+    }
+    active
+}
+
+/// 把活跃点位集下发给各北向从站：裁剪已下线节点、刷新节点写权限。
+fn notify_north_points_changed(state: &Arc<AppState>, active: &ActivePointSet) {
+    for server in &state.north.north_servers {
+        server.on_points_changed(active);
+    }
 }
 
 #[cfg(test)]
@@ -801,5 +835,59 @@ mod tests {
             restored.pointer("/web/username"),
             original.pointer("/web/username")
         );
+    }
+
+    /// 契约：活跃点位集口径 = 展开点位 ∪ **启用中**的虚拟点位；
+    /// 写权限只来自普通点位的 `writable`（虚拟点位由公式派生，不接受外部写入）。
+    #[test]
+    fn active_points_include_only_enabled_virtual_points() {
+        use gateway_core::config::VirtualPoint;
+
+        let writable = PointConfig {
+            id: "p_w".into(),
+            writable: true,
+            ..Default::default()
+        };
+        let readonly = PointConfig {
+            id: "p_r".into(),
+            ..Default::default()
+        };
+        let cfg = GatewayConfig {
+            virtual_points: Some(vec![
+                VirtualPoint {
+                    id: "v_on".into(),
+                    name: "v_on".into(),
+                    device_id: None,
+                    formula: "1".into(),
+                    unit: String::new(),
+                    decimals: 2,
+                    enabled: true,
+                    created_at: 0,
+                },
+                VirtualPoint {
+                    id: "v_off".into(),
+                    name: "v_off".into(),
+                    device_id: None,
+                    formula: "1".into(),
+                    unit: String::new(),
+                    decimals: 2,
+                    enabled: false,
+                    created_at: 0,
+                },
+            ]),
+            ..Default::default()
+        };
+
+        let active = build_active_points(&[writable, readonly], &cfg);
+        assert!(active.ids.contains("p_w"));
+        assert!(active.ids.contains("p_r"));
+        assert!(
+            active.ids.contains("v_on"),
+            "启用中的虚拟点位必须纳入清理口径"
+        );
+        assert!(!active.ids.contains("v_off"), "停用的虚拟点位不应保留节点");
+        assert!(active.writable_ids.contains("p_w"));
+        assert!(!active.writable_ids.contains("p_r"));
+        assert!(!active.writable_ids.contains("v_on"));
     }
 }

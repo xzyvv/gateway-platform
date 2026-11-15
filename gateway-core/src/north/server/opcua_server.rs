@@ -21,14 +21,14 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use super::NorthServer;
+use super::{ActivePointSet, NorthServer};
 use crate::engine::audit::AuditLog;
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::model::DataPoint;
 use crate::runtime::GatewayRuntime;
 
 use opcua::crypto::SecurityPolicy;
-use opcua::nodes::{AccessLevel, ObjectBuilder, Variable};
+use opcua::nodes::{AccessLevel, NodeType, ObjectBuilder, Variable};
 use opcua::server::diagnostics::NamespaceMetadata;
 use opcua::server::node_manager::memory::{simple_node_manager, SimpleNodeManager};
 use opcua::server::{ServerBuilder, ServerHandle, ServerUserToken, ANONYMOUS_USER_TOKEN_ID};
@@ -115,8 +115,10 @@ pub struct OpcUaServer {
     namespace_index: Arc<parking_lot::Mutex<Option<u16>>>,
     /// 已注册点位 → OPC UA NodeId 映射
     point_to_node: Arc<RwLock<HashMap<String, NodeId>>>,
-    /// 节点内存缓存（测试与未启动时使用）
+    /// 节点内存缓存（与地址空间中的节点一一对应；测试与未启动时使用）
     pub(crate) nodes: Arc<RwLock<HashMap<String, OpcUaNode>>>,
+    /// 最近一次下发的活跃点位集（None = 尚未收到配置变更通知，按运行态点位配置判断）
+    active_points: Arc<RwLock<Option<ActivePointSet>>>,
     /// 证书文件路径（cert.pem, key.pem），None=用临时自签名证书
     cert_paths: Option<(PathBuf, PathBuf)>,
     /// 写回依赖（None = 未接入写链路，节点一律只读）
@@ -132,6 +134,7 @@ impl OpcUaServer {
             namespace_index: Arc::new(parking_lot::Mutex::new(None)),
             point_to_node: Arc::new(RwLock::new(HashMap::new())),
             nodes: Arc::new(RwLock::new(HashMap::new())),
+            active_points: Arc::new(RwLock::new(None)),
             cert_paths,
             write_handler: None,
         }
@@ -154,10 +157,13 @@ impl OpcUaServer {
     /// - handle 就绪：更新 OPC UA 地址空间节点值并通知订阅
     /// - handle 未就绪：仅更新内存缓存（测试场景）
     pub fn update_value(&self, source_point_id: &str, value: f64) {
-        // 始终更新内存缓存（测试兼容）
-        if let Some(n) = self.nodes.write().get_mut(source_point_id) {
-            n.value = value;
-        }
+        // 始终更新内存缓存（测试兼容）：点位首次更新即建条目，
+        // 避免「先 update 后 register_node」时首值被静默丢弃。
+        self.nodes
+            .write()
+            .entry(source_point_id.to_string())
+            .or_insert(OpcUaNode { value })
+            .value = value;
 
         // 若 OPC UA server 已启动，同步到地址空间
         let handle_guard = self.handle.lock();
@@ -199,15 +205,9 @@ impl OpcUaServer {
         let node_id = NodeId::new(ns, point_id);
         let gateway_folder = NodeId::new(ns, "Gateway");
 
-        // 写回能力：仅在 opcua.write_enabled 为真、已接入写链路、且点位
-        // `writable = true` 时，才把节点标记为可写并注册写回调。
-        let point_cfg = self
-            .write_handler
-            .as_ref()
-            .and_then(|h| h.gateway.point_config(point_id));
-        let writable = self.config.write_enabled
-            && self.write_handler.is_some()
-            && point_cfg.as_ref().is_some_and(|p| p.writable);
+        // 写回能力：仅在 opcua.write_enabled 为真、已接入写链路、且点位当前
+        // 可写（活跃点位集优先，启动阶段退回运行态配置）时，才把节点标记为可写。
+        let writable = self.is_point_writable(point_id);
 
         let mut aspace = nm.address_space().write();
         if !aspace.node_exists(&node_id) {
@@ -226,56 +226,154 @@ impl OpcUaServer {
         self.point_to_node
             .write()
             .insert(point_id.to_string(), node_id.clone());
+        // 地址空间节点真实建立后才计入缓存：`node_count` 必须反映实际节点数。
+        // 旧实现只在测试专用的 `register_node` 里写缓存，生产路径恒为 0。
+        self.nodes
+            .write()
+            .entry(point_id.to_string())
+            .or_insert(OpcUaNode { value: 0.0 });
 
         if writable {
-            if let (Some(handler), Some(point)) = (self.write_handler.as_ref(), point_cfg) {
-                // 审计字段提前在节点创建时算好，回调内不再查配置。
-                let display_name = point.name.clone().unwrap_or_else(|| point_id.to_string());
-                let audit_target = point.device_id.clone().unwrap_or_else(|| point.bus.clone());
-                let handler = handler.clone();
-                let pid = point_id.to_string();
-                nm.inner()
-                    .add_write_callback(node_id.clone(), move |value, _range| {
-                        let Some(variant) = value.value else {
-                            return StatusCode::BadNothingToDo;
-                        };
-                        let Some(write_value) = variant_to_f64(&variant) else {
-                            return StatusCode::BadTypeMismatch;
-                        };
-                        // 回调是同步的，真实写命令（持有总线 IO）转异步执行；
-                        // 同步路径只做类型校验并乐观返回 Good，失败经审计暴露。
-                        let handler = handler.clone();
-                        let pid = pid.clone();
-                        let display_name = display_name.clone();
-                        let audit_target = audit_target.clone();
-                        tokio::spawn(async move {
-                            let detail = match handler.gateway.write_point(&pid, write_value).await
-                            {
-                                Ok(()) => format!("{}={}", display_name, write_value),
-                                Err(e) => {
-                                    format!("{}={} [失败: {}]", display_name, write_value, e)
-                                }
-                            };
-                            handler
-                                .audit
-                                .log("point.write", &audit_target, &detail, "opcua");
-                        });
-                        StatusCode::Good
-                    });
-            }
+            self.register_write_callback(nm, &node_id, point_id);
         }
 
         node_id
+    }
+
+    /// 点位当前是否允许北向写回。
+    ///
+    /// 优先取最近一次下发的活跃点位集（配置口径，热更后立即反映 `writable` 变更）；
+    /// 尚未收到配置变更通知（启动阶段）时退回运行态点位配置。
+    fn is_point_writable(&self, point_id: &str) -> bool {
+        if !self.config.write_enabled || self.write_handler.is_none() {
+            return false;
+        }
+        match self.active_points.read().as_ref() {
+            Some(active) => active.writable_ids.contains(point_id),
+            None => self
+                .write_handler
+                .as_ref()
+                .and_then(|h| h.gateway.point_config(point_id))
+                .is_some_and(|p| p.writable),
+        }
+    }
+
+    /// 为点位节点注册写回调（同 NodeId 重复注册会覆盖旧回调，幂等）。
+    ///
+    /// 调用方负责同步节点 AccessLevel / UserAccessLevel；权限被拒时 async-opcua
+    /// 在校验阶段即返回、不会走到回调，故撤销可写后残留的回调无害。
+    fn register_write_callback(&self, nm: &SimpleNodeManager, node_id: &NodeId, point_id: &str) {
+        if !self.is_point_writable(point_id) {
+            return;
+        }
+        let Some(handler) = self.write_handler.as_ref() else {
+            return;
+        };
+        // 运行态暂不可见（如总线暂停）时不注册：写回白名单同样查不到该点位。
+        let Some(point) = handler.gateway.point_config(point_id) else {
+            return;
+        };
+        // 审计字段提前在节点创建时算好，回调内不再查配置。
+        let display_name = point.name.clone().unwrap_or_else(|| point_id.to_string());
+        let audit_target = point.device_id.clone().unwrap_or_else(|| point.bus.clone());
+        let handler = handler.clone();
+        let pid = point_id.to_string();
+        nm.inner()
+            .add_write_callback(node_id.clone(), move |value, _range| {
+                let Some(variant) = value.value else {
+                    return StatusCode::BadNothingToDo;
+                };
+                let Some(write_value) = variant_to_f64(&variant) else {
+                    return StatusCode::BadTypeMismatch;
+                };
+                // 回调是同步的，真实写命令（持有总线 IO）转异步执行；
+                // 同步路径只做类型校验并乐观返回 Good，失败经审计暴露。
+                let handler = handler.clone();
+                let pid = pid.clone();
+                let display_name = display_name.clone();
+                let audit_target = audit_target.clone();
+                tokio::spawn(async move {
+                    let detail = match handler.gateway.write_point(&pid, write_value).await {
+                        Ok(()) => format!("{}={}", display_name, write_value),
+                        Err(e) => {
+                            format!("{}={} [失败: {}]", display_name, write_value, e)
+                        }
+                    };
+                    handler
+                        .audit
+                        .log("point.write", &audit_target, &detail, "opcua");
+                });
+                StatusCode::Good
+            });
+    }
+
+    /// 按活跃点位集裁剪地址空间（删除已下线节点）并刷新可写权限。
+    fn sync_address_space(&self, nm: &SimpleNodeManager, active: &ActivePointSet) {
+        // 先快照映射与可写判定再释放锁：随后要持地址空间写锁，
+        // 避免在地址空间锁内再取 active_points 锁造成锁序交叉。
+        let mapped: Vec<(String, NodeId, bool)> = self
+            .point_to_node
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone(), self.is_point_writable(k)))
+            .collect();
+
+        let mut removed: Vec<String> = Vec::new();
+        {
+            let mut aspace = nm.address_space().write();
+            for (point_id, node_id, writable) in &mapped {
+                if !active.ids.contains(point_id) {
+                    // 配置里已删除/改名的点位：删除节点并清掉 Gateway folder 指向它的
+                    // HasComponent 引用（true），否则客户端仍能浏览/订阅到冻结旧值。
+                    aspace.delete(node_id, true);
+                    removed.push(point_id.clone());
+                    continue;
+                }
+                // 点位仍在配置中：同步可写权限。AccessLevel 决定服务端是否接受 Write，
+                // UserAccessLevel 决定客户端看到的可写提示，两者必须一致。
+                if let Some(NodeType::Variable(var)) = aspace.find_mut(node_id) {
+                    var.set_writable(*writable);
+                    let mut user_level = var.user_access_level();
+                    if *writable {
+                        user_level.insert(AccessLevel::CURRENT_WRITE);
+                    } else {
+                        user_level.remove(AccessLevel::CURRENT_WRITE);
+                    }
+                    var.set_user_access_level(user_level);
+                }
+            }
+        }
+
+        if !removed.is_empty() {
+            let mut point_to_node = self.point_to_node.write();
+            let mut nodes = self.nodes.write();
+            for point_id in &removed {
+                point_to_node.remove(point_id);
+                nodes.remove(point_id);
+                tracing::info!("opcua: removed stale node for point {}", point_id);
+            }
+        }
+
+        // 授予可写后必须（重新）注册回调；撤销时不移除——async-opcua 没有删除回调的
+        // API，且权限校验先于回调查找，无 CURRENT_WRITE 时残留回调永远不会被执行。
+        for (point_id, node_id, writable) in &mapped {
+            if active.ids.contains(point_id) && *writable {
+                self.register_write_callback(nm, node_id, point_id);
+            }
+        }
     }
 
     /// 更新单个 DataPoint（完整映射：value + quality + timestamp → OPC UA DataValue）
     /// - handle 就绪：更新 OPC UA 地址空间节点值并通知订阅
     /// - handle 未就绪：仅更新内存缓存（测试场景）
     pub fn update_point(&self, p: &DataPoint) {
-        // 始终更新内存缓存（测试兼容）
-        if let Some(n) = self.nodes.write().get_mut(&p.point_id) {
-            n.value = p.value;
-        }
+        // 始终更新内存缓存（测试兼容）：与 update_value 相同的 entry 语义，
+        // 保证地址空间懒建节点时首值不会丢失。
+        self.nodes
+            .write()
+            .entry(p.point_id.clone())
+            .or_insert(OpcUaNode { value: p.value })
+            .value = p.value;
 
         // 若 OPC UA server 已启动，同步到地址空间
         let handle_guard = self.handle.lock();
@@ -541,6 +639,9 @@ impl NorthServer for OpcUaServer {
             // NodeId 后直接早退，后续 set_value 写到一个不存在的节点上（静默失败），
             // OPC UA 订阅者永远收不到重启后的数据更新。
             self.point_to_node.write().clear();
+            // 地址空间同样是全新的：内存节点缓存一并清空，否则 node_count 会把上一次
+            // 运行的节点算进来（节点要等下一次 update 时才会重建）。
+            self.nodes.write().clear();
 
             // 创建 Gateway folder 节点（Objects/Gateway）
             let gateway_folder = NodeId::new(ns, "Gateway");
@@ -584,6 +685,22 @@ impl NorthServer for OpcUaServer {
     fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
+
+    fn on_points_changed(&self, active: &ActivePointSet) {
+        // 先记录配置口径：此后懒建的节点按活跃集决定初始写权限。
+        *self.active_points.write() = Some(active.clone());
+
+        // 取 handle 快照后立即释放锁（临时 guard 在 let 语句结束时 drop）。
+        let handle = match self.handle.lock().as_ref() {
+            Some(h) => h.clone(),
+            // 未启动：地址空间尚不存在，节点会在 start 后按活跃集懒建。
+            None => return,
+        };
+        let Some(nm) = handle.node_managers().get_of_type::<SimpleNodeManager>() else {
+            return;
+        };
+        self.sync_address_space(&nm, active);
+    }
 }
 
 /// 是否注册匿名/明文 None 端点。
@@ -600,7 +717,8 @@ pub(crate) fn should_register_anonymous_none_endpoint(
 #[cfg(test)]
 mod tests {
     use super::{
-        should_register_anonymous_none_endpoint, user_token_ids, variant_to_f64, OpcUaServerConfig,
+        should_register_anonymous_none_endpoint, user_token_ids, variant_to_f64, ActivePointSet,
+        NorthServer, OpcUaServer, OpcUaServerConfig,
     };
 
     /// 契约：未配证书时必须注册 None 端点（否则服务没有任何可用端点）；
@@ -658,5 +776,94 @@ mod tests {
         assert_eq!(variant_to_f64(&Variant::Int32(-3)), Some(-3.0));
         assert_eq!(variant_to_f64(&Variant::Boolean(true)), Some(1.0));
         assert_eq!(variant_to_f64(&Variant::String(UAString::from("7"))), None);
+    }
+
+    /// 契约：`node_count` 必须反映真实节点——首次 update 即建缓存条目，不再恒为 0。
+    #[test]
+    fn update_value_seeds_node_cache() {
+        let srv = OpcUaServer::new(OpcUaServerConfig::default(), None);
+        assert_eq!(srv.node_count(), 0);
+
+        srv.update_value("p1", 42.0);
+        assert_eq!(srv.node_count(), 1);
+        assert_eq!(srv.nodes.read().get("p1").map(|n| n.value), Some(42.0));
+
+        srv.update_value("p1", 43.0);
+        assert_eq!(srv.node_count(), 1, "同一节点重复更新不应重复计数");
+        assert_eq!(srv.nodes.read().get("p1").map(|n| n.value), Some(43.0));
+    }
+
+    /// 契约：配置热更后按活跃点位集裁剪地址空间——已删除/改名的点位节点必须从
+    /// 地址空间、`point_to_node` 与 `nodes` 三处一并消失，仍在配置中的节点保留。
+    #[tokio::test]
+    async fn points_changed_prunes_stale_nodes() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use opcua::server::node_manager::memory::SimpleNodeManager;
+        use opcua::types::NodeId;
+
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind probe");
+        let port = probe.local_addr().expect("local_addr").port();
+        drop(probe);
+
+        let cfg = OpcUaServerConfig {
+            enabled: true,
+            endpoint: format!("opc.tcp://127.0.0.1:{port}"),
+            ..Default::default()
+        };
+        let srv = Arc::new(OpcUaServer::new(cfg, None));
+        let run_srv = srv.clone();
+        let run_task = tokio::spawn(async move {
+            let _ = run_srv.start().await;
+        });
+
+        let mut running = false;
+        for _ in 0..50 {
+            if srv.is_running() {
+                running = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(running, "opcua server 未进入 running");
+
+        srv.update_value("keep", 1.0);
+        srv.update_value("stale", 2.0);
+        assert_eq!(srv.node_count(), 2);
+
+        let mut active = ActivePointSet::default();
+        active.ids.insert("keep".to_string());
+        srv.on_points_changed(&active);
+
+        assert_eq!(srv.node_count(), 1, "stale 节点应已从缓存移除");
+        assert!(srv.point_to_node.read().contains_key("keep"));
+        assert!(!srv.point_to_node.read().contains_key("stale"));
+
+        // 地址空间里也必须真的删除，否则客户端仍能浏览/订阅到冻结旧值
+        let ns = *srv
+            .namespace_index
+            .lock()
+            .as_ref()
+            .expect("namespace index not set");
+        let handle = srv.handle.lock().as_ref().cloned().expect("handle");
+        {
+            let nm = handle
+                .node_managers()
+                .get_of_type::<SimpleNodeManager>()
+                .expect("node manager");
+            let aspace = nm.address_space().read();
+            assert!(aspace.node_exists(&NodeId::new(ns, "keep")));
+            assert!(
+                !aspace.node_exists(&NodeId::new(ns, "stale")),
+                "地址空间中的僵尸节点未被删除"
+            );
+        }
+        drop(handle);
+
+        srv.stop().await.expect("stop");
+        let _ = tokio::time::timeout(Duration::from_secs(5), run_task).await;
     }
 }

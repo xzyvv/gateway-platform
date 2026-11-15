@@ -7,6 +7,7 @@
 //!
 //! 与 Collector trait 对偶：Collector 读外部；NorthServer 响应外部读。
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -45,6 +46,26 @@ pub trait NorthServer: Send + Sync {
 
     /// 是否正在运行
     fn is_running(&self) -> bool;
+
+    /// 点位集变更通知（默认空实现：不关心点位集的从站无需处理）。
+    ///
+    /// 配置热更成功后由 Web 层调用，实现方据此裁剪地址空间（删除已删除/改名
+    /// 的点位节点）并刷新写权限，避免旧节点长期残留、客户端仍能订阅到冻结旧值。
+    fn on_points_changed(&self, _active: &ActivePointSet) {}
+}
+
+/// 活跃点位集：配置口径下「当前应存在」的北向点位集合。
+///
+/// 由配置写回路径（`reload_then_save`）在热重载成功后组装并下发给每个从站。
+/// 口径必须取**配置**（设备模板展开后的点位 ∪ 启用中的虚拟点位），而不是
+/// 调度器当前点位集——`pause_bus` / `resume_bus` 会临时替换调度器点位，
+/// 用运行态会误删仍然有效的节点。
+#[derive(Debug, Clone, Default)]
+pub struct ActivePointSet {
+    /// 当前配置下应存在的点位 ID
+    pub ids: HashSet<String>,
+    /// 其中允许北向写回（`PointConfig.writable = true`）的点位 ID
+    pub writable_ids: HashSet<String>,
 }
 
 /// r60-SD2：与 r48-MQTT1 同型的「Notify 丢失唤醒」修复助手。
