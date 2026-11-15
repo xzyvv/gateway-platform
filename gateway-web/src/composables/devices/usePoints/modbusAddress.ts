@@ -56,7 +56,9 @@ export function modbusAddressOf(
   addressNum?: number | null,
 ): string {
   const offset = Math.trunc(addressNum ?? 0) + 1
-  if (offset < 1 || offset > 9999) return ''
+  // NaN 也要挡：`NaN < 1` 和 `NaN > 9999` 都是 false，只判范围会漏过去，
+  // 最终拼出 '3NaN' 这种非法展示串。
+  if (!Number.isFinite(offset) || offset < 1 || offset > 9999) return ''
   return `${headOfFunctionCode(fc)}${String(offset).padStart(4, '0')}`
 }
 

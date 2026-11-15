@@ -557,6 +557,22 @@ fn read_batches_never_cross_max_count() {
     assert_eq!(batches.len(), 2);
 }
 
+/// 读合并的寄存器数必须与解码宽度同源：`data_type: f32` 配上 `register_count: 1`
+/// 时仍按 2 个寄存器申请，否则只读 1 个寄存器、解码判定越界，点位静默无数据。
+#[test]
+fn read_batches_width_follows_data_type_over_register_count() {
+    use super::merge_batches;
+
+    let mut p = mk_addr_point(0, "f32");
+    p.register_count = Some(1);
+    let batches = merge_batches(&[&p], 0, 125);
+    assert_eq!(batches.len(), 1);
+    assert_eq!(
+        batches[0].count, 2,
+        "f32 需 2 个寄存器，不能被 register_count=1 压缩"
+    );
+}
+
 /// 解码：寄存器数不足时必须返回 Bad，而不是越界 panic（脏帧/短响应）。
 #[test]
 fn parse_point_value_out_of_range_is_bad_not_panic() {

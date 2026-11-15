@@ -8,6 +8,21 @@ use crate::south::protocol::{convert_value, decode_binary_value as decode_value,
 
 // ===== 批量合并算法 =====
 
+/// 读取一个点位需要申请的寄存器数。
+///
+/// 必须与解码宽度同源：`parse_point_value` 只按 `data_type` 取字节数，
+/// 若这里优先采用手填的 `register_count`，两者矛盾时（例如 `data_type: f32`
+/// 却填 `register_count: 1`）会只申请 1 个寄存器，解码阶段判定越界，
+/// 该点位静默返回 Bad、现场表现为"一直采不到数"。
+///
+/// `register_count` 仅在未指定 `data_type` 时兜底（历史配置可能只填它）。
+pub(crate) fn read_register_count(p: &PointConfig) -> u16 {
+    p.data_type_enum()
+        .map(|d| d.register_count())
+        .or(p.register_count)
+        .unwrap_or(1)
+}
+
 pub(crate) struct Batch<'a> {
     pub(crate) start_addr: u16,
     pub(crate) count: u16,
@@ -24,9 +39,7 @@ pub(crate) fn merge_batches<'a>(
 
     for p in points {
         let addr = p.address_num.unwrap_or(0);
-        let reg_count = p
-            .register_count
-            .unwrap_or_else(|| p.data_type_enum().map(|d| d.register_count()).unwrap_or(1));
+        let reg_count = read_register_count(p);
 
         if let Some(last) = batches.last_mut() {
             let last_end = last.start_addr.saturating_add(last.count);
@@ -55,7 +68,9 @@ pub(crate) fn merge_batches<'a>(
 
 pub(crate) fn parse_point_value(point: &PointConfig, regs: &[u16], batch_start: u16) -> DataPoint {
     let addr = point.address_num.unwrap_or(0);
-    let offset = (addr - batch_start) as usize;
+    // 用 saturating_sub 而非裸减：正常由 merge_batches 保证 addr >= batch_start，
+    // 但这是隐式契约，裸减一旦被破坏在 debug 构建下会直接 panic。
+    let offset = addr.saturating_sub(batch_start) as usize;
     let data_type = point.data_type_enum().unwrap_or(PointDataType::U16);
     let byte_order = point.byte_order_enum();
 

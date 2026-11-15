@@ -26,6 +26,8 @@ describe('modbusAddress（区段 ↔ 功能码 ↔ 0 基偏移）', () => {
     expect(modbusAddressOf(3, 9998)).toBe('39999')
     expect(modbusAddressOf(3, 9999)).toBe('')
     expect(modbusAddressOf(3, -1)).toBe('')
+    // NaN 不能拼成 '3NaN'：数字输入框清空后 v-model.number 常见产物
+    expect(modbusAddressOf(3, Number.NaN)).toBe('')
   })
 
   it('解析 5 位地址 → 功能码 + 0 基偏移', () => {
