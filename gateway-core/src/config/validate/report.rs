@@ -438,6 +438,12 @@ impl GatewayConfig {
         }
 
         // 总线超时超过 1000ms：慢总线会把整轮轮询拖长，最终表现为数据滞后。
+        // 若同时启用 OPC UA 写回，超时还会放大写回调的持锁等待（3×timeout_ms+500ms，
+        // 5s 封顶），等待期间该 OPC UA Server 的读与订阅通知全部阻塞。
+        let opcua_write_enabled = self
+            .opcua
+            .as_ref()
+            .is_some_and(|o| o.enabled && o.write_enabled);
         for (i, b) in self.buses.iter().enumerate() {
             if b.timeout_ms > 1000 {
                 push_level(
@@ -446,8 +452,14 @@ impl GatewayConfig {
                     "bus_timeout",
                     format!("buses[{i}].timeout_ms"),
                     format!(
-                        "总线 {} 超时 {}ms 超过建议值 1000ms",
-                        b.port_name, b.timeout_ms
+                        "总线 {} 超时 {}ms 超过建议值 1000ms{}",
+                        b.port_name,
+                        b.timeout_ms,
+                        if opcua_write_enabled {
+                            "；该站启用了 OPC UA 写回，写回调按 3×timeout_ms+500ms 等待（5s 封顶），等待期间 OPC UA 读/订阅被阻塞，建议压到 1000ms 以内，写频繁时请让客户端串行写"
+                        } else {
+                            ""
+                        }
                     ),
                 );
             }

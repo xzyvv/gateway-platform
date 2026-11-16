@@ -207,3 +207,35 @@ fn timeout_and_integrity_are_non_blocking() {
         .any(|i| i.level == "info" && i.code == "cfg_no_device"));
     assert!(empty.iter().all(|i| i.level != "error"));
 }
+
+/// 启用 OPC UA 写回时，总线超时告警要说明「写回调持锁等待」的影响与建议；
+/// 未启用写回时保持原提示，不引入无关信息。
+#[test]
+fn bus_timeout_warns_about_opcua_write_lock() {
+    let mut cfg = base();
+    cfg.buses[0].timeout_ms = 1500;
+    cfg.opcua = Some(crate::config::OpcuaConfig {
+        enabled: true,
+        write_enabled: true,
+        allow_anonymous: true,
+        ..Default::default()
+    });
+    let report = cfg.validate_report();
+    let msg = report
+        .iter()
+        .find(|i| i.code == "bus_timeout")
+        .map(|i| i.message.clone())
+        .unwrap_or_default();
+    assert!(msg.contains("OPC UA 写回"), "report: {report:?}");
+    assert!(msg.contains("串行写"), "report: {report:?}");
+
+    let mut no_write = base();
+    no_write.buses[0].timeout_ms = 1500;
+    let msg = no_write
+        .validate_report()
+        .iter()
+        .find(|i| i.code == "bus_timeout")
+        .map(|i| i.message.clone())
+        .unwrap_or_default();
+    assert!(!msg.contains("OPC UA"), "report: {msg:?}");
+}

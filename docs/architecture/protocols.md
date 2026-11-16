@@ -145,4 +145,10 @@
 
 `NorthDispatcher` 消费北向专用无损队列 `NorthFeed`，将采集数据分发给所有已注册的 `NorthConnector`。
 
+> **写回与总线超时的关系**：OPC UA Server 的写回调会同步等待真实写结果（下限 3s，
+> 按 `3×buses[].timeout_ms+500ms` 推导，5s 封顶）。等待期间 async-opcua 持有地址空间
+> 写锁，该 Server 的读与订阅通知都会被阻塞。因此参与 OPC UA 写回的总线建议
+> `timeout_ms ≤ 1000`；写频繁的站点请让客户端串行写，避免多个写请求在锁上排队、
+> 把阻塞时长按倍数叠加。
+
 ---
