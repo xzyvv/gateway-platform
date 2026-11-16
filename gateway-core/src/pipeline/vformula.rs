@@ -270,9 +270,7 @@ impl<'a> Parser<'a> {
     /// 取下一个记号（返回克隆，避免与后续可变借用冲突）
     fn take(&mut self) -> Option<Token> {
         let t = self.tokens.get(self.pos).cloned();
-        if t.is_some() {
-            self.pos += 1;
-        }
+        self.pos += usize::from(t.is_some());
         t
     }
 

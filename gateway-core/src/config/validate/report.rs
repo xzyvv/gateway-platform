@@ -7,77 +7,10 @@
 use crate::config::point::RatioScope;
 use crate::config::GatewayConfig;
 
-/// 配置校验报告中的单条问题。
-///
-/// `level = "error"` 阻断保存；`level = "warning"` 允许保存但需提示；
-/// `level = "info"` 为改进建议（只影响体检评分，不阻断保存）。
-/// `code` 是稳定的规则标识，前端据此映射中文类别与修复建议（展示层职责），
-/// 规则本身仍只在本模块维护一份。
-/// `field` 为可定位的字段路径（如 `buses[0].port_name`），无法定位时为空串；
-/// 前端据此推导配置页签实现「定位」跳转（UI 概念不进入核心层）。
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ConfigValidationIssue {
-    pub level: &'static str,
-    pub code: &'static str,
-    pub field: String,
-    pub message: String,
-}
+mod issue;
 
-/// 从 `validate_all` 的错误文案中提取字段路径。
-///
-/// 两种既有文案格式：
-/// - validator 聚合：`buses[0].baud_rate: invalid_baud_rate`
-/// - 扩展校验：`mqtt.broker 协议非法（必须为 mqtt/mqtts/ws/wss）: ...`
-///
-/// 提取不到时返回空串（前端仅失去「定位」按钮，不影响问题展示）。
-fn field_path_of(message: &str) -> String {
-    if let Some((path, _)) = message.split_once(": ") {
-        if path.contains('.') || path.contains('[') {
-            return path.trim().to_string();
-        }
-    }
-    if let Some(first) = message.split_whitespace().next() {
-        if first.contains('.') && !first.contains('\'') {
-            return first.trim_end_matches(':').to_string();
-        }
-    }
-    String::new()
-}
-
-/// 追加一条错误；同一字段已有错误时跳过，避免同一问题重复刷屏。
-fn push_error(
-    issues: &mut Vec<ConfigValidationIssue>,
-    seen: &mut std::collections::HashSet<String>,
-    code: &'static str,
-    field: String,
-    message: String,
-) {
-    if !field.is_empty() && !seen.insert(field.clone()) {
-        return;
-    }
-    issues.push(ConfigValidationIssue {
-        level: "error",
-        code,
-        field,
-        message,
-    });
-}
-
-/// 追加一条非阻断问题（warning / info）。warning 与 info 天然按对象区分，不做去重。
-fn push_level(
-    issues: &mut Vec<ConfigValidationIssue>,
-    level: &'static str,
-    code: &'static str,
-    field: String,
-    message: String,
-) {
-    issues.push(ConfigValidationIssue {
-        level,
-        code,
-        field,
-        message,
-    });
-}
+pub use issue::ConfigValidationIssue;
+use issue::{field_path_of, push_error, push_level};
 
 impl GatewayConfig {
     /// 生成完整校验报告（Web `POST /api/config/validate` 专用）。

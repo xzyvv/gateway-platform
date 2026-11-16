@@ -536,11 +536,8 @@ fn validate_point_inherits_device(
     bus: &str,
     protocol: &str,
 ) -> Result<(), String> {
-    let Some(dev) = cfg
-        .devices
-        .as_ref()
-        .and_then(|ds| ds.iter().find(|d| d.id == device_id))
-    else {
+    let devices = cfg.devices.as_ref();
+    let Some(dev) = devices.and_then(|ds| ds.iter().find(|d| d.id == device_id)) else {
         return Ok(());
     };
     if dev.bus != bus {

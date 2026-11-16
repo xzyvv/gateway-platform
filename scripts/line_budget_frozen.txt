@@ -14,9 +14,7 @@ gateway-api/src/web/api/config/handlers/points.rs	561
 gateway-api/src/web/api/protocol_tools/handlers/slave_scan.rs	680
 gateway-api/src/web/api/protocol_tools/handlers/slave_simulator.rs	666
 gateway-api/src/web/api/system/handlers/status.rs	921
-gateway-api/src/web/config_apply.rs	824
 gateway-api/src/web/heal.rs	834
-gateway-api/src/web/middleware/auth.rs	793
 gateway-core/src/config/bus.rs	551
 gateway-core/src/config/template.rs	553
 gateway-core/src/config/validate/gate.rs	547

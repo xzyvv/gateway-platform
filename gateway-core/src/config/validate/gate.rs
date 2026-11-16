@@ -537,11 +537,8 @@ impl GatewayConfig {
     }
 }
 
-/// F2: Unified collection config validation entry point
-/// Consolidates bus/point/validate validation into single module
-pub fn validate_collection_config(
-    config: &crate::config::GatewayConfig,
-) -> Result<(), Vec<String>> {
+/// F2：采集配置校验统一入口（合并总线 / 点位 / 校验三处入口）。
+pub fn validate_collection_config(config: &GatewayConfig) -> Result<(), Vec<String>> {
     config.validate_all()
 }
 
