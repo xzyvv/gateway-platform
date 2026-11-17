@@ -210,6 +210,10 @@ impl Metrics {
         // ===== 单事务往返延迟（counter + histogram）=====
         self.transaction.render(&mut out);
 
+        // ===== OPC UA 写回调持锁等待（histogram + counter）=====
+        // 指标名不含协议名缩写（opcua 是服务名非南向协议族），不受 r31-PM1 约束。
+        self.opcua_write.render(&mut out);
+
         // ===== 按点位的采集失败分布（scoped 日桶）=====
         // 指标名不含协议名，不受 r31-PM1 的「协议名指标须在 sink 之后」约束，
         // 但仍放在 sink 段之后以保持导出文本的既有分区顺序。

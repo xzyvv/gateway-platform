@@ -58,6 +58,25 @@ fn test_export_contains_queue_persist_and_wal_gauges() {
     assert!(out.contains("gateway_sqlite_db_size_bytes 5678"));
 }
 
+/// 回归：OPC UA 写回持锁等待指标必须出现在 `/api/metrics`，否则现场无法观测
+/// 「写回锁竞争导致读/订阅变慢」。与 queue_persist 同类——新增子结构务必接入 render。
+#[test]
+fn test_export_contains_opcua_write_wait_metrics() {
+    let m = Metrics::new();
+    m.opcua_write.record(3_200_000, false, false);
+    m.opcua_write.record(6_000_000, true, false);
+    let out = m.prometheus_export();
+    assert!(
+        out.contains("# TYPE gateway_opcua_write_wait_us histogram"),
+        "{out}"
+    );
+    assert!(out.contains("gateway_opcua_write_wait_us_count 2"), "{out}");
+    assert!(
+        out.contains("gateway_opcua_write_timeouts_total 1"),
+        "{out}"
+    );
+}
+
 #[test]
 fn test_uplink_total_is_sum_of_successes() {
     let m = Metrics::new();

@@ -35,6 +35,7 @@ pub mod gauge;
 pub mod histogram;
 pub mod lifecycle;
 pub mod mqtt;
+pub mod opcua_write;
 pub mod pipeline;
 pub mod prometheus;
 pub mod protocol_exception;
@@ -53,6 +54,7 @@ pub use collect::CollectMetrics;
 pub use histogram::{Histogram, BUCKETS_LEN};
 pub use lifecycle::LifecycleMetrics;
 pub use mqtt::MqttMetrics;
+pub use opcua_write::OpcUaWriteMetrics;
 pub use pipeline::PipelineMetrics;
 pub use protocol_exception::ProtocolExceptionMetrics;
 pub use queue_persist::QueuePersistMetrics;
@@ -201,6 +203,9 @@ pub struct Metrics {
     ///
     /// 未注入 metrics 的部署不写这些计数（恒 0），不影响其它子系统。
     pub sim_consumer: SimConsumerMetrics,
+    /// OPC UA Server 写回调持锁等待指标。Prom 命名：`gateway_opcua_write_*`。
+    /// 未启用 OPC UA Server 时恒为 0。
+    pub opcua_write: OpcUaWriteMetrics,
 
     // ===== sink fan-out（通用机制，独立于子结构语义）=====
     /// 每个内置 sink 的 send / dropped / channel depth 固定槽位。
