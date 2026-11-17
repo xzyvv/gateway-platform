@@ -3,7 +3,7 @@
     <el-descriptions :column="3" border size="small" class="info-line">
       <el-descriptions-item label="设备">{{ deviceName }}</el-descriptions-item>
       <el-descriptions-item label="总线">{{ selectedBus?.port_name }}</el-descriptions-item>
-      <el-descriptions-item label="地址">{{ deviceAddress }}</el-descriptions-item>
+      <el-descriptions-item label="设备地址">{{ deviceAddress }}</el-descriptions-item>
     </el-descriptions>
 
     <div v-if="loadingPoints" class="loading-line">正在加载该设备的点位…</div>
@@ -104,7 +104,7 @@ const emit = defineEmits<{
 const pointColumns: ColumnDef<PointConfig>[] = [
   { key: 'name', title: '点位名称', minWidth: 140, ellipsis: true },
   { key: 'id', title: '点位 ID', minWidth: 160, ellipsis: true },
-  addressColumn<PointConfig>({ width: 100 }),
+  addressColumn<PointConfig>({ title: '点位地址', width: 100 }),
   { key: 'data_type', title: '类型', width: 90 },
   { key: 'interval', title: '周期(s)', width: 90 },
 ]

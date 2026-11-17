@@ -58,3 +58,17 @@ export function formatTimeOfDay(input: DateInput): string {
 export function formatClock(): string {
   return formatTimeOfDay(Date.now())
 }
+
+/**
+ * 两位补零（`7 → "07"`）。
+ *
+ * 只用于**布局不属于上面几个标准格式**的地方（如「11-17 22:04」这类紧凑标题、
+ * `YYYYMMDD-HHMM` 形式的文件名）。此前这类地方各自在局部定义了一份完全相同的
+ * `const pad = (n) => String(n).padStart(2, '0')`（8 处），改一处口径要改 8 个文件。
+ *
+ * 需要「HH:mm:ss」「YYYY/MM/DD HH:mm:ss」时请直接用 `formatTimeOfDay` /
+ * `formatDateTime`，不要用本函数自己拼。
+ */
+export function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}

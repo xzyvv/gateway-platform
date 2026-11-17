@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
-  buildProtocolErrorEntries,
+  buildMeterErrorEntries,
   decodeCjt188St,
   decodeDlt645Err,
   DLT645_ERR_BITS,
   CJT188_JD_ENTRIES,
   CJT188_ST_BITS,
-  PROTOCOL_ERROR_NOTES,
-} from './protocolErrorCodes'
+  METER_ERROR_NOTES,
+} from './meterErrorCodes'
 
 /**
  * 回归测试：DLT645 / CJT188 异常码知识库（P2 #3a）。
@@ -129,14 +129,14 @@ describe('CJT188 状态 ST', () => {
 
 describe('码表转表格行', () => {
   it('DLT645 按 bit 逐行输出，码形如 ERR bit0', () => {
-    const rows = buildProtocolErrorEntries('dlt645')
+    const rows = buildMeterErrorEntries('dlt645')
     expect(rows).toHaveLength(7)
     expect(rows[0]!.code).toBe('ERR bit0')
     expect(rows[0]!.name).toBe('其他错误')
   })
 
   it('CJT188 输出位标志 + 诊断码两类行', () => {
-    const rows = buildProtocolErrorEntries('cjt188')
+    const rows = buildMeterErrorEntries('cjt188')
     expect(rows.length).toBe(CJT188_ST_BITS.length + CJT188_JD_ENTRIES.length)
     expect(rows.some((r) => r.code.startsWith('ST bit'))).toBe(true)
     expect(rows.some((r) => r.code.startsWith('JD '))).toBe(true)
@@ -144,7 +144,7 @@ describe('码表转表格行', () => {
 
   it('每行都有完整的四段文案（表格直接渲染）', () => {
     for (const p of ['dlt645', 'cjt188'] as const) {
-      for (const r of buildProtocolErrorEntries(p)) {
+      for (const r of buildMeterErrorEntries(p)) {
         expect(r.code.length, `${p} ${r.code} 缺码`).toBeGreaterThan(0)
         expect(r.name.length, `${p} ${r.code} 缺名称`).toBeGreaterThan(0)
         expect(r.meaning.length, `${p} ${r.code} 缺含义`).toBeGreaterThan(0)
@@ -157,7 +157,7 @@ describe('码表转表格行', () => {
 
 describe('协议机制说明', () => {
   it('两种协议都说明了错误表达机制（用户最容易误解的地方）', () => {
-    expect(PROTOCOL_ERROR_NOTES.dlt645).toContain('位标志')
-    expect(PROTOCOL_ERROR_NOTES.cjt188).toContain('厂商定义')
+    expect(METER_ERROR_NOTES.dlt645).toContain('位标志')
+    expect(METER_ERROR_NOTES.cjt188).toContain('厂商定义')
   })
 })

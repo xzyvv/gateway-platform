@@ -35,6 +35,10 @@ vi.mock('element-plus', async () => {
   }
 })
 
+// 操作记录「复制全部」：统一走 utils/clipboard，这里打桩以便断言复制内容
+const clipboardState = vi.hoisted(() => ({ copyText: vi.fn(async () => true) }))
+vi.mock('@/utils/clipboard', () => ({ copyText: clipboardState.copyText }))
+
 vi.mock('@/api/devices', () => ({ listDevices }))
 vi.mock('@/api/points', () => ({ listPoints }))
 vi.mock('@/api/protocols', () => ({ listProtocolCapabilities, getProtocolDiag }))
@@ -56,6 +60,7 @@ import CurrentValuePanel from './parts/CurrentValuePanel.vue'
 import WriteSection from './parts/WriteSection.vue'
 import OperationLogPanel from './parts/OperationLogPanel.vue'
 import DevicePointSelector from './parts/DevicePointSelector.vue'
+import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
 
 const DEVICE = { id: 'dev-1', name: '现场从站', bus: 'bus-1', protocol: 'modbus' }
 const POINT = { id: 'p-1', name: '温度', device_id: 'dev-1', bus: 'bus-1', protocol: 'modbus', data_type: 'int16' }
@@ -95,6 +100,8 @@ function logsOf(wrapper: ReturnType<typeof mount>) {
 
 describe('Tester 点位读写', () => {
   beforeEach(() => {
+    // 协议能力是模块级单例：清掉上一条用例灌进去的快照，否则本用例的 mock 返回值不会被重新请求
+    resetProtocolCapsCache()
     vi.clearAllMocks()
     selectedDeviceId.value = ''
     listDevices.mockResolvedValue([DEVICE])
@@ -137,6 +144,33 @@ describe('Tester 点位读写', () => {
     const logs = logsOf(wrapper)
     expect(logs[0]?.tag).toBe('读取')
     expect(logs[0]?.message).toContain('温度 = 25.5')
+  })
+
+  /**
+   * 操作记录必须能整体复制为纯文本。
+   *
+   * 改造前这块面板只有「导出 CSV / 清空」：想把几轮失败记录直接贴进群里讨论，
+   * 得先导出一个文件再传，对方还不一定能打开。复制口径与导出一致（时间正序）。
+   *
+   * 变异验证：删掉 OperationLogPanel 上的 @copy-all → 本用例红（copyText 未被调用）。
+   */
+  it('操作记录可整体复制为纯文本，含时间/标签/内容', async () => {
+    const wrapper = await mountPage()
+    await selectDeviceAndPoint(wrapper)
+
+    wrapper.findComponent(CurrentValuePanel).vm.$emit('read')
+    await settle()
+    expect(logsOf(wrapper)).toHaveLength(1)
+
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('复制全部'))
+    expect(btn, '操作记录面板应提供「复制全部」').toBeTruthy()
+    await btn!.trigger('click')
+
+    expect(clipboardState.copyText).toHaveBeenCalledTimes(1)
+    const [text, okMessage] = clipboardState.copyText.mock.calls[0] as unknown as [string, string]
+    expect(text).toContain('读取')
+    expect(text).toContain('温度 = 25.5')
+    expect(okMessage).toBe('已复制 1 条操作记录')
   })
 
   it('读取失败：当前值复位为「—」，操作记录带排障提示', async () => {

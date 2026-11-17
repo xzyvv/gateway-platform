@@ -8,6 +8,7 @@ import { type PointQuality } from '@/api/dataQuality'
 import { fetchPointQualities } from '@/composables/data/usePointQuality'
 import { getUplinkConfig, testUplink } from '@/api/uplink'
 import { extractErrorMessage } from '@/utils/errorHandler'
+import { copyText } from '@/utils/clipboard'
 
 /**
  * 链路追踪可选点位：配置点位（元数据全）与运行时点位（模板展开，仅 id/name/device_id）
@@ -29,7 +30,6 @@ export function useDataFlowTrace() {
   const { readOnce } = useReadPointNow()
   const DEFAULT_UPLINK_TEMPLATE = '{"device":"${device_id}","value":${value}}'
   const COPY_SUCCESS_MSG = '报文已复制到剪贴板'
-  const COPY_FAIL_MSG = '复制失败，请手动选择复制'
   const STALE_CONTEXT_MSG = '设备或点位已变更，请重新采集后再上送'
 
   const devices = ref<DeviceConfig[]>([])
@@ -255,25 +255,10 @@ export function useDataFlowTrace() {
   async function copyPayload() {
     if (!renderedPayload.value || copying.value) return
     copying.value = true
-    const text = renderedPayload.value
     try {
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(text)
-        ElMessage.success(COPY_SUCCESS_MSG)
-        return
-      }
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      const ok = document.execCommand('copy')
-      document.body.removeChild(ta)
-      if (ok) ElMessage.success(COPY_SUCCESS_MSG)
-      else ElMessage.error(COPY_FAIL_MSG)
-    } catch {
-      ElMessage.error(COPY_FAIL_MSG)
+      // 统一走 utils/clipboard：现场网关多为 http:// 非安全上下文，
+      // 那里 navigator.clipboard 不存在，直接写会一路落到 catch 变成假失败。
+      await copyText(renderedPayload.value, COPY_SUCCESS_MSG)
     } finally {
       copying.value = false
     }

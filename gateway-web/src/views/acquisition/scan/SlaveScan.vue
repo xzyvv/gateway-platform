@@ -5,18 +5,16 @@
       type="info"
       show-icon
       :closable="false"
-      title="用途：找出未知的从站号"
+      title="用途：找出未知的从站地址"
       description="按地址区间逐个探测有无应答，只回答「这个地址上有没有设备」，不识别波特率/校验位等参数。若已知设备地址、需要确认通信参数，请到「参数探测」。"
     />
     <el-card shadow="never" class="section-card">
       <el-form inline>
         <el-form-item label="总线">
-          <el-select v-model="bus" style="width:220px" :loading="targetsLoading" placeholder="选择总线" aria-label="总线" no-data-text="暂无总线，请先在配置管理中添加">
-            <el-option v-for="o in busOptions" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
+          <BusSelect v-model="bus" :options="busOptions" :loading="targetsLoading" />
         </el-form-item>
-        <el-form-item label="起始ID"><el-input-number v-model="start" :min="1" :max="247" /></el-form-item>
-        <el-form-item label="结束ID"><el-input-number v-model="end" :min="1" :max="247" /></el-form-item>
+        <el-form-item label="起始从站地址"><el-input-number v-model="start" :min="1" :max="247" /></el-form-item>
+        <el-form-item label="结束从站地址"><el-input-number v-model="end" :min="1" :max="247" /></el-form-item>
         <el-form-item>
           <el-button :type="scanning ? 'danger' : 'primary'" @click="onScanButton" :icon="scanning ? undefined : Search" :disabled="!scanSupported">
             {{ scanning ? '停止' : '扫描' }}
@@ -74,6 +72,7 @@ import { listProtocolCapabilities } from '@/api/protocols'
 import type { ProtocolCapabilities } from '@/api/generated/ProtocolCapabilities'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import BusSelect from '@/components/industrial/BusSelect.vue'
 
 // 共享调试目标（审查#5）：总线选择跨调试页保持一致，选项加载后失效值自动回退第一项
 const { buses, busOptions, loading: targetsLoading, selectedBus: bus } = useDebugTargets()

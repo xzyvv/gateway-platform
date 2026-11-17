@@ -26,6 +26,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import type { HealthProblem } from '@/api/status'
 import type { OverallHealthStatus, ProblemCounts } from '@/stores/healthReport'
+import { formatTimeOfDay } from '@/utils/datetime'
 
 const props = withDefaults(
   defineProps<{
@@ -53,9 +54,7 @@ const counts = computed<ProblemCounts>(() => {
 const generatedAt = computed(() => {
   const ms = props.generatedAtMs
   if (!ms) return ''
-  const d = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `生成于 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  return `生成于 ${formatTimeOfDay(ms)}`
 })
 
 const router = useRouter()

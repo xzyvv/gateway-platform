@@ -15,7 +15,7 @@
     <el-form-item label="告警 Topic">
       <!-- 告警 Topic 由数据 Topic 派生，只读展示，避免对接方猜测订阅地址 -->
       <div class="derived-topics">
-        <el-input :model-value="alarmTopic" readonly placeholder="点位报警/恢复" />
+        <el-input :model-value="alarmTopic" readonly placeholder="点位告警/恢复" />
         <el-input :model-value="systemAlarmTopic" readonly placeholder="系统（磁盘）告警" />
         <div class="field-hint">由数据 Topic 派生，不可单独配置</div>
       </div>
@@ -149,7 +149,7 @@ const KEEP_ALIVE_PRESETS = [15, 30, 60, 120, 180, 300]
 const ACK_TIMEOUT_PRESETS = [5, 10, 15, 30, 60, 120]
 
 /**
- * 点位报警/恢复主题（后端 `format!("{}/alarm", topic)`）。
+ * 点位告警/恢复主题（后端 `format!("{}/alarm", topic)`）。
  *
  * 刻意不做斜杠归一化：后端是直接字符串拼接，展示必须与真实下发主题一致，
  * 否则用户按这里显示的地址去订阅会收不到消息。

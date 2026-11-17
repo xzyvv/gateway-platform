@@ -138,7 +138,11 @@
           <template #label>
             <span class="tab-label"><el-icon><Box /></el-icon> 队列</span>
           </template>
-          <QueueConfigTab v-model="config.queue" />
+          <QueueConfigTab
+            v-model="config.queue"
+            :point-count="usedPoints ?? (config.points as unknown[] | undefined)?.length ?? 500"
+            :interval-sec="defaultPointInterval"
+          />
         </el-tab-pane>
 
         <el-tab-pane name="webhook">
@@ -210,6 +214,7 @@ import { useConfigActions } from '@/composables/config/useConfigActions'
 import { usePermission } from '@/composables/auth/usePermission'
 import { useTierStore, TIER_LABEL } from '@/stores/tier'
 import { getStatus } from '@/api/status'
+import { pad2 } from '@/utils/datetime'
 import ConfigChangePreview from './dialogs/ConfigChangePreview.vue'
 import ConfigValidateDialog from './dialogs/ConfigValidateDialog.vue'
 import BusConfigTab from './tabs/BusConfigTab.vue'
@@ -262,6 +267,13 @@ const quotaAtLimit = computed(
   () => usedPoints.value !== null && maxPoints.value !== null && usedPoints.value >= maxPoints.value,
 )
 
+/** 队列容量估算用的默认采集周期：取首个配置点位的 interval，无点位时按出厂模板 10 秒。 */
+const defaultPointInterval = computed(() => {
+  const points = config.points as Array<{ interval?: number }> | undefined
+  const first = points?.[0]?.interval
+  return typeof first === 'number' && first > 0 ? first : 10
+})
+
 async function refreshQuotaUsage() {
   try {
     const s = await getStatus()
@@ -287,8 +299,8 @@ watch(saving, (now, before) => {
 const draftTimeText = computed(() => {
   if (!draftSavedAt.value) return '未知时间'
   const d = new Date(draftSavedAt.value)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  // 月份也要补零：原来只剩月份不补，同一列出现「11-07」与「11-17」两种宽度
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 })
 
 // A1: 总线 tab 实时检测 port_name 重复；第二次起的行显示行内错误。

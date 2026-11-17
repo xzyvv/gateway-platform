@@ -64,7 +64,7 @@ const columns: ColumnDef<DeviceRow>[] = [
   { key: 'name', title: '设备名称', minWidth: 140 },
   { key: 'protocol', title: '协议', width: 100 },
   { key: 'bus', title: '总线', width: 100 },
-  { key: 'address', title: '地址/从站号', width: 120, cell: (row) => row.address || row.slave_id || '-' },
+  { key: 'address', title: '地址/从站地址', width: 120, cell: (row) => row.address || row.slave_id || '-' },
   { key: 'status', title: '状态', width: 100, cell: (row) => statusTag(row._status) },
   { key: 'latency', title: '耗时', width: 100, cell: (row) => (row._latency != null ? `${row._latency}ms` : '-') },
   { key: 'detail', title: '详情', minWidth: 160, cell: (row) => detailCell(row) },

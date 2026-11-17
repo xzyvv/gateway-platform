@@ -34,12 +34,25 @@ vi.mock('@/composables/data/useReadPointNow', () => ({
 }))
 vi.mock('@/api/devices', () => ({ listDevices: vi.fn() }))
 vi.mock('@/api/points', () => ({ listPoints: vi.fn() }))
+vi.mock('@/api/protocols', async () => {
+  const actual = await vi.importActual<typeof import('@/api/protocols')>('@/api/protocols')
+  return { ...actual, listProtocolCapabilities: vi.fn() }
+})
+const clipboardState = vi.hoisted(() => ({ copyText: vi.fn(async () => true) }))
+vi.mock('@/utils/clipboard', () => ({ copyText: clipboardState.copyText }))
+const exportState = vi.hoisted(() => ({ csv: vi.fn() }))
+vi.mock('@/utils/exportCsv', () => ({
+  downloadTableCsv: exportState.csv,
+  csvFilename: (prefix: string) => `${prefix}-stamp.csv`,
+}))
 vi.mock('@/utils/deviceComms', () => ({ recordRead: vi.fn() }))
 vi.mock('@/utils/busStats', () => ({ recordBusOp: vi.fn() }))
 
 import BatchReadTest from './BatchReadTest.vue'
 import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
+import { listProtocolCapabilities } from '@/api/protocols'
+import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
 import { recordRead } from '@/utils/deviceComms'
 import { recordBusOp } from '@/utils/busStats'
 
@@ -51,6 +64,16 @@ const POINTS = [
   { id: 'p1', name: '温度', data_type: 'float', device_id: 'dev-1', bus: 'COM1' },
   { id: 'p2', name: '湿度', data_type: 'float', device_id: 'dev-1', bus: 'COM1' },
 ]
+const CAPS = {
+  supports_write: true,
+  supports_batch_read: true,
+  supports_scan_slaves: false,
+  supports_frame_extract: true,
+  supports_register_scan: false,
+  supports_auto_detect: false,
+  supports_write_multi: false,
+  supports_diag: true,
+}
 
 /** 一次读点结果的构造：只关心成败与耗时，其余字段给足避免模板取空 */
 function outcome(ok: boolean, latencyMs: number) {
@@ -101,10 +124,15 @@ async function readyToRun(wrapper: ReturnType<typeof mountPage>, count: number) 
 
 describe('BatchReadTest 读取性能测试', () => {
   beforeEach(() => {
+    // 协议能力是模块级单例：清掉上一条用例灌进去的快照，否则本用例的 mock 返回值不会被重新请求
+    resetProtocolCapsCache()
     vi.clearAllMocks()
     h.deviceRef.current.value = ''
     vi.mocked(listDevices).mockResolvedValue(DEVICES as never)
     vi.mocked(listPoints).mockResolvedValue(POINTS as never)
+    vi.mocked(listProtocolCapabilities).mockResolvedValue([
+      { name: 'modbus-tcp', capabilities: CAPS },
+    ] as never)
     queueReads([{ ok: true, latencyMs: 10 }])
   })
 
@@ -247,6 +275,37 @@ describe('BatchReadTest 读取性能测试', () => {
     expect(logs[1]!.text()).toContain('发起 1 次读取')
   })
 
+  /**
+   * 测试日志此前只能「清空」：一轮压测跑完，P50/P99 的结论要交给别人看，
+   * 只能截图。现在与另外两个日志面板共用 LogPanel 的三件套。
+   *
+   * 变异验证：删掉 LogPanel 上的 copyable/exportable → 本用例红（按钮找不到）。
+   */
+  it('测试日志可复制全部、可导出 CSV', async () => {
+    const wrapper = mountPage()
+    await settle()
+    await readyToRun(wrapper, 1)
+
+    await button(wrapper, '开始测试').trigger('click')
+    await settle()
+    expect(wrapper.findAll('.log-item')).toHaveLength(2)
+
+    const copyBtn = wrapper.findAll('button').find((b) => b.text().includes('复制全部'))!
+    await copyBtn.trigger('click')
+    expect(clipboardState.copyText).toHaveBeenCalledTimes(1)
+    const [text, okMessage] = clipboardState.copyText.mock.calls[0] as unknown as [string, string]
+    // 倒序的日志翻回时间正序，「发起」应排在「完成」之前
+    expect(text.indexOf('发起')).toBeLessThan(text.indexOf('成功率='))
+    expect(okMessage).toBe('已复制 2 条测试日志')
+
+    const exportBtn = wrapper.findAll('button').find((b) => b.text().includes('导出 CSV'))!
+    await exportBtn.trigger('click')
+    const [header, rows, filename] = exportState.csv.mock.calls[0] as [string[], unknown[][], string]
+    expect(header).toEqual(['时间', '类型', '标签', '内容'])
+    expect(rows).toHaveLength(2)
+    expect(filename).toBe('batch-read-log-stamp.csv')
+  })
+
   it('没有结果时「清空结果」禁用，有结果后清空会移除结果块', async () => {
     const wrapper = mountPage()
     await settle()
@@ -302,5 +361,68 @@ describe('BatchReadTest 读取性能测试', () => {
 
     expect(wrapper.findAllComponents(ElOption).map((o) => o.props('label'))).toEqual(['温控器 (modbus-tcp)', '电表 (dlt645)'])
     expect(button(wrapper, '开始测试').attributes('disabled')).toBeDefined()
+  })
+
+  /**
+   * 复用「点位读写」页的 DevicePointSelector（本页此前内联复制了一份下拉）。
+   * 除标签格式/aria 口径统一外，最实质的差别是带上了协议能力徽标——
+   * 「这个协议到底支不支持批量读」直接决定本页的测试结论有没有意义。
+   */
+  it('复用统一选择器：按协议能力声明渲染能力徽标', async () => {
+    const wrapper = mountPage()
+    await settle()
+    h.deviceRef.current.value = 'dev-1'
+    await settle()
+
+    expect(listProtocolCapabilities).toHaveBeenCalled()
+    const text = wrapper.text()
+    expect(text).toContain('支持批量读')
+    expect(text).toContain('支持写入')
+    expect(text).toContain('不支持扫描')
+  })
+
+  it('切换点位清空上一轮统计，避免把旧点位的成绩算到新点位上', async () => {
+    const wrapper = mountPage()
+    await settle()
+    await readyToRun(wrapper, 1)
+    await button(wrapper, '开始测试').trigger('click')
+    await settle()
+    expect(wrapper.find('.result-block').exists()).toBe(true)
+
+    // 模拟用户在下拉里换点位（Element Plus 同时发出 update:modelValue 与 change）
+    const pointSelect = wrapper.findAllComponents(ElSelect)[1]!
+    pointSelect.vm.$emit('update:modelValue', 'p2')
+    pointSelect.vm.$emit('change', 'p2')
+    await settle()
+
+    expect(wrapper.find('.result-block').exists()).toBe(false)
+  })
+
+  it('快速切换设备时丢弃过期的点位响应（Bug 181）', async () => {
+    const wrapper = mountPage()
+    await settle()
+
+    // dev-1 的请求挂起，随后切到 dev-2 并让它先返回
+    let releaseDev1: (() => void) | null = null
+    vi.mocked(listPoints).mockImplementation((id: string) =>
+      id === 'dev-1'
+        ? new Promise((resolve) => {
+            releaseDev1 = () => resolve([{ id: 'p-old', name: '旧点位', data_type: 'float' }] as never)
+          })
+        : Promise.resolve([{ id: 'p-new', name: '新点位', data_type: 'float' }] as never),
+    )
+
+    h.deviceRef.current.value = 'dev-1'
+    await settle()
+    h.deviceRef.current.value = 'dev-2'
+    await settle()
+    expect(wrapper.findAllComponents(ElOption).map((o) => o.props('label'))).toContain('新点位 (float)')
+
+    // 旧设备的响应姗姗来迟：不得覆盖当前设备已加载的点位
+    releaseDev1!()
+    await settle()
+    const labels = wrapper.findAllComponents(ElOption).map((o) => o.props('label'))
+    expect(labels).toContain('新点位 (float)')
+    expect(labels).not.toContain('旧点位 (float)')
   })
 })

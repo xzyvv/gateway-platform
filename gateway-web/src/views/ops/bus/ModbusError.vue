@@ -80,14 +80,14 @@ import { ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { listModbusErrorsView as listErrors, listCommonIssuesView as getCommonIssues, type ModbusErrorView as ModbusError, type CommonIssueView } from '@/api/diagnostics'
 import {
-  buildProtocolErrorEntries,
-  PROTOCOL_ERROR_NOTES,
-  PROTOCOL_ERROR_PROTOCOL_LABEL,
-  type ProtocolErrorEntry,
-  type ProtocolErrorProtocol,
-} from '@/utils/protocolErrorCodes'
+  buildMeterErrorEntries,
+  METER_ERROR_NOTES,
+  METER_ERROR_PROTOCOL_LABEL,
+  type MeterErrorEntry,
+  type MeterErrorProtocol,
+} from '@/utils/meterErrorCodes'
 
-type ProtocolTab = 'modbus' | ProtocolErrorProtocol
+type ProtocolTab = 'modbus' | MeterErrorProtocol
 
 const protocol = ref<ProtocolTab>('modbus')
 const errors = ref<ModbusError[]>([])
@@ -97,12 +97,12 @@ const issues = ref<CommonIssueView[]>([])
 /**
  * 三种协议的码表来源不同，统一成同一行结构后渲染：
  * - Modbus：后端静态知识库接口（GET /api/diagnostics/modbus-errors）
- * - DLT645 / CJT188：前端协议知识库（utils/protocolErrorCodes.ts）
+ * - DLT645 / CJT188：前端协议知识库（utils/meterErrorCodes.ts）
  *
  * 两类协议的码形态也不同：Modbus 是「一码一条」，DLT645 的 ERR 是位标志、
  * CJT188 的状态 ST 是「位标志 + 诊断码」，因此行键用 code 而非码值本身。
  */
-const protocolEntries = computed<ProtocolErrorEntry[]>(() => {
+const protocolEntries = computed<MeterErrorEntry[]>(() => {
   if (protocol.value === 'modbus') {
     return errors.value.map((e) => ({
       code: e.code,
@@ -112,13 +112,13 @@ const protocolEntries = computed<ProtocolErrorEntry[]>(() => {
       solution: e.solution,
     }))
   }
-  return buildProtocolErrorEntries(protocol.value)
+  return buildMeterErrorEntries(protocol.value)
 })
 
 const tableTitle = computed(() =>
   protocol.value === 'modbus'
     ? 'Modbus 异常码表'
-    : `${PROTOCOL_ERROR_PROTOCOL_LABEL[protocol.value]} 异常码表`,
+    : `${METER_ERROR_PROTOCOL_LABEL[protocol.value]} 异常码表`,
 )
 
 const searchPlaceholder = computed(() =>
@@ -129,11 +129,11 @@ const searchPlaceholder = computed(() =>
 
 /** 协议补充说明：DLT645/CJT188 的码机制与 Modbus 差异大，需要先讲清楚 */
 const protocolNote = computed(() =>
-  protocol.value === 'modbus' ? '' : PROTOCOL_ERROR_NOTES[protocol.value],
+  protocol.value === 'modbus' ? '' : METER_ERROR_NOTES[protocol.value],
 )
 
 // 表格统一走 DataTable：搜索后的 filtered 直接作为数据源，行键用异常码
-const errorColumns: ColumnDef<ProtocolErrorEntry>[] = [
+const errorColumns: ColumnDef<MeterErrorEntry>[] = [
   {
     key: 'code',
     title: '码',

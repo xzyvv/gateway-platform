@@ -154,7 +154,7 @@ describe('DeviceImportBranch 设备批量导入', () => {
     )
 
     const rows = previewProps(wrapper).rows
-    expect(rows[1]!.error).toContain('设备ID「dev_dup」重复')
+    expect(rows[1]!.error).toContain('设备 ID「dev_dup」重复')
     expect(previewProps(wrapper).valid).toBe(1)
   })
 
@@ -222,7 +222,7 @@ describe('DeviceImportBranch 设备批量导入', () => {
     expect(history[0]).toMatchObject({ total: 2, success: 1, failed: 1 })
   })
 
-  it('下发请求体符合后端契约：Modbus 从站号转数字并补地址，非 Modbus 不带从站号', async () => {
+  it('下发请求体符合后端契约：Modbus 从站地址转数字并补地址，非 Modbus 不带从站地址', async () => {
     const wrapper = mountPage([
       { name: '温控模板', protocol: 'modbus-tcp' },
       { name: '电表模板', protocol: 'dlt645' },
@@ -235,9 +235,9 @@ describe('DeviceImportBranch 设备批量导入', () => {
     await settle()
 
     const payloads = vi.mocked(createDevice).mock.calls.map((c) => c[0]) as Array<Record<string, unknown>>
-    // Modbus：从站号是数字，「地址」留空时自动补成从站号；interval 置空交给模板默认周期
+    // Modbus：从站地址是数字，「地址」留空时自动补成从站地址；interval 置空交给模板默认周期
     expect(payloads[0]).toMatchObject({ id: 'dev_hvac', slave_id: 2, address: '2', interval: null })
-    // 非 Modbus：用表地址寻址，从站号为空
+    // 非 Modbus：用表地址寻址，从站地址为空
     expect(payloads[1]).toMatchObject({ id: 'dev_meter', slave_id: null, address: '1234567890' })
   })
 

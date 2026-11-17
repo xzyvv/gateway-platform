@@ -1,5 +1,9 @@
 /**
- * 协议异常码知识库（DLT645 / CJT188）
+ * 表计协议异常码知识库（DL/T 645 错误信息字 ERR / CJ/T 188 状态字节 ST）
+ *
+ * 命名说明：本模块原名 `protocolErrorCodes.ts`，与 `protocolFailures.ts`（运行时失败分类）
+ * 同带 "protocolError" 前缀却毫无关系——前者是「规范里的码表」，后者是「本次请求为什么失败」。
+ * 现按职责区分：`meter*` = 表计协议知识库，`protocolFailures` = 失败分类中文名。
  *
  * 背景：Modbus 异常码由后端静态知识库接口提供（GET /api/diagnostics/modbus-errors），
  * 但 DL/T 645 与 CJ/T 188 两种表计协议没有对应接口——现场排查时只能对着
@@ -25,9 +29,9 @@
  * 「厂商相关」，避免用户误以为是标准强制值。
  */
 
-export type ProtocolErrorProtocol = 'dlt645' | 'cjt188'
+export type MeterErrorProtocol = 'dlt645' | 'cjt188'
 
-export interface ProtocolErrorEntry {
+export interface MeterErrorEntry {
   /** 码/位的展示形式，如 "ERR bit0" / "JD 0x01" */
   code: string
   /** 名称 */
@@ -302,7 +306,7 @@ export function decodeCjt188St(stBytes: number[]): {
 }
 
 /** 协议中文名 */
-export const PROTOCOL_ERROR_PROTOCOL_LABEL: Record<ProtocolErrorProtocol, string> = {
+export const METER_ERROR_PROTOCOL_LABEL: Record<MeterErrorProtocol, string> = {
   dlt645: 'DL/T 645-2007',
   cjt188: 'CJ/T 188-2018',
 }
@@ -313,7 +317,7 @@ export const PROTOCOL_ERROR_PROTOCOL_LABEL: Record<ProtocolErrorProtocol, string
  * DLT645 的码表是位标志，与 Modbus 的「一码一条」形态不同——列表里按
  * bit 逐行列出，并标注该位可与哪些位并存，避免用户以为 ERR 只有一个错误。
  */
-export function buildProtocolErrorEntries(protocol: ProtocolErrorProtocol): ProtocolErrorEntry[] {
+export function buildMeterErrorEntries(protocol: MeterErrorProtocol): MeterErrorEntry[] {
   if (protocol === 'dlt645') {
     return DLT645_ERR_BITS.map((b) => ({
       code: `ERR bit${b.bit}`,
@@ -323,7 +327,7 @@ export function buildProtocolErrorEntries(protocol: ProtocolErrorProtocol): Prot
       solution: b.solution,
     }))
   }
-  const rows: ProtocolErrorEntry[] = CJT188_ST_BITS.map((b) => ({
+  const rows: MeterErrorEntry[] = CJT188_ST_BITS.map((b) => ({
     code: `ST bit${b.bit}`,
     name: b.name,
     meaning: b.meaning,
@@ -346,7 +350,7 @@ export function buildProtocolErrorEntries(protocol: ProtocolErrorProtocol): Prot
  * 各协议码表的补充说明（页面上作为提示展示）。
  * DLT645 特别说明 ERR 是位标志——这是最容易误解的一点。
  */
-export const PROTOCOL_ERROR_NOTES: Record<ProtocolErrorProtocol, string> = {
+export const METER_ERROR_NOTES: Record<MeterErrorProtocol, string> = {
   dlt645:
     'DL/T 645-2007 的错误信息字 ERR 是**位标志**而非码值表：一个字节可同时表示多个错误（各位独立置位）。'
     + '从站异常应答帧格式为 68 A0..A5 68 Cx 01 ERR CS 16，其中控制码 D6 位=1 表示异常应答、数据域长度 L=01H，'

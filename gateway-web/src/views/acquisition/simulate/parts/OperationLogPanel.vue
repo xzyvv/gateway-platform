@@ -1,38 +1,35 @@
 <template>
-  <el-card class="log-card" shadow="never">
-    <SectionHeader title="操作记录" icon="Document">
-      <el-button size="small" text :disabled="!logs.length" @click="emit('export')">
-        <el-icon><Download /></el-icon> 导出 CSV
-      </el-button>
-      <el-button size="small" text @click="emit('clear')">
-        <el-icon><Delete /></el-icon> 清空
-      </el-button>
-    </SectionHeader>
-    <div class="log-list">
-      <div
-        v-for="(log, i) in logs"
-        :key="i"
-        class="log-item"
-        :class="log.type"
-      >
-        <div class="log-time">{{ log.time }}</div>
-        <div class="log-content">
-          <el-tag size="small" :type="log.type" effect="dark" class="log-tag">
-            {{ log.tag }}
-          </el-tag>
-          <span class="log-msg">{{ log.message }}</span>
-        </div>
-        <!-- 原始报文（请求/响应 HEX）：来自抓包缓冲，现场排障可直接复制 -->
-        <div v-if="log.frames?.length" class="log-frames">
-          <div v-for="(f, fi) in log.frames" :key="fi" class="log-frame">
-            <span class="frame-dir" :class="f.direction">{{ f.direction === 'request' ? '请求' : '响应' }}</span>
-            <span class="frame-hex">{{ f.hex }}</span>
-          </div>
+  <log-panel
+    title="操作记录"
+    icon="Document"
+    :empty="logs.length === 0"
+    empty-text="发送读写请求后，收发的报文与结果会记录在这里"
+    copyable
+    exportable
+    clearable
+    :max-height="480"
+    :empty-min-height="300"
+    @copy-all="emit('copy-all')"
+    @export="emit('export')"
+    @clear="emit('clear')"
+  >
+    <div v-for="(log, i) in logs" :key="i" class="log-item" :class="log.type">
+      <div class="log-time">{{ log.time }}</div>
+      <div class="log-content">
+        <el-tag size="small" :type="log.type" effect="dark" class="log-tag">
+          {{ log.tag }}
+        </el-tag>
+        <span class="log-msg">{{ log.message }}</span>
+      </div>
+      <!-- 原始报文（请求/响应 HEX）：来自抓包缓冲，现场排障可直接复制 -->
+      <div v-if="log.frames?.length" class="log-frames">
+        <div v-for="(f, fi) in log.frames" :key="fi" class="log-frame">
+          <span class="frame-dir" :class="f.direction">{{ f.direction === 'request' ? '请求' : '响应' }}</span>
+          <span class="frame-hex">{{ f.hex }}</span>
         </div>
       </div>
-      <empty-state v-if="!logs.length" description="发送读写请求后，收发的报文与结果会记录在这里" :image-size="80" />
     </div>
-  </el-card>
+  </log-panel>
 </template>
 
 <script lang="ts">
@@ -52,18 +49,22 @@ export interface LogEntry {
  * 右侧「操作记录」面板（从 Tester.vue 拆出）
  *
  * 职责：按时间倒序展示读写/诊断/批量写入的结果，每条可附原始报文 HEX；
- * 并提供「导出 CSV」「清空」两个操作入口（导出与清空的实际动作在父组件）。
+ * 提供复制全部、导出 CSV、清空三个操作入口（实际动作在父组件）。
+ *
+ * 卡片壳与三件套由 components/LogPanel.vue 统一渲染。此前这里只有「导出 / 清空」，
+ * 缺「复制全部」——想把几条失败记录直接贴进群里讨论时，只能先导出一个 CSV 再传文件。
  *
  * Props:
  * - logs：操作记录（最新在前）
  *
  * Emits:
+ * - copy-all：复制全部记录为纯文本
  * - export：导出为 CSV（读写记录是现场排障证据）
  * - clear：清空记录
  *
  * 典型应用场景：点位读写测试页（Tester.vue）右栏。
  */
-import { Delete, Download } from '@element-plus/icons-vue'
+import LogPanel from '@/components/LogPanel.vue'
 
 defineProps<{
   /** 操作记录（最新在前） */
@@ -71,6 +72,8 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
+  /** 复制全部记录 */
+  (e: 'copy-all'): void
   /** 导出操作记录 */
   (e: 'export'): void
   /** 清空操作记录 */
@@ -80,11 +83,6 @@ const emit = defineEmits<{
 
 <style scoped>
 /* 以下规则来自原 Tester.css，随区块一起迁移到本组件 */
-.log-list {
-  max-height: 480px;
-  overflow-y: auto;
-  min-height: 300px;
-}
 .log-item {
   padding: 8px 10px;
   border-radius: var(--radius-button);

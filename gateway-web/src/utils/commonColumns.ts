@@ -94,7 +94,8 @@ export function protocolColumn<T extends object = AnyRow>(
 }
 
 export interface AddressColumnOptions {
-  title?: string
+  /** 列头文案（必填）：设备地址 / 点位地址 / 寄存器地址…按各页字段语义给 */
+  title: string
   width?: number
   minWidth?: number
   align?: 'left' | 'center' | 'right'
@@ -107,15 +108,19 @@ export interface AddressColumnOptions {
 /**
  * 地址列：等宽、右对齐、超长省略。
  *
- * 地址（寄存器地址 / 设备地址 / 从站地址）需要逐位比对，等宽 + 右对齐是
- * 现场看表的基本要求，不该每个页面各自记得加。
+ * 地址（寄存器地址 / 设备地址 / 点位地址 / 从站地址）需要逐位比对，
+ * 等宽 + 右对齐是现场看表的基本要求，不该每个页面各自记得加。
+ *
+ * `title` 刻意设为**必填**：默认值曾是「地址」，于是设备表的 address
+ * （设备地址）与点位表的 address（点位地址）都顶着同一个「地址」列头，
+ * 两块表并排看会以为是同一个字段。语义不同的列头由调用方显式给出。
  */
 export function addressColumn<T extends object = AnyRow>(
-  options: AddressColumnOptions & { key?: string } = {},
+  options: AddressColumnOptions & { key?: string },
 ): ColumnDef<T> {
   const {
     key = 'address',
-    title = '地址',
+    title,
     width = 100,
     minWidth,
     align = 'right',

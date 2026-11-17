@@ -13,8 +13,8 @@
         <el-form-item label="范围">
           <el-select v-model="scope" style="width:120px">
             <el-option label="全部" value="all" />
-            <el-option label="名称" value="name" />
-            <el-option label="地址" value="address" />
+            <el-option label="点位名称" value="name" />
+            <el-option label="点位地址" value="address" />
             <el-option label="单位" value="unit" />
           </el-select>
         </el-form-item>
@@ -102,7 +102,7 @@ async function doReplace() {
     return
   }
   const field = fieldMap[scope.value === 'all' ? 'name' : scope.value] || 'name'
-  const fieldLabel = field === 'name' ? '名称' : field === 'address' ? '地址' : '单位'
+  const fieldLabel = field === 'name' ? '点位名称' : field === 'address' ? '点位地址' : '单位'
   const ok = await confirmAction({
     message: `将把已选 ${n} 个点位的「${fieldLabel}」中「${keyword.value}」替换为「${replaceVal.value}」。此操作不可撤销，确定继续吗？`,
     title: '批量替换确认',

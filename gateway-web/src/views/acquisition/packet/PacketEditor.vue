@@ -3,9 +3,7 @@
     <el-card shadow="never" class="section-card">
       <el-form inline>
         <el-form-item label="总线">
-          <el-select v-model="bus" style="width:220px" :loading="targetsLoading" placeholder="选择总线" aria-label="总线" no-data-text="暂无总线，请先在配置管理中添加">
-            <el-option v-for="o in busOptions" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
+          <BusSelect v-model="bus" :options="busOptions" :loading="targetsLoading" />
         </el-form-item>
         <el-form-item label="超时(ms)">
           <el-input-number v-model="timeoutMs" :min="100" :max="10000" :step="100" style="width:130px" aria-label="单帧超时毫秒" />
@@ -60,7 +58,9 @@ import {Promotion} from '@element-plus/icons-vue'
 import { listPresets, sendFrame, type PacketPreset, type SendResult } from '@/api/protocolTools'
 import HexInput from '@/components/industrial/HexInput.vue'
 import BusPauseBanner from '@/components/BusPauseBanner.vue'
+import BusSelect from '@/components/industrial/BusSelect.vue'
 import { withDiagHint } from '@/utils/diagHints'
+import { protocolFailureLabel } from '@/utils/protocolFailures'
 import { isValidHex } from '@/utils/hexFrame'
 import { inferParseProtocol, parseFrame, type ParseResult } from '@/utils/frameParser'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
@@ -92,22 +92,13 @@ onMounted(async () => {
   presets.value = await listPresets().catch(() => [])
 })
 
-/** error 机器码 → 面向现场的中文分类名（契约 §5；处置建议由 diagHints 按 parsed 追加） */
-const ERROR_LABELS: Record<string, string> = {
-  timeout: '超时无响应',
-  crc: 'CRC 校验失败',
-  exception: '设备返回异常帧',
-  bus_offline: '总线不可用',
-  bus_busy: '总线被占用',
-  invalid_frame: '请求帧非法',
-  bus_not_found: '总线不存在',
-}
-
+/** 失败原因：机器码中文名走 utils/protocolFailures 的共享映射（契约 §5）；
+ *  处置建议由 diagHints 按 parsed 追加 */
 /** 失败原因：优先 error 分类 + 后端解析文案；响应帧为空说明超时/链路无应答。统一拼诊断建议（审查#6） */
 const failReason = computed(() => {
   const r = result.value
   if (!r || r.success) return ''
-  const label = r.error ? (ERROR_LABELS[r.error] ?? r.error) : ''
+  const label = protocolFailureLabel(r.error)
   const detail = r.parsed || (!r.responseHex ? '超时，未收到响应帧' : '未知错误')
   return withDiagHint(label ? `${label}：${detail}` : detail)
 })

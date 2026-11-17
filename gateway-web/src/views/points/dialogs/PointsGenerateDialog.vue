@@ -8,7 +8,7 @@
       <el-form-item label="名称前缀" prop="namePrefix">
         <el-input v-model="genForm.namePrefix" placeholder="如：电压" />
       </el-form-item>
-      <el-form-item label="从站号" prop="slaveId">
+      <el-form-item label="从站地址" prop="slaveId">
         <el-input-number v-model="genForm.slaveId" :min="1" :max="247" controls-position="right" />
       </el-form-item>
       <el-form-item label="协议" prop="protocol">
@@ -18,7 +18,7 @@
           <el-option label="Modbus ASCII" value="modbus-ascii" />
         </el-select>
       </el-form-item>
-      <el-form-item label="起始地址" prop="startAddr">
+      <el-form-item label="起始地址（0 基）" prop="startAddr">
         <el-input-number v-model="genForm.startAddr" :min="0" :max="65535" controls-position="right" />
       </el-form-item>
       <el-form-item label="生成数量" prop="count">
@@ -82,9 +82,9 @@ const genRules: FormRules = {
     { required: true, message: '名称前缀不能为空', trigger: 'blur' },
     { max: 32, message: '名称前缀不能超过 32 个字符', trigger: 'blur' },
   ],
-  slaveId: [{ type: 'number', min: 1, max: 247, message: '从站号需在 1-247 之间', trigger: 'blur' }],
+  slaveId: [{ type: 'number', min: 1, max: 247, message: '从站地址需在 1-247 之间', trigger: 'blur' }],
   protocol: [{ required: true, message: '请选择协议', trigger: 'change' }],
-  startAddr: [{ type: 'number', min: 0, max: 65535, message: '起始地址需在 0-65535 之间', trigger: 'blur' }],
+  startAddr: [{ type: 'number', min: 0, max: 65535, message: '起始地址需在 0-65535 之间（0 基）', trigger: 'blur' }],
   count: [{ type: 'number', min: 1, max: 100, message: '生成数量需在 1-100 之间', trigger: 'blur' }],
   step: [{ type: 'number', min: 1, max: 10, message: '地址步长需在 1-10 之间', trigger: 'blur' }],
   addressNum: [{ type: 'number', min: 1, max: 4, message: '每个占寄存器数需在 1-4 之间', trigger: 'blur' }],

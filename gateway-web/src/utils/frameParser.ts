@@ -4,7 +4,7 @@
  */
 
 import { extractErrorMessage } from './errorHandler'
-import { decodeCjt188St, decodeDlt645Err } from './protocolErrorCodes'
+import { decodeCjt188St, decodeDlt645Err } from './meterErrorCodes'
 
 export interface ParsedField {
   name: string

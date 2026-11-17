@@ -9,11 +9,9 @@
       </template>
       <el-form :inline="true" label-width="80px" ref="formRef">
         <el-form-item label="总线">
-          <el-select v-model="bus" style="width: 220px" :loading="targetsLoading" placeholder="选择总线" aria-label="总线" no-data-text="暂无总线，请先在配置管理中添加">
-            <el-option v-for="o in busOptions" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
+          <BusSelect v-model="bus" :options="busOptions" :loading="targetsLoading" />
         </el-form-item>
-        <el-form-item label="从站 ID">
+        <el-form-item label="从站地址">
           <el-input-number v-model="slaveId" :min="1" :max="247" controls-position="right" />
         </el-form-item>
         <el-form-item label="寄存器类型">
@@ -21,13 +19,13 @@
             <el-option label="保持寄存器 (03)" value="holding" />
             <el-option label="输入寄存器 (04)" value="input" />
             <el-option label="线圈 (01)" value="coils" />
-            <el-option label="离散量 (02)" value="discrete" />
+            <el-option label="离散输入 (02)" value="discrete" />
           </el-select>
         </el-form-item>
-        <el-form-item label="起始地址" prop="startAddr">
+        <el-form-item label="起始地址（0 基）" prop="startAddr">
           <el-input-number v-model="startAddr" :min="0" :max="65535" controls-position="right" />
         </el-form-item>
-        <el-form-item label="结束地址" prop="endAddr">
+        <el-form-item label="结束地址（0 基）" prop="endAddr">
           <el-input-number v-model="endAddr" :min="0" :max="65535" controls-position="right" />
         </el-form-item>
         <el-form-item>
@@ -128,6 +126,7 @@ import type { FormInstance } from 'element-plus'
 import { VideoPlay } from '@element-plus/icons-vue'
 import { useRegisterScan } from '@/composables/acquisition/useRegisterScan'
 import RegisterScanGrid from './parts/RegisterScanGrid.vue'
+import BusSelect from '@/components/industrial/BusSelect.vue'
 
 /** el-form 实例引用，供跨字段校验高亮（校验逻辑在 composable） */
 const formRef = ref<FormInstance>()

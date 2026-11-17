@@ -1,5 +1,6 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { confirmAction } from '@/utils/confirm'
 import { useClock } from '@/composables/system/useClock'
 import { usePolling } from '@/composables/core/usePolling'
@@ -28,6 +29,7 @@ import { statusTagType, type TagType } from '@/utils/statusType'
  * composable，主组件只剩 template。
  */
 export function useSystem() {
+  const { showToast } = useErrorDisplay()
   // ===== 审计日志 =====
   // B3：前端本地操作审计已下线，这里只读后端 /api/audit/logs（唯一审计来源）。
   // 后端没有删除端点，所以不提供「清空」，只有刷新。
@@ -211,8 +213,8 @@ export function useSystem() {
       downloadBackup(backup)
       lastBackup.value = backup
       ElMessage.success('备份已生成并下载')
-    } catch {
-      ElMessage.error('生成备份失败')
+    } catch (e) {
+      showToast(e, '生成备份失败')
     } finally {
       if (!unmounted) backupLoading.value = false
     }

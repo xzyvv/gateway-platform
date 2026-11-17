@@ -26,7 +26,7 @@ supports_frame_extract: boolean, supports_write: boolean, supports_scan_slaves: 
  */
 supports_register_scan: boolean, 
 /**
- * 是否支持「自动识别设备」调试工具（遍历从站号 + 协议探测）。
+ * 是否支持「自动识别设备」调试工具（遍历从站地址 + 协议探测）。
  */
 supports_auto_detect: boolean, 
 /**

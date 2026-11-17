@@ -157,7 +157,7 @@ describe('PointsBatchEditDialog', () => {
     await nextTick()
     await flushPromises()
 
-    // 勾选框顺序：名称 0、总线 1、协议 2、从站号 3、CT 4、PT 5
+    // 勾选框顺序：名称 0、总线 1、协议 2、从站地址 3、CT 4、PT 5
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
     await checkboxes[4]!.setValue(true)
     await checkboxes[5]!.setValue(true)
@@ -192,7 +192,7 @@ describe('PointsBatchEditDialog', () => {
     await nextTick()
     await flushPromises()
 
-    // 勾选框顺序：名称 0、总线 1、协议 2、从站号 3、CT 4、PT 5、数据类型 6、字节序 7、寄存器数 8
+    // 勾选框顺序：名称 0、总线 1、协议 2、从站地址 3、CT 4、PT 5、数据类型 6、字节序 7、寄存器数 8
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
     await checkboxes[6]!.setValue(true)
     await checkboxes[7]!.setValue(true)

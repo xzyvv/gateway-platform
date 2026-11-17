@@ -7,6 +7,7 @@ import { useWebhook } from '@/composables/uplink/useWebhook'
 import { precheckCommand, QUICK_DIAGNOSTIC_COMMANDS } from '@/utils/diagnosticsCommands'
 import { useVirtualLogs } from './useVirtualLogs'
 import { triggerDownload } from '@/utils/exportCsv'
+import { copyText } from '@/utils/clipboard'
 
 interface LogItem { id: number; text: string }
 
@@ -292,12 +293,9 @@ export function useLogs() {
 
   async function copyOutput() {
     if (!cmdOutput.value) return
-    try {
-      await navigator.clipboard.writeText(cmdOutput.value)
-      ElMessage.success('已复制到剪贴板')
-    } catch {
-      ElMessage.warning('复制失败，请手动复制')
-    }
+    // 统一走 utils/clipboard（含非安全上下文的 execCommand 回退）：
+    // 诊断命令输出常要贴给研发，假成功会让人贴出空内容
+    await copyText(cmdOutput.value, '已复制到剪贴板')
   }
 
   let ws: GatewayWebSocket | null = null

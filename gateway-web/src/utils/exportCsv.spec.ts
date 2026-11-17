@@ -3,6 +3,8 @@ import {
   buildHistoryCsv,
   csvEscapeField,
   csvEscapeFieldOptionalQuote,
+  csvFilename,
+  fileTimestamp,
   sanitizeCsvCell,
   toCsv,
 } from '../utils/exportCsv'
@@ -267,5 +269,27 @@ describe('buildHistoryCsv — 公式注入防护（W-7）', () => {
     const csv = buildHistoryCsv([[1, 2, 3, 4]])
     const lines = csv.split('\n')
     expect(lines[1]).toBe('"1","2","3","4"')
+  })
+})
+
+describe('fileTimestamp / csvFilename — 导出文件名时间戳', () => {
+  it('按浏览器本地时间生成，各段用 - 分隔（Windows 不允许冒号）', () => {
+    // 注意用本地时间构造：'2026-11-17T21:06:08'（无 Z）才会被 Date 当本地时间解析
+    expect(fileTimestamp(new Date(2026, 10, 17, 21, 6, 8))).toBe('2026-11-17-21-06-08')
+  })
+
+  it('月/日/时/分/秒均补零到两位', () => {
+    expect(fileTimestamp(new Date(2026, 0, 2, 3, 4, 5))).toBe('2026-01-02-03-04-05')
+  })
+
+  it('csvFilename 拼上前缀与 .csv 后缀', () => {
+    expect(csvFilename('packet-capture', new Date(2026, 10, 17, 21, 6, 8)))
+      .toBe('packet-capture-2026-11-17-21-06-08.csv')
+  })
+
+  it('不使用 UTC：本地 23:30 不得被换算成次日 15:30', () => {
+    // 这是收敛前的真实缺陷：toISOString() 在 UTC+8 会让文件名比页面时间早 8 小时
+    const d = new Date(2026, 10, 17, 23, 30, 0)
+    expect(fileTimestamp(d)).toBe('2026-11-17-23-30-00')
   })
 })

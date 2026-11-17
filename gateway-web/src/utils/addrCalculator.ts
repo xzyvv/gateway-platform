@@ -30,7 +30,7 @@ interface Zone {
 /** 5 位区地址约定：区前缀 → (0-based 换算基数, 区说明) */
 const ZONES: Record<string, Zone> = {
   '0': { base: 1, label: '线圈（0xxxx）' },
-  '1': { base: 10001, label: '离散量输入（1xxxx）' },
+  '1': { base: 10001, label: '离散输入（1xxxx）' },
   '3': { base: 30001, label: '输入寄存器（3xxxx）' },
   '4': { base: 40001, label: '保持寄存器（4xxxx）' },
 }
@@ -49,7 +49,7 @@ const FC_ZONE: Record<string, string> = {
 
 const FUNC_CODES: FuncCodeItem[] = [
   { code: '01', name: '读线圈' },
-  { code: '02', name: '读离散量输入' },
+  { code: '02', name: '读离散输入' },
   { code: '03', name: '读保持寄存器' },
   { code: '04', name: '读输入寄存器' },
   { code: '05', name: '写单线圈' },
@@ -110,7 +110,7 @@ export async function calculate(
   const zone = ZONES[zonePrefix]!
   const systemAddr = n - zone.base
 
-  // 组 RTU 请求帧：从站号 + 功能码 + 起始地址(2B 大端) + 数量(2B 大端) + CRC16(低字节在前)
+  // 组 RTU 请求帧：从站地址 + 功能码 + 起始地址(2B 大端) + 数量(2B 大端) + CRC16(低字节在前)
   const payload = [
     slaveId & 0xff,
     Number.parseInt(fc.code, 16),

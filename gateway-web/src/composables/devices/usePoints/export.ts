@@ -13,9 +13,10 @@
  * 运行期与模板展开结果重复。
  */
 import { ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { exportPoints } from '@/api/points'
-import { downloadTableCsv, triggerDownload } from '@/utils/exportCsv'
+import { confirmAction } from '@/utils/confirm'
+import { downloadTableCsv, fileTimestamp, triggerDownload } from '@/utils/exportCsv'
 import {
   POINT_FIELDS_BASIC,
   POINT_FIELDS_FULL,
@@ -50,16 +51,12 @@ export function createPointExport() {
    * @returns true = 用户确认继续；false = 取消（含直接关闭弹窗）
    */
   async function confirmCsvSemantics(format: 'csv-basic' | 'csv-full'): Promise<boolean> {
-    try {
-      await ElMessageBox.confirm(CSV_PRESETS[format].hint, '导出 CSV 说明', {
-        type: 'info',
-        confirmButtonText: '继续导出',
-        cancelButtonText: '取消',
-      })
-      return true
-    } catch {
-      return false // 用户取消
-    }
+    return confirmAction({
+      message: CSV_PRESETS[format].hint,
+      title: '导出 CSV 说明',
+      type: 'info',
+      confirmText: '继续导出',
+    })
   }
 
   /** @param format 下拉菜单回传的是字符串，非法值直接忽略 */
@@ -74,7 +71,7 @@ export function createPointExport() {
         ElMessage.warning('没有可导出的配置点位（模板设备展开出的点位不在导出范围）')
         return
       }
-      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      const stamp = fileTimestamp()
       if (format === 'json') {
         triggerDownload(
           new Blob([JSON.stringify(points, null, 2)], { type: 'application/json' }),

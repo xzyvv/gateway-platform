@@ -139,12 +139,12 @@ const previewLines = computed(() => rawText.value.split('\n').slice(0, 5).join('
 const resultColumns: ColumnDef<ImportRow>[] = [
   { key: 'line', title: '行号', width: 60 },
   { key: 'name', title: '设备名称', width: 120 },
-  { key: 'id', title: '设备ID', width: 120 },
+  { key: 'id', title: '设备 ID', width: 120 },
   { key: 'bus', title: '所属总线', width: 140 },
   protocolColumn<ImportRow>({ width: 90, useLabel: false }),
   { key: 'slaveId', title: '从站', width: 70 },
   { key: 'template', title: '模板', width: 130, ellipsis: true },
-  addressColumn<ImportRow>({ width: 100 }),
+  addressColumn<ImportRow>({ title: '设备地址', width: 100 }),
   tagColumn<ImportRow>('valid', {
     title: '状态',
     width: 80,
@@ -164,7 +164,7 @@ const resultColumns: ColumnDef<ImportRow>[] = [
 const outcomeColumns: ColumnDef<OutcomeRow>[] = [
   { key: 'line', title: '行号', width: 60 },
   { key: 'name', title: '设备名称', width: 140 },
-  { key: 'id', title: '设备ID', width: 140 },
+  { key: 'id', title: '设备 ID', width: 140 },
   tagColumn<OutcomeRow>('ok', {
     title: '结果',
     width: 80,

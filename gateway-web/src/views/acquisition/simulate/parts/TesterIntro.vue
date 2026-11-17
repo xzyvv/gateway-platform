@@ -7,7 +7,7 @@
         <p>
           选设备与点位后可读取或写入测试值，用于验证地址配置与采集链路。
           <el-link v-if="supportsWrite" type="primary" @click="emit('scroll-to-batch-write')">批量写入</el-link>
-          支持一次提交多个点位；批量性能测试请用【读取性能】。
+          支持一次提交多个点位；对同一指标连续多轮读取请用【读取性能】。
         </p>
       </div>
     </div>

@@ -27,19 +27,12 @@ export interface RunLog extends StepOutcome {
   bus: string
 }
 
-/** 后端错误码 → 中文标签 */
-export const ERROR_LABEL: Record<string, string> = {
-  timeout: '超时无响应',
-  crc: 'CRC 校验失败',
-  exception: '设备返回异常码',
-  bus_offline: '总线离线',
-  bus_busy: '总线被占用',
-  invalid_frame: '帧格式非法',
-  bus_not_found: '总线不存在',
-}
-
-/** 错误码转中文标签；未知错误码原样返回 */
-export function errorLabel(err?: string | null): string {
-  if (!err) return ''
-  return ERROR_LABEL[err] ?? err
-}
+/**
+ * 「后端错误码 → 中文标签」的唯一实现在 `utils/protocolFailures.ts`。
+ *
+ * 这里曾自带一份 ERROR_LABEL，与 `packet/PacketEditor.vue` 里的另一份对同一个
+ * 机器码给出不同说法（bus_offline 一处「总线离线」一处「总线不可用」…），
+ * 用户会以为是两种故障。现统一复用共享映射，本模块只保留类型定义并转出，
+ * 避免调用方为了一个文案函数多 import 一个路径。
+ */
+export { protocolFailureLabel as errorLabel } from '@/utils/protocolFailures'

@@ -106,6 +106,7 @@ import { ElBadge } from 'element-plus'
 import 'element-plus/es/components/badge/style/css'
 import { Bell, CopyDocument, Close, Position } from '@element-plus/icons-vue'
 import { useNotificationsStore, type AppNotification, type NotificationType } from '@/stores/notifications'
+import { formatTimeOfDay, pad2 } from '@/utils/datetime'
 import { describeErrorDetail, isHttpStatusCode } from '@/utils/errorCodes'
 import { buildDiagnosticText } from '@/utils/diagnosticReport'
 import { copyText } from '@/utils/clipboard'
@@ -162,14 +163,13 @@ function codeLine(code: number): string {
 /** 当天只显示时分秒，跨天补日期，避免"09:12:03"分不清是哪天 */
 function formatTime(ts: number): string {
   const d = new Date(ts)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const hms = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  const hms = formatTimeOfDay(d)
   const today = new Date()
   const sameDay =
     d.getFullYear() === today.getFullYear() &&
     d.getMonth() === today.getMonth() &&
     d.getDate() === today.getDate()
-  return sameDay ? hms : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hms}`
+  return sameDay ? hms : `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hms}`
 }
 
 /**

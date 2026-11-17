@@ -10,10 +10,10 @@
             <el-option v-for="opt in protocolOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="起始地址" prop="start">
+        <el-form-item label="起始从站地址" prop="start">
           <el-input-number v-model="discover.start" :min="1" :max="247" controls-position="right" />
         </el-form-item>
-        <el-form-item label="结束地址" prop="end">
+        <el-form-item label="结束从站地址" prop="end">
           <el-input-number v-model="discover.end" :min="1" :max="247" controls-position="right" />
         </el-form-item>
         <el-form-item>
@@ -95,7 +95,7 @@ const discoverGuard = useDialogDirtyGuard(visible, () => discover, dirtyScope ? 
 
 // DataTable 列定义：宽度/固定列与原列保持一致
 const discoverColumns: ColumnDef<Record<string, unknown>>[] = [
-  { key: 'address', title: '地址', width: 120 },
+  { key: 'address', title: '设备地址', width: 120 },
   {
     key: 'device_id',
     title: '设备 ID',

@@ -91,7 +91,7 @@
         <div v-for="row in machineRows" :key="row.label" class="lic-machine-row">
           <span class="lic-machine-label">{{ row.label }}</span>
           <span class="lic-machine-value">{{ row.value }}</span>
-          <el-button text size="small" @click="copyText(row.value, row.label)">复制</el-button>
+          <el-button text size="small" @click="copyRow(row.value, row.label)">复制</el-button>
         </div>
         <el-button size="small" class="lic-copy-all" @click="copyAll">复制全部设备码</el-button>
       </div>
@@ -120,6 +120,7 @@ import { fetchLicense, importLicense, type LicenseSnapshot } from '@/api/license
 import { useTierStore, TIER_LABEL } from '../../stores/tier'
 import { formatDate } from '@/utils/datetime'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { copyText } from '@/utils/clipboard'
 
 defineProps<{ modelValue: boolean }>()
 defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
@@ -296,13 +297,9 @@ const machineRows = computed<MachineRow[]>(() => {
   return rows
 })
 
-async function copyText(text: string, label: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success(`${label}已复制`)
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本复制')
-  }
+/** 单行设备码复制：标签不同，成功提示跟着变（主设备码/备用码要能分辨） */
+async function copyRow(text: string, label: string) {
+  await copyText(text, `${label}已复制`)
 }
 
 async function copyAll() {
@@ -312,12 +309,8 @@ async function copyAll() {
   if (main) lines.push(`主设备码: ${main.value}`)
   if (fallbacks.length) lines.push(`备用设备码: ${fallbacks.map((r) => r.value).join(',')}`)
   if (!lines.length) return
-  try {
-    await navigator.clipboard.writeText(lines.join('\n'))
-    ElMessage.success('设备码已复制，请发送给供应商')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本复制')
-  }
+  // 设备码要发给供应商申请授权，复制失败必须让用户知道（否则会发出空的工单）
+  await copyText(lines.join('\n'), '设备码已复制，请发送给供应商')
 }
 
 // ===== .lic 导入 =====

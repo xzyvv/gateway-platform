@@ -211,13 +211,13 @@ const foundColumns: ColumnDef<FoundDeviceRow>[] = [
   protocolColumn<FoundDeviceRow>({ width: 90, useLabel: false }),
   {
     key: 'id',
-    title: '设备ID',
+    title: '设备 ID',
     minWidth: 140,
     cell: (row) =>
       h(ElInput, {
         modelValue: row.id,
         size: 'small',
-        placeholder: '设备ID（留空自动生成）',
+        placeholder: '设备 ID（留空自动生成）',
         'onUpdate:modelValue': (v: string) => { row.id = v },
       }),
   },

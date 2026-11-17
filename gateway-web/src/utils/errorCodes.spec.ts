@@ -86,6 +86,15 @@ describe('describeErrorDetail', () => {
     expect(describeErrorDetail(400)!.label).toBe('请求参数有误')
   })
 
+  it('504 的引导必须指向「上游/设备」而不是「网关负载」', () => {
+    // 504 现在的来源是 GatewayError::NoReply（设备/总线未应答）。若文案仍写
+    // 「检查网关负载」，现场会去重启网关，而真正要查的是设备在线、从站地址与接线。
+    const d = describeErrorDetail(504)!
+    expect(d.label).toBe('上游未响应')
+    expect(d.suggestion).toContain('设备')
+    expect(d.suggestion).toContain('从站地址')
+  })
+
   it('已知业务码：复用字典 message 与 hint', () => {
     expect(describeErrorDetail(ERR.UNAUTHORIZED)).toEqual({
       label: '登录状态已失效',

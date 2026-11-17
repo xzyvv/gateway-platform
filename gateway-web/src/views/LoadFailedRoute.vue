@@ -45,7 +45,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { copyText } from '@/utils/clipboard'
 import {
   WarningFilled, Refresh, RefreshRight, HomeFilled, CopyDocument,
 } from '@element-plus/icons-vue'
@@ -112,28 +112,11 @@ function reloadPage() {
 }
 
 async function copyError() {
-  try {
-    await navigator.clipboard.writeText(errorDetail.value)
+  // 复制成功才亮「已复制」：页面崩溃时的错误详情是唯一线索，假成功会让人
+  // 以为自己拿到了诊断信息，实际粘出来是空的
+  if (await copyText(errorDetail.value, '错误信息已复制')) {
     copied.value = true
-    ElMessage.success('错误信息已复制')
     setTimeout(() => { copied.value = false }, 2000)
-  } catch {
-    // 老浏览器降级：使用 execCommand
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = errorDetail.value
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      copied.value = true
-      ElMessage.success('错误信息已复制')
-      setTimeout(() => { copied.value = false }, 2000)
-    } catch {
-      ElMessage.warning('复制失败，请手动选择文本')
-    }
   }
 }
 

@@ -1,16 +1,13 @@
 <template>
   <div class="toolbar">
-    <el-select
+    <BusSelect
       :model-value="bus"
+      :options="busOptions"
       :loading="busLoading"
-      class="bus-select"
-      placeholder="选择总线"
-      aria-label="总线"
+      :width="200"
       :disabled="running"
       @change="emit('bus-change', $event)"
-    >
-      <el-option v-for="o in busOptions" :key="o.value" :label="o.label" :value="o.value" />
-    </el-select>
+    />
     <el-select
       :model-value="activeId"
       class="seq-select"
@@ -73,6 +70,7 @@
  */
 import { computed } from 'vue'
 import BusPauseBanner from '@/components/BusPauseBanner.vue'
+import BusSelect from '@/components/industrial/BusSelect.vue'
 import type { StepOutcome } from './stepDebugTypes'
 
 const props = defineProps<{
@@ -118,7 +116,6 @@ const busBusy = computed(() => Object.values(props.outcomes).some((o) => o.error
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
-.bus-select { width: 200px; }
 .seq-select { flex: 1; }
 .seq-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
 .seq-name { width: 180px; }

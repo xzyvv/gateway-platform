@@ -40,7 +40,7 @@ const RULES: HintRule[] = [
   { match: 'illegal data address', hint: '寄存器地址超出设备范围，请核对设备手册中的地址映射（注意 0-based / 1-based 偏移）' },
   { match: 'illegal data value', hint: '写入值超出设备允许范围，请检查数值类型与量程' },
   { match: 'slave device failure', hint: '从站设备返回异常，可能是设备故障或忙，请稍后重试或检查设备状态' },
-  { match: '无响应', hint: '设备未应答，请确认从站 ID 正确、设备在线且通信参数（波特率/校验位）一致' },
+  { match: '无响应', hint: '设备未应答，请确认从站地址正确、设备在线且通信参数（波特率/校验位）一致' },
 
   // —— 配置 / 数据 ——
   { match: 'not in whitelist', hint: '该点位未开启写入白名单，请先在点位列表中开启「允许写入」' },

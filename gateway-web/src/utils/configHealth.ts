@@ -68,7 +68,7 @@ const PRESENTATION: Readonly<Record<string, Presentation>> = {
   bus_timeout: { category: '参数越界', suggestion: '将超时调整为 1000ms 以内' },
   bus_busy: { category: '性能建议', suggestion: '为各设备设置不同的采集起始偏移' },
   bus_port_dup: { category: '端口重复', suggestion: '修改其中一条总线的端口名' },
-  device_addr_dup: { category: '设备地址重复', suggestion: '修改其中一台设备的地址或从站号' },
+  device_addr_dup: { category: '设备地址重复', suggestion: '修改其中一台设备的地址或从站地址' },
   point_addr_dup: { category: '重复地址', suggestion: '修改其中一个点位的寄存器地址' },
   point_device_missing: { category: '引用缺失', suggestion: '把点位挂到已存在的设备上，或先创建该设备' },
   point_bus_missing: { category: '引用缺失', suggestion: '把点位挂到已存在的总线上，或先创建该总线' },

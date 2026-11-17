@@ -98,6 +98,7 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import type { HealthBusRow } from '@/api/status'
 import { useHealthReport } from '@/composables/system/useHealthReport'
 import { busSuccessTag, QUEUE_BACKLOG_WARN } from '@/utils/healthVerdict'
+import { formatTimeOfDay } from '@/utils/datetime'
 import HealthProblemList from './HealthProblemList.vue'
 
 // 与运行总览 / 自诊断 / 网关信息共享同一份模块级快照；手动刷新强制绕过 10s TTL
@@ -174,9 +175,7 @@ const fmtPct = (v: number | null | undefined) => (v === null || v === undefined 
 const generatedAt = computed(() => {
   const ms = report.value?.generated_at_ms
   if (!ms) return ''
-  const d = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `生成于 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  return `生成于 ${formatTimeOfDay(ms)}`
 })
 
 const busColumns: ColumnDef<HealthBusRow>[] = [

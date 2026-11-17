@@ -133,13 +133,15 @@
  * 不新增后端聚合 API，数据源均为已有端点，避免与健康报告重复实现判定口径。
  */
 import { computed, h, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
+import { ElMessage, ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { getVersion } from '@/api/status'
 import { importProject, type ProjectFile } from '@/api/project'
 import type { VersionInfo } from '@/api/types'
 import { copyText } from '@/utils/clipboard'
 import { triggerDownload } from '@/utils/exportCsv'
+import { pad2 } from '@/utils/datetime'
+import { confirmAction } from '@/utils/confirm'
 import { useHealthReport } from '@/composables/system/useHealthReport'
 import {
   LEVEL_LABEL,
@@ -164,7 +166,7 @@ const TEMPLATES: TemplateDef[] = [
   {
     name: 'Modbus 电力仪表',
     file: 'modbus-power-meter.json',
-    desc: '1 路 Modbus-RTU 串口 + 1 台三相多功能电表（12 个遥测点），默认 COM3 / 从站 1 / 5s。',
+    desc: '1 路 Modbus-RTU 串口 + 1 台三相多功能电表（12 个点位），默认 COM3 / 从站地址 1 / 5s。',
   },
   {
     name: 'IEC104 变电站',
@@ -265,15 +267,12 @@ async function downloadTemplate(tpl: TemplateDef) {
 }
 
 async function applyTemplate(tpl: TemplateDef) {
-  try {
-    await ElMessageBox.confirm(
-      `将用「${tpl.name}」覆盖当前的总线、北向与变量映射三层配置（不改 Web 鉴权/时钟）。建议先导出工程备份，是否继续？`,
-      '应用配置模板',
-      { type: 'warning', confirmButtonText: '覆盖并应用', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
+  const ok = await confirmAction({
+    message: `将用「${tpl.name}」覆盖当前的总线、北向与变量映射三层配置（不改 Web 鉴权/时钟）。建议先导出工程备份，是否继续？`,
+    title: '应用配置模板',
+    confirmText: '覆盖并应用',
+  })
+  if (!ok) return
   applying.value = tpl.file
   try {
     const data = await fetchTemplate(tpl)
@@ -293,8 +292,7 @@ async function copyReport() {
 
 function fileStamp(): string {
   const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
+  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`
 }
 
 function downloadSelfCheckMd() {

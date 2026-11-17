@@ -42,10 +42,10 @@
         </div>
         <div class="dft-step-body" v-if="device">
           <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="设备名">{{ device.name || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="设备名称">{{ device.name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="设备 ID">{{ device.id || '-' }}</el-descriptions-item>
             <el-descriptions-item label="总线">{{ device.bus || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="地址">{{ device.address || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="设备地址">{{ device.address || '-' }}</el-descriptions-item>
             <el-descriptions-item label="协议">{{ device.protocol || '-' }}</el-descriptions-item>
             <el-descriptions-item label="模板"><span class="dft-nowrap" :title="device.template || '-'">{{ device.template || '-' }}</span></el-descriptions-item>
           </el-descriptions>
@@ -67,7 +67,7 @@
             <el-descriptions-item label="点位名">{{ pointInfo.name || pointInfo.id || '-' }}</el-descriptions-item>
             <el-descriptions-item label="点位 ID">{{ pointInfo.id || '-' }}</el-descriptions-item>
             <el-descriptions-item label="寄存器">{{ pointInfo.address || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="从站号">{{ pointInfo.slave_id ?? '-' }}</el-descriptions-item>
+            <el-descriptions-item label="从站地址">{{ pointInfo.slave_id ?? '-' }}</el-descriptions-item>
             <el-descriptions-item label="数据类型">{{ pointInfo.data_type || '-' }}</el-descriptions-item>
             <el-descriptions-item label="缩放">{{ pointInfo.scale ?? 1 }}</el-descriptions-item>
           </el-descriptions>

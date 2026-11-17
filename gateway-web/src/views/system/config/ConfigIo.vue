@@ -114,6 +114,7 @@ import type { GatewayConfig } from '@/api/types'
 import type { ProjectFile } from '@/api/project'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import { triggerDownload } from '@/utils/exportCsv'
+import { copyText } from '@/utils/clipboard'
 import { makeJsonTextValidator } from '@/utils/jsonTextValidator'
 import ImportOutcome from '@/components/ImportOutcome.vue'
 import ConfigChangePreview from './dialogs/ConfigChangePreview.vue'
@@ -159,10 +160,15 @@ async function doExport() {
   }
 }
 
-function copyJson() {
+/**
+ * 复制导出内容。走 `copyText`（含 execCommand 回退）而非直写 `navigator.clipboard`：
+ * 现场网关多以 `http://<ip>:<port>` 访问，非安全上下文下 `navigator.clipboard` 为
+ * undefined，原实现会同步抛 TypeError（且不 await，拒绝也无人接管），用户点了
+ * 「复制到剪贴板」既没成功也没提示。
+ */
+async function copyJson() {
   if (!exportedJson.value) return
-  navigator.clipboard.writeText(exportedJson.value)
-  ElMessage.success('已复制到剪贴板')
+  await copyText(exportedJson.value, '配置已复制到剪贴板')
 }
 
 function downloadJson() {
@@ -232,10 +238,10 @@ async function doExportProject() {
   }
 }
 
-function copyProjectJson() {
+/** 同上：复制工程文件走 copyText，保证 http 直连时可回退。 */
+async function copyProjectJson() {
   if (!projectJson.value) return
-  navigator.clipboard.writeText(projectJson.value)
-  ElMessage.success('已复制到剪贴板')
+  await copyText(projectJson.value, '工程文件已复制到剪贴板')
 }
 
 function downloadProjectJson() {

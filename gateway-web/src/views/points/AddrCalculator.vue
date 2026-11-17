@@ -7,7 +7,7 @@
           <ModbusAddressInput v-model="manualAddr" />
         </el-form-item>
         <el-form-item label="功能码"><el-select v-model="funcCode" style="width:180px"><el-option v-for="f in fcs" :key="f.code" :label="`${f.code} - ${f.name}`" :value="f.code" /></el-select></el-form-item>
-        <el-form-item label="从站ID"><el-input-number v-model="slaveId" :min="1" :max="247" /></el-form-item>
+        <el-form-item label="从站地址"><el-input-number v-model="slaveId" :min="1" :max="247" /></el-form-item>
         <el-form-item label="数量"><el-input-number v-model="count" :min="1" :max="125" /></el-form-item>
         <el-form-item><el-button type="primary" :loading="calcLoading" @click="calc">计算</el-button></el-form-item>
       </el-form>

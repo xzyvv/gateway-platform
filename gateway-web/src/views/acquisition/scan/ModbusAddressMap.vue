@@ -1,9 +1,7 @@
 <template>
   <div class="addr-map">
     <div class="control-bar">
-      <el-select v-model="selectedBus" placeholder="选择总线" aria-label="选择总线" style="width: 200px" @change="loadMap">
-        <el-option v-for="b in buses" :key="b" :label="b" :value="b" />
-      </el-select>
+      <BusSelect v-model="selectedBus" :options="busOptions" :width="200" aria-label="选择总线" @change="loadMap" />
       <el-select v-model="selectedSlave" placeholder="选择从站" aria-label="选择从站" style="width: 140px" @change="loadMap">
         <el-option v-for="s in slaves" :key="s" :label="`从站 ${s}`" :value="s" />
       </el-select>
@@ -56,7 +54,7 @@
       <!-- 占用详情 -->
       <el-drawer v-model="showDetail" title="地址占用详情" size="40%">
         <el-descriptions v-if="hoverCell" :column="1" border>
-          <el-descriptions-item label="地址">{{ hoverCell.addr }}</el-descriptions-item>
+          <el-descriptions-item label="寄存器地址">{{ hoverCell.addr }}</el-descriptions-item>
           <el-descriptions-item label="点位 ID">{{ hoverCell.pointId || '无' }}</el-descriptions-item>
           <el-descriptions-item label="点位名称">{{ hoverCell.pointName || '未分配' }}</el-descriptions-item>
           <el-descriptions-item label="占用寄存器数">{{ hoverCell.addressNum || 1 }}</el-descriptions-item>
@@ -70,11 +68,14 @@
 import { ref, computed, onMounted } from 'vue'
 import {Refresh} from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
+import BusSelect, { type BusOption } from '@/components/industrial/BusSelect.vue'
 import { getConfig } from '@/api/config'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import type { PointConfig } from '@/api/types'
 
 const buses = ref<string[]>([])
+/** 总线名直接当选项（本图只画占用情况，不需要协议附加信息） */
+const busOptions = computed<BusOption[]>(() => buses.value.map((b) => ({ label: b, value: b })))
 const selectedBus = ref('')
 const slaves = ref<number[]>([])
 const selectedSlave = ref<number | null>(null)

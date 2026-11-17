@@ -56,7 +56,7 @@
         <el-tab-pane label="Modbus RTU" name="modbus">
           <div class="proto-desc">
             <p><strong>帧结构：</strong>从站地址(1B) + 功能码(1B) + 数据(NB) + CRC校验(2B)</p>
-            <p><strong>功能码：</strong>01读线圈、02读离散量、03读保持寄存器、04读输入寄存器、05写单个线圈、06写单个寄存器、15写多个线圈、16写多个寄存器</p>
+            <p><strong>功能码：</strong>01读线圈、02读离散输入、03读保持寄存器、04读输入寄存器、05写单个线圈、06写单个寄存器、15写多个线圈、16写多个寄存器</p>
             <p><strong>CRC：</strong>CRC-16/MODBUS，低字节在前</p>
           </div>
         </el-tab-pane>

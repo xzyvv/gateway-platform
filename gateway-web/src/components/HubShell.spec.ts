@@ -11,12 +11,14 @@
  *   2. 有未保存更改且用户拒绝放弃时，不切换、不卸载
  *   3. 页签很少（≤ 5）时同样使用左侧导航，不再切换成顶部标签条（全站单一范式）
  *   4. URL ?tab= 驱动的切换同样过脏检查，拒绝时把地址栏拉回当前 tab
+ *   5. keepAlive 的缓存上限覆盖全部页签，多页签 Hub 不会悄悄淘汰早期现场
  * 变异验证：删掉 `.hub-content` 上的 v-if（改为常驻）→ 用例 1 失败；
  * 删掉 selectTab 里的 handleBeforeLeave → 用例 2 失败；
- * 删掉 route watcher 里的 confirmDiscardDirty → 用例 4 失败。
+ * 删掉 route watcher 里的 confirmDiscardDirty → 用例 4 失败；
+ * 把 KeepAlive 的 :max 改回 5 → 用例 5 失败。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { defineComponent, h, markRaw, onMounted, onUnmounted } from 'vue'
+import { defineComponent, h, markRaw, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 
 const m = vi.hoisted(() => ({
@@ -181,6 +183,94 @@ describe('HubShell 分组 + 受控卸载', () => {
     expect(wrapper.find('.probe-b').exists()).toBe(true)
     expect(wrapper.find('.probe-a').exists()).toBe(false)
     expect(unmounts.a).toBe(1)
+    wrapper.unmount()
+  })
+
+  /**
+   * keepAlive 契约：会话型调试 Hub（协议调试台、点位读写）切页签时保留现场。
+   *
+   * 这类页面的「现场」是抓包缓冲、单步队列、待导出的操作记录——卸载即丢，
+   * 用户切回来得从头再跑一遍。注意 keepAlive 下切走只走 `onDeactivated`，
+   * 页面里任何 `onUnmounted` 清理（全局快捷键、定时器）都不会执行，
+   * 需要页面自己用 onDeactivated 配对处理（见 packet/StepDebug.vue）。
+   */
+  it('keepAlive：切页签只挂起不卸载，切回后现场还在', async () => {
+    const events: string[] = []
+    const cacheProbe = (name: string) => defineComponent({
+      name: `CacheProbe-${name}`,
+      setup() {
+        onMounted(() => events.push(`mount:${name}`))
+        onActivated(() => events.push(`activate:${name}`))
+        onDeactivated(() => events.push(`deactivate:${name}`))
+        onUnmounted(() => events.push(`unmount:${name}`))
+        // 每次点击累加，代表「页面里的现场」（如操作记录条数）
+        const hits = ref(0)
+        return () => h('div', { class: `probe-${name}`, onClick: () => { hits.value += 1 } }, String(hits.value))
+      },
+    })
+    const tabs: HubTab[] = [
+      { name: 'a', label: '甲', component: markRaw(cacheProbe('a')) },
+      { name: 'b', label: '乙', component: markRaw(cacheProbe('b')) },
+    ]
+    const wrapper = mount(HubShell, { props: { tabs, fallbackTab: 'a', keepAlive: true } })
+    await flushPromises()
+
+    await wrapper.find('.probe-a').trigger('click')
+    expect(wrapper.find('.probe-a').text()).toBe('1')
+
+    await navItem(wrapper, '乙').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.probe-a').exists()).toBe(false)
+    expect(events).toContain('deactivate:a')
+    expect(events).not.toContain('unmount:a') // 未卸载 → 定时器/状态得以保留
+
+    await navItem(wrapper, '甲').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.probe-a').text()).toBe('1') // 现场没丢
+    expect(events.filter((e) => e === 'mount:a')).toHaveLength(1) // 只挂载过一次
+    wrapper.unmount()
+  })
+
+  /**
+   * KeepAlive 缓存上限必须覆盖全部页签。
+   *
+   * 旧实现写死 `:max="5"`，而协议调试台有 11 个页签：从第 6 个开始按 LRU 淘汰，
+   * 「点一遍再回去」时最早那几页的抓包缓冲/单步队列已被静默丢弃——正是
+   * keepAlive 要保住的东西。页签总数是缓存的天然上界，按它取值即可全部保留。
+   *
+   * 变异验证：把 `:max` 改回 5 → 第 7 页激活后 'a' 被淘汰，切回时 hits 归零。
+   */
+  it('keepAlive：页签数超过 5 时仍不淘汰早期页签', async () => {
+    const cacheProbe = (name: string) => defineComponent({
+      name: `WideProbe-${name}`,
+      setup() {
+        const hits = ref(0)
+        return () => h('div', { class: `wide-${name}`, onClick: () => { hits.value += 1 } }, String(hits.value))
+      },
+    })
+    const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    const tabs: HubTab[] = names.map((n) => ({
+      name: n,
+      label: n.toUpperCase(),
+      component: markRaw(cacheProbe(n)),
+    }))
+    const wrapper = mount(HubShell, { props: { tabs, fallbackTab: 'a', keepAlive: true } })
+    await flushPromises()
+
+    // 在 'a' 里留下现场
+    await wrapper.find('.wide-a').trigger('click')
+    expect(wrapper.find('.wide-a').text()).toBe('1')
+
+    // 依次访问其余 6 个页签（总数 7 > 旧上限 5）
+    for (const n of names.slice(1)) {
+      await navItem(wrapper, n.toUpperCase()).trigger('click')
+      await flushPromises()
+    }
+
+    // 切回 'a'：现场必须还在
+    await navItem(wrapper, 'A').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.wide-a').text()).toBe('1')
     wrapper.unmount()
   })
 

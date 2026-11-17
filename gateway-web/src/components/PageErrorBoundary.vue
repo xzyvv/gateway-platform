@@ -68,7 +68,7 @@
  */
 import { ref, computed, onErrorCaptured, nextTick } from 'vue'
 import { CopyDocument, Refresh, RefreshRight } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { copyText } from '@/utils/clipboard'
 import SectionHeader from './SectionHeader.vue'
 import { reportPageError, bumpErrorCount, clearErrorCount } from '../composables/core/useErrorReporter'
 
@@ -159,25 +159,10 @@ function reload() {
 }
 
 async function copyError() {
-  try {
-    await navigator.clipboard.writeText(errorText.value || '')
-    ElMessage.success('错误信息已复制')
-  } catch {
-    // 老浏览器或非安全上下文无 clipboard API，降级为选中文本
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = errorText.value || ''
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      ElMessage.success('错误信息已复制')
-    } catch {
-      ElMessage.warning('复制失败，请手动选择文本')
-    }
-  }
+  // 统一走 utils/clipboard：非安全上下文（现场常用 http://<ip>:<port>）下
+  // navigator.clipboard 不存在，utils 内自带 textarea + execCommand 回退。
+  // 错误堆栈是用户提交工单的唯一凭据，复制失败必须是「确定失败」而不是假成功。
+  await copyText(errorText.value, '错误信息已复制')
 }
 
 // 清理函数：边界恢复正常（外部主动重置错误时）清除该 name 的计数

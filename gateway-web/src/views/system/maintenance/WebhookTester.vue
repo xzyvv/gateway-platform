@@ -75,6 +75,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, h } from 'vue'
 import { ElMessage, ElTag } from 'element-plus'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { Promotion } from '@element-plus/icons-vue'
 import { testWebhook, type WebhookTestResponse } from '@/api/webhook'
 import type { ColumnDef } from '@/components/DataTable.vue'
@@ -92,6 +93,8 @@ interface HistoryItem {
 }
 
 const HISTORY_KEY = 'webhook_test_history'
+
+const { showToast } = useErrorDisplay()
 
 const req = reactive({ url: '', method: 'POST' as 'POST' | 'PUT' | 'GET', body: '' })
 const headersStr = ref('{"Content-Type":"application/json"}')
@@ -172,8 +175,8 @@ async function send() {
     history.value.unshift(item)
     if (history.value.length > 20) history.value.pop()
     saveHistory()
-  } catch {
-    ElMessage.error('请求发送失败')
+  } catch (e) {
+    showToast(e, 'Webhook 请求发送失败')
   } finally {
     sending.value = false
   }

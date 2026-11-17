@@ -6,7 +6,7 @@
  * 页面组件只保留参数表单与卡片布局，地址分布图交给 scan/parts/RegisterScanGrid.vue。
  */
 import { computed, h, onMounted, ref, type Ref } from 'vue'
-import { ElButton, ElMessage, ElMessageBox, ElTag, type FormInstance } from 'element-plus'
+import { ElButton, ElMessage, ElTag, type FormInstance } from 'element-plus'
 import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/formFieldError'
 import {
   startScan, getScanResult, listScanResults, deleteScanResult, generatePointSuggestions,
@@ -14,12 +14,14 @@ import {
 } from '@/api/protocolTools'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useProtocolCaps } from '@/composables/acquisition/useProtocolCaps'
-import { downloadTableCsv } from '@/utils/exportCsv'
+import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
+import { copyText } from '@/utils/clipboard'
 import { withDiagHint } from '@/utils/diagHints'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { usePolling } from '@/composables/core/usePolling'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn, timeColumn } from '@/utils/commonColumns'
+import { confirmAction } from '@/utils/confirm'
 
 /** 点位建议行 */
 export type SuggestionRow = { id: string; name: string; address: string; address_num: number }
@@ -190,10 +192,17 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
     }
   }
 
-  function copySuggestion(row: { address: string; address_num: number }) {
-    const text = `地址: ${row.address}, 寄存器数量: ${row.address_num}`
-    navigator.clipboard?.writeText(text)
-    ElMessage.success('已复制到剪贴板')
+  /**
+   * 复制一条点位建议。
+   *
+   * 必须走 `copyText`（带 execCommand 回退）而不是直写 `navigator.clipboard`：
+   * 现场网关多以 `http://<ip>:<port>` 访问，属非安全上下文，浏览器不给
+   * `navigator.clipboard`。原先写的是 `navigator.clipboard?.writeText(text)` +
+   * 无条件成功提示 —— 可选链把「接口不存在」静默吞掉，用户看到「已复制」而
+   * 剪贴板是空的，粘贴到工单里才发现没内容。
+   */
+  async function copySuggestion(row: { address: string; address_num: number }) {
+    await copyText(`地址: ${row.address}, 寄存器数量: ${row.address_num}`)
   }
 
   async function loadHistory() {
@@ -205,15 +214,16 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
    * 因此这里对进行中的记录也允许删除，并在确认框里说明。
    */
   async function removeScan(row: ScanResult) {
-    try {
-      await ElMessageBox.confirm(
-        `删除扫描记录（${row.bus} / 从站 ${row.slaveId} / ${row.startAddr}-${row.endAddr}）？` +
-        (row.status !== 'done' ? '该扫描仍在进行中，删除会先中止它。' : ''),
-        '删除扫描结果',
-        { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-      )
-    } catch {
-      return // 用户取消
+    if (
+      !(await confirmAction({
+        title: '删除扫描结果',
+        confirmText: '删除',
+        message:
+          `删除扫描记录（${row.bus} / 从站 ${row.slaveId} / ${row.startAddr}-${row.endAddr}）？` +
+          (row.status !== 'done' ? '该扫描仍在进行中，删除会先中止它。' : ''),
+      }))
+    ) {
+      return
     }
     try {
       await deleteScanResult(row.id)
@@ -242,7 +252,7 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
     downloadTableCsv(
       ['总线', '从站', '寄存器类型', '地址', '是否响应', '值', '功能码', '错误'],
       s.cells.map((c) => [s.bus, s.slaveId, s.regType, c.address, c.responded ? '是' : '否', c.value ?? '', c.funcCode ?? '', c.error ?? '']),
-      `register-scan-${safeBus}-${s.slaveId}-${new Date(s.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`,
+      csvFilename(`register-scan-${safeBus}-${s.slaveId}`, new Date(s.createdAt)),
     )
     ElMessage.success(`已导出 ${s.cells.length} 条扫描结果`)
   }

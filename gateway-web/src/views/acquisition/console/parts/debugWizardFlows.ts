@@ -1,7 +1,7 @@
 /**
  * 现场调试向导数据：按「协议 + 症状」沉淀专家排查路径。
  *
- * 现场新人通常知道「读不到数」，但不知道先查接线还是先查从站号。
+ * 现场新人通常知道「读不到数」，但不知道先查接线还是先查从站地址。
  * 这里把常见故障拆成有序检查项，每项给出判断依据与可跳转的处置入口；
  * 页面只负责渲染与勾选进度，流程内容集中在本文件，便于持续补充经验。
  *
@@ -58,7 +58,7 @@ export const debugWizardFlows: WizardFlow[] = [
     protocol: 'modbus-rtu',
     symptom: '读不到数 / 从站无应答',
     intro:
-      'Modbus RTU 从站完全无响应时，按「物理层 → 通信参数 → 从站号 → 地址」顺序排查；每一步都有明确判据，不要同时改多个参数。',
+      'Modbus RTU 从站完全无响应时，按「物理层 → 通信参数 → 从站地址 → 地址」顺序排查；每一步都有明确判据，不要同时改多个参数。',
     steps: [
       {
         id: 'confirm-rtu-bus',
@@ -83,9 +83,9 @@ export const debugWizardFlows: WizardFlow[] = [
       },
       {
         id: 'check-slave-id',
-        title: '核对从站号并扫描该地址',
+        title: '核对从站地址并扫描该地址',
         detail:
-          '从站号取值 1–247，必须与设备拨码/铭牌一致，且同一总线不能重复。用从站扫描确认该地址是否真的有响应，避免把「地址写错」当成「设备坏」。',
+          '从站地址取值 1–247，必须与设备拨码/铭牌一致，且同一总线不能重复。用从站扫描确认该地址是否真的有响应，避免把「地址写错」当成「设备坏」。',
         action: { label: '从站扫描', to: '/acquisition/console?tab=slave-scan' },
       },
       {
@@ -164,7 +164,7 @@ export const debugWizardFlows: WizardFlow[] = [
       },
       {
         id: 'check-unit-id',
-        title: '核对从站号（Unit ID）',
+        title: '核对从站地址（Unit ID）',
         detail:
           'Modbus TCP 网关下多台表通常使用不同 Unit ID，直连 PLC 常用 1 或 255。Unit ID 与设备文档不一致时，TCP 能连上但读写无响应。',
         action: { label: '从站扫描', to: '/acquisition/console?tab=slave-scan' },

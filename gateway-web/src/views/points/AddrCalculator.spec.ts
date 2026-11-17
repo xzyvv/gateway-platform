@@ -10,7 +10,7 @@ import { nextTick } from 'vue'
  * - 5 位区地址换算正确（0/1/3/4 四个区、非零偏移）；
  * - 区前缀与功能码不匹配时必须明确指出双方区名，不能算出一个看似合理的地址；
  * - 非法输入/不支持的功能码给出可纠正的提示，不显示半截结果；
- * - 请求帧包含从站号、数量与真实 CRC16，低字节在前。
+ * - 请求帧包含从站地址、数量与真实 CRC16，低字节在前。
  */
 
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
@@ -51,7 +51,7 @@ async function setNumber(wrapper: ReturnType<typeof mountPage>, which: 'slave' |
   const target = wrapper
     .findAllComponents({ name: 'ElInputNumber' })
     .find((c) => Number(c.props('max')) === (which === 'slave' ? 247 : 125))
-  expect(target, `找不到${which === 'slave' ? '从站 ID' : '数量'}输入框`).toBeTruthy()
+  expect(target, `找不到${which === 'slave' ? '从站地址' : '数量'}输入框`).toBeTruthy()
   target!.vm.$emit('update:modelValue', value)
   await settle()
 }
@@ -81,7 +81,7 @@ describe('AddrCalculator 地址换算', () => {
   it('四个地址区都能换算：0/1/3/4 前缀各自归零', async () => {
     const cases: Array<[string, string, string]> = [
       ['00001', '01', '读线圈'],
-      ['10001', '02', '读离散量输入'],
+      ['10001', '02', '读离散输入'],
       ['30001', '04', '读输入寄存器'],
       ['40001', '03', '读保持寄存器'],
     ]
@@ -107,7 +107,7 @@ describe('AddrCalculator 地址换算', () => {
     expect(wrapper.find('.hex').text()).toBe('01 01 00 00 00 02 BD CB')
   })
 
-  it('非零偏移按区基数计算，并从站号/数量正确组帧', async () => {
+  it('非零偏移按区基数计算，并从站地址/数量正确组帧', async () => {
     const wrapper = mountPage()
     await setAddr(wrapper, '40100')
     await setNumber(wrapper, 'slave', 247)

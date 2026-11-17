@@ -86,6 +86,7 @@ const { showToast } = useErrorDisplay()
 import { ElButton, ElIcon, ElMessage, ElSwitch, ElTag, ElTooltip, type FormInstance, type FormRules } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { confirmDelete } from '@/utils/confirm'
+import { copyText } from '@/utils/clipboard'
 import { Plus, Refresh, CopyDocument } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
@@ -146,19 +147,10 @@ function resetForm() {
 }
 
 async function copyKey(key: string) {
-  // W95: clipboard API 在 HTTP 非 HTTPS 环境下可能不可用
-  // 此时 navigator.clipboard 为 undefined，原 fallback 可能失效
-  // 改为 try/catch + 提示用户手动复制
-  if (!navigator.clipboard) {
-    ElMessage.warning('当前环境不支持自动复制，请手动复制 Key')
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(key)
-    ElMessage.success('已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动复制')
-  }
+  // 统一走 utils/clipboard。原实现（W95）在 `!navigator.clipboard` 时直接放弃，
+  // 提示「当前环境不支持自动复制」——而 http:// 访问的现场网关正是这种情况，
+  // 其实 textarea + execCommand 回退可用，用户本可以一键复制。
+  await copyText(key)
 }
 function isExpiring(ts: number) {
   return ts > Date.now() && ts - Date.now() < 86400000 * 30
@@ -285,8 +277,8 @@ async function create() {
 async function onToggle(k: ApiKey) {
   try {
     await setApiKeyEnabled(k.id, k.enabled)
-  } catch {
-    ElMessage.error('更新失败')
+  } catch (e) {
+    showToast(e, '更新密钥状态失败')
     k.enabled = !k.enabled
   }
 }

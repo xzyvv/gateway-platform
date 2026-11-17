@@ -33,7 +33,7 @@ const navIndex: NavIndexItem[] = [
   { id: 'nav-system', title: '系统设置', alias: '网关信息', icon: InfoFilled, target: '/system' },
   { id: 'nav-ota', title: '固件升级', alias: '固件与证书', icon: Upload, target: '/system?tab=ota' },
   { id: 'nav-tester', title: '点位读写', alias: '读写测试', icon: Operation, target: '/acquisition/tester' },
-  { id: 'nav-batch-read-test', title: '读取性能测试', alias: '批量读取', icon: Timer, target: '/acquisition/tester?tab=batch-read-test' },
+  { id: 'nav-batch-read-test', title: '读取性能', alias: '批量读取 读取性能测试', icon: Timer, target: '/acquisition/tester?tab=batch-read-test' },
   // 第三阶段 C1：原「协议扫描 / 协议仿真 / 报文调试」三个 Hub 合并为统一「协议调试台」，
   // 汇总入口只保留这一条；旧叫法登记为别名，按老名字搜索仍能命中
   { id: 'nav-protocol-console', title: '协议调试台', alias: '协议工具 协议扫描 协议仿真 报文调试', subtitle: '扫描 / 报文 / 模拟一站式调试，先选总线目标再选动作', icon: Tools, target: '/acquisition/console' },

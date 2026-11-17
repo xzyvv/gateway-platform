@@ -1,4 +1,4 @@
-import { ElMessageBox } from 'element-plus'
+import { confirmAction } from './confirm'
 
 /**
  * 全局未保存更改（脏状态）注册表
@@ -134,27 +134,25 @@ export async function confirmDiscardDirty(currentScope: string): Promise<boolean
   if (!isScopeDirty(currentScope)) {
     return true
   }
-  try {
-    await ElMessageBox.confirm('当前有未保存的更改，离开后将丢失。', '未保存的更改', {
-      type: 'warning',
-      confirmButtonText: '放弃更改并离开',
-      cancelButtonText: '留在本页',
-      autofocus: false,
-    })
-    // Bug-W6: 只清当前 scope 的脏标记，其他 tab 数据完整保留
-    const bucket = dirtyKeysByScope.get(currentScope)
-    if (bucket) {
-      bucket.clear()
-      syncBeforeUnload()
-      // bucket 空时是否删除 key？这层选择：
-      // - 删除：避免长期累积 scope 名（路由切换会自然重连）
-      // - 保留：避免 isScopeDirty 频繁重建 Set 的小开销
-      // 选"保留"——脏数据本来就是边界态，长期累积 scope 数有限（最多路由数）
-    }
-    return true
-  } catch {
-    return false
+  const ok = await confirmAction({
+    message: '当前有未保存的更改，离开后将丢失。',
+    title: '未保存的更改',
+    confirmText: '放弃更改并离开',
+    cancelText: '留在本页',
+    autofocus: false,
+  })
+  if (!ok) return false
+  // Bug-W6: 只清当前 scope 的脏标记，其他 tab 数据完整保留
+  const bucket = dirtyKeysByScope.get(currentScope)
+  if (bucket) {
+    bucket.clear()
+    syncBeforeUnload()
+    // bucket 空时是否删除 key？这层选择：
+    // - 删除：避免长期累积 scope 名（路由切换会自然重连）
+    // - 保留：避免 isScopeDirty 频繁重建 Set 的小开销
+    // 选"保留"——脏数据本来就是边界态，长期累积 scope 数有限（最多路由数）
   }
+  return true
 }
 
 /** 测试用：清空所有脏标记 */

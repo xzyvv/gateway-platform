@@ -113,11 +113,11 @@ export function createDeviceConnectivity(state: DeviceState, deps: DeviceConnect
     } catch {
       return
     }
-    // 从站号应取 form.slave_id；Modbus 未单独填写时回退到地址字段（地址即从站号）。
-    // 表计类协议（DLT645/CJT188）的地址是表号，不能当从站号用，必须显式填写。
+    // 从站地址应取 form.slave_id；Modbus 未单独填写时回退到地址字段（地址即从站地址）。
+    // 表计类协议（DLT645/CJT188）的地址是表号，不能当从站地址用，必须显式填写。
     const slave = state.form.slave_id ?? (deps.isModbus() ? Number(state.form.address) : NaN)
     if (!Number.isInteger(slave) || slave < 1 || slave > 247) {
-      ElMessage.warning('请先填写从站号（Modbus 从站范围 1-247）')
+      ElMessage.warning('请先填写从站地址（Modbus 从站范围 1-247）')
       return
     }
     state.testingConn.value = true
@@ -130,7 +130,7 @@ export function createDeviceConnectivity(state: DeviceState, deps: DeviceConnect
       if (found) {
         ElMessage.success(`设备可达！总线 ${state.form.bus} 地址 ${slave} 响应正常，耗时 ${latency}ms`)
       } else {
-        ElMessage.error(`设备无响应。总线 ${state.form.bus} 上未探测到地址 ${slave} 的设备，请检查接线、波特率或从站号`)
+        ElMessage.error(`设备无响应。总线 ${state.form.bus} 上未探测到地址 ${slave} 的设备，请检查接线、波特率或从站地址`)
       }
     } catch (e) {
       ElMessage.error(`探测失败：${extractErrorMessage(e)}`)

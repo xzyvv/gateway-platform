@@ -127,7 +127,7 @@ export interface DeviceCrudDeps {
 /**
  * 连通性模块的外部依赖
  *
- * 表单内「测试连接」需要知道当前协议（决定从站号语义），由 validation 模块注入。
+ * 表单内「测试连接」需要知道当前协议（决定从站地址语义），由 validation 模块注入。
  */
 export interface DeviceConnectivityDeps {
   /** 当前表单是否为 Modbus 协议 */

@@ -7,7 +7,7 @@
       </span>
     </div>
     <el-form ref="batchFormRef" :model="batchEditForm" :rules="batchRules" label-width="90px" scroll-to-error>
-      <el-form-item label="名称" prop="name">
+      <el-form-item label="点位名称" prop="name">
         <el-input v-model="batchEditForm.name" placeholder="留空则不修改">
           <template #prepend>
             <el-checkbox v-model="batchEditFlags.name" @change="onBatchFlagToggle('name', $event)" />
@@ -16,23 +16,19 @@
       </el-form-item>
       <el-form-item label="总线" prop="bus">
         <!-- 总线名必须与运行参数里的总线完全一致：手填错一个字符，点位就永远采不到数据 -->
-        <el-select
+        <BusSelect
           v-if="buses.length"
           v-model="batchEditForm.bus"
+          :options="busSelectOptions"
           filterable
           :loading="busesLoading"
           :disabled="!batchEditFlags.bus"
-          placeholder="选择总线"
-          style="width: 100%"
+          :width="'100%'"
         >
           <template #prefix>
             <el-checkbox v-model="batchEditFlags.bus" @change="onBatchFlagToggle('bus', $event)" />
           </template>
-          <el-option v-for="b in buses" :key="b.port_name" :label="b.port_name" :value="b.port_name">
-            <span>{{ b.port_name }}</span>
-            <span class="bus-opt-meta">{{ protocolLabel[b.protocol] || b.protocol }}</span>
-          </el-option>
-        </el-select>
+        </BusSelect>
         <!-- 总线列表加载失败时退回文本输入，避免弹窗直接不可用 -->
         <el-input v-else v-model="batchEditForm.bus" placeholder="留空则不修改">
           <template #prepend>
@@ -48,7 +44,7 @@
           <el-option v-for="o in protocolOptions" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="从站号" prop="slave_id">
+      <el-form-item label="从站地址" prop="slave_id">
         <SlaveIdInput v-model="batchEditForm.slave_id" :disabled="!batchEditFlags.slave_id" />
         <el-checkbox v-model="batchEditFlags.slave_id" @change="onBatchFlagToggle('slave_id', $event)" class="batch-check-side" />
       </el-form-item>
@@ -137,7 +133,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, h, getCurrentInstance, watch } from 'vue'
+import { ref, reactive, h, getCurrentInstance, watch, computed } from 'vue'
 import { ElMessage, ElNotification, type FormInstance, type FormItemRule, type FormRules } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { confirmAction } from '@/utils/confirm'
@@ -146,6 +142,7 @@ import { updatePoint } from '@/api/points'
 import { getConfig } from '@/api/config'
 import type { BusConfig, PointConfig } from '@/api/types'
 import SlaveIdInput from '@/components/industrial/SlaveIdInput.vue'
+import BusSelect, { type BusOption } from '@/components/industrial/BusSelect.vue'
 import { protocolLabel, protocolOptions } from '@/composables/devices/useProtocol'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
@@ -180,6 +177,14 @@ const visible = useDialogVisible(props, emit)
 
 /** 可选总线：与设备表单同源（/api/config 的 buses）；加载失败退回文本输入 */
 const buses = ref<BusConfig[]>([])
+/** 总线选项：协议名作为右侧灰色 meta，label 保持 port_name（与提交值一致） */
+const busSelectOptions = computed<BusOption[]>(() =>
+  buses.value.map((b) => ({
+    label: b.port_name,
+    value: b.port_name,
+    meta: protocolLabel[b.protocol] || b.protocol,
+  })),
+)
 const busesLoading = ref(false)
 async function loadBuses() {
   busesLoading.value = true
@@ -252,7 +257,7 @@ const batchRules: FormRules = {
     { required: true, message: '请选择协议', trigger: 'change' },
   ],
   slave_id: [
-    { type: 'number', min: 0, max: 247, message: '从站号需在 0-247 之间（0 为广播地址）', trigger: 'change' },
+    { type: 'number', min: 0, max: 247, message: '从站地址需在 0-247 之间（0 为广播地址）', trigger: 'change' },
   ],
   ct_ratio: [
     { validator: validateRatioWhenChecked('CT'), trigger: 'change' },
@@ -451,5 +456,4 @@ async function submitBatchEdit() {
 .batch-tip { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--color-primary-bg); border-radius: var(--radius-small); margin-bottom: 16px; color: var(--color-primary); }
 .batch-check-side { margin-left: 8px; }
 .batch-hint { font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.6; margin-top: 4px; }
-.bus-opt-meta { margin-left: 8px; color: var(--text-secondary); font-size: 0.75rem; }
 </style>

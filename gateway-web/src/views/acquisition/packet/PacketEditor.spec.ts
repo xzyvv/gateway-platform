@@ -155,7 +155,9 @@ describe('PacketEditor 报文编辑', () => {
     await button(wrapper, '发送').trigger('click')
     await settle()
 
-    expect(wrapper.find('.result').text()).toContain('通信失败：总线被占用')
+    // 文案取自 utils/protocolFailures 的唯一映射：点明「被采集占用」才对得上
+    // 下方「暂停该总线采集」的处置入口（旧文案只说「总线被占用」，用户会去查接线）
+    expect(wrapper.find('.result').text()).toContain('通信失败：总线被采集占用')
     expect(wrapper.find('.bus-pause-banner').text()).toContain('「/dev/ttyUSB0」正被采集引擎占用')
     expect(button(wrapper, '暂停该总线采集')).toBeTruthy()
   })

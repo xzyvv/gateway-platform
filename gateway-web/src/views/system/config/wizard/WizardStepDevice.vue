@@ -12,7 +12,7 @@
       </el-form-item>
       <el-form-item label="从站地址" required>
         <el-input-number v-model="deviceForm.slaveId" :min="1" :max="247" controls-position="right" />
-        <div class="field-hint">Modbus 从站号 1~247，按设备铭牌或拨码填写。</div>
+        <div class="field-hint">Modbus 从站地址 1~247，按设备铭牌或拨码填写。</div>
       </el-form-item>
       <el-form-item label="设备模板" required>
         <el-select v-model="deviceForm.template" placeholder="选择设备模板（必选）" style="width: 100%">

@@ -7,6 +7,7 @@
  * 2. 时间戳归零：首帧记 0ms，回放按帧间隔下发而非绝对时间。
  */
 import type { ReplayPacket, ReplaySession } from '@/api/protocolTools/types'
+import { pad2 } from './datetime'
 
 export interface ReplayFrameInput {
   /** 帧捕获时刻（epoch ms） */
@@ -41,6 +42,5 @@ export function buildReplaySession(name: string, deviceName: string, frames: Rep
 /** 默认会话名：抓包会话 + 当前时刻（本地时区，冒号替换掉避免路径/显示问题） */
 export function defaultSessionName(): string {
   const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `抓包会话 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `抓包会话 ${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }

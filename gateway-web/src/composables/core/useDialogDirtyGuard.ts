@@ -1,5 +1,5 @@
 import { computed, getCurrentInstance, onUnmounted, ref, watch, type Ref } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { confirmAction } from '../../utils/confirm'
 import { registerDirtyGuard } from '../../utils/dirtyGuard'
 
 /**
@@ -78,19 +78,17 @@ export function useDialogDirtyGuard(
   /** 有未保存修改时弹确认；返回 true = 用户同意放弃，可以关闭 */
   async function confirmClose(): Promise<boolean> {
     if (!isDirty()) return true
-    try {
-      await ElMessageBox.confirm('当前修改尚未保存，关闭后将丢失。', '未保存的修改', {
-        type: 'warning',
-        confirmButtonText: '放弃修改并关闭',
-        cancelButtonText: '继续编辑',
-        autofocus: false,
-      })
-      // 用户已同意放弃：把当前状态作为新基线，弹窗继续打开期间再次关闭不再重复弹
-      baseline.value = snapshot()
-      return true
-    } catch {
-      return false
-    }
+    const ok = await confirmAction({
+      message: '当前修改尚未保存，关闭后将丢失。',
+      title: '未保存的修改',
+      confirmText: '放弃修改并关闭',
+      cancelText: '继续编辑',
+      autofocus: false,
+    })
+    if (!ok) return false
+    // 用户已同意放弃：把当前状态作为新基线，弹窗继续打开期间再次关闭不再重复弹
+    baseline.value = snapshot()
+    return true
   }
 
   async function beforeClose(done: () => void) {

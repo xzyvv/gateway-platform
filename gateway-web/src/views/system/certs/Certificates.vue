@@ -67,6 +67,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, h } from 'vue'
 import { ElButton, ElMessage, ElTag } from 'element-plus'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { confirmAction } from '@/utils/confirm'
 import { Upload, Refresh } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
@@ -82,6 +83,8 @@ import {
 import { formatDate, formatDateTime } from '@/utils/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import CertView from './CertView.vue'
+
+const { showToast } = useErrorDisplay()
 
 const certs = ref<Certificate[]>([])
 const loading = ref(false)
@@ -159,8 +162,8 @@ async function load() {
   loading.value = true
   try {
     certs.value = await listCertificates()
-  } catch {
-    ElMessage.error('加载证书列表失败')
+  } catch (e) {
+    showToast(e, '加载证书列表失败')
   } finally {
     loading.value = false
   }
@@ -176,8 +179,8 @@ async function upload() {
     showUpload.value = false
     form.name = ''; form.certPem = ''; form.keyPem = ''
     load()
-  } catch {
-    ElMessage.error('上传失败')
+  } catch (e) {
+    showToast(e, '上传证书失败')
   } finally {
     uploading.value = false
   }

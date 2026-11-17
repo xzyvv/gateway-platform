@@ -20,6 +20,7 @@ vi.mock('element-plus', () => {
 
 import { instance, request } from './http'
 import { useNotificationsStore } from '../stores/notifications'
+import { isUserNotified } from '../utils/errorHandler'
 
 const realAdapter = instance.defaults.adapter
 
@@ -40,6 +41,27 @@ function failNetwork(code = 'ERR_NETWORK') {
   instance.defaults.adapter = async (config) => {
     throw new AxiosError('Network Error', code, config as InternalAxiosRequestConfig)
   }
+}
+
+/** HTTP 200 + 信封里 code!==0：后端业务码拒绝的主路径 */
+function bizFail(code: number, message: string) {
+  instance.defaults.adapter = async (config) => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+    data: { code, message, data: null },
+  })
+}
+
+/** 取 reject 出来的错误对象本身（要检查全局提示标记） */
+async function rejection(p: Promise<unknown>): Promise<unknown> {
+  return p.then(
+    () => {
+      throw new Error('期望 reject，实际 resolve')
+    },
+    (e: unknown) => e,
+  )
 }
 
 describe('写操作失败全局静默（isMutation）', () => {
@@ -98,5 +120,38 @@ describe('写操作失败全局静默（isMutation）', () => {
     await expect(request({ url: '/api/save', method: 'POST' })).rejects.toThrow()
 
     expect(ElMessage.warning).toHaveBeenCalledWith('请求过于频繁，请稍后重试')
+  })
+
+  // 业务码（HTTP 200 + code!==0）此前无视 isMutation 无条件弹窗，
+  // 导致「保存点位」这类校验失败出现「后端原因」+「保存点位失败：原因」两条
+  it('业务码拒绝对写操作同样只留痕不弹窗', async () => {
+    bizFail(4001, '点位名称不能为空')
+
+    const err = await rejection(request({ url: '/api/points', method: 'POST' }))
+
+    const store = useNotificationsStore()
+    expect(store.items[0]!.message).toBe('点位名称不能为空')
+    expect(ElNotification).not.toHaveBeenCalled()
+    // 未弹过 → 不标记，页面 catch 仍须给出带动作语境的提示
+    expect(isUserNotified(err)).toBe(false)
+  })
+
+  it('业务码拒绝对 GET 仍弹窗，并标记错误避免页面重复弹', async () => {
+    bizFail(4001, '点位名称不能为空')
+
+    const err = await rejection(request({ url: '/api/points', method: 'GET' }))
+
+    expect(ElNotification).toHaveBeenCalledTimes(1)
+    expect(isUserNotified(err)).toBe(true)
+  })
+
+  // 授权类业务码是跨页面全局状态，不受写操作静音约束
+  it('配额不足业务码对写操作仍全局提示', async () => {
+    bizFail(4021, '当前档位支持最多 1500 点位数，当前已 2000')
+
+    const err = await rejection(request({ url: '/api/points', method: 'POST' }))
+
+    expect(ElNotification).toHaveBeenCalledTimes(1)
+    expect(isUserNotified(err)).toBe(true)
   })
 })

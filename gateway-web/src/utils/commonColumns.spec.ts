@@ -34,9 +34,17 @@ describe('commonColumns — 跨页面列定义单一来源', () => {
     expect(col.cell?.({ ts: 0 })).toBe('-')
   })
 
-  it('addressColumn 默认等宽右对齐', () => {
-    const col = addressColumn()
+  /**
+   * 列头不再有默认值「地址」。
+   *
+   * 原来设备表（address = 设备地址）与点位表（address = 点位地址）都靠默认值
+   * 顶着同一个「地址」列头，两块表并排看会以为是同一字段。现在 title 是必填项，
+   * 由各页按字段语义给出；这里守住「传什么就渲染什么」，防止有人又加回默认值。
+   */
+  it('addressColumn 列头按调用方语义给出，默认等宽右对齐', () => {
+    const col = addressColumn({ title: '点位地址' })
     expect(col.key).toBe('address')
+    expect(col.title).toBe('点位地址')
     expect(col.mono).toBe(true)
     expect(col.align).toBe('right')
   })

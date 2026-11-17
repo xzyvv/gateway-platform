@@ -214,7 +214,7 @@ export function createPointCrud(state: PointsState, loadPoints: () => Promise<vo
   async function savePointField(row: PointConfig, patch: InlinePatch): Promise<boolean> {
     if (state.isUnmounted()) return false
     const field = Object.keys(patch)[0] ?? ''
-    const fieldName = field === 'name' ? '名称' : field === 'address' ? '地址' : '从站号'
+    const fieldName = field === 'name' ? '名称' : field === 'address' ? '地址' : '从站地址'
     const isAddressing = field === 'address' || field === 'slave_id'
     if (isAddressing) {
       const ok = await confirmAction({

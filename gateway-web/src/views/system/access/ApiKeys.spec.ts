@@ -140,6 +140,43 @@ describe('ApiKeys.vue', () => {
     expect(tableText).not.toContain(FULL_KEY)
   })
 
+  /**
+   * 现场网关多用 `http://<ip>:<port>` 访问，属非安全上下文，浏览器不提供
+   * `navigator.clipboard`。旧实现在这种情况下直接 `ElMessage.warning('当前环境不支持
+   * 自动复制')` 放弃，而 textarea + `document.execCommand('copy')` 回退其实是可用的——
+   * 「创建后唯一一次能看到完整 Key」的场景因此变成必须手抄。
+   *
+   * 变异验证：把 copyKey 改回「!navigator.clipboard 就返回」→ 本用例红（无 execCommand 调用）。
+   */
+  it('非安全上下文（无 navigator.clipboard）仍能复制完整 Key', async () => {
+    createApiKeyMock.mockResolvedValue(CREATED)
+    const wrapper = await mountPage()
+
+    await (await findButton(wrapper, '新建 API Key')).trigger('click')
+    await settle()
+    await wrapper.find('input[placeholder="为该 API Key 起个名字"]').setValue('新密钥')
+    await (await findButton(wrapper, '创建')).trigger('click')
+    await settle()
+
+    // 模拟 http:// 访问：clipboard API 整个不存在
+    const originalClipboard = navigator.clipboard
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    const exec = vi.fn().mockReturnValue(true)
+    const originalExec = document.execCommand
+    Object.defineProperty(document, 'execCommand', { value: exec, configurable: true })
+    try {
+      await (await findButton(wrapper, '复制')).trigger('click')
+      await settle()
+
+      expect(exec).toHaveBeenCalledWith('copy')
+      expect(ElMessage.success).toHaveBeenCalledWith('已复制')
+      expect(ElMessage.warning).not.toHaveBeenCalledWith('当前环境不支持自动复制，请手动复制 Key')
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: originalClipboard, configurable: true })
+      Object.defineProperty(document, 'execCommand', { value: originalExec, configurable: true })
+    }
+  })
+
   it('名称为空时不调用创建接口并提示警告', async () => {
     const wrapper = await mountPage()
 

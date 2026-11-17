@@ -42,7 +42,7 @@ export function summarizeBackoff(points: PointBackoff[]): BackoffStats {
  * 退避记录 → 设备 ID。
  *
  * 后端退避快照里 `device_id` 可能为空（模板展开点位的归属未写入），
- * 此时用 `${设备ID}_` 前缀从 point_id 反解；反解不出来就返回空串，不猜。
+ * 此时用 `${设备 ID}_` 前缀从 point_id 反解；反解不出来就返回空串，不猜。
  */
 export function resolveBackoffDeviceId(
   b: PointBackoff,

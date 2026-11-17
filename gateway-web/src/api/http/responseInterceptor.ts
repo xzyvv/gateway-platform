@@ -14,6 +14,7 @@ import { useRequestLogStore } from '../../stores/requestLog'
 import { useAuthStore } from '../../stores/auth'
 import { clearToken } from '../token'
 import { ERR, describeErrorCode } from '../../utils/errorCodes'
+import { markUserNotified } from '../../utils/errorHandler'
 import { withDiagHint } from '../../utils/diagHints'
 import { logWarn } from '../../utils/logger'
 import { instance, unregisterInflight, type TimedConfig } from './instance'
@@ -21,6 +22,17 @@ import { readTraceId } from './trace'
 import { isPlainObject, loggableBody, loggableHeaders, sanitizeUrl } from './sanitize'
 import { isBareResponse, type ApiEnvelope } from './envelope'
 import { releaseLoggingOut, tryAcquireLoggingOut } from './loggingOut'
+
+/**
+ * 写操作方法判定（GET 之外都算写）。
+ *
+ * 成功分支（业务码 code!==0）与失败分支都按这个口径决定「全局弹窗 / 只留痕」，
+ * 抽成一个函数避免两处漂移——历史上成功分支漏了这个判断，导致业务码校验失败
+ * 无条件弹窗，与失败分支的口径相反。
+ */
+function isMutationRequest(cfg: TimedConfig): boolean {
+  return (cfg.method ?? 'get').toLowerCase() !== 'get'
+}
 
 instance.interceptors.response.use(
   (response) => {
@@ -60,10 +72,21 @@ instance.interceptors.response.use(
           responseHeaders: loggableHeaders(response.headers),
         })
         const notify = useNotificationsStore()
-        notify.error(message, { code: wrapped.code, traceId })
+        const isMutation = isMutationRequest(cfg)
+        // 与下方 HTTP 状态码分支保持同一口径：写操作的提示归页面 catch（带动作语境），
+        // 全局只留痕不弹窗。本分支此前无视 isMutation 无条件弹窗，于是「保存点位」
+        // 这类 4xxx 业务码校验失败会出现「后端原因」+「保存点位失败：原因」两条。
+        // 授权类业务码是跨页面全局状态，不受静音约束（同上）。
+        const isGlobalAlert =
+          wrapped.code === ERR.QUOTA_EXCEEDED ||
+          wrapped.code === ERR.LICENSE_REQUIRED ||
+          wrapped.code === ERR.LICENSE_INVALID
+        notify.error(message, { code: wrapped.code, traceId, silent: isMutation && !isGlobalAlert })
         // traceId 挂到 Error 上：页面/组合式函数在上下文提示里也能带上它
         const bizError = new Error(message) as Error & { traceId?: string }
         bizError.traceId = traceId
+        // 全局已弹过才标记，页面 catch 里就不会再叠一条
+        if (!isMutation || isGlobalAlert) markUserNotified(bizError)
         return Promise.reject(bizError)
       } else {
         responseData = wrapped.data
@@ -95,7 +118,7 @@ instance.interceptors.response.use(
     // 故写操作只在通知中心留痕、不弹窗，保证用户只看到一条有上下文的提示。
     // GET 多为轮询/加载，用户没有主动发起，也没有人负责提示，仍由全局弹。
     // 例外（401 鉴权 / 4021 配额 / 429 限流）保持全局提示：它们是跨页面的全局状态，需要立刻可见。
-    const isMutation = (cfg.method ?? 'get').toLowerCase() !== 'get'
+    const isMutation = isMutationRequest(cfg)
 
     // 主动取消：切网关 abortAllInflight / 组件卸载 AbortController.abort()
     // 不弹通知、不写错误日志
@@ -140,6 +163,8 @@ instance.interceptors.response.use(
             if (!isLoginPage) {
               const notify = useNotificationsStore()
               notify.error('鉴权失败，请重新登录', { code: ERR.UNAUTHORIZED, traceId })
+              // 已由全局层告知用户（并即将跳登录页），页面 catch 不必再弹一条
+              markUserNotified(error)
               // Bug 179: 延迟到跳登录流程结束后再释放登出门。原实现紧接着同步 release，
               // 使 ref-count 在同一同步批次内立刻回到 0，导致并发 401 每一个都判定为
               // “第一个”而重复弹窗/跳登录。改为动态导入 + replace 完成后再释放，保证
@@ -175,6 +200,8 @@ instance.interceptors.response.use(
         // 后端返回面向客户的中文 message（如"当前档位支持最多 1500 点位数，当前已 2000"），
         // 原样透出 + 授权编号增强定位。
         const detail = describeErrorCode(body.code, body?.message)
+        // 授权类拒绝必定全局可见（不受 isMutation 静音约束），页面无需再弹
+        markUserNotified(error)
         void import('../../stores/tier')
           .then(({ useTierStore }) => {
             const licId = useTierStore().licenseState?.license_id
@@ -188,10 +215,13 @@ instance.interceptors.response.use(
           })
       } else if (status === 429) {
         ElMessage.warning('请求过于频繁，请稍后重试')
+        markUserNotified(error)
       } else {
         // code 传 HTTP 状态码：通知中心按 100–599 区间识别并给出人话解释 + 排查建议
         // （业务码 4021/8000 都在区间外，不会与 ApiResponse.code 混淆）
         useNotificationsStore().error(`请求失败(${status}): ${msg}`, { code: status, silent: isMutation, traceId })
+        // 仅当真的弹了（GET；写操作是静音的，提示归页面 catch 负责）才标记
+        if (!isMutation) markUserNotified(error)
       }
       useRequestLogStore().pushLog({
         method: cfg.method?.toUpperCase() || 'GET',
@@ -211,6 +241,8 @@ instance.interceptors.response.use(
       // 避免用户只看到一句"网络错误"无从下手
       const selfCheck = '自检：确认网关服务已启动、访问地址与端口正确、本机与网关网络连通'
       useNotificationsStore().error(`网络错误: ${errMsg}；${selfCheck}`, { silent: isMutation })
+      // 同上：只有 GET 会真弹，写操作的提示归页面 catch
+      if (!isMutation) markUserNotified(error)
       useRequestLogStore().pushLog({
         method: cfg.method?.toUpperCase() || 'GET',
         url: sanitizeUrl(cfg.url),

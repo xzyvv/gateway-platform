@@ -189,7 +189,7 @@ export function buildPointPayload(validRows: PointRow[]): PointConfig[] {
  * - CSV 没出现过的列 → 保留原值（这是合并模式的意义：导出精简 10 列再导回，
  *   scale / unit / 公式 / 告警阈值等都不会被冲掉）；
  * - CSV 出现但留空的列 → 按字段表的语义清空或保留（scale/offset 这类不可清空字段
- *   留空表示保留原值，不会把测点值乘成 0）。
+ *   留空表示保留原值，不会把点位值乘成 0）。
  *
  * @param existing 现场现有点位（按 id 索引）
  * @param presentColumns CSV 表头里真正出现过的可映射列

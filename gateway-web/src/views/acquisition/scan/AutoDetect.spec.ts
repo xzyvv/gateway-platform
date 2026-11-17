@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 
@@ -22,6 +22,12 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
 import AutoDetect from './AutoDetect.vue'
 import { listProtocolCapabilities } from '@/api/protocols'
+import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
+
+// 协议能力是模块级单例：逐条用例清空，保证各自的 mock 能力位真正被请求到
+beforeEach(() => {
+  resetProtocolCapsCache()
+})
 
 /**
  * B3：参数探测入口必须由协议能力位（supports_auto_detect）驱动，

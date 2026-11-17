@@ -48,7 +48,7 @@
       </el-card>
 
       <!-- 右侧：操作记录 -->
-      <OperationLogPanel :logs="logs" @export="exportLogs" @clear="clearLog" />
+      <OperationLogPanel :logs="logs" @copy-all="copyAllLogs" @export="exportLogs" @clear="clearLog" />
     </div>
 
     <!-- 批量写入：仅当协议声明 supports_write 时显示 -->
@@ -82,16 +82,17 @@ import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
 import { useReadPointNow } from '@/composables/data/useReadPointNow'
 import { confirmPointWrite, usePointWrite } from '@/composables/data/usePointWrite'
-import { listProtocolCapabilities, getProtocolDiag } from '@/api/protocols'
-import type { ProtocolCapabilities } from '@/api/generated/ProtocolCapabilities'
+import { getProtocolDiag } from '@/api/protocols'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 import { recordRead as recordDeviceRead } from '@/utils/deviceComms'
 import { recordBusOp } from '@/utils/busStats'
 import { useSharedDebugTarget } from '@/composables/acquisition/useDebugTargets'
+import { useProtocolGates } from '@/composables/acquisition/useProtocolGates'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import { withDiagHint } from '@/utils/diagHints'
 import { formatClock } from '@/utils/datetime'
-import { downloadTableCsv } from '@/utils/exportCsv'
+import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
+import { copyText } from '@/utils/clipboard'
 import { getPackets } from '@/api/protocolTools/packetCapture'
 import TesterIntro from './parts/TesterIntro.vue'
 import DevicePointSelector from './parts/DevicePointSelector.vue'
@@ -111,8 +112,9 @@ const { selectedDeviceId: selectedDevice } = useSharedDebugTarget()
 const selectedPoint = ref('')
 const devicesLoading = ref(false)
 const pointsLoading = ref(false)
-// 协议名 -> 能力声明（来自 GET /api/protocols，用于动态渲染操作入口）
-const protocolCaps = ref<Record<string, ProtocolCapabilities>>({})
+// 协议能力门控（口径见 useProtocolGates）：能力未知一律按不支持处理
+const { selectedProtocol, capsKnown, supportsWrite, supportsBatchRead, supportsScanSlaves, supportsDiag } =
+  useProtocolGates(devices, selectedDevice)
 
 const currentValue = ref<number | string>('—')
 const valueLoading = ref(false)
@@ -131,24 +133,6 @@ const selectedPointObj = computed(() =>
   points.value.find((p) => p.id === selectedPoint.value),
 )
 const selectedPointType = computed(() => selectedPointObj.value?.data_type || selectedPointObj.value?.protocol || '')
-
-/** 所选设备对应的协议名 */
-const selectedProtocol = computed(
-  () => devices.value.find((d) => d.id === selectedDevice.value)?.protocol || '',
-)
-/** 所选协议的能力声明；元数据缺失（未加载/未知协议）时为 null */
-const selectedCaps = computed(() => protocolCaps.value[selectedProtocol.value] ?? null)
-// 能力门控：元数据可用时严格按声明渲染；不可用时**按不支持处理**。
-//
-// 口径说明（与 SlaveScan.vue 的 `caps ? caps.supports_scan_slaves : false` 统一）：
-// 「能力未知」不等于「能力具备」。写入是对设备的真实副作用操作，若元数据
-// 因网络异常/协议未加载而缺失却仍放行写入入口，用户会看到一个必然返回
-// `Unsupported` 的按钮，误判为设备故障。故未知一律按「不支持」保守处理。
-const capsKnown = computed(() => selectedCaps.value !== null)
-const supportsWrite = computed(() => selectedCaps.value?.supports_write ?? false)
-const supportsBatchRead = computed(() => selectedCaps.value?.supports_batch_read ?? false)
-const supportsScanSlaves = computed(() => selectedCaps.value?.supports_scan_slaves ?? false)
-const supportsDiag = computed(() => selectedCaps.value?.supports_diag ?? false)
 
 function addLog(type: LogEntry['type'], tag: string, message: string): LogEntry {
   const time = formatClock()
@@ -191,18 +175,6 @@ async function loadDevices() {
     // HTTP 错误由拦截器处理
   } finally {
     if (!unmounted) devicesLoading.value = false
-  }
-}
-
-async function loadProtocolCaps() {
-  try {
-    const list = await listProtocolCapabilities()
-    if (unmounted) return
-    const map: Record<string, ProtocolCapabilities> = {}
-    for (const e of list) map[e.name] = e.capabilities
-    protocolCaps.value = map
-  } catch {
-    // 能力元数据获取失败时保持为空，门控降级为保守放行（不阻断读写功能）
   }
 }
 
@@ -359,6 +331,25 @@ function clearLog() {
   logs.value = []
 }
 
+/**
+ * 复制全部操作记录为纯文本：比导出 CSV 更常用——现场直接把几轮失败记录
+ * 贴进群/工单里讨论，不用先落一个文件再传。
+ * 倒序的 logs 翻回时间正序，与导出 CSV 的口径一致。
+ */
+function copyAllLogs() {
+  if (!logs.value.length) return
+  const text = [...logs.value]
+    .reverse()
+    .map((l) => {
+      const frames = (l.frames ?? [])
+        .map((f) => `${f.direction === 'request' ? '请求' : '响应'}: ${f.hex}`)
+        .join('\n')
+      return [`[${l.time}] ${l.tag} ${l.message}`, frames].filter(Boolean).join('\n')
+    })
+    .join('\n\n')
+  void copyText(text, `已复制 ${logs.value.length} 条操作记录`)
+}
+
 /** 导出操作记录为 CSV：读写测试的收发记录是现场排障证据，支持导出后随工单交付 */
 function exportLogs() {
   if (!logs.value.length) return
@@ -373,15 +364,12 @@ function exportLogs() {
       l.frames?.find((f) => f.direction === 'request')?.hex ?? '',
       l.frames?.find((f) => f.direction === 'response')?.hex ?? '',
     ]),
-    `tester-log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`,
+    csvFilename('tester-log'),
   )
   ElMessage.success(`已导出 ${logs.value.length} 条操作记录`)
 }
 
-onMounted(() => {
-  loadDevices()
-  loadProtocolCaps()
-})
+onMounted(loadDevices)
 onUnmounted(() => { unmounted = true })
 </script>
 

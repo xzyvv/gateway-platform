@@ -84,6 +84,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, h } from 'vue'
 import { ElButton, ElMessage } from 'element-plus'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import DurationSelect from '@/components/industrial/DurationSelect.vue'
 import {
@@ -100,6 +101,8 @@ import { getConfig, postConfig } from '@/api/config'
 import type { SelfHealConfig } from '@/api/types'
 import { formatDateTime } from '@/utils/datetime'
 import { actionColumn, tagColumn } from '@/utils/commonColumns'
+
+const { showToast } = useErrorDisplay()
 
 // 自愈配置缺省值（与后端 SelfHealConfig::default 保持一致：默认关闭）
 const DEFAULT_HEAL: SelfHealConfig = {
@@ -127,8 +130,8 @@ async function load() {
     const [svcs, evts] = await Promise.all([listServices(), listHealEvents()])
     services.value = svcs
     events.value = evts
-  } catch {
-    ElMessage.error('加载看门狗状态失败')
+  } catch (e) {
+    showToast(e, '加载看门狗状态失败')
   } finally {
     loading.value = false
   }
@@ -139,8 +142,8 @@ async function loadHeal() {
   try {
     const cfg = await getConfig()
     heal.value = { ...DEFAULT_HEAL, ...(cfg.self_heal || {}) }
-  } catch {
-    ElMessage.error('加载自愈配置失败')
+  } catch (e) {
+    showToast(e, '加载自愈配置失败')
   }
 }
 
@@ -152,8 +155,8 @@ async function saveHeal() {
     cfg.self_heal = { ...heal.value }
     await postConfig(cfg)
     ElMessage.success('自愈配置已保存，重启网关后生效')
-  } catch {
-    ElMessage.error('保存自愈配置失败')
+  } catch (e) {
+    showToast(e, '保存自愈配置失败')
   } finally {
     saving.value = false
   }
@@ -165,8 +168,8 @@ async function restart(name: string) {
     await restartService(name)
     ElMessage.success(`已触发 ${name} 服务重启`)
     restartTimer = setTimeout(() => { if (!unmounted) load() }, 1500)
-  } catch {
-    ElMessage.error('重启失败')
+  } catch (e) {
+    showToast(e, `重启 ${name} 服务失败`)
   } finally {
     restarting.value = null
   }

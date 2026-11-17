@@ -81,13 +81,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, h, type VNodeChild } from 'vue'
 import { usePolling } from '@/composables/core/usePolling'
-import { ElMessage, ElTag } from 'element-plus'
+import { ElTag } from 'element-plus'
 import {Refresh} from '@element-plus/icons-vue'
 import { getMetrics } from '@/api/status'
 import { parsePrometheusLines } from '@/utils/prometheus'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import TableSkeleton from '@/components/TableSkeleton.vue'
 import { formatClock, formatDateTime } from '@/utils/datetime'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+
+const { showToast } = useErrorDisplay()
 
 const REFRESH_INTERVAL = 5000
 
@@ -210,8 +213,8 @@ async function loadMetrics(opts: { silent?: boolean } = {}) {
             activeGroups.value = metricGroups.value.slice(0, 5).map((g) => g.name)
     }
     lastUpdate.value = formatClock()
-  } catch {
-    if (!unmounted) ElMessage.error('获取指标失败')
+  } catch (e) {
+    if (!unmounted) showToast(e, '获取指标失败')
   } finally {
     if (!silent) loading.value = false
   }

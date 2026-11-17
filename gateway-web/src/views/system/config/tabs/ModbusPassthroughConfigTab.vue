@@ -18,9 +18,15 @@
       <div class="form-hint">默认 5020，故意避开 Modbus Server 的 502，避免两个服务抢同一端口。</div>
     </el-form-item>
     <el-form-item label="目标串口总线">
-      <el-select v-model="pt.target_bus" filterable allow-create default-first-option style="width: 260px" placeholder="选择总线端口名">
-        <el-option v-for="name in busOptions" :key="name" :label="name" :value="name" />
-      </el-select>
+      <BusSelect
+        v-model="pt.target_bus"
+        :options="busSelectOptions"
+        filterable
+        allow-create
+        default-first-option
+        :width="260"
+        placeholder="选择总线端口名"
+      />
       <div class="form-hint">对应「总线」页签中已配置的 port_name；透传请求会转到该 RTU 总线。</div>
     </el-form-item>
     <el-form-item label="请求超时">
@@ -37,11 +43,14 @@
 import { computed } from 'vue'
 import { Link } from '@element-plus/icons-vue'
 import type { BusConfig, ModbusPassthroughConfig } from '@/api/types'
+import BusSelect from '@/components/industrial/BusSelect.vue'
 
 const props = defineProps<{ buses: BusConfig[] }>()
 const pt = defineModel<ModbusPassthroughConfig | null>({ required: true })
 
 const busOptions = computed(() => props.buses.map((b) => b.port_name).filter(Boolean))
+/** 总线下拉选项：只展示 port_name（透传要的就是这个名字，不需要协议附加信息） */
+const busSelectOptions = computed(() => busOptions.value.map((n) => ({ label: n, value: n })))
 </script>
 
 <style scoped>

@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { parseCSV, validateImport } from './batchImportCsv'
 
-/** 列顺序：设备名称,设备ID,所属总线,协议,从站ID,模板,地址（末列留空即由从站ID推导） */
+/**
+ * 列顺序：设备名称,设备 ID,所属总线,协议,从站地址,模板,地址（末列留空即由从站地址推导）。
+ *
+ * 这里刻意沿用手册里的**旧表头**（设备ID / 从站ID）：解析按列位，不认表头文字，
+ * 现场早已存下的 Excel 不能因为改了模板措辞就导不进来。
+ */
 const HEADER = '设备名称,设备ID,所属总线,协议,从站ID,模板,地址'
 
 describe('batchImportCsv 形状冒烟（随模块自 mock 迁入）', () => {

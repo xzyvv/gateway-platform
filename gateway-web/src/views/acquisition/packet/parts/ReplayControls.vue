@@ -1,9 +1,7 @@
 <template>
   <el-form inline @submit.prevent>
     <el-form-item label="总线">
-      <el-select v-model="bus" style="width:200px" :loading="loading" placeholder="选择总线" aria-label="回放目标总线" no-data-text="暂无总线，请先在配置管理中添加">
-        <el-option v-for="o in busOptions" :key="o.value" :label="o.label" :value="o.value" />
-      </el-select>
+      <BusSelect v-model="bus" :options="busOptions" :loading="loading" :width="200" aria-label="回放目标总线" />
     </el-form-item>
     <el-form-item label="超时(ms)">
       <el-input-number v-model="timeoutMs" :min="100" :max="10000" :step="100" style="width:120px" aria-label="单帧超时毫秒" />
@@ -41,6 +39,7 @@
  * - replay / stop / reset / save-as-new：四个执行入口
  */
 import { VideoPlay } from '@element-plus/icons-vue'
+import BusSelect from '@/components/industrial/BusSelect.vue'
 
 defineProps<{
   /** 总线选项 */

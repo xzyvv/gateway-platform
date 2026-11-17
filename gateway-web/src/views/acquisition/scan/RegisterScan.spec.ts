@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 
@@ -23,6 +23,12 @@ vi.mock('@/composables/acquisition/useDebugTargets', () => ({
 
 import RegisterScan from './RegisterScan.vue'
 import { listProtocolCapabilities } from '@/api/protocols'
+import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
+
+// 协议能力是模块级单例：逐条用例清空，保证各自的 mock 能力位真正被请求到
+beforeEach(() => {
+  resetProtocolCapsCache()
+})
 
 /**
  * B3：寄存器扫描入口必须由协议能力位（supports_register_scan）驱动，

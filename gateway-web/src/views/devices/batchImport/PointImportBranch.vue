@@ -191,7 +191,7 @@ const pointRowColumns: ColumnDef<PointRow>[] = [
   { key: 'name', title: '点位名称', minWidth: 120, ellipsis: true },
   { key: 'bus', title: '所属总线', width: 100, ellipsis: true },
   protocolColumn<PointRow>({ width: 80, useLabel: false }),
-  addressColumn<PointRow>({ minWidth: 100 }),
+  addressColumn<PointRow>({ title: '点位地址', minWidth: 100 }),
   { key: 'slave_id', title: '从站', width: 70 },
   tagColumn<PointRow>('valid', {
     title: '状态',

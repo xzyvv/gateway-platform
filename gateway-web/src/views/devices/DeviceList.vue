@@ -67,7 +67,7 @@
 
     <el-dialog v-model="showCreate" :title="editing ? '编辑设备' : '新增设备'" width="520px" :before-close="formGuard.beforeClose" @open="onDialogOpen">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px" class="device-form">
-        <el-form-item label="设备名" prop="name">
+        <el-form-item label="设备名称" prop="name">
           <el-input v-model="form.name" placeholder="请输入设备名称">
             <template #prefix><el-icon><Cpu /></el-icon></template>
           </el-input>
@@ -96,18 +96,14 @@
         <el-form-item label="总线" prop="bus">
           <!-- N1: 改为下拉选择。原自由文本框填错总线名仍能保存成功，
                后端按 bus 建不出采集器，设备永远采不到数据。 -->
-          <el-select
+          <BusSelect
             v-model="form.bus"
+            :options="busSelectOptions"
             filterable
             :loading="busesLoading"
+            :width="'100%'"
             placeholder="选择设备挂载的总线（来自运行参数）"
-            style="width: 100%"
-          >
-            <el-option v-for="b in buses" :key="b.port_name" :label="b.port_name" :value="b.port_name">
-              <span>{{ b.port_name }}</span>
-              <span class="tpl-opt-meta">{{ protocolLabel[b.protocol] || b.protocol }}</span>
-            </el-option>
-          </el-select>
+          />
           <div v-if="busLoadError" class="tpl-hint tpl-hint--err">
             {{ busLoadError }}
             <router-link class="tpl-hint__link" to="/system/config?tab=runtime-config">去新增总线</router-link>
@@ -124,15 +120,15 @@
           />
           <div class="tpl-hint">协议由模板决定，不可单独修改。</div>
         </el-form-item>
-        <el-form-item label="地址" prop="address">
+        <el-form-item label="设备地址" prop="address">
           <el-input v-model="form.address" :placeholder="protocolAddressPlaceholder(form.protocol)">
             <template #prefix><el-icon><Location /></el-icon></template>
           </el-input>
         </el-form-item>
-        <el-form-item v-if="form.protocol === 'modbus'" label="从站号" prop="slave_id">
+        <el-form-item v-if="form.protocol === 'modbus'" label="从站地址" prop="slave_id">
           <el-input-number v-model="form.slave_id" :min="1" :max="247" controls-position="right" placeholder="1-247（可选）" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="采集间隔" prop="interval">
+        <el-form-item label="采集周期" prop="interval">
           <el-input-number v-model="form.interval" :min="1" controls-position="right" placeholder="留空使用模板默认" style="width: 100%" />
           <span style="margin-left: 8px; color: var(--text-secondary); font-size: 0.75rem">单位：秒；留空则使用模板默认周期</span>
         </el-form-item>
@@ -157,7 +153,7 @@
     <el-dialog v-model="assetShow" :title="assetTitle" width="560px" :close-on-click-modal="false">
       <el-skeleton v-if="assetLoading" :rows="5" animated />
       <el-form v-else-if="assetCur" label-width="90px">
-        <el-form-item label="设备ID"><el-input :model-value="assetCur.deviceId" disabled /></el-form-item>
+        <el-form-item label="设备 ID"><el-input :model-value="assetCur.deviceId" disabled /></el-form-item>
         <el-form-item label="资产编号"><el-input v-model="assetCur.assetNo" placeholder="请输入资产编号" /></el-form-item>
         <el-form-item label="厂家"><el-input v-model="assetCur.vendor" placeholder="请输入厂家" /></el-form-item>
         <el-form-item label="型号"><el-input v-model="assetCur.model" placeholder="请输入型号" /></el-form-item>
@@ -197,6 +193,7 @@ import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import { usePermission } from '@/composables/auth/usePermission'
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
 import InlineEditCell from '@/components/InlineEditCell.vue'
+import BusSelect, { type BusOption } from '@/components/industrial/BusSelect.vue'
 import FreshnessBadge from '@/components/FreshnessBadge.vue'
 import {
   usePointBackoff,
@@ -236,6 +233,15 @@ const {
 
 // 模板里的 ref="formRef" 是按名字绑定 setup 变量的，vue-tsc 的 noUnusedLocals 看不到这层引用
 void formRef
+
+/** 总线选项：label 用 port_name（写进 form.bus 的就是它），协议名放右侧 meta */
+const busSelectOptions = computed<BusOption[]>(() =>
+  buses.value.map((b) => ({
+    label: b.port_name,
+    value: b.port_name,
+    meta: protocolLabel[b.protocol] || b.protocol,
+  })),
+)
 
 // 按钮级权限：写操作（新增/编辑/删除）仅 device.write 可见
 const { can } = usePermission()
@@ -443,22 +449,22 @@ watch(devices, reset)
 /** 可隐藏的列：设备表 9 列，窄屏下模板/分组/标签通常用不上 */
 const toggleableColumns = [
   { key: 'id', title: '设备 ID' },
-  { key: 'name', title: '设备名' },
+  { key: 'name', title: '设备名称' },
   { key: 'last_good_ts', title: '最后成功采集' },
   { key: 'evidence', title: '诊断证据' },
   { key: 'template', title: '模板' },
   { key: 'bus', title: '总线' },
   { key: 'protocol', title: '协议' },
-  { key: 'address', title: '地址' },
+  { key: 'address', title: '设备地址' },
   { key: 'group', title: '分组' },
   { key: 'tags', title: '标签' },
 ]
 const { hidden: hiddenColumns } = useColumnPrefs('devices', {
-  // 窄屏（<1440px 笔记本）放下全部列需横向滚动，「地址」被挤出可视区（1366 下需横滚 150px）。
+  // 窄屏（<1440px 笔记本）放下全部列需横向滚动，「设备地址」被挤出可视区（1366 下需横滚 150px）。
   // 因此窄屏默认收起六列：诊断证据 / 分组 / 标签 / 协议 / 模板 / 总线——
   // 诊断证据、分组、标签属低频维护信息；协议与模板可从设备详情、点位页查看；
   // 单总线直连调试时总线名无区分度。
-  // 保留「状态 / 通信质量 / 最后成功采集 / 设备 ID / 设备名 / 地址 / 操作」这组现场诊断必需列，
+  // 保留「状态 / 通信质量 / 最后成功采集 / 设备 ID / 设备名称 / 设备地址 / 操作」这组现场诊断必需列，
   // 使地址列无需横向滚动即可见。用户手动调整过的列偏好优先，不会被反复隐藏。
   narrowHidden: ['evidence', 'group', 'tags', 'protocol', 'template', 'bus'],
 })
@@ -566,14 +572,14 @@ const deviceColumns: ColumnDef<DeviceRow>[] = [
   { key: 'id', title: '设备 ID', width: 128, ellipsis: true, mono: true, sortable: true },
   {
     key: 'name',
-    title: '设备名',
+    title: '设备名称',
     width: 128,
     sortable: true,
     // 行内改名：改个错别字不必再开弹窗、重新校验整套表单
     cell: (row) =>
       h(InlineEditCell, {
         value: row.name,
-        label: '设备名',
+        label: '设备名称',
         maxlength: 64,
         save: (v: string | number) => saveDeviceField(row, { name: String(v) }),
       }),
@@ -581,7 +587,7 @@ const deviceColumns: ColumnDef<DeviceRow>[] = [
   { key: 'template', title: '模板', minWidth: 150, ellipsis: true, sortable: true },
   { key: 'bus', title: '总线', width: 90, sortable: true },
   protocolColumn<DeviceRow>({ width: 100, sortable: true }),
-  addressColumn<DeviceRow>({ width: 120, sortable: true }),
+  addressColumn<DeviceRow>({ title: '设备地址', width: 120, sortable: true }),
   { key: 'group', title: '分组', width: 110, ellipsis: true, sortable: true, cell: (row) => row.group || '—' },
   {
     key: 'tags',

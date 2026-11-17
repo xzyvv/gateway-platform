@@ -119,7 +119,7 @@ describe('InlineEditCell', () => {
 
   it('数字列拒绝非整数与越界值', async () => {
     const save = vi.fn().mockResolvedValue(true)
-    const wrapper = mountCell({ value: 1, label: '从站号', type: 'number', min: 1, max: 247, save })
+    const wrapper = mountCell({ value: 1, label: '从站地址', type: 'number', min: 1, max: 247, save })
 
     let input = await enterEdit(wrapper)
     await input.setValue('1.5')

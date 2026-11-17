@@ -47,6 +47,7 @@ vi.mock('element-plus', async () => {
 })
 
 import { useConfigActions } from './useConfigActions'
+import { ElMessage } from 'element-plus'
 
 const mounted: Array<{ unmount: () => void }> = []
 
@@ -94,5 +95,55 @@ describe('useConfigActions 保存在飞保护（审查#B7）', () => {
     await api.saveConfig()
     expect(m.postConfig).toHaveBeenCalledTimes(2)
     expect(api.saving.value).toBe(false)
+  })
+})
+
+/**
+ * E 批：后端保存顺序改为「先落盘、后热重载」后的提示口径。
+ *
+ * 两种失败必须区分开，否则现场会做出相反的动作：
+ * - 落盘失败 → 什么都没改（提示「配置未被修改」，可以修复磁盘后重试）；
+ * - 落盘成功但热重载被拒且回滚也失败 → 磁盘上已是新配置（必须告知重启后生效，
+ *   否则用户会反复重试并以为保存没成功）。
+ */
+describe('useConfigActions 保存失败提示（E 批：落盘前置）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    m.postConfig.mockImplementation(async () => ({ status: 'ok' }))
+    m.confirmAction.mockImplementation(async () => true)
+  })
+
+  afterEach(() => {
+    mounted.forEach((w) => w.unmount())
+    mounted.length = 0
+  })
+
+  it('落盘失败：提示「配置未被修改」', async () => {
+    m.postConfig.mockRejectedValueOnce(new Error('save config failed: Read-only file system'))
+    const { api } = harness()
+    await flushPromises() // 挂载期的 loadConfig
+
+    await api.saveConfig()
+
+    expect(ElMessage.error).toHaveBeenLastCalledWith(expect.stringContaining('配置未被修改'))
+    // 不得出现「磁盘已写入」这类反向结论
+    expect(ElMessage.error).not.toHaveBeenLastCalledWith(expect.stringContaining('磁盘已写入'))
+  })
+
+  it('落盘成功但回滚失败：必须说明磁盘已是新配置、重启后生效', async () => {
+    m.postConfig.mockRejectedValueOnce(
+      new Error(
+        'bus busy (disk holds the new config; rollback of the previous config failed: permission denied)',
+      ),
+    )
+    const { api } = harness()
+    await flushPromises()
+
+    await api.saveConfig()
+
+    expect(ElMessage.error).toHaveBeenLastCalledWith(
+      expect.stringContaining('重启网关后将按新配置运行'),
+    )
+    expect(ElMessage.error).not.toHaveBeenLastCalledWith(expect.stringContaining('配置未被修改'))
   })
 })

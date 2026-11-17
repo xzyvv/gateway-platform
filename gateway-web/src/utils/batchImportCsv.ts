@@ -32,7 +32,7 @@ export interface ImportRow {
   slaveId: number | string
   /** 设备模板名（必填，须与网关模板库中的模板一致） */
   template: string
-  /** 设备地址：Modbus 留空时取从站ID，其它协议必填 */
+  /** 设备地址：Modbus 留空时取从站地址，其它协议必填 */
   address: string
   valid: boolean
   error?: string
@@ -45,13 +45,13 @@ export interface ImportResult {
   rows: ImportRow[]
 }
 
-/** CSV 列顺序：设备名称,设备ID,所属总线,协议,从站ID,模板,地址 */
-const CSV_HEADER = '设备名称,设备ID,所属总线,协议,从站ID,模板,地址'
+/** CSV 列顺序：设备名称,设备 ID,所属总线,协议,从站地址,模板,地址 */
+const CSV_HEADER = '设备名称,设备 ID,所属总线,协议,从站地址,模板,地址'
 
 /** 期望的列数（与 CSV_HEADER 对应） */
 const EXPECTED_COLUMNS = 7
 
-/** Modbus 协议名（唯一需要「从站ID」寻址的一类） */
+/** Modbus 协议名（唯一需要「从站地址」寻址的一类） */
 const MODBUS_PROTOCOLS = ['modbus-tcp', 'modbus-rtu']
 
 export function downloadTemplate(): void {
@@ -113,8 +113,8 @@ export function validateImport(rows: ImportRow[], templates: TemplateInfo[] = []
     // 它是根因，后面的校验报错都是被切列导致的连带现象
     if (r.error) problems.push(r.error)
     if (!r.name) problems.push('缺少设备名称')
-    if (!r.id) problems.push('缺少设备ID')
-    else if (seenIds.has(r.id)) problems.push(`设备ID「${r.id}」重复`)
+    if (!r.id) problems.push('缺少设备 ID')
+    else if (seenIds.has(r.id)) problems.push(`设备 ID「${r.id}」重复`)
     else seenIds.add(r.id)
     if (!r.bus) problems.push('缺少所属总线')
     if (!r.protocol) problems.push('缺少协议')
@@ -134,18 +134,18 @@ export function validateImport(rows: ImportRow[], templates: TemplateInfo[] = []
     if (isModbus) {
       // Modbus 必须靠从站地址寻址，沿用原来的 1-247 范围校验
       if (!Number.isInteger(sid) || sid < 1 || sid > 247) {
-        problems.push(`从站ID须为 1-247 的整数（当前：${r.slaveId || '空'}）`)
+        problems.push(`从站地址须为 1-247 的整数（当前：${r.slaveId || '空'}）`)
       } else {
         r.slaveId = sid
-        // Modbus 的「地址」就是从站号，留空时自动补上，与设备表单的生成规则一致
+        // Modbus 的「地址」就是从站地址，留空时自动补上，与设备表单的生成规则一致
         if (!r.address) r.address = String(sid)
       }
     } else {
-      // 非 Modbus 协议（DLT645 / CJT188 等）用表地址寻址，从站ID 可空
+      // 非 Modbus 协议（DLT645 / CJT188 等）用表地址寻址，从站地址可空
       if (String(r.slaveId).trim() === '') {
         r.slaveId = ''
       } else if (!Number.isInteger(sid) || sid < 0 || sid > 255) {
-        problems.push(`从站ID须为 0-255 的整数（当前：${r.slaveId}）`)
+        problems.push(`从站地址须为 0-255 的整数（当前：${r.slaveId}）`)
       } else {
         r.slaveId = sid
       }

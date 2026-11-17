@@ -57,7 +57,7 @@ const FALLBACK_TIMEOUT_MS: Record<string, number> = {
 }
 
 const FALLBACK_ADDRESS_HINTS: Record<string, string> = {
-  modbus: '如: 1（从站号 1-247）',
+  modbus: '如: 1（从站地址 1-247）',
   dlt645: '如: 1（表号，1-65535）',
   cjt188: '如: 1（表号，1-99999999）',
   iec104: '如: 1（信息体地址 IA）',

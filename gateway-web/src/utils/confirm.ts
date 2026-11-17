@@ -11,12 +11,20 @@ interface ConfirmOptions {
   confirmText?: string
   /** 取消按钮文字，默认 "取消" */
   cancelText?: string
+  /**
+   * 是否自动聚焦确认按钮，默认 true（Element Plus 默认行为）。
+   *
+   * 「放弃未保存修改」这类确认必须传 false：焦点落在确认按钮上时，
+   * 用户习惯性按回车就会把改动丢掉，而这正是最需要一个停顿的场合。
+   */
+  autofocus?: boolean
 }
 
 /**
  * 操作确认对话框（统一封装 ElMessageBox.confirm）
  *
- * 统一 21 处 "await ElMessageBox.confirm(msg, title, {type:'warning'})" 的重复模式。
+ * 全仓确认框的唯一入口：页面不要再直接写 `ElMessageBox.confirm`，
+ * 否则「取消」要各自 try/catch，且按钮文案/图标类型会各写一套。
  * 与原 API 的关键差异：返回 Promise<boolean>，取消时返回 false 不抛错，
  * 调用方无需 try/catch 即可处理取消分支。
  *
@@ -35,6 +43,7 @@ export async function confirmAction(opts: ConfirmOptions): Promise<boolean> {
       type: opts.type ?? 'warning',
       confirmButtonText: opts.confirmText ?? '确定',
       cancelButtonText: opts.cancelText ?? '取消',
+      autofocus: opts.autofocus ?? true,
     })
     return true
   } catch {

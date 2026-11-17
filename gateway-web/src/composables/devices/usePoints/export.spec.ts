@@ -22,6 +22,9 @@ const downloadState = vi.hoisted(() => ({
 vi.mock('@/utils/exportCsv', () => ({
   downloadTableCsv: downloadState.csv,
   triggerDownload: downloadState.blob,
+  // 导出文件名的时间戳由 utils/exportCsv 统一生成（本地时间，非 UTC）；
+  // 这里给固定值，文件名断言就不受运行机器时区影响
+  fileTimestamp: () => '2026-11-17-21-00-00',
 }))
 
 const messageState = vi.hoisted(() => ({

@@ -15,7 +15,19 @@
  * 持久化到 localStorage——任一页改选，其余调试页跟随；选项加载后若当前
  * 选择已失效（设备被删/配置变更），自动回退到第一个可选项。
  *
- * 加载失败由请求层统一弹窗（GET 全局提示），这里保持静默只暴露空选项。
+ * 选项列表（devices / buses / loading / loaded）同样是**模块级单例**：
+ * 原先它们建在 `useDebugTargets()` 内部、且 `onMounted(load)` 也写在 composable 里，
+ * 于是「谁调了一次就自己打一轮接口」。而一个页面上常有两处调用（Hub 的
+ * ConsoleTargetBar + 页面本身），每进一个 tab 就是 2 轮 GET /api/devices +
+ * GET /api/config。改为单例 + 短 TTL 后：
+ * - 同一次渲染里的多处调用合并成**一次**请求（`inflight` 单飞）；
+ * - TTL（5s）内跨组件复用同一份选项，超时后下一次挂载重新拉取，
+ *   设备/总线配置变更不会被长期遮住；
+ * - 需要绝对最新配置的场合（如调试向导的「总线检查」）显式 `reload()` 强制刷新。
+ *
+ * 加载失败由请求层统一弹窗（GET 全局提示），这里保持静默只暴露空选项；
+ * 失败时 `loaded` 保持 false，因此下一次挂载会自动重试，且不会把已持久化的
+ * 选择误判为「失效」而清空。
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import { listDevices } from '@/api/devices'
@@ -50,53 +62,103 @@ export function useSharedDebugTarget() {
   return { selectedDeviceId, selectedBus }
 }
 
-export function useDebugTargets() {
-  const devices = ref<DeviceConfig[]>([])
-  const buses = ref<BusConfig[]>([])
-  const loading = ref(false)
-  /** 首次加载完成后才允许校正共享选择，避免「尚未加载」被误判为「选择失效」而清掉持久值 */
-  const loaded = ref(false)
+// 模块级单例：选项列表与加载态（理由见文件头注释）。
+// 与上面的共享选择同样是**有意为之**的全局状态——它代表「一份网关配置快照」，
+// 每个 tab 各持一份正是本节要消除的重复请求来源，故按 lint 规则指引显式豁免。
+// eslint-disable-next-line no-restricted-syntax
+const devices = ref<DeviceConfig[]>([])
+// eslint-disable-next-line no-restricted-syntax
+const buses = ref<BusConfig[]>([])
+// eslint-disable-next-line no-restricted-syntax
+const loading = ref(false)
+/** 首次**成功**加载完成。失败时保持 false，下一次挂载会重试。 */
+// eslint-disable-next-line no-restricted-syntax
+const loaded = ref(false)
+/** 在飞的加载请求：并发挂载共享同一次，避免每个实例各打一轮接口 */
+let inflight: Promise<void> | null = null
+/**
+ * 选项快照的有效期。
+ *
+ * 旧行为是「每次页面挂载都拉一遍」，配置改动能立刻看到；纯单例会让它变成
+ * 「装一次就永远用旧快照」，新建设备后进扫描页看不到新设备。
+ * TTL 取 5s：同一次渲染里两处调用（工具栏 + 页面）必然落在窗口内，合并成一轮；
+ * 隔几秒再进另一个 tab 则会重新拉取，配置变更不会被长期遮住。
+ * 需要绝对最新的场合（调试向导的总线检查）走 `reload()` 强制刷新。
+ */
+const TARGETS_TTL_MS = 5_000
+/** 上次成功加载的时刻（毫秒时间戳；0 表示从未加载成功） */
+let loadedAt = 0
 
-  /** 设备下拉选项：label 展示 名称 (id)，value 用 id（接口入参） */
-  const deviceOptions = computed(() =>
-    devices.value.map((d) => ({ label: `${d.name} (${d.id})`, value: d.id })),
-  )
+/** 设备下拉选项：label 展示 名称 (id)，value 用 id（接口入参） */
+const deviceOptions = computed(() =>
+  devices.value.map((d) => ({ label: `${d.name} (${d.id})`, value: d.id })),
+)
 
-  /** 总线下拉选项：value 为 port_name（后端 bus 标识），label 附协议便于现场区分 */
-  const busOptions = computed(() =>
-    buses.value.map((b) => ({
-      label: b.tcp_addr ? `${b.tcp_addr} (${b.protocol})` : `${b.port_name} (${b.protocol})`,
-      value: b.port_name,
-    })),
-  )
+/** 总线下拉选项：value 为 port_name（后端 bus 标识），label 附协议便于现场区分 */
+const busOptions = computed(() =>
+  buses.value.map((b) => ({
+    label: b.tcp_addr ? `${b.tcp_addr} (${b.protocol})` : `${b.port_name} (${b.protocol})`,
+    value: b.port_name,
+  })),
+)
 
-  // 选项就绪后校验共享选择：空或已失效时回退到第一个可选项（与原各页「默认选中第一项」行为一致）
-  watch([deviceOptions, loaded], ([list, ok]) => {
-    if (!ok) return
-    if (!list.some((o) => o.value === selectedDeviceId.value)) {
-      selectedDeviceId.value = list[0]?.value ?? ''
-    }
-  }, { immediate: true })
-  watch([busOptions, loaded], ([list, ok]) => {
-    if (!ok) return
-    if (!list.some((o) => o.value === selectedBus.value)) {
-      selectedBus.value = list[0]?.value ?? ''
-    }
-  }, { immediate: true })
+// 选项就绪后校验共享选择：空或已失效时回退到第一个可选项（与原各页「默认选中第一项」行为一致）。
+// 建在模块级：单例状态只需一套校正逻辑，不必每个调用方各建一对 watcher。
+watch([deviceOptions, loaded], ([list, ok]) => {
+  if (!ok) return
+  if (!list.some((o) => o.value === selectedDeviceId.value)) {
+    selectedDeviceId.value = list[0]?.value ?? ''
+  }
+}, { immediate: true })
+watch([busOptions, loaded], ([list, ok]) => {
+  if (!ok) return
+  if (!list.some((o) => o.value === selectedBus.value)) {
+    selectedBus.value = list[0]?.value ?? ''
+  }
+}, { immediate: true })
 
-  async function load() {
-    loading.value = true
+/**
+ * 拉取设备与总线配置（单飞）。
+ *
+ * - 已有请求在跑：直接复用，不叠加第二轮；
+ * - 失败：静默（请求层已统一提示），`loaded` 不复位为 true，选项保持原值。
+ */
+async function fetchTargets(): Promise<void> {
+  if (inflight) return inflight
+  loading.value = true
+  inflight = (async () => {
     try {
       const [devs, cfg] = await Promise.all([listDevices(), getConfig()])
       devices.value = Array.isArray(devs) ? devs : []
       buses.value = Array.isArray(cfg.buses) ? cfg.buses : []
+      loaded.value = true
+      loadedAt = Date.now()
+    } catch {
+      // 失败不抛：调用方多为 onMounted，抛出去只会变成 unhandled rejection
     } finally {
       loading.value = false
-      loaded.value = true
+      inflight = null
     }
+  })()
+  return inflight
+}
+
+export function useDebugTargets() {
+  // 快照仍在有效期内就直接复用；否则（首次 / 过期 / 上次失败）重新拉取。
+  // 此处仍需在 setup 内注册：onMounted 必须在组件生命周期内调用。
+  onMounted(() => {
+    if (!loaded.value || Date.now() - loadedAt > TARGETS_TTL_MS) void fetchTargets()
+  })
+
+  return {
+    devices,
+    buses,
+    deviceOptions,
+    busOptions,
+    loading,
+    /** 强制重新拉取（总线/设备可能已变更）；并发调用仍合并成一次请求 */
+    reload: fetchTargets,
+    selectedDeviceId,
+    selectedBus,
   }
-
-  onMounted(load)
-
-  return { devices, buses, deviceOptions, busOptions, loading, reload: load, selectedDeviceId, selectedBus }
 }

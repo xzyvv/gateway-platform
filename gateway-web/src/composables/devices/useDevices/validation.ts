@@ -1,7 +1,7 @@
 /**
  * 设备表单校验规则
  *
- * 表单校验按协议分语义：Modbus 的地址是从站号、DLT645/CJT188 的地址是表号、
+ * 表单校验按协议分语义：Modbus 的地址是从站地址、DLT645/CJT188 的地址是表号、
  * IEC104 的地址是 host:port——同一字段的取值范围完全不同，
  * 所以校验器必须读当前协议再判范围，不能写死一套规则。
  */
@@ -14,7 +14,7 @@ import type { DeviceState } from './types'
  * @param state 共享状态（form.protocol 决定校验语义）
  */
 export function createDeviceValidation(state: DeviceState) {
-  /** 当前是否 Modbus 协议（协议相关校验：从站号/地址语义不同）。 */
+  /** 当前是否 Modbus 协议（协议相关校验：从站地址/表地址语义不同）。 */
   const isModbus = () => state.form.protocol === 'modbus'
 
   /** 地址校验：按协议限定数值范围/格式，避免非法值下发到现场。 */
@@ -24,7 +24,7 @@ export function createDeviceValidation(state: DeviceState) {
     switch (state.form.protocol) {
       case 'modbus':
         if (!/^\d+$/.test(v) || Number(v) < 1 || Number(v) > 247) {
-          callback(new Error('Modbus 从站号需为 1-247 的整数')); return
+          callback(new Error('Modbus 从站地址需为 1-247 的整数')); return
         }
         break
       case 'dlt645':
@@ -48,22 +48,22 @@ export function createDeviceValidation(state: DeviceState) {
     callback()
   }
 
-  /** 从站号校验：可留空；填了必须是 1-247 的整数（Modbus 规范）。 */
+  /** 从站地址校验：可留空；填了必须是 1-247 的整数（Modbus 规范）。 */
   const validateSlaveId: FormItemRule['validator'] = (_rule, value, callback) => {
     if (value === null || value === undefined || value === '') { callback(); return }
     const n = Number(value)
     if (!Number.isInteger(n) || n < 1 || n > 247) {
-      callback(new Error('从站号需为 1-247 的整数')); return
+      callback(new Error('从站地址需为 1-247 的整数')); return
     }
     callback()
   }
 
-  /** 采集间隔校验：可留空（使用模板默认）；填了必须是 ≥1 的整数秒。 */
+  /** 采集周期校验：可留空（使用模板默认）；填了必须是 ≥1 的整数秒。 */
   const validateInterval: FormItemRule['validator'] = (_rule, value, callback) => {
     if (value === null || value === undefined || value === '') { callback(); return }
     const n = Number(value)
     if (!Number.isInteger(n) || n < 1) {
-      callback(new Error('采集间隔需为 ≥1 的整数秒（留空使用模板默认）')); return
+      callback(new Error('采集周期需为 ≥1 的整数秒（留空使用模板默认）')); return
     }
     callback()
   }

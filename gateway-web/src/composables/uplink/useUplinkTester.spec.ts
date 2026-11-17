@@ -161,9 +161,14 @@ describe('useUplinkTester', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(api.rendered.value)
     expect(ElMessage.success).toHaveBeenCalledWith('已复制到剪贴板')
 
+    // clipboard 被拒时不再直接判失败：统一出口会走 textarea + execCommand 回退
+    // （现场用 http:// 访问网关时 navigator.clipboard 根本不存在，回退才是主路径）
+    const exec = vi.fn().mockReturnValue(false)
+    Object.defineProperty(document, 'execCommand', { value: exec, configurable: true })
     vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error('denied'))
     await api.copyRendered()
-    expect(ElMessage.warning).toHaveBeenCalledWith('剪贴板访问失败，请手动复制')
+    expect(exec).toHaveBeenCalledWith('copy')
+    expect(ElMessage.warning).toHaveBeenCalledWith('复制失败，请手动选择文本')
   })
 
   it('reuseHistory 复用模板与变量；变量 JSON 非法时仅复用模板', () => {

@@ -21,7 +21,7 @@ export const ERR = {
   BAD_REQUEST: 4000,
   /** 未指定总线（协议工具会话） */
   BUS_MISSING: 4001,
-  /** 参数校验未通过：测点字段 / 协议不支持 共用 */
+  /** 参数校验未通过：点位字段 / 协议不支持 共用 */
   INVALID_PARAM: 4002,
   /** 资源不存在（设备/总线/版本等） */
   NOT_FOUND: 4004,
@@ -71,7 +71,7 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
   },
   [ERR.INVALID_PARAM]: {
     message: '参数校验未通过',
-    hint: '请检查协议、地址、从站号、采集周期等字段',
+    hint: '请检查协议、地址、从站地址、采集周期等字段',
   },
   [ERR.NOT_FOUND]: {
     message: '目标资源不存在',
@@ -142,6 +142,8 @@ const BACKEND_MESSAGE_ZH: Readonly<Record<string, string>> = {
   'api key lacks write scope': '当前 API 密钥没有写权限，请改用带写权限的密钥',
   'license required': '尚未导入授权文件，请在「授权管理」中导入 .lic 文件',
   'license expired or invalid': '授权已失效，请检查有效期或重新导入授权文件',
+  // E 批：NoReply 现在走 504（上游未响应），后端 Display 原文是这句
+  'no reply from device': '设备未响应（超时内没有应答），请检查设备在线、从站地址与接线',
 }
 
 /** 码是否存在兜底文案（用于区分"已知业务错"与"未知码"） */
@@ -188,7 +190,13 @@ const HTTP_STATUS_DETAILS: Readonly<Record<number, ErrorCodeDetail>> = {
   500: { label: '网关内部错误', suggestion: '请稍后重试；反复出现请到「系统日志」查看错误详情' },
   502: { label: '网关服务未就绪', suggestion: '网关可能正在重启，请等待几秒后刷新页面' },
   503: { label: '服务暂时不可用', suggestion: '网关可能过载或正在重启，请稍后刷新页面' },
-  504: { label: '网关响应超时', suggestion: '请检查网关负载与网络状况，稍后重试' },
+  // 504 现在主要来自「设备/总线未应答」（GatewayError::NoReply → 504），
+  // 也可能是网关真的过载或代理超时，所以文案同时覆盖两端。
+  504: {
+    label: '上游未响应',
+    suggestion:
+      '设备或总线未在超时内应答：请确认设备在线、从站地址与接线正确；若所有页面都超时再查网关负载',
+  },
 }
 
 /** 是否属于 HTTP 状态码区间（100–599）。业务码（4021/8000 等）都在区间外，不会误判 */

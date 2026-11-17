@@ -25,7 +25,7 @@
  * 让现场一眼看出当前协议能不能写、能不能批量读、能不能扫描、能不能诊断。
  *
  * 能力门控口径：「能力未知」不等于「能力具备」——元数据缺失时统一按未知展示，
- * 由父组件把每个能力位保守地按 false 处理（见 Tester.vue 的 supports* 计算属性）。
+ * 由父组件把每个能力位保守地按 false 处理（见 composables/acquisition/useProtocolGates.ts）。
  *
  * Props:
  * - capsKnown：所选协议的能力元数据是否已加载（false = 能力未知）

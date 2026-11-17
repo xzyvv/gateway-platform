@@ -4,7 +4,7 @@
       <div class="info-row">
         <el-icon class="info-icon"><Timer /></el-icon>
         <div class="info-text">
-          <h3>读取性能测试</h3>
+          <h3>读取性能</h3>
           <p>对点位连续 N 次读取，统计 P50 / P95 / P99 与成功率，评估采集链路稳定性。</p>
         </div>
       </div>
@@ -14,33 +14,25 @@
       <el-card class="control-card" shadow="never">
         <SectionHeader title="选择点位" icon="Cpu" />
 
+        <!-- 与「点位读写」页共用同一个选择器：能力徽标、设备/点位标签格式、aria-label 三处口径一致，
+             避免同一 Hub 内两套选择器各写一份、行为还对不上 -->
+        <DevicePointSelector
+          v-model:selected-device="selectedDevice"
+          v-model:selected-point="selectedPoint"
+          :devices="devices"
+          :points="points"
+          :devices-loading="devicesLoading"
+          :points-loading="pointsLoading"
+          :selected-protocol="selectedProtocol"
+          :caps-known="capsKnown"
+          :supports-write="supportsWrite"
+          :supports-batch-read="supportsBatchRead"
+          :supports-scan-slaves="supportsScanSlaves"
+          :supports-diag="supportsDiag"
+          @point-change="onPointChange"
+        />
+
         <el-form label-position="top">
-          <el-form-item label="设备">
-            <el-select
-              v-model="selectedDevice"
-              placeholder="请选择设备"
-              filterable
-              aria-label="设备"
-              :loading="devicesLoading"
-              style="width: 100%"
-            >
-              <el-option v-for="d in devices" :key="d.id" :label="`${d.name || d.id} (${d.protocol})`" :value="d.id" />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item label="点位">
-            <el-select
-              v-model="selectedPoint"
-              placeholder="请选择点位"
-              filterable
-              :disabled="!selectedDevice"
-              :loading="pointsLoading"
-              style="width: 100%"
-            >
-              <el-option v-for="p in points" :key="p.id" :label="`${p.name || p.id} (${p.data_type || p.protocol || ''})`" :value="p.id" />
-            </el-select>
-          </el-form-item>
-
           <el-form-item label="测试次数">
             <el-input-number v-model="testCount" :min="1" :max="1000" :step="10" controls-position="right" style="width: 100%" />
           </el-form-item>
@@ -74,29 +66,33 @@
         </div>
       </el-card>
 
-      <el-card class="log-card" shadow="never">
-        <SectionHeader title="测试日志" icon="Document">
-          <el-button size="small" text @click="logs = []">
-            <el-icon><Delete /></el-icon> 清空
-          </el-button>
-        </SectionHeader>
-        <div class="log-list">
-          <div v-for="(log, i) in logs" :key="i" class="log-item" :class="log.type">
-            <div class="log-time">{{ log.time }}</div>
-            <div class="log-content">
-              <el-tag size="small" :type="log.type" effect="dark" class="log-tag">{{ log.tag }}</el-tag>
-              <span class="log-msg">{{ log.message }}</span>
-            </div>
+      <LogPanel
+        class="log-card"
+        title="测试日志"
+        icon="Document"
+        :empty="logs.length === 0"
+        empty-text="执行连续读取后，每次读取的结果会显示在这里"
+        copyable
+        exportable
+        clearable
+        @copy-all="copyAllLogs"
+        @export="exportLogs"
+        @clear="logs = []"
+      >
+        <div v-for="(log, i) in logs" :key="i" class="log-item" :class="log.type">
+          <div class="log-time">{{ log.time }}</div>
+          <div class="log-content">
+            <el-tag size="small" :type="log.type" effect="dark" class="log-tag">{{ log.tag }}</el-tag>
+            <span class="log-msg">{{ log.message }}</span>
           </div>
-          <empty-state v-if="!logs.length" description="执行连续读取后，每次读取的结果会显示在这里" :image-size="80" />
         </div>
-      </el-card>
+      </LogPanel>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-/** 读取性能测试：对同一个点位连续 N 次读取，统计 P50/P95/P99 与成功率。
+/** 读取性能：对同一个点位连续 N 次读取，统计 P50/P95/P99 与成功率。
  *  从原 Tester.vue 拆出，避免读写测试页单页密度过高。
  */
 import { ref, watch, onMounted, onUnmounted } from 'vue'
@@ -109,6 +105,11 @@ import { recordRead as recordDeviceRead } from '@/utils/deviceComms'
 import { recordBusOp } from '@/utils/busStats'
 import { formatClock } from '@/utils/datetime'
 import { useSharedDebugTarget } from '@/composables/acquisition/useDebugTargets'
+import { useProtocolGates } from '@/composables/acquisition/useProtocolGates'
+import DevicePointSelector from './parts/DevicePointSelector.vue'
+import LogPanel from '@/components/LogPanel.vue'
+import { copyText } from '@/utils/clipboard'
+import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 
 interface PerfResult {
   count: number
@@ -138,12 +139,45 @@ const { selectedDeviceId: selectedDevice } = useSharedDebugTarget()
 const selectedPoint = ref('')
 const devicesLoading = ref(false)
 const pointsLoading = ref(false)
+// 协议能力门控（口径见 useProtocolGates）：驱动选择器上的能力徽标
+const { selectedProtocol, capsKnown, supportsWrite, supportsBatchRead, supportsScanSlaves, supportsDiag } =
+  useProtocolGates(devices, selectedDevice)
 const testCount = ref(20)
 const loading = ref(false)
 const result = ref<PerfResult | null>(null)
 const logs = ref<LogEntry[]>([])
 
 let unmounted = false
+/**
+ * Bug 181：点位请求序号——快速切换设备时丢弃过期响应。
+ * 本页此前没有这层保护，旧设备的点位列表可能在用户已切到新设备后回写，
+ * 导致下拉里出现不属于当前设备的点位。
+ */
+let pointsSeq = 0
+
+/**
+ * 复制全部测试日志：一轮 1000 次读取跑完，P50/P99 的结论通常要贴进工单，
+ * 逐条复制不现实；导出 CSV 又太重（对方只是想看几行）。
+ */
+function copyAllLogs() {
+  if (!logs.value.length) return
+  const text = [...logs.value]
+    .reverse()
+    .map((l) => `[${l.time}] ${l.tag} ${l.message}`)
+    .join('\n')
+  void copyText(text, `已复制 ${logs.value.length} 条测试日志`)
+}
+
+/** 导出测试日志为 CSV：交付性能报告时随附原始逐次结果 */
+function exportLogs() {
+  if (!logs.value.length) return
+  downloadTableCsv(
+    ['时间', '类型', '标签', '内容'],
+    [...logs.value].reverse().map((l) => [l.time, l.type, l.tag, l.message]),
+    csvFilename('batch-read-log'),
+  )
+  ElMessage.success(`已导出 ${logs.value.length} 条测试日志`)
+}
 
 function addLog(type: LogEntry['type'], tag: string, message: string) {
   const time = formatClock()
@@ -168,17 +202,27 @@ async function loadDevices() {
 
 async function onDeviceChange(id: string) {
   selectedPoint.value = ''
+  // 递增序号：仅最新一次请求的响应可写入状态，过期响应直接丢弃（Bug 181）
+  const seq = ++pointsSeq
   if (!id) { points.value = []; return }
   pointsLoading.value = true
   try {
     const data = await listPoints(id)
-    if (unmounted) return
+    if (unmounted || seq !== pointsSeq) return
     points.value = data
   } catch {
-    if (!unmounted) points.value = []
+    if (!unmounted && seq === pointsSeq) points.value = []
   } finally {
-    if (!unmounted) pointsLoading.value = false
+    if (!unmounted && seq === pointsSeq) pointsLoading.value = false
   }
+}
+
+/**
+ * 切换点位时清空上一轮结果：统计块里不带点位名，留着上一个点位的
+ * P50/P95/P99 会被当成新点位的成绩。
+ */
+function onPointChange() {
+  result.value = null
 }
 
 /**
@@ -254,7 +298,6 @@ onUnmounted(() => { unmounted = true })
 .result-meta { color: var(--text-secondary); font-size: 0.8125rem; }
 .result-desc { margin-top: 8px; }
 .log-card { min-height: 420px; }
-.log-list { max-height: 480px; overflow-y: auto; }
 .log-item { padding: 0px 10px; border-bottom: 1px solid var(--border-light); }
 .log-item:last-child { border-bottom: none; }
 .log-time { font-size: 0.6875rem; color: var(--text-secondary); font-family: var(--font-mono); }

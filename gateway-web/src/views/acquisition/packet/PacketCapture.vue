@@ -17,7 +17,10 @@
       row-key="id"
       :row-class-name="rowClass"
       :max-height="600"
-      empty-text="暂无报文"
+      :loading="loading"
+      :error="loadError"
+      :empty-text="emptyText"
+      @retry="safeLoad"
     />
 
     <el-drawer v-model="detailVisible" title="报文详情" size="42%">
@@ -56,14 +59,18 @@ import {startCapture, stopCapture, getPackets, clearPackets, type Packet} from '
 import FilterToolbar, { type FilterField } from '@/components/FilterToolbar.vue'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { copyText } from '@/utils/clipboard'
-import { downloadTableCsv } from '@/utils/exportCsv'
+import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 import { formatDateTime, formatTimeOfDay } from '@/utils/datetime'
+import { extractErrorMessage } from '@/utils/errorHandler'
 import HexAsciiView from '@/components/industrial/HexAsciiView.vue'
 import { saveSession } from '@/api/protocolTools'
 import { buildReplaySession, defaultSessionName } from '@/utils/replaySession'
 
 const packets = ref<Packet[]>([])
 const capturing = ref(false)
+const loading = ref(false)
+/** 加载失败文案（空串 = 正常）：交给 DataTable 统一渲染错误条 + 重试 */
+const loadError = ref('')
 // 筛选条件与 URL 双向同步：切 tab 返回后还原，且可刷新/分享带筛选的链接
 const qsBus = useQueryState('bus')
 const qsDevice = useQueryState('device')
@@ -76,10 +83,20 @@ watch(filters, (f) => {
 const { busOptions } = useDebugTargets()
 const filterFields = computed<FilterField[]>(() => [
   { key: 'bus', type: 'select', placeholder: '总线', width: 160, options: busOptions.value },
-  { key: 'device', type: 'input', placeholder: '设备ID', width: 140 },
+  { key: 'device', type: 'input', placeholder: '设备 ID', width: 140 },
 ])
 
 const filtered = computed(() => packets.value.filter((p) => (!filters.value.bus || p.bus === filters.value.bus) && (!filters.value.device || p.deviceId.includes(filters.value.device))))
+
+/**
+ * 空态要分清三种「没内容」，否则现场无从判断下一步：
+ * 压根没开始抓（该去点按钮）/ 抓了但链路上没报文（该去查设备）/ 被筛选条件筛没了（该去改筛选）。
+ */
+const emptyText = computed(() => {
+  if (packets.value.length > 0) return '当前筛选条件下没有报文'
+  if (capturing.value) return '已开始抓包，当前总线上还没有报文往来'
+  return '尚未开始抓包 —— 点「开始抓包」后这里会实时显示收发报文'
+})
 
 // 没有请求帧的会话无法回放（回放只下发请求帧），此时禁用保存入口
 const hasRequest = computed(() => filtered.value.some((p) => p.direction === 'request'))
@@ -123,7 +140,7 @@ function exportFiltered() {
       formatDateTime(p.time), p.direction === 'request' ? '请求' : '响应',
       p.deviceName, p.bus, p.delayMs ?? '', p.hex, p.parsed,
     ]),
-    `packet-capture-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`,
+    csvFilename('packet-capture'),
   )
 }
 
@@ -171,10 +188,41 @@ const columns: ColumnDef<Packet>[] = [
   actionColumn<Packet>({ width: 70, fixed: 'right', cell: (row) => h(ElButton, { size: 'small', type: 'primary', link: true, onClick: () => showDetail(row) }, () => '详情') }),
 ]
 
-async function load() { packets.value = await getPackets(100) }
+/**
+ * 拉取最近报文。
+ *
+ * 有意**不**在这里吞异常：本函数同时被轮询调度器调用，`usePolling` 靠 reject
+ * 判定失败并做指数退避（见其 backoff 选项）。错误展示统一走两个入口：
+ * - 轮询路径 → `usePolling({ onError })`；
+ * - 首屏 / 清空后重载 → `safeLoad()`。
+ * 两处都只把文案落到 `loadError`，由 DataTable 的错误条 + 重试按钮呈现。
+ */
+async function load() {
+  loading.value = true
+  try {
+    packets.value = await getPackets(100)
+    loadError.value = ''
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 非轮询路径的加载：吸收 reject 落到错误态（首屏失败不再变成 unhandled rejection） */
+function safeLoad() {
+  return load().catch((e: unknown) => {
+    loadError.value = extractErrorMessage(e, '报文加载失败')
+  })
+}
 
 // 抓包轮询：usePolling 统一提供隐藏暂停 / 失败退避 / 卸载清理（后端持续抓包，前端暂停拉取无数据损失）
-const { start: startPoll, stop: stopPoll } = usePolling(load, 500, { autoStart: false })
+const { start: startPoll, stop: stopPoll } = usePolling(load, 500, {
+  autoStart: false,
+  // 轮询失败时调度器只退避、不提示：不接管的话界面会一直停在「暂无报文」，
+  // 与「链路上确实没有报文往来」无法区分
+  onError: (e: unknown) => {
+    loadError.value = extractErrorMessage(e, '报文加载失败')
+  },
+})
 
 function toggleCapture() {
   if (capturing.value) {
@@ -185,9 +233,17 @@ function toggleCapture() {
     startPoll()
   }
 }
-async function clear() { try { await clearPackets(); load() } catch (e) { showToast(e, '清空失败') } }
+async function clear() {
+  try {
+    await clearPackets()
+  } catch (e) {
+    showToast(e, '清空失败')
+    return
+  }
+  await safeLoad()
+}
 
-onMounted(load)
+onMounted(() => { void safeLoad() })
 
 // 卸载清理：若正在抓包则调用 stopCapture；轮询定时器由 usePolling 在卸载时自动清理。
 onUnmounted(() => {

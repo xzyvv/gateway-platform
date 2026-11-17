@@ -42,4 +42,33 @@ describe('QueueConfigTab.vue', () => {
     expect(queue.max_rows).toBe(50_000_000)
     wrapper.unmount()
   })
+
+  it('展示容量估算器与聚合覆盖天数，纠正「卡越大历史越长」误判', () => {
+    const { wrapper } = mountTab()
+    const text = wrapper.text()
+    expect(text).toContain('容量估算')
+    expect(text).toContain('建议 max_rows')
+    expect(text).toContain('聚合表')
+    expect(text).toContain('主要由点位数决定')
+    wrapper.unmount()
+  })
+
+  it('默认 100 万行在 500 点规模下提示偏低并可一键应用建议值', async () => {
+    const { queue, wrapper } = mountTab(1_000_000)
+    expect(wrapper.text()).toContain('当前偏低')
+    const applyBtn = wrapper.findAll('button').find((b) => b.text() === '应用')
+    expect(applyBtn).toBeDefined()
+    await applyBtn!.trigger('click')
+    await nextTick()
+    // 500 点/10 秒/24h → 建议 440 万行
+    expect(queue.max_rows).toBe(4_400_000)
+    expect(wrapper.text()).not.toContain('当前偏低')
+    wrapper.unmount()
+  })
+
+  it('当前配置已不低于建议值时不显示应用按钮（不覆盖用户更大配置）', () => {
+    const { wrapper } = mountTab(10_000_000)
+    expect(wrapper.text()).not.toContain('当前偏低')
+    wrapper.unmount()
+  })
 })

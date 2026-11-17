@@ -55,6 +55,7 @@ import { confirmPointWrite, usePointWrite } from '@/composables/data/usePointWri
 import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/formFieldError'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { formatTimeOfDay } from '@/utils/datetime'
+import { composeFailure } from '@/utils/errorHandler'
 
 const STATUS_LABEL: Record<string, string> = { success: '成功', failed: '失败', pending: '待执行' }
 const STATUS_COLOR: Record<string, string> = { success: 'success', failed: 'danger', pending: 'warning' }
@@ -136,7 +137,9 @@ async function send() {
       lastResult.value = `写入成功：${outcome.value ?? val}`
       lastType.value = 'success'
     } else {
-      ElMessage.error('下发失败')
+      // outcome.error 是后端/传输层给出的具体原因（不可写、超时、CRC…），
+      // 只弹「下发失败」会让现场无从判断是配置问题还是通信问题
+      ElMessage.error(composeFailure('下发失败', outcome.error))
       lastResult.value = outcome.error
       lastType.value = 'error'
     }

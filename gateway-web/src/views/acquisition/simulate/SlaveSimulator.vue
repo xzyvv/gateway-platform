@@ -9,7 +9,7 @@
     />
     <el-card shadow="never" class="section-card">
       <el-form inline>
-        <el-form-item label="从站ID"><el-input-number v-model="slaveId" :min="1" :max="247" :disabled="running" /></el-form-item>
+        <el-form-item label="从站地址"><el-input-number v-model="slaveId" :min="1" :max="247" :disabled="running" /></el-form-item>
         <el-form-item label="监听端口"><el-input-number v-model="port" :min="1" :max="65535" :disabled="running" /></el-form-item>
         <el-form-item><el-button type="primary" @click="start" :disabled="running" :icon="VideoPlay">启动模拟</el-button><el-button type="danger" @click="stop" :disabled="!running">停止</el-button></el-form-item>
         <el-tag v-if="running" type="success" effect="dark">运行中，从站 {{ status?.slaveId ?? slaveId }}</el-tag>
@@ -27,20 +27,22 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, h } from 'vue'
+import { ref, onMounted, h } from 'vue'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-const { showToast } = useErrorDisplay()
+import { usePolling } from '@/composables/core/usePolling'
 import { ElButton, ElMessage, ElMessageBox } from 'element-plus'
 import {VideoPlay} from '@element-plus/icons-vue'
 import { getRegisters, updateRegister, startSimulate, stopSimulate, getSimulatorStatus, type SimRegister, type SimulatorStatus } from '@/api/protocolTools'
 import { confirmAction } from '@/utils/confirm'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
+
+const { showToast } = useErrorDisplay()
 const slaveId = ref(1); const port = ref(1502); const running = ref(false); const regs = ref<SimRegister[]>([]); const status = ref<SimulatorStatus | null>(null)
 
 // 寄存器表：当前值用 cell 复刻加粗 + 单位，操作列按钮走 cell 渲染
 const regColumns: ColumnDef<SimRegister>[] = [
-  { key: 'addr', title: '地址', width: 80 },
+  { key: 'addr', title: '寄存器地址', width: 90 },
   { key: 'name', title: '名称', minWidth: 120 },
   {
     key: 'value',
@@ -55,30 +57,38 @@ const regColumns: ColumnDef<SimRegister>[] = [
   }),
 ]
 async function load() {
-  const [r] = await Promise.all([getRegisters(), refreshStatus()])
-  regs.value = r
-  if (running.value) startPolling()
-}
-// 运行中每 2 秒拉取一次 status（端口/请求数/错误数）；组件卸载时清理定时器
-let pollTimer: ReturnType<typeof setInterval> | undefined
-function startPolling() {
-  stopPolling()
-  pollTimer = setInterval(refreshStatus, 2000)
-}
-function stopPolling() {
-  if (pollTimer !== undefined) { clearInterval(pollTimer); pollTimer = undefined }
-}
-async function refreshStatus() {
   try {
-    status.value = await getSimulatorStatus()
-    running.value = status.value.running
-  } catch {
-    // 状态轮询失败静默忽略，避免瞬时网络抖动弹提示
+    const [r] = await Promise.all([getRegisters(), refreshStatus()])
+    regs.value = r
+    if (running.value) startPoll()
+  } catch (e) {
+    showToast(e, '加载从站模拟状态失败')
   }
 }
+
+/**
+ * 运行中每 2 秒拉一次 status（端口/请求数/错误数）。
+ *
+ * 走 usePolling 而不是手写 setInterval，拿到的是全站统一的：标签页隐藏时停表、
+ * KeepAlive 切走时停表、连续失败自动退避（网关重启期间不会每 2 秒打一次）。
+ */
+const { start: startPoll, stop: stopPoll } = usePolling(refreshStatus, 2000, {
+  autoStart: false,
+  // 状态轮询失败不弹提示：期间界面仍显示上次状态，退避由 usePolling 负责
+  onError: () => {},
+})
+
+async function refreshStatus(): Promise<void> {
+  const s = await getSimulatorStatus()
+  status.value = s
+  running.value = s.running
+  // 从站已被停掉（被别的会话/重启停掉）时停止轮询，否则会一直空转并显示「运行中」
+  if (!s.running) stopPoll()
+}
+
 async function start() {
   const ok = await confirmAction({
-    message: `将以从站 ID ${slaveId.value} 在端口 ${port.value} 启动 Modbus TCP 从站，外部主站可连接并读写寄存器（内存态，重启回默认值）。确定启动？`,
+    message: `将以从站地址 ${slaveId.value} 在端口 ${port.value} 启动 Modbus TCP 从站，外部主站可连接并读写寄存器（内存态，重启回默认值）。确定启动？`,
     title: '启动从站模拟',
     confirmText: '启动',
   })
@@ -86,19 +96,20 @@ async function start() {
   try {
     await startSimulate(slaveId.value, port.value)
     running.value = true
-    await refreshStatus()
-    startPolling()
+    startPoll()
+    // 首帧状态拿不到不影响已经起来的模拟器，交给下一拍轮询补齐
+    void refreshStatus().catch(() => {})
     ElMessage.success(`Modbus TCP 从站已启动，监听端口 ${port.value}`)
-  } catch (e) { showToast(e, '启动失败') }
+  } catch (e) { showToast(e, '启动从站模拟失败') }
 }
 async function stop() {
   try {
     await stopSimulate()
     running.value = false
     status.value = null
-    stopPolling()
+    stopPoll()
     ElMessage.warning('已停止')
-  } catch (e) { showToast(e, '停止失败') }
+  } catch (e) { showToast(e, '停止从站模拟失败') }
 }
 async function edit(row: SimRegister) {
   let value: string
@@ -112,13 +123,12 @@ async function edit(row: SimRegister) {
     await updateRegister(row.addr, Number(value))
     await load()
     ElMessage.success(`寄存器 ${row.name} 已更新`)
-  } catch {
-    // PUT 修改寄存器：全局拦截器只留痕，需在此给出可见提示
-    ElMessage.error(`修改寄存器 ${row.name} 失败`)
+  } catch (e) {
+    // PUT 修改寄存器：全局拦截器只留痕，需在此给出可见提示（含具体原因）
+    showToast(e, `修改寄存器「${row.name}」失败`)
   }
 }
-onMounted(load)
-onUnmounted(stopPolling)
+onMounted(() => { void load() })
 </script>
 <style scoped>
 .sim{padding:16px}.section-card{margin-bottom:16px}.anim{color:var(--el-color-primary)}

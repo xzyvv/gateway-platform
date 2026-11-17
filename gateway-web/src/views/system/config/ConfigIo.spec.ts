@@ -108,7 +108,7 @@ describe('ConfigIo 配置导入导出', () => {
 
     await clickButton(wrapper, '复制到剪贴板')
     expect(navigator.clipboard.writeText).toHaveBeenCalledOnce()
-    expect(ElMessage.success).toHaveBeenCalledWith('已复制到剪贴板')
+    expect(ElMessage.success).toHaveBeenCalledWith('配置已复制到剪贴板')
   })
 
   it('导入不再一点就覆盖：合法 JSON 只打开预览，不调用导入接口', async () => {

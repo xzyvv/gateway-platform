@@ -1,6 +1,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { getConfig, postConfig } from '@/api/config'
 import { protocolType, protocolDefaultTimeoutMs } from './useProtocol'
 import { createDevice } from '@/api/devices'
@@ -28,6 +29,7 @@ const IMPORT_CONCURRENCY = 6
  */
 export function useDiscoverWizard() {
   const router = useRouter()
+  const { showToast } = useErrorDisplay()
   const step = ref(0)
   const scanning = ref(false)
   const importing = ref(false)
@@ -67,8 +69,9 @@ export function useDiscoverWizard() {
     try {
       const cfg = await getConfig()
       buses.value = Array.isArray(cfg.buses) ? cfg.buses : []
-    } catch {
-      ElMessage.error('加载总线配置失败')
+    } catch (e) {
+      // 带动作语境的失败提示：只给「加载总线配置失败」用户不知道是权限、网络还是后端 5xx
+      showToast(e, '加载总线配置失败')
     }
   }
 
@@ -146,8 +149,9 @@ export function useDiscoverWizard() {
       }))
       step.value = 2
       ElMessage.success(`扫描完成：发现 ${foundDevices.value.length} 台设备`)
-    } catch {
-      ElMessage.error('扫描失败，请检查总线连接')
+    } catch (e) {
+      // 保留「检查总线连接」的处置建议，同时把后端原因带出来
+      showToast(e, '扫描失败，请检查总线连接')
     } finally {
       scanning.value = false
     }

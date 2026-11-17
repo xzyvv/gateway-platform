@@ -136,7 +136,7 @@
         <el-form-item label="点位 ID" prop="id">
           <el-input v-model="pointForm.id" :disabled="formMode === 'edit'" placeholder="如: temp_01" />
         </el-form-item>
-        <el-form-item label="名称" prop="name">
+        <el-form-item label="点位名称" prop="name">
           <el-input v-model="pointForm.name" placeholder="如: 温度传感器" />
         </el-form-item>
         <el-form-item label="总线" prop="bus">
@@ -151,7 +151,7 @@
             disabled placeholder="继承自所属设备" />
           <div class="point-inherit-hint">协议继承自设备，不可单独修改。</div>
         </el-form-item>
-        <el-form-item label="地址" prop="address">
+        <el-form-item label="点位地址" prop="address">
           <!-- 地址格式随协议不同（Modbus 40001 / S7 DB1.DBD0 / BACnet analog-input:1），
                提示文本统一取后端协议描述符，避免前端只提示 Modbus 写法。 -->
           <!-- Modbus 实际按「功能码 + address_num」寻址，地址串只是 5 位展示；
@@ -168,7 +168,7 @@
             地址偏移超过 9998，5 位地址装不下，请直接填写下方「地址偏移」与展示地址。
           </div>
         </el-form-item>
-        <el-form-item label="从站号" prop="slave_id">
+        <el-form-item label="从站地址" prop="slave_id">
           <el-input-number v-model="pointForm.slave_id" :min="1" :max="247" controls-position="right" style="width: 100%" />
         </el-form-item>
         <!-- address_num 只有 Modbus 有意义（实际寻址 = 功能码 + 0 基寄存器偏移），
@@ -465,7 +465,7 @@ function isRowSelectable(row: PointRow): boolean {
 }
 
 /**
- * 表头排序：从站号升序（1 号排在最前）符合现场按地址排查的习惯；
+ * 表头排序：从站地址升序（1 号排在最前）符合现场按地址排查的习惯；
  * 其余列默认升序。DataTable 只抛事件不自己排序，排序在分页入口完成。
  */
 function onSortChange({ key, order }: { key: string; order: 'asc' | 'desc' }) {
@@ -586,17 +586,17 @@ function onMoreCommand(cmd: string | number | object) {
  */
 const toggleableColumns = [
   { key: '_source', title: '来源' },
-  { key: 'name', title: '名称' },
+  { key: 'name', title: '点位名称' },
   { key: 'bus', title: '总线' },
   { key: 'protocol', title: '协议' },
-  { key: 'address', title: '地址' },
-  { key: 'slave_id', title: '从站号' },
+  { key: 'address', title: '点位地址' },
+  { key: 'slave_id', title: '从站地址' },
   { key: 'ratio', title: '变比' },
   { key: 'writable', title: '允许写入' },
 ]
 const { hidden: hiddenColumns } = useColumnPrefs('points', {
   // 1366 笔记本上 10 列点位表必然横向滚动：默认收起两列「每行都一样/只是溯源」的信息，
-  // 「从站号」「操作」等排查与操作必需的列始终可见（用户可在显示设置里勾回来）。
+  // 「从站地址」「操作」等排查与操作必需的列始终可见（用户可在显示设置里勾回来）。
   narrowHidden: ['_source', 'bus'],
 })
 
@@ -619,16 +619,16 @@ const pointColumns: ColumnDef<PointRow>[] = [
   },
   {
     key: 'name',
-    title: '名称',
+    title: '点位名称',
     width: 140,
     sortable: true,
-    // 名称/地址/从站号支持双击行内改：改个错别字不该再走一遍弹窗；模板行只读
+    // 点位名称/点位地址/从站地址支持双击行内改：改个错别字不该再走一遍弹窗；模板行只读
     cell: (row) =>
       row._source === 'template'
         ? readonlyCell(row.name)
         : h(InlineEditCell, {
             value: row.name,
-            label: '名称',
+            label: '点位名称',
             maxlength: 64,
             save: (v: string | number) => savePointField(row, { name: String(v) }),
           }),
@@ -637,15 +637,16 @@ const pointColumns: ColumnDef<PointRow>[] = [
   protocolColumn<PointRow>({ width: 96, sortable: true }),
   {
     key: 'address',
-    title: '地址',
-    width: 96,
+    title: '点位地址',
+    // 96 装得下 5 位地址但装不下「点位地址」+ 排序图标，会截成「点位地…」
+    width: 108,
     sortable: true,
     cell: (row) =>
       row._source === 'template'
         ? readonlyCell(row.address || null)
         : h(InlineEditCell, {
             value: row.address,
-            label: '地址',
+            label: '点位地址',
             mono: true,
             align: 'right',
             maxlength: 64,
@@ -654,7 +655,7 @@ const pointColumns: ColumnDef<PointRow>[] = [
   },
   {
     key: 'slave_id',
-    title: '从站号',
+    title: '从站地址',
     width: 76,
     sortable: true,
     cell: (row) =>
@@ -662,7 +663,7 @@ const pointColumns: ColumnDef<PointRow>[] = [
         ? readonlyCell(row.slave_id)
         : h(InlineEditCell, {
             value: row.slave_id,
-            label: '从站号',
+            label: '从站地址',
             type: 'number',
             min: 1,
             max: 247,
@@ -700,11 +701,11 @@ const pointColumns: ColumnDef<PointRow>[] = [
   },
   actionColumn<PointRow>({
     // 固定在右缘（fixed: 'right'）：横向滚动时操作入口始终在手边，不会被滚出可视区。
-    // 宽度收窄到 126px：编辑 + 「更多」两个入口足够，避免列宽挤压地址/从站号。
+    // 宽度收窄到 126px：编辑 + 「更多」两个入口足够，避免列宽挤压地址/从站地址。
     width: 126,
     fixed: 'right',
     // 高频操作（编辑）直接露出，读取/删除收进「更多」：
-    // 3 个同权重文字按钮会把操作列撑到 260px，挤压地址、从站号等信息列。
+    // 3 个同权重文字按钮会把操作列撑到 260px，挤压地址、从站地址等信息列。
     // 按钮级权限：编辑/删除仅 point.write 可见；读取当前值所有角色可见。
     cell: (row) => {
       // 模板展开点位只读：只允许读取当前值，编辑/删除需改设备模板

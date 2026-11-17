@@ -159,9 +159,32 @@ export function downloadCsvText(csv: string, filename: string): void {
   triggerDownload(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }), filename)
 }
 
+/**
+ * 导出文件名的时间戳后缀，形如 `2026-11-17-21-06-58`。
+ *
+ * 为什么收敛到这里，而不是各页手写
+ * `new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')`：
+ * 1. 那段写法此前在 5 处各粘了一遍（抓包 / 操作记录 / 扫描结果 / 点位导出 /
+ *    实时数据），改格式要改 5 处，且容易漏掉其中一处；
+ * 2. 更要紧的是 **`toISOString()` 返回 UTC**。现场在 UTC+8 点「导出刚抓的包」，
+ *    文件名叫 `...-13-00-00.csv`，而文件里的时间列、页面日志都是 `21:00:00`，
+ *    附到工单上两端对不上，排查时先要脑内减 8 小时。这里统一用**浏览器本地时间**，
+ *    与 `utils/datetime.ts` 的「不做时区转换、按本地时区展示」约定一致；
+ * 3. Windows 文件名不允许 `:`，故日期与时间各段一律用 `-` 分隔。
+ */
+export function fileTimestamp(d: Date = new Date()): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
+}
+
+/** 带前缀的 CSV 导出文件名，如 `packet-capture-2026-11-17-21-06-58.csv` */
+export function csvFilename(prefix: string, d: Date = new Date()): string {
+  return `${prefix}-${fileTimestamp(d)}.csv`
+}
+
 /** 在浏览器中触发实时数据 CSV 下载 */
 export function downloadCsv(rows: DataPoint[], filename?: string): void {
-  const name = filename || `realtime-data-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`
+  const name = filename || csvFilename('realtime-data')
   triggerDownload(new Blob([toCsv(rows)], { type: 'text/csv;charset=utf-8' }), name)
 }
 

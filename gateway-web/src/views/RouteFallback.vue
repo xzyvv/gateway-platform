@@ -45,7 +45,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { copyText } from '@/utils/clipboard'
 import {
   Lock, QuestionFilled, HomeFilled, CopyDocument, SwitchButton,
 } from '@element-plus/icons-vue'
@@ -91,13 +91,12 @@ function switchAccount() {
 
 /** 远程排查场景需要把路径/账号信息发给研发，直接给文本而非让人手抄 */
 async function copyDetail() {
-  try {
-    await navigator.clipboard.writeText(detail.value)
+  // 统一走 utils/clipboard：非安全上下文下 navigator.clipboard 不存在，
+  // 原实现会直接提示「复制失败」，而 textarea 回退其实是可用的。
+  // 只在真正复制成功后才亮「已复制」，避免用户拿着空内容去求助。
+  if (await copyText(detail.value, '信息已复制')) {
     copied.value = true
-    ElMessage.success('信息已复制')
     setTimeout(() => { copied.value = false }, 2000)
-  } catch {
-    ElMessage.warning('复制失败，请展开详情手动选择文本')
   }
 }
 </script>

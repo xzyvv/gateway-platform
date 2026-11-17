@@ -30,7 +30,7 @@ protocol: string,
  */
 address: string, 
 /**
- * Modbus 从站号 1~247
+ * Modbus 从站地址 1~247
  */
 slave_id: number | null, 
 /**

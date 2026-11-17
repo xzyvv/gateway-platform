@@ -56,8 +56,8 @@ const tabs: HubTab[] = [
   // 菜单落地优先给扫描能力，而不是 Modbus 专用的地址映射视图
   { name: 'register-scan', label: '寄存器扫描', group: 'scan', component: RegisterScan, subtitle: '按总线、从站与地址区间扫描寄存器，看响应分布并生成点位建议', pin: true },
   // R2：从站扫描负责「找未知地址」，参数探测负责「确认已知地址的参数」，两者入口文案须互相指路
-  { name: 'slave-scan', label: '从站扫描', group: 'scan', component: SlaveScan, subtitle: '按总线与地址范围扫描 1–247 从站，用于发现未知从站号；已知地址要确认通信参数请用「参数探测」' },
-  { name: 'auto-detect', label: '参数探测', group: 'scan', component: AutoDetect, subtitle: '对已知地址的设备逐项确认通信参数（波特率/校验位等），成功项可复制或跳转应用；不知道从站号先用「从站扫描」' },
+  { name: 'slave-scan', label: '从站扫描', group: 'scan', component: SlaveScan, subtitle: '按总线与地址范围扫描 1–247 从站，用于发现未知从站地址；已知地址要确认通信参数请用「参数探测」' },
+  { name: 'auto-detect', label: '参数探测', group: 'scan', component: AutoDetect, subtitle: '对已知地址的设备逐项确认通信参数（波特率/校验位等），成功项可复制或跳转应用；不知道从站地址先用「从站扫描」' },
 
   // 先「看」总线上的报文，再「造/发」报文做验证
   { name: 'packet-capture', label: '报文捕获', group: 'packet', component: PacketCapture, subtitle: '观察现场原始帧；抓到的报文可送入编辑与回放' },

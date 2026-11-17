@@ -2,6 +2,8 @@ import { ref, computed, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { confirmDelete } from '@/utils/confirm'
+import { copyText } from '@/utils/clipboard'
+import { formatTimeOfDay } from '@/utils/datetime'
 import {
   testUplink,
   getUplinkConfig,
@@ -118,12 +120,9 @@ export function useUplinkTester() {
   }
 
   async function copyRendered() {
-    try {
-      await navigator.clipboard.writeText(rendered.value)
-      ElMessage.success('已复制到剪贴板')
-    } catch {
-      ElMessage.warning('剪贴板访问失败，请手动复制')
-    }
+    // 统一走 utils/clipboard：http:// 现场访问时 navigator.clipboard 不存在，
+    // 原实现会直接进 catch 提示「剪贴板访问失败」，而其实 textarea 回退是可用的
+    await copyText(rendered.value, '已复制到剪贴板')
   }
 
   async function loadHistory() {
@@ -196,9 +195,7 @@ export function useUplinkTester() {
   }
 
   function formatTime(t: number): string {
-    const d = new Date(t)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    return formatTimeOfDay(t)
   }
 
   onMounted(async () => {

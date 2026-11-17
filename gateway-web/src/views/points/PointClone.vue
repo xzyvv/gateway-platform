@@ -159,8 +159,8 @@ async function loadTargets() {
 }
 
 const sourcePointColumns: ColumnDef<SourcePointRow>[] = [
-  { key: 'name', title: '名称' },
-  { key: 'address_num', title: '地址', width: 80 },
+  { key: 'name', title: '点位名称' },
+  { key: 'address_num', title: '地址偏移', width: 90 },
   { key: 'data_type', title: '类型', width: 80 },
 ]
 

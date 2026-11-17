@@ -10,12 +10,14 @@
  */
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { getConfig, postConfig } from '@/api/config'
 import { protocolDefaultTimeoutMs } from '@/composables/devices/useProtocol'
 import type { BusConfig } from '@/api/types'
 import type { NewBusForm } from './types'
 
 export function useBusStep() {
+  const { showToast } = useErrorDisplay()
   /** 网关现有总线列表 */
   const buses = ref<BusConfig[]>([])
   /** 当前选中的总线端口名 */
@@ -36,8 +38,8 @@ export function useBusStep() {
       const cfg = await getConfig()
       buses.value = Array.isArray(cfg.buses) ? cfg.buses : []
       if (!busPick.value && buses.value[0]) busPick.value = buses.value[0].port_name
-    } catch {
-      ElMessage.error('加载总线配置失败')
+    } catch (e) {
+      showToast(e, '加载总线配置失败')
     }
   }
 

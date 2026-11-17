@@ -27,6 +27,7 @@
           :logs="logs"
           @copy="copyLog"
           @copy-all="copyAllLogs"
+          @export="exportLogs"
           @clear="clearLogs"
         />
       </el-col>
@@ -51,7 +52,7 @@
  * - parts/StepRunLogPanel.vue   执行日志区
  * - parts/stepDebugTypes.ts     共享类型与错误码文案
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listPresets, sendFrame, type PacketPreset } from '@/api/protocolTools'
 import { abortAllInflight } from '@/api/http'
@@ -66,6 +67,7 @@ import {
 } from '@/composables/acquisition/useStepSequences'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { copyText } from '@/utils/clipboard'
+import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 import { confirmAction } from '@/utils/confirm'
 import StepSequencePanel from './parts/StepSequencePanel.vue'
 import StepRunLogPanel from './parts/StepRunLogPanel.vue'
@@ -270,6 +272,27 @@ function copyAllLogs(): void {
   void copyText(logs.value.map(logToText).join('\n\n'), `已复制 ${logs.value.length} 条日志`)
 }
 
+/** 导出执行日志为 CSV：现场要把 20 步的耗时/失败点发给研发，逐条复制不现实 */
+function exportLogs(): void {
+  if (!logs.value.length) return
+  // logs 是倒序（最新在前），导出时翻回执行顺序，与页面阅读顺序一致
+  downloadTableCsv(
+    ['步骤', '结果', '总线', '请求HEX', '响应HEX', '解析值', '耗时ms', '错误'],
+    [...logs.value].reverse().map((l) => [
+      l.step,
+      l.status === 'ok' ? '成功' : '失败',
+      l.bus || '',
+      l.requestHex,
+      l.responseHex,
+      l.parsed,
+      l.latencyMs,
+      l.error ? errorLabel(l.error) : '',
+    ]),
+    csvFilename('step-debug-log'),
+  )
+  ElMessage.success(`已导出 ${logs.value.length} 条执行日志`)
+}
+
 function clearLogs(): void {
   logs.value = []
 }
@@ -313,16 +336,57 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
-// 卸载清理：取消在飞的下发请求，避免快速切页时结果回写到已销毁的页面
-onMounted(async () => {
+/**
+ * 全局 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y 监听的挂载与摘除。
+ *
+ * 为什么需要显式配对（而不是只在 onMounted/onUnmounted 里加减）：
+ * 本页在 ProtocolConsoleHub 的 `<KeepAlive>` 内，切页签只触发 `onDeactivated`、
+ * **不触发 `onUnmounted`**。原先只在 onUnmounted 摘监听，切到「报文捕获」后这个
+ * 全局 keydown 依然挂在 window 上——用户在那页按 Ctrl+Z，命中的是本页的撤销逻辑，
+ * 静默改坏一条他根本没在看的报文序列。
+ *
+ * 用标志位而非直接调用 add/remove：非 KeepAlive 场景下 onActivated 不触发，
+ * 而 KeepAlive 场景下 onMounted 与 onActivated 都会触发一次，需要幂等。
+ */
+let keydownAttached = false
+function attachKeydown(): void {
+  if (keydownAttached) return
   window.addEventListener('keydown', onKeydown)
+  keydownAttached = true
+}
+function detachKeydown(): void {
+  if (!keydownAttached) return
+  window.removeEventListener('keydown', onKeydown)
+  keydownAttached = false
+}
+
+onMounted(async () => {
+  attachKeydown()
   // 预置帧来自后端（P3-4）；首次进入的默认序列据此补齐，避免前后端两份常量漂移
   const frames: PacketPreset[] = await listPresets().catch(() => [])
   presets.value = frames
   seedDefaultSequence(frames)
 })
+
+/** 切回页签：恢复全局快捷键（非 KeepAlive 场景不触发，onMounted 已挂好） */
+onActivated(attachKeydown)
+
+/**
+ * 切走页签：摘监听 + 停止自动执行。
+ *
+ * 停止执行而不是「取消在飞请求」：`abortAllInflight` 是全局核选项（切网关/登出用），
+ * 在这里调会把其它页签正在跑的请求一起打断。而本页的自动执行循环是逐个 await 下发，
+ * 把 `abortRequested` 置位即可在当前步返回后跳出循环；已发出的帧本就不能撤回。
+ * 不这样做的话，用户切到别的页签后本页仍会持续向真实设备下帧，现场只看到设备莫名被写、
+ * 且界面上没有任何「仍在执行」的提示，也就无从点「中止」。
+ */
+onDeactivated(() => {
+  detachKeydown()
+  abortRequested.value = true
+})
+
 onUnmounted(() => {
-  window.removeEventListener('keydown', onKeydown)
+  detachKeydown()
   abortRequested.value = true
   abortAllInflight('StepDebug unmount: abort inflight step-debug requests')
 })

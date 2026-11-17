@@ -92,7 +92,7 @@ export function exportStatsReportCsv(report: StatsReportView): void {
     ['平均延迟', ms(report.summary.avgLatency)],
     ['数据点数', report.summary.totalDataPoints],
     [],
-    ['设备ID', '设备名称', '协议', '总采集', '成功', '失败', '成功率', '平均延迟', '数据点'],
+    ['设备 ID', '设备名称', '协议', '总采集', '成功', '失败', '成功率', '平均延迟', '数据点'],
     ...report.deviceStats.map((d) => [d.deviceId, d.deviceName, d.protocol, d.totalReads, d.success, d.failed, pct(d.successRate), ms(d.avgLatency), d.dataPoints]),
   ]
   // 统一走 csvEscapeField（全部双引号包裹 + RFC 4180 + 公式注入防护），格式与旧实现一致；

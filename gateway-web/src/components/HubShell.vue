@@ -61,8 +61,14 @@
 
       <div v-if="currentTab" class="hub-content">
         <!-- 需要保留现场的 Hub（如报文调试）用 KeepAlive 缓存已访问 tab；
-             普通 Hub 保持“切走即卸载”，避免后台定时器/图表长期常驻。 -->
-        <KeepAlive v-if="keepAlive" :max="5">
+             普通 Hub 保持“切走即卸载”，避免后台定时器/图表长期常驻。
+
+             max 取页签总数而不是写死的 5：协议调试台有 11 个页签，
+             写死 5 时从第 6 个页签起就会按 LRU 淘汰最早缓存的页面，
+             用户「点一遍再回去」时前面几页的抓包缓冲/单步队列已被静默丢弃——
+             恰好是 keepAlive 本来要保住的东西。页签总数就是缓存的天然上界，
+             按它取值即可「全部保留」且不会无界增长。 -->
+        <KeepAlive v-if="keepAlive" :max="Math.max(1, visibleTabs.length)">
           <component :is="currentTab.component" :key="currentTab.name" />
         </KeepAlive>
         <component v-else :is="currentTab.component" :key="currentTab.name" />

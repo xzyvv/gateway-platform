@@ -94,6 +94,7 @@ import echarts, { initChart, disposeChart } from '@/utils/echarts-extra'
 import { defaultGrid, valueAxisStyle, categoryAxisStyle, axisNameStyle } from '@/utils/chartStyle'
 import { CHART_PRIMARY, CHART_DANGER, CHART_WARNING } from '@/utils/chartTheme'
 import { getDiskHistory, type DiskHistory } from '@/api/status'
+import { pad2 } from '@/utils/datetime'
 import { logError } from '@/utils/logger'
 
 // 磁盘水位分级阈值，与后端 `gateway_core::engine::monitor::health::disk_alarm` 保持一致。
@@ -156,8 +157,7 @@ const levelColor = computed(() => {
 function formatTime(ts: number): string {
   try {
     const d = new Date(ts)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+    return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
   } catch {
     return String(ts)
   }
