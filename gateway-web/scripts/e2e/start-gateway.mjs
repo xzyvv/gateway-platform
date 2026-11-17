@@ -110,6 +110,9 @@ const isolatedEnv = {
   GATEWAY_LUA_SCRIPT: join(workDir, 'process.lua'),
   GATEWAY_CERT_DIR: join(workDir, 'certs'),
   GATEWAY_LICENSE_CLOCK_DB: join(workDir, 'license_clock.db'),
+  // 看门狗 abort 前的状态快照：不指定会落到 /var/lib/gateway，CI 非 root 不可写，
+  // 触发 abort 时快照丢失（日志里只剩 Permission denied，无法审计上次退出原因）。
+  GATEWAY_WATCHDOG_STATE: join(workDir, 'watchdog_state.json'),
 }
 
 const child = spawn(binary, {

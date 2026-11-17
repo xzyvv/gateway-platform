@@ -126,7 +126,7 @@ pub(crate) async fn rate_limit(
         return reject_request(&state, &method, &path, key, started, "global");
     }
     // 2. 规则限速（RateRuleStore 中启用的规则，按路径/方法匹配）
-    if let Some(rule_id) = check_rule_limits(&state, key, &method, &path, now) {
+    if let Some(rule_id) = check_rule_limits(&state, key, &method, &path, now).await {
         return reject_request(&state, &method, &path, key, started, &rule_id);
     }
 
@@ -193,14 +193,14 @@ fn check_global_limit(state: &Arc<AppState>, key: Option<std::net::IpAddr>, now:
 /// - 分钟窗口允许 `limit_per_minute + burst` 次（burst 为短时突发余量）；
 /// - 小时窗口允许 `limit_per_hour` 次；
 /// - 多条规则命中同一请求时，任一超限即拒（最严生效）。
-fn check_rule_limits(
+async fn check_rule_limits(
     state: &Arc<AppState>,
     key: Option<std::net::IpAddr>,
     method: &axum::http::Method,
     path: &str,
     now: u64,
 ) -> Option<String> {
-    let rules = load_enabled_rules(state);
+    let rules = load_enabled_rules(state).await;
     if rules.is_empty() {
         return None;
     }
@@ -250,7 +250,13 @@ fn rule_matches(rule: &gateway_core::config::RateRule, method: &str, path: &str)
 /// 加载启用规则（带 TTL 缓存，避免每请求一次 SQLite 查询）。
 /// 缓存读库失败时返回空表（fail-open）并告警——规则存储故障不应阻断业务请求；
 /// 但下一次缓存过期后仍会重试，故障恢复后自动生效。
-fn load_enabled_rules(state: &Arc<AppState>) -> Vec<gateway_core::config::RateRule> {
+///
+/// 缓存命中走同步快路径；缓存过期时把**同步 SQLite 查询挪到 blocking 池**。
+/// 原因：`list_enabled_rules` 底层是 `parking_lot` 互斥（无等待超时）+
+/// `busy_timeout` 5s。若它跑在 tokio worker 上、而连接被长写事务压住，
+/// 多个并发请求会一起把 worker 占满 → 整个运行时停顿，5s 喂狗任务停转
+/// 超过 15s 即触发看门狗 `abort()`。
+async fn load_enabled_rules(state: &Arc<AppState>) -> Vec<gateway_core::config::RateRule> {
     {
         let cache = state.rate_limiter.rules_cache.lock();
         if let Some((rules, at)) = cache.as_ref() {
@@ -259,11 +265,20 @@ fn load_enabled_rules(state: &Arc<AppState>) -> Vec<gateway_core::config::RateRu
             }
         }
     }
-    let rules = match state.platform.rate_rules.list_enabled_rules() {
-        Ok(r) => r,
-        Err(e) => {
+    let store = state.platform.rate_rules.clone();
+    let rules = match tokio::task::spawn_blocking(move || store.list_enabled_rules()).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             tracing::warn!(
                 "load rate limit rules failed (fail-open this window): {}",
+                e
+            );
+            Vec::new()
+        }
+        Err(e) => {
+            // blocking 池任务 panic / 取消：同样 fail-open，仅告警
+            tracing::warn!(
+                "load rate limit rules task failed (fail-open this window): {}",
                 e
             );
             Vec::new()
