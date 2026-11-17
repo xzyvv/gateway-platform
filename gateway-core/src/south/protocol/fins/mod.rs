@@ -35,7 +35,7 @@ use crate::south::protocol::{
     convert_value, reverse_convert, Collector, CollectorError, CollectorResult,
 };
 
-mod frames;
+pub(crate) mod frames;
 use frames::{
     build_cpu_control_frame, build_fins_frame_request, build_node_addr_request, build_read_frame,
     build_write_frame, encode_words, parse_address, parse_cpu_control, parse_node_addr_response,
@@ -419,6 +419,8 @@ impl Collector for FinsCollector {
             };
 
             let value = convert_value(point, raw_value);
+            // FINS 读响应不带时标：原始采集时刻即本次读成功时刻（此前填 0 → 北向 1970）
+            let ts = DataPoint::now();
             Ok(DataPoint {
                 point_id: point.id.clone(),
                 device_id: point.device_id.clone().unwrap_or_default(),
@@ -427,8 +429,8 @@ impl Collector for FinsCollector {
                 raw_type,
                 quality: Quality::Good,
                 quality_reason: String::new(),
-                timestamp: DataPoint::now(),
-                source_ts: 0,
+                timestamp: ts,
+                source_ts: ts,
                 stale_count: 0,
                 value_text: None,
             })

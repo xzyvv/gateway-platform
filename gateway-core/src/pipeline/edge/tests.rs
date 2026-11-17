@@ -205,6 +205,18 @@ fn test_aggregation_in_pipeline_loop() {
     let result = ep.flush_all(&[p.clone()]);
     assert_eq!(result.len(), 3, "应有 3 个聚合点（2 pending + 1 当前）");
 
+    // 契约（E 批）：聚合点是派生值，`source_ts` 取窗口右边界并与 `timestamp` 一致。
+    // 旧实现填 0，北向 OPC UA 会把它映射成 1970-01-01 的 source timestamp。
+    assert_eq!(result[0].timestamp, 1000, "窗口 0 的右边界");
+    assert_eq!(result[1].timestamp, 2000, "窗口 1 的右边界");
+    for dp in &result {
+        assert_eq!(
+            dp.source_ts, dp.timestamp,
+            "聚合点 source_ts 必须等于窗口右边界"
+        );
+        assert!(dp.source_ts > 0, "聚合点 source_ts 不得为 0");
+    }
+
     // flush_all 后缓冲清空，再次 flush 应返回空
     let again = ep.flush_aggregated(&[p]);
     assert!(again.is_empty(), "flush_all 后再次 flush 应为空");
@@ -263,4 +275,107 @@ fn test_flushed_value_passes_through_process_flushed() {
         ep.process_flushed(&p, flushed[0].clone()).is_some(),
         "process_flushed 下聚合值应能通过死区/变化上传节点"
     );
+}
+
+/// 构造指定时间戳的聚合样本。
+fn agg_sample(point_id: &str, val: f64, ts: i64) -> DataPoint {
+    DataPoint {
+        point_id: point_id.to_string(),
+        device_id: String::new(),
+        value: val,
+        raw_value: val,
+        raw_type: "u16".to_string(),
+        quality: Quality::Good,
+        quality_reason: String::new(),
+        timestamp: ts,
+        source_ts: 0,
+        stale_count: 0,
+        value_text: None,
+    }
+}
+
+/// 回归测试（Bug 168）：写入路径（`add_to_buffer`）的补窗必须有迭代上限。
+///
+/// 原实现只在 `flush_aggregated` 加了 `MAX_CATCHUP_WINDOWS`，`add_to_buffer` 的
+/// 空窗补全是无界 `while`。当样本时间戳跨越多个窗口（设备离线后首个恢复样本、
+/// 系统时钟前跳、点位临时禁用后重新启用）时，会把整个缺口逐窗 push 进 `pending`，
+/// 并在下一次 flush 时逐条展开成 DataPoint —— 内存放大倍数等于缺口窗口数，
+/// 且每个点位各算一份。
+///
+/// 本测试以 1s 窗口、200 个窗口的缺口验证：补齐数量被截断到上限，而非全量生成。
+#[test]
+fn test_add_to_buffer_catch_up_is_capped() {
+    const MAX_CATCHUP_WINDOWS: usize = 64;
+
+    let ep = EdgeProcessor::new();
+    let mut p = make_point("p8", 0.0, false);
+    p.aggregation = Some(AggregationConfig {
+        window: 1,
+        function: AggFn::Last,
+    });
+
+    // 首个样本落在窗口 0
+    assert!(ep.process(&p, agg_sample("p8", 1.0, 0)).is_none());
+    // 第二个样本跳到窗口 200：缺口 = 199 个中间空窗，远超上限
+    assert!(ep.process(&p, agg_sample("p8", 2.0, 200_000)).is_none());
+
+    let result = ep.flush_all(&[p]);
+
+    let empty_windows = result
+        .iter()
+        .filter(|d| d.raw_type == "empty_window")
+        .count();
+    assert_eq!(
+        empty_windows, MAX_CATCHUP_WINDOWS,
+        "补窗必须截断到 MAX_CATCHUP_WINDOWS（{}），实际生成 {} 个空窗",
+        MAX_CATCHUP_WINDOWS, empty_windows
+    );
+
+    // 1 个旧窗口聚合值 + 64 个空窗占位 + 1 个当前窗口聚合值
+    assert_eq!(result.len(), MAX_CATCHUP_WINDOWS + 2);
+    assert_eq!(
+        result.iter().filter(|d| d.raw_type == "aggregated").count(),
+        2,
+        "旧窗口与当前窗口的聚合值都应保留"
+    );
+}
+
+/// 反向守卫（Bug 168）：缺口小于上限时，补窗必须逐窗完整生成，不能被误截断。
+///
+/// 该用例锁定「上限只做保护、不改变正常语义」：1s 窗口跨 5 个窗口的缺口
+/// 应产出 4 个空窗占位（窗口 1/2/3/4），一个不多一个不少。
+#[test]
+fn test_add_to_buffer_catch_up_below_cap_is_exact() {
+    let ep = EdgeProcessor::new();
+    let mut p = make_point("p9", 0.0, false);
+    p.aggregation = Some(AggregationConfig {
+        window: 1,
+        function: AggFn::Last,
+    });
+
+    assert!(ep.process(&p, agg_sample("p9", 1.0, 0)).is_none());
+    assert!(ep.process(&p, agg_sample("p9", 2.0, 5_000)).is_none());
+
+    let result = ep.flush_all(&[p]);
+
+    let empty_windows: Vec<i64> = result
+        .iter()
+        .filter(|d| d.raw_type == "empty_window")
+        .map(|d| d.timestamp)
+        .collect();
+    assert_eq!(
+        empty_windows,
+        vec![2_000, 3_000, 4_000, 5_000],
+        "缺口 4 个窗口应精确补齐 4 个占位样本（时间戳为窗口右边界）"
+    );
+
+    // E 批：空窗占位样本同样带得出采集时刻（取窗口右边界），不能是 0——
+    // 北向 OPC UA 对 0 会映射成「无原始时标」，现场就看不出这个空洞发生在哪一刻。
+    for dp in result.iter().filter(|d| d.raw_type == "empty_window") {
+        assert_eq!(
+            dp.source_ts, dp.timestamp,
+            "空窗占位 source_ts 必须等于窗口右边界"
+        );
+        assert!(dp.source_ts > 0);
+    }
 }

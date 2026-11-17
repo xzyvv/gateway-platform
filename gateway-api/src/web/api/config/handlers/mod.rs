@@ -35,7 +35,7 @@ pub(crate) async fn apply_reload(
 ) -> Result<crate::web::config_apply::ReloadOutcome, ApiError> {
     // D-06：统一走 config_apply 的唯一写回路径（expand → reload → store → save）
     let (outcome, _effective) =
-        crate::web::config_apply::reload_then_save(state, old, &new).await?;
+        crate::web::config_apply::persist_then_apply(state, old, &new).await?;
     Ok(outcome)
 }
 

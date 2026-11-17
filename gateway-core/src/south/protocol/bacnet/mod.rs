@@ -134,8 +134,9 @@ impl BacnetCollector {
             raw_type: "bacnet".into(),
             quality: entry.quality,
             quality_reason: String::new(),
+            // COV 通知的到达时刻就是该值的原始采集时刻，source_ts 同取
             timestamp: entry.received_ms,
-            source_ts: 0,
+            source_ts: entry.received_ms,
             stale_count: 0,
             value_text: None,
         })

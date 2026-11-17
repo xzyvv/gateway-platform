@@ -195,7 +195,7 @@ fn judge_modbus(request: &[u8], response: &[u8], elapsed_ms: u64) -> SendResult 
     }
 }
 
-/// 面向现场的一行解读：从站号、功能码、地址与数据
+/// 面向现场的一行解读：从站地址、功能码、地址与数据
 fn describe_modbus(request: &[u8], response: &[u8]) -> String {
     let slave = response.first().copied().unwrap_or(0);
     let fc = response.get(1).copied().unwrap_or(0);
@@ -246,7 +246,7 @@ fn describe_modbus(request: &[u8], response: &[u8]) -> String {
 fn failure_hint(kind: BusErrorKind, bus: &str) -> String {
     match kind {
         BusErrorKind::Timeout => format!(
-            "等待 {} 超时仍未收到完整响应。请确认从站号/波特率正确、设备在线，必要时加大超时",
+            "等待 {} 超时仍未收到完整响应。请确认从站地址/波特率正确、设备在线，必要时加大超时",
             bus
         ),
         _ => format!("下发失败（{}），请检查总线状态与配置", kind.as_str()),

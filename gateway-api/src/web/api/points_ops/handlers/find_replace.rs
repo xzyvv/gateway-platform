@@ -146,7 +146,7 @@ pub(crate) async fn reload_points(
     new_cfg: &gateway_core::config::GatewayConfig,
 ) -> Result<(), ApiError> {
     // 统一走 config_apply（expand → reload → store → save）
-    crate::web::config_apply::reload_then_save(state, old, new_cfg)
+    crate::web::config_apply::persist_then_apply(state, old, new_cfg)
         .await
         .map(|_| ())
 }

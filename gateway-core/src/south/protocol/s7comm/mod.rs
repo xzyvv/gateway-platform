@@ -253,6 +253,6 @@ impl S7CommCollector {
 
 mod address;
 mod collector;
-mod frames;
+pub(crate) mod frames;
 #[cfg(test)]
 mod tests;

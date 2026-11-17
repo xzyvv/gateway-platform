@@ -752,7 +752,8 @@ async fn restart_service(state: &Arc<AppState>, target: &str) -> Result<(), Stri
 }
 
 /// 统一的「重启内部服务」实现：持有 `config_reload_lock` → 重载磁盘配置 →
-/// [`crate::web::config_apply::reload_then_save`]（A5 顺序）。
+/// [`crate::web::config_apply::persist_then_apply`]（E 批起为落盘前置：
+/// save → reload → store → notify）。
 ///
 /// 手动重启端点（`/api/watchdog/services/:name/restart`）与自愈执行器的 `RestartService`
 /// 动作共用此函数，确保恢复路径唯一、不新增旁路。返回 `Err` 时运行时未产生半更新。
@@ -768,7 +769,7 @@ pub(crate) async fn reload_services(
         .config_loader
         .reload()
         .map_err(|e| ApiError::internal(format!("reload failed: {}", e)))?;
-    let _ = crate::web::config_apply::reload_then_save(state, &old, &new).await?;
+    let _ = crate::web::config_apply::persist_then_apply(state, &old, &new).await?;
     state
         .platform
         .audit

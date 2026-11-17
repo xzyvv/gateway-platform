@@ -221,10 +221,11 @@ impl MqttClient {
         })
     }
 
-    /// 注入协议转换引擎（批次 B：enum 标签回查）。
+    /// 注入协议转换引擎（批次 B：enum 标签兜底回查）。
     ///
-    /// payload 构建期对每条 QueuedItem 调 `enum_label_for(point_id, raw_value)`
-    /// 补回 value_text；引擎为共享 Arc，热重载后读当前规则集。
+    /// payload 构建期优先读 `QueuedItem.value_text`（入队时落库的标签，与历史同源）；
+    /// 该字段为空时才用本引擎按**当前**规则集回查（`enum_label_for(point_id, value)`）
+    /// 补回 value_text。引擎为共享 Arc，热重载后读当前规则集。
     pub fn set_convert_engine(&self, engine: Arc<crate::pipeline::ConvertEngine>) {
         self.convert_engine.store(Some(engine));
     }

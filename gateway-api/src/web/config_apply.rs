@@ -3,12 +3,20 @@
 //! web 有 10+ 个写端点都要做「保存 config → 更新内存 → 展开设备模板 → 热重载」，
 //! 历史实现散落在各 handler 中且顺序不一。本模块集中这几步，消除重复。
 //!
-//! # 统一顺序（D-06）
-//! 所有配置写回只走 [`reload_then_save`]：expand → reload → store → save（A5 顺序）。
+//! # 统一顺序（D-06 / E 批）
+//! 所有配置写回只走 [`persist_then_apply`]：expand → **save（落盘）** → reload → store → notify。
+//!
+//! 落盘前置（E 批）：先写盘，成功后才热重载运行态、替换内存快照、通知北向。
+//! 这样「保存」是原子的——写盘失败时内存/运行态/磁盘都还是旧配置，接口直接报错。
+//! 旧顺序（reload → store → notify → save）在写盘失败时会出现「内存与运行态是新配置、
+//! 磁盘是旧配置」，而接口只回 500；现场重启一次配置就悄悄回退，无从察觉。
+//!
+//! 落盘成功但热重载被拒时，回写旧配置把磁盘一起退回（保持「整体不生效」）。回写
+//! 也失败才退化为「磁盘已新、运行态仍旧」，届时错误消息里明确告知需重启生效。
+//!
 //! 历史上并存 `save_then_reload`（先写盘后热更）与 `save_and_store`（纯元数据落盘）
 //! 两套路径；前者与本路径的 `expand_points` 口径存在漂移温床（现场表现为
 //! 「重启后正常、热更后点位错位」），现已统一收敛，只保留单一路径。
-//! reload 先行：若热重载期间 panic，disk/内存仍为旧配置，系统保持一致。
 //!
 //! 调用方须**已持有 `config_reload_lock`**（本模块不负责加锁）。
 //!
@@ -58,7 +66,7 @@ impl ReloadOutcome {
 /// 历史上这 6 个 counter 的唯一写入点在
 /// `gateway_core::config::loader::reload_atomic`，而该函数全仓零调用（死代码），
 /// 运维看板上的 `gateway_config_reload_*` 因此恒为 0。现将写入点迁到真实热更路径
-/// （本模块的 `reload_then_save`）：每次尝试 +1 total，
+/// （本模块的 `persist_then_apply`）：每次尝试 +1 total，
 /// 成功 +1 succeeded，失败 +1 rejected 并按错误语义分桶（前缀规则与旧实现一致）。
 fn record_reload_attempt(state: &Arc<AppState>) {
     state
@@ -407,10 +415,12 @@ pub(crate) fn restore_redacted_secrets(old: &GatewayConfig, new: &mut GatewayCon
     }
 }
 
-/// 整份替换路径（A5）：expand → reload → store → save，返回 `(热重载说明列表, 实际生效配置)`。
+/// 整份替换路径（A5 / E 批）：expand → save → reload → store → notify，
+/// 返回 `(热重载说明列表, 实际生效配置)`。
 ///
-/// reload 先行：若热重载期间 panic，disk/内存仍为旧配置，系统保持一致。
-/// 保存失败时运行时与内存已更新，返回 500 并在日志中说明（与原 post_config 行为一致）。
+/// 落盘前置：写盘失败直接返回 500，内存/运行态/磁盘保持旧配置（整体不生效）。
+/// 落盘成功而热重载被拒时，回写旧配置让磁盘一起退回；回写也失败才退化为
+/// 「磁盘已新、运行态仍旧」，并在错误消息里说明需重启生效。
 ///
 /// 返回的第二个元素是**还原脱敏占位后的真实配置**（即真正落盘/生效的那份）。
 /// 调用方（版本快照 / 变更判定 / 审计）必须用它，绝不能再用入参 `new`：
@@ -419,7 +429,7 @@ pub(crate) fn restore_redacted_secrets(old: &GatewayConfig, new: &mut GatewayCon
 ///
 /// D-06：本函数是**唯一**的配置写回路径（整份替换 / 增量编辑 / 元数据变更共用），
 /// 在此集中做 license 配额前置校验（V-8），避免各端点各自校验导致覆盖不全。
-pub(crate) async fn reload_then_save(
+pub(crate) async fn persist_then_apply(
     state: &Arc<AppState>,
     old: &GatewayConfig,
     new: &GatewayConfig,
@@ -435,6 +445,14 @@ pub(crate) async fn reload_then_save(
     let expanded = expand_points(state, &new);
     // 活跃点位集在 reload 前按配置口径算好（expanded 随后会被 move 进 reload_config）。
     let active_points = build_active_points(&expanded, &new);
+
+    // ① 落盘前置：写盘失败则整体不生效，运行态一行都没动。
+    state.config.config_loader.save(&new).map_err(|e| {
+        tracing::error!("config save failed, runtime untouched: {}", e);
+        ApiError::internal(format!("save config failed: {}", e))
+    })?;
+
+    // ② 热重载：被拒时把磁盘退回旧配置，保持「要么整体生效、要么整体不生效」。
     record_reload_attempt(state);
     let notes = match state.north.gateway.reload_config(old, &new, expanded).await {
         Ok(notes) => {
@@ -443,27 +461,55 @@ pub(crate) async fn reload_then_save(
         }
         Err(e) => {
             let err: ApiError = e.into();
+            let err = rollback_saved_config(state, old, err);
             record_reload_rejected(state, &err);
             return Err(err);
         }
     };
+
+    // ③ 落盘与热重载都已成功，才让内存快照与新运行态对外可见。
     state.config.store(Arc::new(new.clone()));
     // 北向节点集同步：按配置口径裁剪地址空间（清理删除/改名的点位节点）并刷新写权限。
     // 放在 store 之后：此刻运行态配置已是新值，通知逻辑与配置口径一致。
     notify_north_points_changed(state, &active_points);
-    state.config.config_loader.save(&new).map_err(|e| {
-        tracing::error!(
-            "runtime reloaded & memory updated, but disk save failed: {}",
-            e
-        );
-        ApiError::internal(format!("runtime reloaded but disk save failed: {}", e))
-    })?;
     // D3: 所有配置变更（含用户/密码/分组/资产等元数据）统一落审计。
     state
         .platform
         .audit
         .log("config.update", "gateway", "config update via api", "api");
     Ok((ReloadOutcome::new(notes, scope), new))
+}
+
+/// 热重载被拒后把磁盘退回旧配置。
+///
+/// 成功时磁盘与运行态一起回到「本次未保存」，错误消息保持原样（前端按
+/// 「配置未被修改」提示）。回写也失败时只能如实说明：磁盘上已是新配置，
+/// 重启后会生效——这条消息前端专门识别（`disk holds the new config`）。
+fn rollback_saved_config(state: &Arc<AppState>, old: &GatewayConfig, err: ApiError) -> ApiError {
+    match state.config.config_loader.save(old) {
+        Ok(()) => {
+            tracing::warn!(
+                "config reload rejected after disk save; disk rolled back to previous config: {}",
+                err.message
+            );
+            err
+        }
+        Err(re) => {
+            tracing::error!(
+                "config reload rejected after disk save, and rollback failed too: {}; \
+                 disk holds the new config, it will take effect after restart",
+                re
+            );
+            ApiError {
+                status: err.status,
+                code: err.code,
+                message: format!(
+                    "{} (disk holds the new config; rollback of the previous config failed: {})",
+                    err.message, re
+                ),
+            }
+        }
+    }
 }
 
 /// 组装配置口径的活跃点位集（纯函数，不依赖运行态）。

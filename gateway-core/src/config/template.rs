@@ -361,7 +361,7 @@ impl TemplateManager {
             //
             // Modbus 实际按 `address_num`（0 基偏移）+ 功能码寻址，`address` 只是给
             // 人看的 5 位展示串。此前统一写 `device.address`（从站地址），列表里
-            // 同一设备的点位全显示成同一个从站号，现场按界面排查会走偏。
+            // 同一设备的点位全显示成同一个从站地址，现场按界面排查会走偏。
             let address = if device.protocol.eq_ignore_ascii_case("modbus") {
                 modbus_display_address(pt.function_code, address_num).unwrap_or_else(|| {
                     // 偏移超出 5 位串表达范围（> 9998）：退回偏移数字，至少不丢信息

@@ -141,20 +141,20 @@ pub(crate) async fn post_config(
     Json(new_config): Json<GatewayConfig>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     // 1.5 v2.0 license 配额校验（点位/协议/北向）—— 在变更前拦截超限保存
-    // 统一走 config_apply::check_config_quota，与其余写端点（reload_then_save）共用同一实现。
-    // 结构完整性校验（D1）已收敛到 config_apply::reload_then_save 内部统一执行。
+    // 统一走 config_apply::check_config_quota，与其余写端点（persist_then_apply）共用同一实现。
+    // 结构完整性校验（D1）已收敛到 config_apply::persist_then_apply 内部统一执行。
     crate::web::config_apply::check_config_quota(&state, &new_config)?;
 
     // A5: 串行化整个热重载流程，防止并发配置更新交错产生半旧状态
     let _reload_guard = state.config.config_reload_lock.lock().await;
     let old = state.config.load_full();
 
-    // 2-5. 展开设备模板 + 热重载 + 持久化（A5 顺序：reload → store → save）
+    // 2-5. 展开设备模板 + 落盘 + 热重载（E 批起落盘前置：save → reload → store → notify）
     //      统一走 config_apply，消除与 rollback / restart_service 的重复实现。
     //      effective 为还原脱敏占位后的真实配置：版本快照与 web 变更判定都必须基于它，
     //      否则前端回传的 "********" 会被当作凭据落库、并误报 web 配置已变更。
     let (mut outcome, effective) =
-        crate::web::config_apply::reload_then_save(&state, &old, &new_config).await?;
+        crate::web::config_apply::persist_then_apply(&state, &old, &new_config).await?;
 
     // 记录配置热重载指标
     state.platform.metrics.inc_config_reload();
@@ -310,11 +310,11 @@ pub(crate) async fn rollback_config_version(
     // 否则会因配额卡死重启，违背「稳定性第一」。）
     crate::web::config_apply::check_config_quota(&state, &new_config)?;
 
-    // 展开设备模板 + 热重载 + 持久化（A5 顺序：reload → store → save）
-    // 结构完整性校验（D1）已收敛到 config_apply::reload_then_save 内部统一执行。
+    // 展开设备模板 + 落盘 + 热重载（E 批起落盘前置：save → reload → store → notify）
+    // 结构完整性校验（D1）已收敛到 config_apply::persist_then_apply 内部统一执行。
     // effective 为还原脱敏占位后的真实配置：回滚后的版本快照必须基于它落库。
     let (outcome, effective) =
-        crate::web::config_apply::reload_then_save(&state, &old, &new_config).await?;
+        crate::web::config_apply::persist_then_apply(&state, &old, &new_config).await?;
 
     // 记录配置热重载指标
     state.platform.metrics.inc_config_reload();

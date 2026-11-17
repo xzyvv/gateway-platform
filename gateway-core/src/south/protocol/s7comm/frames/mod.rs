@@ -11,7 +11,7 @@ use super::*;
 mod decode;
 mod link;
 mod read;
-mod spec;
+pub(crate) mod spec;
 mod szl;
 mod write;
 

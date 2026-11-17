@@ -335,18 +335,30 @@ impl OpcUaServer {
             .map(|bus| bus.io_timeout())
             .unwrap_or(DEFAULT_IO_TIMEOUT);
         let budget = write_wait_budget(io_timeout);
+        // 写回调持地址空间写锁，这段等待直接决定该 Server 读/订阅的阻塞时长。
+        // 记录到指标，让「写回锁竞争」可被 Prometheus / 运维页观测。
+        let wait_start = std::time::Instant::now();
         let write = handler.gateway.write_point(pid, write_value);
         let outcome = run_write_blocking(tokio::time::timeout(budget, write));
+        let wait_us = wait_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        let write_metrics = &handler.gateway.metrics.opcua_write;
         let (status, detail) = match outcome {
-            Some(Ok(Ok(()))) => (
-                StatusCode::Good,
-                format!("{}={}", display_name, write_value),
-            ),
-            Some(Ok(Err(e))) => (
-                write_error_status(&e),
-                format!("{}={} [失败: {}]", display_name, write_value, e),
-            ),
+            Some(Ok(Ok(()))) => {
+                write_metrics.record(wait_us, false, false);
+                (
+                    StatusCode::Good,
+                    format!("{}={}", display_name, write_value),
+                )
+            }
+            Some(Ok(Err(e))) => {
+                write_metrics.record(wait_us, false, true);
+                (
+                    write_error_status(&e),
+                    format!("{}={} [失败: {}]", display_name, write_value, e),
+                )
+            }
             Some(Err(_)) => {
+                write_metrics.record(wait_us, true, false);
                 // 超时只取消了「等待」，总线任务多半已把帧发给设备：真实结果
                 // 无法得知。审计必须如实标注，否则运维会当成「没写进去」重试，
                 // 造成重复写（对累计量/寄存器等点位是实质错误）。
@@ -531,7 +543,15 @@ fn map_data_point_to_value(p: &DataPoint) -> DataValue {
 
     // 时间戳映射：source_ts → source_timestamp，timestamp → server_timestamp
     // DataPoint 时间戳为 UTC 毫秒，转换为 chrono DateTime
-    let source_dt = chrono::DateTime::from_timestamp_millis(p.source_ts);
+    //
+    // `source_ts == 0` 的语义是「本样本没有原始时标」（例如 IEC 104 无时标类型，
+    // 见 `asdu` 的 DataEntry 文档），必须映射为 None：`from_timestamp_millis(0)` 会
+    // 得到 1970-01-01，客户端据此判定数据陈旧，甚至按 source timestamp 丢弃该值。
+    let source_dt = if p.source_ts > 0 {
+        chrono::DateTime::from_timestamp_millis(p.source_ts)
+    } else {
+        None
+    };
     let server_dt = chrono::DateTime::from_timestamp_millis(p.timestamp);
 
     DataValue {

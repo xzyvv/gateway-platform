@@ -141,7 +141,7 @@
 //! `Collector::read` 返回 `CollectorResult<DataPoint>`（即 `Result<_, GatewayError>`）。
 //! 新协议应使用具体错误变体，便于监控告警分类（见 `crate::engine::error`）：
 //! - 帧格式/CRC 错误 → `GatewayError::Protocol`（code 3000）
-//! - 设备无响应/超时 → `GatewayError::NoReply`（code 0）
+//! - 设备无响应/超时 → `GatewayError::NoReply`（code 3001）
 //! - 配置非法值 → `GatewayError::Config`（code 1000）
 //! - 串口/网络 IO → `GatewayError::Io`（code 2000）
 //! - **勿用** `GatewayError::Message` 兜底（code 9999，监控盲点）

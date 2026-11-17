@@ -516,7 +516,7 @@ async fn test_post_config_unlimited_quota_accepts_any_size() {
     }
 }
 
-// ===== C3：增量端点（批量导入）统一走 reload_then_save 配额前置校验 =====
+// ===== C3：增量端点（批量导入）统一走 persist_then_apply 配额前置校验 =====
 
 /// 批量导入点位超限 → 4021（证明增量端点也受配额约束，不再只有 POST /api/config 校验）。
 #[tokio::test]

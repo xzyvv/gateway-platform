@@ -255,6 +255,8 @@ impl Collector for BacnetMstpCollector {
 
             // 9. 解析 APDU 值
             let (value, quality) = super::bacnet::parse_value_from_apdu(apdu_data, invoke_id)?;
+            // BACnet MS/TP 读响应不带时标：原始采集时刻即本次读成功时刻
+            let ts = DataPoint::now();
 
             Ok(DataPoint {
                 point_id: point.id.clone(),
@@ -264,8 +266,8 @@ impl Collector for BacnetMstpCollector {
                 raw_type: "bacnet_mstp".into(),
                 quality,
                 quality_reason: String::new(),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                source_ts: 0,
+                timestamp: ts,
+                source_ts: ts,
                 stale_count: 0,
                 value_text: None,
             })

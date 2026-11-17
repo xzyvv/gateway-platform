@@ -151,8 +151,11 @@ impl From<gateway_core::engine::error::GatewayError> for ApiError {
             gateway_core::engine::error::GatewayError::Config(_) => StatusCode::BAD_REQUEST,
             gateway_core::engine::error::GatewayError::Auth(_) => StatusCode::UNAUTHORIZED,
             gateway_core::engine::error::GatewayError::NotFound(_) => StatusCode::NOT_FOUND,
+            // 设备无响应 = 上游（现场设备/总线）超时，不是网关自身故障：给 504，
+            // 与 OPC UA 侧的 `NoReply → BadTimeout` 保持同一口径。旧实现归 500，
+            // 现场据此以为是网关崩了，去重启网关而不是查设备/接线。
+            gateway_core::engine::error::GatewayError::NoReply => StatusCode::GATEWAY_TIMEOUT,
             gateway_core::engine::error::GatewayError::Protocol(_)
-            | gateway_core::engine::error::GatewayError::NoReply
             | gateway_core::engine::error::GatewayError::Io(_)
             | gateway_core::engine::error::GatewayError::Queue(_)
             | gateway_core::engine::error::GatewayError::Mqtt(_)
@@ -186,6 +189,45 @@ impl From<std::io::Error> for ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: 2000,
             message: e.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway_core::engine::error::GatewayError;
+
+    /// 契约：设备无响应是**上游超时**（现场设备/总线没回），不是网关自身故障，
+    /// 状态码必须是 504 且业务码非 0（0 在信封里表示成功）。
+    ///
+    /// 旧实现归 500 + code 0：运维看到 500 会去重启网关而不是查设备接线，
+    /// 而 code 0 会被前端当成成功、把「没读到」显示成「空数据」。
+    #[test]
+    fn no_reply_maps_to_gateway_timeout_with_nonzero_code() {
+        let err: ApiError = GatewayError::NoReply.into();
+        assert_eq!(err.status, StatusCode::GATEWAY_TIMEOUT);
+        assert_ne!(err.code, 0, "0 在 API 信封里表示成功，错误不得用 0");
+    }
+
+    /// 契约：协议/IO/队列错误仍是网关自身或南向实现问题，保持 500。
+    /// 只有「对端没回」升级为 504，避免把所有南向失败都推给上游。
+    #[test]
+    fn other_gateway_errors_stay_internal() {
+        let cases = [
+            GatewayError::Protocol("bad crc".into()),
+            GatewayError::Io("eof".into()),
+            GatewayError::Queue("db locked".into()),
+            GatewayError::Mqtt("broker down".into()),
+        ];
+        for e in cases {
+            let err: ApiError = e.into();
+            assert_eq!(
+                err.status,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "不应升级为 504：{}",
+                err.message
+            );
         }
     }
 }

@@ -25,7 +25,7 @@ pub struct ProtocolCapabilities {
     /// 工具端按此能力位路由，而不是按协议名硬编码；新增协议只要在注册表声明
     /// 该位为 true，扫描入口即可用。
     pub supports_register_scan: bool,
-    /// 是否支持「自动识别设备」调试工具（遍历从站号 + 协议探测）。
+    /// 是否支持「自动识别设备」调试工具（遍历从站地址 + 协议探测）。
     pub supports_auto_detect: bool,
     /// 是否实现「一次事务写多点」（覆写 `write_multi`）；false 表示后端退化为逐点写
     pub supports_write_multi: bool,

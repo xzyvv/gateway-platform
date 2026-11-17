@@ -822,7 +822,7 @@ fn extract_modbus_frame_resyncs_to_valid_frame_after_garbage() {
 
 /// 性质：合法响应的任意单比特翻转都必须被拒绝。
 ///
-/// 覆盖从站号 / 功能码 / 字节数 / 数据区 / CRC 五个环节——任一环节漏校验
+/// 覆盖从站地址 / 功能码 / 字节数 / 数据区 / CRC 五个环节——任一环节漏校验
 /// 都会变成「错误数据入库」，比丢帧更难发现。
 #[test]
 fn parse_read_response_rejects_every_single_bit_flip() {

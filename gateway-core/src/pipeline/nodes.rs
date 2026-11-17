@@ -9,6 +9,56 @@ use crate::engine::model::Quality;
 
 use super::edge::{aggregate, PipelineNode};
 
+/// 补窗（catch-up）单次最多生成的空窗口数量。
+///
+/// 设备离线很久、或系统时钟前跳时，`当前窗口 - 上次窗口` 可达数天。若按 `window_ms`
+/// 逐窗补齐，会一次性产出海量 DataPoint（1s 窗口离线一天 = 86400 个/点位），撑爆
+/// 内存与下游队列。超过本上限即停止补窗，由调用方直接对齐到目标窗口边界，
+/// 中间空洞不再逐窗生成占位样本（宁可丢细节，不可拖垮网关）。
+///
+/// 写入路径（`add_to_buffer`）与刷新路径（`flush_aggregated`）共用同一口径，
+/// 避免两条路径的补窗上限不一致导致行为分裂。
+const MAX_CATCHUP_WINDOWS: usize = 64;
+
+/// 聚合窗口产出的数据点。
+///
+/// 聚合值是**派生值**，没有单一的「原始采集时刻」：这里取窗口右边界（与上报
+/// `timestamp` 一致），语义为「本样本代表截至该时刻的窗口」。此前填 0 会让北向
+/// 拿到 1970-01-01 的 source timestamp，客户端据此判定数据陈旧。
+fn aggregated_point(point_id: &str, value: f64, window_end: i64) -> DataPoint {
+    DataPoint {
+        point_id: point_id.to_string(),
+        device_id: String::new(),
+        value,
+        raw_value: value,
+        raw_type: "aggregated".to_string(),
+        quality: Quality::Good,
+        quality_reason: String::new(),
+        timestamp: window_end,
+        // 派生值：source_ts 与上送时刻同取窗口右边界（见函数文档）
+        source_ts: window_end,
+        stale_count: 0,
+        value_text: None,
+    }
+}
+
+/// 空窗口占位点（`Bad` / `empty_window`），时间口径同 [`aggregated_point`]。
+fn empty_window_point(point_id: &str, window_end: i64) -> DataPoint {
+    DataPoint {
+        point_id: point_id.to_string(),
+        device_id: String::new(),
+        value: 0.0,
+        raw_value: 0.0,
+        raw_type: "empty_window".to_string(),
+        quality: Quality::Bad,
+        quality_reason: "empty_window".to_string(),
+        timestamp: window_end,
+        source_ts: window_end,
+        stale_count: 0,
+        value_text: None,
+    }
+}
+
 struct AggBuffer {
     values: Vec<(i64, f64)>, // (timestamp, value)
     window_start: i64,
@@ -59,7 +109,25 @@ impl AggregationNode {
             // Push Bad placeholders for intermediate empty windows
             if window_ms > 0 {
                 let mut ws = buffer.window_start + window_ms;
+                let mut catchup_windows: usize = 0;
                 while ws < aligned_start {
+                    // Bug 168: 写入路径的补窗同样必须有上限。原实现只给 `flush_aggregated`
+                    // 加了限制，而本函数在「样本时间戳跨越多个窗口」时（设备离线后首个
+                    // 恢复样本、系统时钟前跳、或点位被临时禁用后重新启用）会一次性把
+                    // 整个缺口逐窗 push 进 `pending`。`pending` 在下一次 flush 时会被
+                    // 逐条展开成 DataPoint，因此这里的内存放大倍数等于缺口窗口数，
+                    // 且对每个点位各算一份，属于典型的无界内存增长。
+                    if catchup_windows >= MAX_CATCHUP_WINDOWS {
+                        tracing::warn!(
+                            "aggregation {}: catch-up window limit ({}) reached while buffering, \
+                             skipping remaining gap of {} windows",
+                            dp.point_id,
+                            MAX_CATCHUP_WINDOWS,
+                            (aligned_start - ws) / window_ms
+                        );
+                        break;
+                    }
+                    catchup_windows += 1;
                     buffer.pending.push((f64::NAN, ws));
                     ws += window_ms;
                 }
@@ -123,35 +191,12 @@ impl PipelineNode for AggregationNode {
                         // Bug 34: NAN values represent Bad empty-window placeholders
                         let pending: Vec<(f64, i64)> = std::mem::take(&mut buffer.pending);
                         for (agg_value, old_window_start) in pending {
-                            if agg_value.is_nan() {
-                                result.push(DataPoint {
-                                    point_id: pid.clone(),
-                                    device_id: String::new(),
-                                    value: 0.0,
-                                    raw_value: 0.0,
-                                    raw_type: "empty_window".to_string(),
-                                    quality: Quality::Bad,
-                                    quality_reason: "empty_window".to_string(),
-                                    timestamp: old_window_start + window_ms,
-                                    source_ts: 0,
-                                    stale_count: 0,
-                                    value_text: None,
-                                });
+                            let window_end = old_window_start + window_ms;
+                            result.push(if agg_value.is_nan() {
+                                empty_window_point(&pid, window_end)
                             } else {
-                                result.push(DataPoint {
-                                    point_id: pid.clone(),
-                                    device_id: String::new(),
-                                    value: agg_value,
-                                    raw_value: agg_value,
-                                    raw_type: "aggregated".to_string(),
-                                    quality: Quality::Good,
-                                    quality_reason: String::new(),
-                                    timestamp: old_window_start + window_ms,
-                                    source_ts: 0,
-                                    stale_count: 0,
-                                    value_text: None,
-                                });
-                            }
+                                aggregated_point(&pid, agg_value, window_end)
+                            });
                         }
                         // 2. 检查当前窗口是否超时，循环处理所有过期窗口
                         // Bug 34: 原代码只处理一个窗口，跨多窗口时中间窗口丢失
@@ -159,7 +204,6 @@ impl PipelineNode for AggregationNode {
                         // `now - window_start` 可达数天，按 window_ms 逐窗补齐会一次性产出
                         // 海量 DataPoint，撑爆内存与下游队列。超出上限直接跳出，由下方
                         // “对齐到当前窗口边界”收尾，中间空洞不再逐窗生成占位样本。
-                        const MAX_CATCHUP_WINDOWS: usize = 64;
                         let mut catchup_windows: usize = 0;
                         while window_ms > 0 && now - buffer.window_start >= window_ms {
                             if catchup_windows >= MAX_CATCHUP_WINDOWS {
@@ -171,38 +215,15 @@ impl PipelineNode for AggregationNode {
                                 break;
                             }
                             catchup_windows += 1;
+                            let window_end = buffer.window_start + window_ms;
                             if !buffer.values.is_empty() {
                                 // 有数据：正常聚合输出
                                 let agg_value = aggregate(&buffer.values, agg.function);
-                                result.push(DataPoint {
-                                    point_id: pid.clone(),
-                                    device_id: String::new(),
-                                    value: agg_value,
-                                    raw_value: agg_value,
-                                    raw_type: "aggregated".to_string(),
-                                    quality: Quality::Good,
-                                    quality_reason: String::new(),
-                                    timestamp: buffer.window_start + window_ms,
-                                    source_ts: 0,
-                                    stale_count: 0,
-                                    value_text: None,
-                                });
+                                result.push(aggregated_point(&pid, agg_value, window_end));
                                 buffer.values.clear();
                             } else {
                                 // 空窗口（设备离线无数据）：输出 Bad 占位样本
-                                result.push(DataPoint {
-                                    point_id: pid.clone(),
-                                    device_id: String::new(),
-                                    value: 0.0,
-                                    raw_value: 0.0,
-                                    raw_type: "empty_window".to_string(),
-                                    quality: Quality::Bad,
-                                    quality_reason: "empty_window".to_string(),
-                                    timestamp: buffer.window_start + window_ms,
-                                    source_ts: 0,
-                                    stale_count: 0,
-                                    value_text: None,
-                                });
+                                result.push(empty_window_point(&pid, window_end));
                             }
                             buffer.window_start += window_ms;
                         }
@@ -238,51 +259,17 @@ impl PipelineNode for AggregationNode {
                     let window_ms = (agg.window * 1000) as i64;
                     let pending: Vec<(f64, i64)> = std::mem::take(&mut buffer.pending);
                     for (agg_value, old_window_start) in pending {
-                        if agg_value.is_nan() {
-                            result.push(DataPoint {
-                                point_id: pid.clone(),
-                                device_id: String::new(),
-                                value: 0.0,
-                                raw_value: 0.0,
-                                raw_type: "empty_window".to_string(),
-                                quality: Quality::Bad,
-                                quality_reason: "empty_window".to_string(),
-                                timestamp: old_window_start + window_ms,
-                                source_ts: 0,
-                                stale_count: 0,
-                                value_text: None,
-                            });
+                        let window_end = old_window_start + window_ms;
+                        result.push(if agg_value.is_nan() {
+                            // `pid` 来自 `buffers.iter_mut()`，已是 `&String`
+                            empty_window_point(pid, window_end)
                         } else {
-                            result.push(DataPoint {
-                                point_id: pid.clone(),
-                                device_id: String::new(),
-                                value: agg_value,
-                                raw_value: agg_value,
-                                raw_type: "aggregated".to_string(),
-                                quality: Quality::Good,
-                                quality_reason: String::new(),
-                                timestamp: old_window_start + window_ms,
-                                source_ts: 0,
-                                stale_count: 0,
-                                value_text: None,
-                            });
-                        }
+                            aggregated_point(pid, agg_value, window_end)
+                        });
                     }
                     if !buffer.values.is_empty() {
                         let agg_value = aggregate(&buffer.values, agg.function);
-                        result.push(DataPoint {
-                            point_id: pid.clone(),
-                            device_id: String::new(),
-                            value: agg_value,
-                            raw_value: agg_value,
-                            raw_type: "aggregated".to_string(),
-                            quality: Quality::Good,
-                            quality_reason: String::new(),
-                            timestamp: DataPoint::now(),
-                            source_ts: 0,
-                            stale_count: 0,
-                            value_text: None,
-                        });
+                        result.push(aggregated_point(pid, agg_value, DataPoint::now()));
                     }
                 }
             }

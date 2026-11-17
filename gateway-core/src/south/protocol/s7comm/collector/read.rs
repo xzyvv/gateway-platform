@@ -79,6 +79,9 @@ impl S7CommCollector {
         // 与 Modbus/DLT645 对齐：scale/offset/formula + CT/PT 变比统一在 common 层换算。
         // 此前 S7 直接把原始值当工程量上送，点位配了 scale/offset 也不生效。
         let value = convert_value(point, raw_value);
+        // S7 读响应不带时标：原始采集时刻即本次读成功时刻，与 timestamp 取同一值
+        // （此前填 0，北向 OPC UA 会把它映射成 1970-01-01 的 source timestamp）。
+        let ts = DataPoint::now();
 
         Ok(DataPoint {
             point_id: point.id.clone(),
@@ -88,8 +91,8 @@ impl S7CommCollector {
             raw_type: "s7comm".into(),
             quality: Quality::Good,
             quality_reason: String::new(),
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            source_ts: 0,
+            timestamp: ts,
+            source_ts: ts,
             stale_count: 0,
             value_text: None,
         })
@@ -202,20 +205,23 @@ impl S7CommCollector {
                         "S7 multi-read item {i} failed (return code 0x{rc:02X})"
                     ))),
                     Ok(value_bytes) => match frames::decode_value(&value_bytes, p.data_type) {
-                        Ok(raw) => Ok(DataPoint {
-                            point_id: point_cfg.id.clone(),
-                            device_id: point_cfg.device_id.clone().unwrap_or_default(),
-                            // 批量路径与单点路径同一套换算，避免两条路径数值不一致
-                            value: convert_value(point_cfg, raw),
-                            raw_value: raw,
-                            raw_type: "s7comm".into(),
-                            quality: Quality::Good,
-                            quality_reason: String::new(),
-                            timestamp: chrono::Utc::now().timestamp_millis(),
-                            source_ts: 0,
-                            stale_count: 0,
-                            value_text: None,
-                        }),
+                        Ok(raw) => {
+                            let ts = DataPoint::now();
+                            Ok(DataPoint {
+                                point_id: point_cfg.id.clone(),
+                                device_id: point_cfg.device_id.clone().unwrap_or_default(),
+                                // 批量路径与单点路径同一套换算，避免两条路径数值不一致
+                                value: convert_value(point_cfg, raw),
+                                raw_value: raw,
+                                raw_type: "s7comm".into(),
+                                quality: Quality::Good,
+                                quality_reason: String::new(),
+                                timestamp: ts,
+                                source_ts: ts,
+                                stale_count: 0,
+                                value_text: None,
+                            })
+                        }
                         Err(e) => Err(e),
                     },
                 });

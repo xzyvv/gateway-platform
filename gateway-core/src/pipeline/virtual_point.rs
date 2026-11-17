@@ -160,7 +160,15 @@ impl VirtualPointEngine {
             return Vec::new();
         }
         let now = DataPoint::now();
-        let values = self.cache.snapshot(now);
+        // 级联求解的作用域 = 采集点缓存快照 + 已解出的虚拟点值。
+        //
+        // 性能：原实现在**每条规则**求值前都 `values.clone()` 再把 `resolved` 全量覆盖
+        // 进去，于是每批次代价 ≈ 轮数 × 规则数 × 缓存条目的 String 克隆
+        // （500 缓存 × 50 虚拟点 × 8 轮上限 ≈ 20 万次）。改为**增量维护同一份作用域**：
+        // 采集点值只拷一次，虚拟点值在解出的瞬间插入。二者提供的可见性完全等价——
+        // `resolved` 单调增长、从不删除，故「解出即加入」与「求值前全量重建」看到的
+        // 键值集合相同（同名时虚拟点覆盖采集点，顺序也保持一致）。
+        let mut scope = self.cache.snapshot(now);
 
         // 级联求解：虚拟点位可引用其它虚拟点位，按固定点迭代。
         // `resolved` 记录已求出的虚拟点位值（键为虚拟点位 ID）。
@@ -181,13 +189,11 @@ impl VirtualPointEngine {
                         progressed = true;
                     }
                     Ok(compiled) => {
-                        let mut scope = values.clone();
-                        for (k, v) in &resolved {
-                            scope.insert(k.clone(), *v);
-                        }
                         match compiled.eval(&scope) {
                             Ok(v) => {
                                 resolved.insert(rule.id.clone(), v);
+                                // 立即并入作用域：同级后续规则 / 下一轮重试都能看到
+                                scope.insert(rule.id.clone(), v);
                                 progressed = true;
                             }
                             Err(e) => {
@@ -437,6 +443,47 @@ mod tests {
         let vp2 = out.iter().find(|d| d.point_id == "vp2").expect("vp2");
         assert_eq!(vp1.value, 3.0);
         assert_eq!(vp2.value, 30.0);
+    }
+
+    /// 回归（性能优化，语义等价性）：正序长级联链必须在**同一轮**内全部解出。
+    ///
+    /// 优化把「每条规则求值前重建 scope（values.clone + resolved 全量覆盖）」改成
+    /// 「解出一个立刻并入 scope」。二者等价的关键就在**同级可见性**：前面规则刚解出
+    /// 的值，后面的规则本轮必须能看见。若误改成「每轮开头统一注入」，这条 12 级链
+    /// 每轮只能前进一级，8 轮（`MAX_CASCADE_ROUNDS`）后剩 4 个点解不出。
+    #[test]
+    fn deep_cascade_resolves_within_single_round() {
+        const DEPTH: usize = 12;
+        let mut rules = vec![vp("vp0", "{p1} + 1")];
+        for i in 1..DEPTH {
+            rules.push(vp(&format!("vp{i}"), &format!("{{vp{}}} + 1", i - 1)));
+        }
+        let engine = VirtualPointEngine::new(rules);
+        let items = vec![item("p1", 2.0)];
+        engine.update_cache(
+            &items,
+            &items.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+        );
+
+        let out = engine.evaluate();
+        assert_eq!(out.len(), DEPTH, "12 级链应全部产出，实际: {}", out.len());
+        for dp in &out {
+            assert_eq!(
+                dp.quality,
+                Quality::Good,
+                "{} 不应因级联轮数不足而失败: {:?}",
+                dp.point_id,
+                dp.quality_reason
+            );
+        }
+        // vp0 = 2 + 1 = 3，逐级 +1 → vp11 = 14
+        for i in 0..DEPTH {
+            let dp = out
+                .iter()
+                .find(|d| d.point_id == format!("vp{i}"))
+                .unwrap_or_else(|| panic!("vp{i} 缺失"));
+            assert_eq!(dp.value, 3.0 + i as f64, "vp{i} 级联值错误");
+        }
     }
 
     #[test]

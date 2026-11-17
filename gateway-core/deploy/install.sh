@@ -352,7 +352,8 @@ chown -R root:gateway "$CONFIG_DIR"
 chmod -R g+rX,o-rwx "$CONFIG_DIR"
 # 目录额外需要**组可写**：ConfigLoader::save() → atomic_write() 的临时文件建在
 # 目标同目录（/etc/gateway/）再 rename 覆盖，目录不可写时所有在线改配置端点
-# 都会 500「runtime reloaded but disk save failed」——运行时已改、磁盘未改，重启回滚。
+# 都会 500「save config failed」——落盘前置，失败即整次保存不生效（内存/运行态/磁盘
+# 都保持旧配置），不会再出现「运行时已改、磁盘未改」的半新半旧状态。
 # 文件本身保持组只读（g+r，不给 g+w）：写回走的是 rename 替换，不需要文件写权限。
 find "$CONFIG_DIR" -type d -exec chmod g+rwx,o-rwx {} +
 chown -R root:root "$INSTALL_DIR"

@@ -304,7 +304,7 @@ fn expand_modbus_uses_register_offset_as_display_address() {
     let mut dev = build_device("meter", "7");
     dev.protocol = "modbus".into();
     let points = mgr.expand_devices(&[dev]).expect("modbus 模板应能展开");
-    assert_eq!(points[0].address, "30001", "应展示寄存器地址而非从站号");
+    assert_eq!(points[0].address, "30001", "应展示寄存器地址而非从站地址");
     assert_eq!(points[0].address_num, Some(0), "实际寻址仍用 0 基偏移");
 }
 

@@ -1,7 +1,7 @@
 //! 上行模板配置保存/导入/导出 handler
 
 use super::*;
-use crate::web::config_apply::reload_then_save;
+use crate::web::config_apply::persist_then_apply;
 use crate::web::services::validate_template;
 use gateway_core::config::PointConfig;
 
@@ -51,10 +51,10 @@ async fn do_save_uplink_config(
         cfg
     };
 
-    // V-8：统一走 reload_then_save —— 结构校验 + 模板展开校验 + license 配额 + 热重载 + 落盘 +
+    // V-8：统一走 persist_then_apply —— 结构校验 + 模板展开校验 + license 配额 + 热重载 + 落盘 +
     // 更新内存。任一步失败即中止，不再绕过配额与校验规则；
     // reload_config 失败会作为 ApiError 返回，不会出现「配置已落盘但运行态未更新却提示成功」。
-    let (outcome, _effective) = match reload_then_save(state, &old_cfg, &new_cfg).await {
+    let (outcome, _effective) = match persist_then_apply(state, &old_cfg, &new_cfg).await {
         Ok(o) => o,
         Err(e) => return err(e.status, e.code, e.message),
     };

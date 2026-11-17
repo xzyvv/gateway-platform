@@ -160,7 +160,7 @@ pub(crate) async fn change_password(
     } else {
         return Err(ApiError::internal("web config not set"));
     }
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &cfg).await?;
     // 改密会轮换 api_token（旧凭证即刻失效），属账号安全事件，必须留痕
     state.platform.audit.log(
         "auth.password_change",

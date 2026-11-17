@@ -68,7 +68,7 @@ RestrictNamespaces=true
 # /etc/gateway 必须在这里：Web API 改配置走 ConfigLoader::save() → atomic_write()，
 # 临时文件建在**目标同目录**（/etc/gateway/）再 rename 覆盖，
 # 因此需要该目录可写；缺这一条时所有在线改配置端点都会返回
-# 500「runtime reloaded but disk save failed」——运行时已改、磁盘未改，重启回滚。
+# 500「save config failed」——落盘前置，失败即整次保存不生效（运行态与磁盘都保持旧配置）。
 ReadWritePaths=/var/lib/gateway /var/log/gateway /tmp /etc/gateway
 
 # 设备访问：硬件看门狗 + 串口

@@ -51,7 +51,7 @@ impl Collector for ModbusCollector {
                 Err(CollectorError::ModbusException(code)) => {
                     let exc = ModbusExceptionCode::from_code(code);
                     return format!(
-                        "modbus@{}: 链路可达，但从站 {} 对 FC03@{}+1 返回异常码 0x{:02X}（{}）；核对从站号/寄存器地址是否对应现场设备",
+                        "modbus@{}: 链路可达，但从站 {} 对 FC03@{}+1 返回异常码 0x{:02X}（{}）；核对从站地址/寄存器地址是否对应现场设备",
                         bus, DIAG_SLAVE, DIAG_ADDR, code, exc.description()
                     );
                 }
@@ -75,7 +75,7 @@ impl Collector for ModbusCollector {
                 Err(CollectorError::ModbusException(code)) => {
                     let exc = ModbusExceptionCode::from_code(code);
                     format!(
-                        "modbus@{}: 链路可达，但从站 {} 对 FC03@{}+1 返回异常码 0x{:02X}（{}）；核对从站号/寄存器地址是否对应现场设备",
+                        "modbus@{}: 链路可达，但从站 {} 对 FC03@{}+1 返回异常码 0x{:02X}（{}）；核对从站地址/寄存器地址是否对应现场设备",
                         bus, DIAG_SLAVE, DIAG_ADDR, code, exc.description()
                     )
                 }

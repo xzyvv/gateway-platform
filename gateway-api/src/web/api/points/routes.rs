@@ -62,7 +62,7 @@
 //!   写 `require_auth`，无分类标记。
 //!
 //! License gate（v2.0）：批量与虚拟点位功能全部免费，不挂中间件。配额校验
-//! （max_points 等）不在此层，而由 `web::config_apply::reload_then_save` 统一前置校验。
+//! （max_points 等）不在此层，而由 `web::config_apply::persist_then_apply` 统一前置校验。
 
 use std::sync::Arc;
 

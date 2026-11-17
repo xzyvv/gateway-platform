@@ -184,7 +184,7 @@ pub(crate) async fn list_heal_events(
 
 /// POST /api/watchdog/services/:name/restart — 手动重启服务
 ///
-/// 通过统一配置重载入口（`config_reload_lock` + `reload_then_save`）触发一次热重载。
+/// 通过统一配置重载入口（`config_reload_lock` + `persist_then_apply`）触发一次热重载。
 /// 重启 MQTT / 采集调度 / 北向等内部服务。主进程本身无法通过 API 重启
 /// （需外部 systemd / 看门狗进程）。与自愈执行器的 `RestartService` 共用同一实现。
 pub(crate) async fn restart_service(

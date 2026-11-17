@@ -323,13 +323,27 @@ mod tests {
     use super::*;
 
     /// r24-MOD1：合法 finite 值应原样保留为 Good。
+    ///
+    /// E 批追加：`source_ts` 必须与 `timestamp` 同取构造时刻。0 的语义是
+    /// 「本样本没有原始时标」（IEC 104 无时标类型），不能出现在正常成功样本上
+    /// ——北向 OPC UA 会把 0 映射成缺省，客户端看到的数据就没有采集时刻。
     #[test]
     fn good_passes_through_finite_values() {
+        let before = DataPoint::now();
         let p = DataPoint::good("p1", "d1", 42.5, 850.0, "u16");
+        let after = DataPoint::now();
         assert_eq!(p.quality, Quality::Good);
         assert_eq!(p.value, 42.5);
         assert_eq!(p.raw_value, 850.0);
         assert_eq!(p.quality_reason, "");
+        assert_eq!(
+            p.source_ts, p.timestamp,
+            "成功样本 source_ts 必须等于 timestamp"
+        );
+        assert!(
+            p.source_ts >= before && p.source_ts <= after,
+            "source_ts 必须落在构造时刻区间内"
+        );
     }
 
     /// r24-MOD1：NaN value 必须降级为 Uncertain(0.0)，不可标记为 Good。

@@ -250,7 +250,7 @@ use std::task::{Context, Poll};
 #[cfg(feature = "modbus")]
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-/// 可编程串口桩：按请求里的从站号决定是否响应，支持运行时把某个从站改成静默。
+/// 可编程串口桩：按请求里的从站地址决定是否响应，支持运行时把某个从站改成静默。
 #[cfg(feature = "modbus")]
 #[derive(Clone)]
 struct SwitchablePort {
@@ -269,7 +269,7 @@ struct SwitchState {
     /// 待交付的响应字节
     pending: Vec<u8>,
     pending_pos: usize,
-    /// 当前"在线"的从站号集合（不在集合内 = 静默）
+    /// 当前"在线"的从站地址集合（不在集合内 = 静默）
     alive: HashSet<u8>,
 }
 

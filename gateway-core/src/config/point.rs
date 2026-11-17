@@ -39,7 +39,7 @@ pub struct DeviceConfig {
     /// 从站地址/表地址
     pub address: String,
 
-    /// Modbus 从站号
+    /// Modbus 从站地址
     pub slave_id: Option<u8>,
 
     /// 参数名→地址覆盖
@@ -92,7 +92,7 @@ pub struct PointConfig {
     /// 地址（Modbus=slave_id字符串 / DLT645=BCD地址 / GPIO=GPIO编号）
     pub address: String,
 
-    /// Modbus 从站号 1~247
+    /// Modbus 从站地址 1~247
     pub slave_id: Option<u8>,
 
     /// Modbus 寄存器地址

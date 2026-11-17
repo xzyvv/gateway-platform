@@ -2,7 +2,7 @@
 //!
 //! 数据源：[`gateway_core::south::frame_log`]（采集事务 + 调试直发单点记录）。
 //! 与 diagnostics::capture 共用同一帧源，结构不同（本结构含
-//! deviceName/matchedId/delayMs/ascii）。设备归属按帧内从站号匹配
+//! deviceName/matchedId/delayMs/ascii）。设备归属按帧内从站地址匹配
 //! GatewayConfig::devices（同总线 + address 一致）；匹配不到如实标「未知设备」。
 //! 历史 V1 按 hash_id 编造请求/响应配对——误导性假数据，已移除。
 
@@ -69,7 +69,7 @@ fn mbap_offset(bytes: &[u8]) -> usize {
     }
 }
 
-/// 提取 Modbus 帧的（从站号, 功能码）；非 Modbus/过短帧 None。
+/// 提取 Modbus 帧的（从站地址, 功能码）；非 Modbus/过短帧 None。
 fn modbus_head(bytes: &[u8]) -> Option<(u8, u8)> {
     let off = mbap_offset(bytes);
     if bytes.len() < off + 2 {
@@ -142,7 +142,7 @@ pub(crate) async fn list_packets(
     // 经 web::debug_bus 门面访问（arch_deps 禁止 api 层直引 gateway_core::south）
     let frames = crate::web::debug_bus::frame_snapshot(None, limit * 2);
 
-    // 设备归属：帧内从站号 → 同总线 + address 一致的配置设备
+    // 设备归属：帧内从站地址 → 同总线 + address 一致的配置设备
     let dev_list = cfg.devices.as_deref().unwrap_or(&[]);
     let find_dev = |bus: &str, slave: Option<u8>| -> Option<(String, String)> {
         let s = slave? as i64;

@@ -13,7 +13,6 @@ gateway-core/src/engine/formula.rs:33:22: replace < with > in is_formula_safe
 gateway-core/src/pipeline/vformula.rs:293:24: replace match guard t == want with true in Parser<'a>::expect
 gateway-core/src/pipeline/vformula.rs:376:13: delete match arm Some(Token::Op('+')) in Parser<'a>::parse_factor
 gateway-core/src/pipeline/vformula.rs:491:32: replace || with && in eval_call
-gateway-core/src/pipeline/vformula.rs:50:9: replace <impl fmt::Display for FormulaError>::fmt -> fmt::Result with Ok(Default::default())
 gateway-core/src/queue/core/key.rs:143:5: replace set_file_permissions with ()
 gateway-core/src/queue/core/limit.rs:108:9: replace QueueHealth::label -> &'static str with ""
 gateway-core/src/queue/core/limit.rs:108:9: replace QueueHealth::label -> &'static str with "xyzzy"

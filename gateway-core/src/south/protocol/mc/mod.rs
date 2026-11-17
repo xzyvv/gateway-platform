@@ -34,7 +34,7 @@ use crate::south::protocol::{
     CollectorResult,
 };
 
-mod frames;
+pub(crate) mod frames;
 use frames::{
     build_read_request_at_station, build_request_1e, build_write_bit_request,
     build_write_words_request, check_end_code, decode_bit, decode_words, encode_words,
@@ -75,6 +75,8 @@ struct McTxn {
 /// 由点位配置与原始值构造 DataPoint（单点 read 与批量 read_batch 共用）。
 fn build_datapoint(point: &PointConfig, raw_value: f64) -> DataPoint {
     let value = convert_value(point, raw_value);
+    // MC 读响应不带时标：原始采集时刻即本次读成功时刻（此前填 0，北向会得到 1970）
+    let ts = DataPoint::now();
     DataPoint {
         point_id: point.id.clone(),
         device_id: point.device_id.clone().unwrap_or_default(),
@@ -83,8 +85,8 @@ fn build_datapoint(point: &PointConfig, raw_value: f64) -> DataPoint {
         raw_type: "mc".into(),
         quality: Quality::Good,
         quality_reason: String::new(),
-        timestamp: DataPoint::now(),
-        source_ts: 0,
+        timestamp: ts,
+        source_ts: ts,
         stale_count: 0,
         value_text: None,
     }

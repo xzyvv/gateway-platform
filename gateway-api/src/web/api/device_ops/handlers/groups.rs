@@ -70,7 +70,7 @@ pub(crate) async fn create_group(
         created_at: now_ms,
     };
     groups.push(new_group.clone());
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state.platform.audit.log(
         "group.create",
         &new_group.id,
@@ -126,7 +126,7 @@ pub(crate) async fn update_group(
     if let Some(devs) = payload.device_ids {
         g.device_ids = devs;
     }
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state
         .platform
         .audit
@@ -150,7 +150,7 @@ pub(crate) async fn delete_group(
     if groups.len() == before {
         return Ok(ApiResponse::err(6002, "group not found"));
     }
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state
         .platform
         .audit
@@ -189,7 +189,7 @@ pub(crate) async fn add_device_to_group(
     if !g.device_ids.contains(&device_id) {
         g.device_ids.push(device_id.clone());
     }
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state
         .platform
         .audit
@@ -213,7 +213,7 @@ pub(crate) async fn remove_device_from_group(
         None => return Ok(ApiResponse::err(6002, "group not found")),
     };
     g.device_ids.retain(|d| d != &device_id);
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state
         .platform
         .audit

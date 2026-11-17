@@ -1,6 +1,7 @@
 use super::{
-    should_register_anonymous_none_endpoint, user_token_ids, variant_to_f64, write_error_status,
-    write_wait_budget, ActivePointSet, NorthServer, OpcUaServer, OpcUaServerConfig,
+    map_data_point_to_value, should_register_anonymous_none_endpoint, user_token_ids,
+    variant_to_f64, write_error_status, write_wait_budget, ActivePointSet, NorthServer,
+    OpcUaServer, OpcUaServerConfig,
 };
 
 /// 契约：未配证书时必须注册 None 端点（否则服务没有任何可用端点）；
@@ -46,6 +47,44 @@ fn user_token_ids_lists_configured_users() {
 fn user_token_ids_require_explicit_anonymous() {
     assert!(user_token_ids(&[], false).is_empty());
     assert_eq!(user_token_ids(&[], true), vec!["ANONYMOUS"]);
+}
+
+/// 契约：`source_ts` 是原始采集时刻，必须映射到 `source_timestamp`；
+/// `source_ts == 0` 表示该样本**没有**原始时标（IEC 104 无时标类型，见 `asdu`），
+/// 必须映射为 `None`。旧实现无条件 `from_timestamp_millis(0)`，得到 1970-01-01，
+/// 客户端会按 source timestamp 判定数据陈旧，甚至直接丢弃该值。
+#[test]
+fn source_ts_maps_to_source_timestamp_not_epoch() {
+    use crate::engine::model::DataPoint;
+
+    let mut dp = DataPoint::good("p1", "d1", 1.0, 1.0, "u16");
+    dp.source_ts = 1_700_000_000_000;
+    dp.timestamp = 1_700_000_001_000;
+
+    let dv = map_data_point_to_value(&dp);
+    let expect: opcua::types::DateTime = chrono::DateTime::from_timestamp_millis(dp.source_ts)
+        .expect("valid source_ts")
+        .into();
+    assert_eq!(
+        dv.source_timestamp,
+        Some(expect),
+        "source_ts 必须映射为 source_timestamp"
+    );
+    assert_eq!(dv.source_picoseconds, Some(0));
+
+    // 无原始时标：必须缺省，而不是 1970-01-01
+    dp.source_ts = 0;
+    let dv = map_data_point_to_value(&dp);
+    assert!(
+        dv.source_timestamp.is_none(),
+        "source_ts=0 不得映射成 1970-01-01"
+    );
+    assert!(
+        dv.source_picoseconds.is_none(),
+        "无原始时标时 picoseconds 也应缺省"
+    );
+    // server_timestamp 不受影响，仍是上送时刻
+    assert!(dv.server_timestamp.is_some());
 }
 
 /// 契约：写失败必须映射为可区分的 OPC UA 状态码，客户端据此判断原因

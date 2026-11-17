@@ -96,6 +96,8 @@ impl Dlt645Collector {
         let value_bytes = &resp_data[4..];
         let (raw_value, raw_type, quality) = decode_dlt_value(point, value_bytes);
         let value = convert_value(point, raw_value);
+        // 645 应答帧不带时标：原始采集时刻即本次读成功时刻（此前填 0 → 北向 1970）
+        let ts = DataPoint::now();
 
         Ok(DataPoint {
             point_id: point.id.clone(),
@@ -105,8 +107,8 @@ impl Dlt645Collector {
             raw_type,
             quality,
             quality_reason: String::new(),
-            timestamp: DataPoint::now(),
-            source_ts: 0,
+            timestamp: ts,
+            source_ts: ts,
             stale_count: 0,
             value_text: None,
         })

@@ -330,9 +330,10 @@ pub struct MqttClient {
     /// 之后静默——避免每个发布周期重复刷日志。
     unresolved_template_warned: std::sync::atomic::AtomicBool,
 
-    /// 协议转换引擎（批次 B：enum 标签回查）。批次 C 起 QueuedItem 已带
-    /// value_text 字段（入队时落库的标签），但 MQTT 报文口径不变——仍在
-    /// payload 构建期对每条 item 调 `ConvertEngine::enum_label_for` 补回枚举文本。
+    /// 协议转换引擎（批次 B：enum 标签兜底回查）。批次 C 起 QueuedItem 已带
+    /// value_text 字段（入队时落库的标签，与历史表同源），payload 构建期**优先
+    /// 直接读该字段**；仅当其为空（批次 C 之前落库的历史行）时才用本引擎按当前
+    /// 规则集调 `ConvertEngine::enum_label_for` 回查补回枚举文本。
     /// 存 Arc 共享引擎本体：规则热重载（update_rules 原地 swap）后读到当前规则，
     /// 不是配置快照。未注入（None）时行为与旧版一致——不报 value_text。
     convert_engine: arc_swap::ArcSwapOption<crate::pipeline::ConvertEngine>,

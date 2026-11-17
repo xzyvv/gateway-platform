@@ -76,7 +76,7 @@ pub(crate) const PROTOCOL_ENTRIES: &[ProtocolEntry] = &[
         label: "Modbus",
         transport: "serial",
         default_timeout_ms: 1000,
-        address_hint: "如: 1（从站号 1-247）",
+        address_hint: "如: 1（从站地址 1-247）",
         endpoint_hint: "如: 192.168.1.10:502（填写后该总线走 Modbus TCP）",
         variants: &[("rtu", "RTU"), ("ascii", "ASCII")],
         tag_color: "primary",

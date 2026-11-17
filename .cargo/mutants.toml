@@ -7,6 +7,15 @@
 # 范围收敛：只跑 queue / formula / 解码模块，避免全仓变异导致 CI 时长失控。
 # 本地：cargo install cargo-mutants && cargo mutants -p gateway-core
 # CI：.github/workflows/fuzz-mutation.yml 的 mutation job（定时/手动触发）
+#
+# E 批扩面实测（2026-11-17，Windows 本地 -j4）：
+#   s7comm/frames/read.rs 抽样 shard 1/4（37 个变体）→ 36 caught / 0 missed
+#   （最后 1 个在收尾时人工中止）。该文件断言强度足够，纳入常态范围。
+#   其余新增文件（mc/frames.rs 265、fins/frames.rs 121、s7 szl/decode/write/link/spec
+#   约 400 个变体）未在本地跑完——Windows 单变体约 6 分钟（Linux CI 实测 81s），
+#   全量需 12 小时以上，交给 CI 分片首次执行。
+#   首次跑出 missed 时按「补断言」处理，不要写进 scripts/mutation_baseline.txt：
+#   那份基线只应缩小（见其文件头）。
 examine_globs = [
   # 队列：SQLite 存储、深度/容量、淘汰、WAL 与错误分类
   "gateway-core/src/queue/**",
@@ -19,6 +28,12 @@ examine_globs = [
   "gateway-core/src/south/protocol/modbus/frames.rs",
   "gateway-core/src/south/protocol/dlt645/frames.rs",
   "gateway-core/src/south/protocol/bacnet_mstp/frames.rs",
+  # 协议层（E 批扩面）：此前只有 fuzz 没有变异测试，帧级边界条件（长度域、
+  # 结束码、块数校验、字节序）全靠人工读代码。三个协议都是「对端字节不可信」
+  # 的解析器，边界断言缺失的代价是现场错帧被当成有效值。
+  "gateway-core/src/south/protocol/s7comm/frames/**",
+  "gateway-core/src/south/protocol/mc/frames.rs",
+  "gateway-core/src/south/protocol/fins/frames.rs",
 ]
 
 # 测试代码本身不参与变异（mutants 也会跳过 #[cfg(test)]，这里显式排除目录级测试）

@@ -6,7 +6,7 @@
 //! 公式在处理管道中按采集周期求值，派生量参与广播/入队/北向上报。
 //! 「重算」端点触发一次同步求值，立即返回最新结果。
 //!
-//! 写操作一律走 `reload_then_save`（而非纯元数据路径）：虚拟点位规则集
+//! 写操作一律走 `persist_then_apply`（而非纯元数据路径）：虚拟点位规则集
 //! 由 core 引擎的 `ArcSwap` 承载，配置落盘后必须热重载才能让新公式生效，
 //! 否则会退化成「改了不生效、必须重启」的老问题。
 
@@ -136,7 +136,7 @@ pub(crate) async fn create_virtual_point(
     };
     vps.push(vp.clone());
     // 热重载：规则集变更后立即生效（core 引擎 ArcSwap 原子替换）
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state.platform.audit.log(
         "virtual_point.create",
         &vp.id,
@@ -176,7 +176,7 @@ pub(crate) async fn update_virtual_point(
     };
     let vp = vps[pos].clone();
     // 热重载：公式改动立即生效
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state.platform.audit.log(
         "virtual_point.update",
         &vp.id,
@@ -205,7 +205,7 @@ pub(crate) async fn delete_virtual_point(
         .ok_or_else(|| ApiError::not_found(format!("virtual point {} not found", id)))?;
     vps.remove(pos);
     // 热重载：删除后引擎内规则同步移除
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state
         .platform
         .audit

@@ -81,7 +81,7 @@ pub(crate) async fn update_asset(
         Some(i) => assets[i] = asset.clone(),
         None => assets.push(asset.clone()),
     }
-    let _ = crate::web::config_apply::reload_then_save(&state, &old, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state.platform.audit.log(
         "asset.update",
         &device_id,

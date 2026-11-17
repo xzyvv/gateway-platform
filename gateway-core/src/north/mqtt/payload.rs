@@ -102,10 +102,34 @@ impl MqttClient {
     }
 }
 
+/// 解析上行报文的枚举文本标签（Bug 169 修复）
+///
+/// 优先级：
+/// 1. `item.value_text` —— 入队时由 pipeline 转换引擎写下的标签，与实时值/历史表
+///    **同源**，因此报文标签与历史查询结果必然一致；
+/// 2. 回退到按当前规则集回查 —— 仅用于 `value_text` 为空的历史数据
+///    （批次 C 之前落库的行，`value_text` 列为 NULL）。
+///
+/// 原实现跳过第 1 步、直接按 `raw_value` 回查当前规则，导致两个口径问题：
+/// - **键不一致**：`ConvertEngine::apply` 用 `format!("{}", dp.value)` 查 enum_map，
+///   这里用 `raw_value`。二者在「线性+枚举串联」或「点位 scale 后再枚举」时不同，
+///   同一采样会出现历史有标签、报文没标签（或反之）。
+/// - **快照漂移**：热重载 enum 映射后（如 `1 → 运行` 改为 `1 → 运转`），队列中
+///   入队时的旧样本会在发送瞬间被按新规则重新贴标签 —— 同一采样的报文标签与
+///   历史标签不一致；规则被删除后则连标签一起丢失。
+///
+/// 回退分支的取值同步对齐 `apply`，改用 `item.value` 而非 `raw_value`。
+fn resolve_value_text(item: &QueuedItem, convert: Option<&ConvertEngine>) -> Option<String> {
+    item.value_text
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| convert.and_then(|e| e.enum_label_for(&item.point_id, item.value)))
+}
+
 /// 把 QueuedItem + 可选 PointConfig 拼装成 TemplateVars（pub 供测试和上层使用）
 ///
-/// `convert`：批次 B 注入的协议转换引擎，用于回查 enum 规则文本写入
-/// `vars.value_text`（未命中/未注入则为 None，模板渲染为空串）。
+/// `convert`：批次 B 注入的协议转换引擎，用于在 `value_text` 缺失时回查 enum 规则
+/// 补文本（未命中/未注入则为 None，模板渲染为空串）。
 pub(crate) fn template_vars_from_item(
     item: &QueuedItem,
     pc: Option<&PointConfig>,
@@ -121,10 +145,7 @@ pub(crate) fn template_vars_from_item(
         quality_text: item.quality.clone(),
         quality_reason: item.quality_reason.clone(),
         stale_count: item.stale_count,
-        // 批次 B：构建期按当前规则回查补 enum 标签。
-        // 批次 C 起 QueuedItem 已带 value_text 列（入队时落库的标签），
-        // 但 MQTT 报文的取值来源仍保持批次 B 的规则回查不变（本批次不动北向口径）。
-        value_text: convert.and_then(|e| e.enum_label_for(&item.point_id, item.raw_value)),
+        value_text: resolve_value_text(item, convert),
         ..Default::default()
     };
     vars.timestamp_iso = chrono::DateTime::from_timestamp_millis(item.timestamp)
@@ -158,7 +179,7 @@ pub(crate) fn template_vars_from_item(
 
 /// 默认 JSON 格式（保持 Q10 历史兼容）
 ///
-/// `convert`：批次 B 注入的协议转换引擎；每个点位回查 enum 标签，
+/// `convert`：批次 B 注入的协议转换引擎，用于在 `value_text` 缺失时回查 enum 标签；
 /// 命中时附加 `value_text` 键，未命中/未注入时键不出现（schema 不变）。
 fn build_payload_default(items: &[QueuedItem], convert: Option<&ConvertEngine>) -> Vec<u8> {
     use std::collections::HashMap;
@@ -182,8 +203,7 @@ fn build_payload_default(items: &[QueuedItem], convert: Option<&ConvertEngine>) 
                     quality_reason: item.quality_reason.as_str(),
                     stale_count: item.stale_count,
                     source_ts: item.source_ts,
-                    value_text: convert
-                        .and_then(|e| e.enum_label_for(&item.point_id, item.raw_value)),
+                    value_text: resolve_value_text(item, convert),
                 })
                 .collect();
             PayloadReport {

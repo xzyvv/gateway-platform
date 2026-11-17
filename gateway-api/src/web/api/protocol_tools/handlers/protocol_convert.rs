@@ -2,7 +2,7 @@
 //!
 //! 规则持久化进 `config.json` 的 `convert_rules` 节，写操作遵循统一范式：
 //! mutate load_full → `ConvertRuleConfig::validate_rule`（fail-closed）→
-//! [`reload_then_save`]（结构校验 + 模板展开校验 + license 配额 + store
+//! [`persist_then_apply`]（结构校验 + 模板展开校验 + license 配额 + 落盘
 //! + 热重载，引擎热 swap）。
 //!
 //! 运行时执行由 `gateway_core::pipeline::convert::ConvertEngine` 承担
@@ -132,14 +132,14 @@ fn validate_dto(r: &ConvertRule) -> Result<(), ApiError> {
 /// 写操作统一收尾：校验 → 配额 → 落盘 → store → 展开点位 → 热重载
 /// （调用方须已持有 config_reload_lock）。
 ///
-/// V-8：改用 [`reload_then_save`] 统一入口，与其它配置写端点共享
+/// V-8：改用 [`persist_then_apply`] 统一入口，与其它配置写端点共享
 /// 「结构校验 + 模板展开校验 + license 配额」链路，不再直连 `config_loader.save`。
 async fn persist_and_reload(
     state: &Arc<AppState>,
     old_cfg: &gateway_core::config::GatewayConfig,
     new_cfg: gateway_core::config::GatewayConfig,
 ) -> Result<(), ApiError> {
-    let _ = crate::web::config_apply::reload_then_save(state, old_cfg, &new_cfg).await?;
+    let _ = crate::web::config_apply::persist_then_apply(state, old_cfg, &new_cfg).await?;
     Ok(())
 }
 

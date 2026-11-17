@@ -174,6 +174,8 @@ impl Collector for BacnetCollector {
                 }
 
                 let (raw_value, quality) = frames::parse_value_from_apdu(apdu, invoke_id)?;
+                // BACnet 读响应不带时标：原始采集时刻即本次读成功时刻
+                let ts = DataPoint::now();
 
                 return Ok(DataPoint {
                     point_id: point.id.clone(),
@@ -184,8 +186,8 @@ impl Collector for BacnetCollector {
                     raw_type: "bacnet".into(),
                     quality,
                     quality_reason: String::new(),
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    source_ts: 0,
+                    timestamp: ts,
+                    source_ts: ts,
                     stale_count: 0,
                     value_text: None,
                 });
@@ -419,20 +421,24 @@ impl Collector for BacnetCollector {
                         Ok(map) => {
                             let oid = ((*ot as u32) << 22) | (*inst & 0x3FFFFF);
                             match map.get(&oid) {
-                                Some((v, q)) => results.push(Ok(DataPoint {
-                                    point_id: p.id.clone(),
-                                    device_id: p.device_id.clone().unwrap_or_default(),
-                                    // 批量路径与单点路径同一套换算，避免两条路径数值不一致
-                                    value: convert_value(p, *v),
-                                    raw_value: *v,
-                                    raw_type: "bacnet".into(),
-                                    quality: *q,
-                                    quality_reason: String::new(),
-                                    timestamp: chrono::Utc::now().timestamp_millis(),
-                                    source_ts: 0,
-                                    stale_count: 0,
-                                    value_text: None,
-                                })),
+                                Some((v, q)) => {
+                                    // 批量响应同样不带时标：取本批解析时刻
+                                    let ts = DataPoint::now();
+                                    results.push(Ok(DataPoint {
+                                        point_id: p.id.clone(),
+                                        device_id: p.device_id.clone().unwrap_or_default(),
+                                        // 批量路径与单点路径同一套换算，避免两条路径数值不一致
+                                        value: convert_value(p, *v),
+                                        raw_value: *v,
+                                        raw_type: "bacnet".into(),
+                                        quality: *q,
+                                        quality_reason: String::new(),
+                                        timestamp: ts,
+                                        source_ts: ts,
+                                        stale_count: 0,
+                                        value_text: None,
+                                    }));
+                                }
                                 None => results.push(Err(CollectorError::NoReply)),
                             }
                         }

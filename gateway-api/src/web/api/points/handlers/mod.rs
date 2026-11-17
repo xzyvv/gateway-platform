@@ -71,7 +71,7 @@ async fn upsert_points(
             config.points.push(p);
         }
     }
-    let _ = crate::web::config_apply::reload_then_save(state, &old, &config).await?;
+    let _ = crate::web::config_apply::persist_then_apply(state, &old, &config).await?;
     let after = config.points.len();
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -121,7 +121,7 @@ async fn edit_points(
         added += 1;
     }
     let (outcome, _effective) =
-        crate::web::config_apply::reload_then_save(state, &old, &config).await?;
+        crate::web::config_apply::persist_then_apply(state, &old, &config).await?;
     Ok(Json(serde_json::json!({
         "status": "ok",
         "added": added,

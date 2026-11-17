@@ -72,7 +72,7 @@ impl Collector for SkeletonCollector {
 
 /// 构造请求帧（按你的协议格式实现）
 fn build_request(point: &PointConfig) -> Vec<u8> {
-    // 示例：从站号 + 功能码 + 寄存器地址（大端）
+    // 示例：从站地址 + 功能码 + 寄存器地址（大端）
     let slave = point.slave_id.unwrap_or(0);
     let addr = point.address.parse::<u16>().unwrap_or(0);
     vec![slave, 0x03, (addr >> 8) as u8, addr as u8]

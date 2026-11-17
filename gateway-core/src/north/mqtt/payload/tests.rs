@@ -233,3 +233,138 @@ fn test_template_value_text_variable() {
     assert_eq!(line, r#"{"text":""}"#);
     assert_eq!(missing, vec!["value_text".to_string()]);
 }
+
+// ============================================================================
+// Bug 169：北向枚举标签口径与 pipeline 转换结果对齐
+// ============================================================================
+
+/// 回归（Bug 169 主症状）：报文必须优先使用**入队时落库**的标签。
+///
+/// 原实现每次发送都按当前规则集重算，于是 enum 映射热重载后（`1 → 运行` 改成
+/// `1 → 运转`），队列里入队时的旧样本会被追溯改标签 —— 同一条采样的 MQTT 报文
+/// 与历史查询（读 `data_points.value_text`）标签不一致；规则被删则标签直接丢失。
+#[test]
+fn test_default_payload_prefers_persisted_value_text() {
+    let engine = make_enum_engine(); // 当前规则：1 → 运行
+    let mut item = make_item("dev1", "p1", 1.0);
+    item.value_text = Some("运转".into()); // 入队时按当时的规则落下的标签
+
+    let s = String::from_utf8(build_payload_default(&[item], Some(&*engine))).unwrap();
+    assert!(
+        s.contains("\"value_text\":\"运转\""),
+        "报文应沿用入队时落库的标签（运转），不得按当前规则重算成「运行」: {}",
+        s
+    );
+    assert!(
+        !s.contains("\"运行\""),
+        "不得用当前规则覆盖已落库标签: {}",
+        s
+    );
+}
+
+/// 兜底路径：`value_text` 为空（批次 C 之前落库的历史行，列为 NULL）时，
+/// 仍按当前规则集回查补标签，老数据不丢文本。
+#[test]
+fn test_default_payload_falls_back_to_live_lookup_when_value_text_absent() {
+    let engine = make_enum_engine();
+    let item = make_item("dev1", "p1", 1.0); // value_text = None
+    let s = String::from_utf8(build_payload_default(&[item], Some(&*engine))).unwrap();
+    assert!(
+        s.contains("\"value_text\":\"运行\""),
+        "value_text 缺失时应回查规则补标签: {}",
+        s
+    );
+
+    // 空串按「缺失」处理，避免报文出现 "value_text":"" 的空键
+    let mut blank = make_item("dev1", "p1", 1.0);
+    blank.value_text = Some(String::new());
+    let s = String::from_utf8(build_payload_default(&[blank], Some(&*engine))).unwrap();
+    assert!(
+        s.contains("\"value_text\":\"运行\""),
+        "空串标签应回退到规则回查，而非输出空键: {}",
+        s
+    );
+}
+
+/// 模板路径与默认 JSON 路径必须同口径（都优先持久化标签）。
+#[test]
+fn test_template_value_text_prefers_persisted() {
+    let engine = make_enum_engine();
+    let mut item = make_item("dev1", "p1", 1.0);
+    item.value_text = Some("运转".into());
+
+    let vars = template_vars_from_item(&item, None, Some(&*engine));
+    assert_eq!(
+        vars.value_text.as_deref(),
+        Some("运转"),
+        "模板变量应与默认 JSON 路径一致，优先使用已落库标签"
+    );
+}
+
+/// 回归（Bug 169 根因）：报文标签必须与 `ConvertEngine::apply` 的产物一致。
+///
+/// 「线性 + 枚举」串联时，apply 用**转换后**的 `dp.value` 查 enum_map（1.0 → 10.0
+/// → key "10" 未命中 → 无标签）；原北向实现用 `raw_value`（1.0 → key "1" → 命中
+/// 「运行」）。同一采样在实时值/历史表里没有标签，报文里却有 —— 口径分裂。
+/// 修复后两路都取 `value`，结果一致（都无标签）。
+#[test]
+fn test_payload_label_matches_convert_apply_output() {
+    use crate::config::{ConvertEnumItemConfig, ConvertRuleConfig};
+    use crate::engine::model::DataPoint;
+    use crate::queue::QueuedItem;
+
+    let linear_then_enum = vec![
+        ConvertRuleConfig {
+            id: "cv-linear".into(),
+            name: "cv-linear".into(),
+            source_proto: "modbus-tcp".into(),
+            source_point_id: "p1".into(),
+            source_point_name: String::new(),
+            target_proto: "mqtt".into(),
+            target_tag: String::new(),
+            transform: "linear".into(),
+            scale: Some(10.0),
+            offset: Some(0.0),
+            enum_map: None,
+            enabled: true,
+            created_at_ms: 0,
+        },
+        ConvertRuleConfig {
+            id: "cv-enum".into(),
+            name: "cv-enum".into(),
+            source_proto: "modbus-tcp".into(),
+            source_point_id: "p1".into(),
+            source_point_name: String::new(),
+            target_proto: "mqtt".into(),
+            target_tag: String::new(),
+            transform: "enum".into(),
+            scale: None,
+            offset: None,
+            enum_map: Some(vec![ConvertEnumItemConfig {
+                key: "1".into(),
+                label: "运行".into(),
+            }]),
+            enabled: true,
+            created_at_ms: 0,
+        },
+    ];
+    let engine = crate::pipeline::ConvertEngine::new(linear_then_enum);
+
+    // 管线侧：apply 后 value=10.0，enum 查 "10" 未命中 → 无标签
+    let mut dp = DataPoint::good("p1", "dev1", 1.0, 1.0, "u16");
+    engine.apply(std::slice::from_mut(&mut dp));
+    assert_eq!(dp.value, 10.0, "线性规则应把 1.0 换算为 10.0");
+    assert!(
+        dp.value_text.is_none(),
+        "apply 侧 key 是转换后的值，\"10\" 不在映射表内 → 不应产出标签"
+    );
+
+    // 北向侧：由同一 dp 构造 QueuedItem，报文标签必须与 apply 一致（同为 None）
+    let item = QueuedItem::from_datapoint(&dp);
+    let s = String::from_utf8(build_payload_default(&[item], Some(&*engine))).unwrap();
+    assert!(
+        !s.contains("value_text"),
+        "报文不得因用 raw_value 回查而出现 apply 侧并不存在的标签: {}",
+        s
+    );
+}

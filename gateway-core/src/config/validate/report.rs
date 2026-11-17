@@ -163,7 +163,7 @@ impl GatewayConfig {
             }
         }
 
-        // 点位地址重复：key 与旧前端规则一致（设备/总线/协议/从站号/地址）。
+        // 点位地址重复：key 与旧前端规则一致（设备/总线/协议/从站地址/地址）。
         let mut pt_seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
         for p in &self.points {
             let key = format!(

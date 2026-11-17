@@ -187,7 +187,7 @@ pub(crate) async fn import_project(
     crate::web::config_apply::check_config_quota(&state, &new)?;
 
     // A5 整份替换序：expand → reload → store → save
-    let (_, effective) = crate::web::config_apply::reload_then_save(&state, &old, &new).await?;
+    let (_, effective) = crate::web::config_apply::persist_then_apply(&state, &old, &new).await?;
     // 工程导入与 PUT /api/config/import 同为覆盖式写，必须落版本快照，
     // 否则导入前的配置在版本库中没有落点，误导入后无法回滚。
     // 快照失败只降级为告警：配置已落盘生效，不应因历史归档失败而回滚本次导入。

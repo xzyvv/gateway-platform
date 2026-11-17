@@ -380,21 +380,116 @@ pub(crate) fn build_request_1e(
     Ok(f)
 }
 
-/// 读取带 `数据长度` 字段的响应体，返回（结束代码，数据区）。
+/// 「结束代码 + 数据」字节数是否在可接受范围。
 ///
-/// `len` 为「结束代码 + 数据」的字节数；`stream` 必须已读走固定头。
-async fn read_len_body(stream: &mut TcpStream, len: usize) -> CollectorResult<(u16, Vec<u8>)> {
+/// 生产读路径与 fuzz harness 共用同一口径：`<2` 装不下结束代码，`>960` 是异常长度
+/// （正常批量读最多 479 字 = 958 字节），不拦住就会按对端给的数字 `vec![0; len]`。
+pub(crate) fn body_len_checked(len: usize) -> CollectorResult<usize> {
     if len < 2 {
         return Err(CollectorError::InvalidFrame(format!(
             "mc response data length too small: {len}"
         )));
     }
     if len > 960 {
-        // 3E/4E 帧单次事务数据长度上限（保守值，防止异常长度撑爆内存）
         return Err(CollectorError::InvalidFrame(format!(
             "mc response data length too large: {len}"
         )));
     }
+    Ok(len)
+}
+
+/// 校验 3E 响应头，返回需要读取的帧体长度（`结束代码 + 数据`）。
+///
+/// 抽成纯函数是为了让 fuzz 能直接喂任意字节（生产路径 `read_response_3e` 只负责
+/// 读满头部再调用本函数，逻辑不复制）。
+pub(crate) fn parse_response_header_3e(head: &[u8]) -> CollectorResult<usize> {
+    if head.len() < HEADER_LEN_3E {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc 3E response header too short: {} bytes",
+            head.len()
+        )));
+    }
+    if head[0..2] != SUBHEADER_RESP_3E {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc invalid 3E response subheader 0x{:02X}{:02X}",
+            head[0], head[1]
+        )));
+    }
+    body_len_checked(u16::from_le_bytes([head[7], head[8]]) as usize)
+}
+
+/// 校验 4E 响应头（子头 `0xD400` + 序列号回显），返回帧体长度。
+pub(crate) fn parse_response_header_4e(head: &[u8], serial: u16) -> CollectorResult<usize> {
+    if head.len() < HEADER_LEN_4E {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc 4E response header too short: {} bytes",
+            head.len()
+        )));
+    }
+    if head[0..2] != SUBHEADER_RESP_4E {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc invalid 4E response subheader 0x{:02X}{:02X}",
+            head[0], head[1]
+        )));
+    }
+    let resp_serial = u16::from_le_bytes([head[2], head[3]]);
+    if resp_serial != serial {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc 4E serial mismatch: sent {serial}, got {resp_serial}"
+        )));
+    }
+    body_len_checked(u16::from_le_bytes([head[9], head[10]]) as usize)
+}
+
+/// 校验 1E 响应头（`(功能码|0x80)` + 状态码），返回 `(状态码, 待读数据字节数)`。
+///
+/// 1E 无长度字段：数据长度由请求点数推导（位元件 2 点/字节，字元件 1 点/2 字节），
+/// 因此这里是「对端可影响的边界」唯一能做上限校验的地方（512 字节）。
+pub(crate) fn parse_response_header_1e(
+    hdr: &[u8],
+    func: u8,
+    is_read: bool,
+    is_bit: bool,
+    points: u16,
+) -> CollectorResult<(u16, usize)> {
+    if hdr.len() < 2 {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc 1E response header too short: {} bytes",
+            hdr.len()
+        )));
+    }
+    let expect_fc = func | 0x80;
+    if hdr[0] != expect_fc {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc 1E response func 0x{:02X} != expected 0x{:02X}",
+            hdr[0], expect_fc
+        )));
+    }
+    let status = hdr[1];
+    let data_len = if is_read && status == 0 {
+        let len = if is_bit {
+            (points as usize).div_ceil(2)
+        } else {
+            points as usize * 2
+        };
+        if len > 512 {
+            return Err(CollectorError::InvalidFrame(format!(
+                "mc 1E response data too large: {len}"
+            )));
+        }
+        len
+    } else {
+        0
+    };
+    Ok((status as u16, data_len))
+}
+
+/// 读取带 `数据长度` 字段的响应体，返回（结束代码，数据区）。
+///
+/// `len` 为「结束代码 + 数据」的字节数；`stream` 必须已读走固定头。
+async fn read_len_body(stream: &mut TcpStream, len: usize) -> CollectorResult<(u16, Vec<u8>)> {
+    // 双检：调用方（头部解析）已校验，这里再走同一函数，避免两路口径漂移。
+    let len = body_len_checked(len)?;
     let mut body = vec![0u8; len];
     stream
         .read_exact(&mut body)
@@ -411,13 +506,8 @@ pub(crate) async fn read_response_3e(stream: &mut TcpStream) -> CollectorResult<
         .read_exact(&mut head)
         .await
         .map_err(|e| CollectorError::IoError(format!("mc read header: {e}")))?;
-    if head[0..2] != SUBHEADER_RESP_3E {
-        return Err(CollectorError::InvalidFrame(format!(
-            "mc invalid 3E response subheader 0x{:02X}{:02X}",
-            head[0], head[1]
-        )));
-    }
-    read_len_body(stream, u16::from_le_bytes([head[7], head[8]]) as usize).await
+    let len = parse_response_header_3e(&head)?;
+    read_len_body(stream, len).await
 }
 
 /// 读取 4E 响应帧（子头 `0xD400` + 序列号回显校验），返回（结束代码，数据区）。
@@ -430,19 +520,8 @@ pub(crate) async fn read_response_4e(
         .read_exact(&mut head)
         .await
         .map_err(|e| CollectorError::IoError(format!("mc read header: {e}")))?;
-    if head[0..2] != SUBHEADER_RESP_4E {
-        return Err(CollectorError::InvalidFrame(format!(
-            "mc invalid 4E response subheader 0x{:02X}{:02X}",
-            head[0], head[1]
-        )));
-    }
-    let resp_serial = u16::from_le_bytes([head[2], head[3]]);
-    if resp_serial != serial {
-        return Err(CollectorError::InvalidFrame(format!(
-            "mc 4E serial mismatch: sent {serial}, got {resp_serial}"
-        )));
-    }
-    read_len_body(stream, u16::from_le_bytes([head[9], head[10]]) as usize).await
+    let len = parse_response_header_4e(&head, serial)?;
+    read_len_body(stream, len).await
 }
 
 /// 读取 1E 响应帧（无长度字段，读操作按点数推导数据长度），返回（状态码，数据区）。
@@ -460,36 +539,18 @@ pub(crate) async fn read_response_1e(
         .read_exact(&mut hdr)
         .await
         .map_err(|e| CollectorError::IoError(format!("mc read 1E header: {e}")))?;
-    let expect_fc = func | 0x80;
-    if hdr[0] != expect_fc {
-        return Err(CollectorError::InvalidFrame(format!(
-            "mc 1E response func 0x{:02X} != expected 0x{:02X}",
-            hdr[0], expect_fc
-        )));
-    }
-    let status = hdr[1];
-    let data = if is_read && status == 0 {
-        // 位元件 2 点/字节，字元件 1 点 = 2 字节
-        let data_len = if is_bit {
-            (points as usize).div_ceil(2)
-        } else {
-            points as usize * 2
-        };
-        if data_len > 512 {
-            return Err(CollectorError::InvalidFrame(format!(
-                "mc 1E response data too large: {data_len}"
-            )));
-        }
+    let (status, data_len) = parse_response_header_1e(&hdr, func, is_read, is_bit, points)?;
+    let data = if data_len == 0 {
+        Vec::new()
+    } else {
         let mut d = vec![0u8; data_len];
         stream
             .read_exact(&mut d)
             .await
             .map_err(|e| CollectorError::IoError(format!("mc read 1E data: {e}")))?;
         d
-    } else {
-        Vec::new()
     };
-    Ok((status as u16, data))
+    Ok((status, data))
 }
 
 /// 将结束代码/状态码的非零值转为协议错误。

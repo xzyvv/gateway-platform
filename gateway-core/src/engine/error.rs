@@ -168,14 +168,18 @@ impl GatewayError {
     /// - 7xxx: 公式错误
     /// - 8xxx: 鉴权错误
     /// - 9xxx: 资源不存在
-    /// - 0:    设备无响应
+    /// - 3001: 设备无响应（协议类下的独立码）
     /// - 9999: 未分类
+    ///
+    /// 注意：**0 不是错误码**——API 信封（`web::envelope`）与前端都把 `code == 0`
+    /// 当作「成功」。`NoReply` 早期返回 0，一旦经 `ApiError` 回传就会被前端静默
+    /// 当成成功（数据为空而非报错），故改用 3001。
     pub fn code(&self) -> u32 {
         match self {
             GatewayError::Config(_) => 1000,
             GatewayError::Io(_) => 2000,
             GatewayError::Protocol(_) => 3000,
-            GatewayError::NoReply => 0,
+            GatewayError::NoReply => 3001,
             GatewayError::Queue(_) => 4000,
             GatewayError::Mqtt(_) => 5000,
             GatewayError::Formula(_) => 7000,

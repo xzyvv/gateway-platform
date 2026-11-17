@@ -407,3 +407,39 @@ fn test_shared_cross_language_cases() {
         }
     }
 }
+
+/// 契约：`Display` 必须同时带上「错误类别」与「具体原因」。
+///
+/// 这是现场唯一能看到的公式错误文案：`GatewayError::Formula(String)` 只保留
+/// 这段字符串（`message()` 直接返回它，不再拼类型前缀）。若 Display 退化成空串，
+/// 或只剩类别而丢掉原因，日志里就分不清「哪条公式的哪一步、为什么」失败——
+/// 这条用例正是 `mutants.out/missed.txt` 里长期存活的空串变异体。
+#[test]
+fn display_keeps_category_and_reason() {
+    let syntax = FormulaError::Syntax("unexpected ')'".into()).to_string();
+    assert!(syntax.contains("公式语法错误"), "缺少类别前缀: {syntax}");
+    assert!(syntax.contains("unexpected ')'"), "丢失具体原因: {syntax}");
+
+    let missing = FormulaError::MissingPoint("voltage".into()).to_string();
+    assert!(
+        missing.contains("引用点位不可用"),
+        "缺少类别前缀: {missing}"
+    );
+    assert!(missing.contains("voltage"), "丢失点位名: {missing}");
+
+    let eval = FormulaError::Eval("division by zero".into()).to_string();
+    assert!(eval.contains("公式求值失败"), "缺少类别前缀: {eval}");
+    assert!(eval.contains("division by zero"), "丢失具体原因: {eval}");
+}
+
+/// 契约：三个变体的文案前缀互不相同——日志与前端提示靠它区分失败阶段
+/// （语法错要改公式、缺点位要查采集、求值错要看数据）。
+#[test]
+fn display_prefixes_are_distinguishable() {
+    let a = FormulaError::Syntax("x".into()).to_string();
+    let b = FormulaError::MissingPoint("x".into()).to_string();
+    let c = FormulaError::Eval("x".into()).to_string();
+    assert_ne!(a, b);
+    assert_ne!(b, c);
+    assert_ne!(a, c);
+}

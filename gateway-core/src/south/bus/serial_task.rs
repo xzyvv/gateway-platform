@@ -114,7 +114,7 @@ pub(crate) async fn run_serial_bus_task(
 
     let mut consecutive_io_errors: u32 = 0;
     let mut consecutive_no_replies: u32 = 0;
-    // 最近一次成功通信的 Modbus 从站号：自检帧的探测目标
+    // 最近一次成功通信的 Modbus 从站地址：自检帧的探测目标
     let mut last_good_slave: Option<u8> = None;
     // 上次"自检判定端口损坏并重开"的时间，用于重开冷却
     let mut last_reopen_at: Option<tokio::time::Instant> = None;
@@ -203,7 +203,7 @@ pub(crate) async fn run_serial_bus_task(
             Ok(_) => {
                 consecutive_io_errors = 0;
                 consecutive_no_replies = 0;
-                // 记录最近一次成功通信的 Modbus 从站号，作为后续自检帧的探测目标。
+                // 记录最近一次成功通信的 Modbus 从站地址，作为后续自检帧的探测目标。
                 // slave 0 是广播地址（从站不应答），不能作为探测目标。
                 if protocol == "modbus" {
                     last_good_slave = tx.request.first().copied().filter(|&s| s != 0);

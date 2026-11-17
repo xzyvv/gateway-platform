@@ -5,7 +5,7 @@ fn code_for_each_variant() {
     assert_eq!(GatewayError::Config("x".into()).code(), 1000);
     assert_eq!(GatewayError::Io("x".into()).code(), 2000);
     assert_eq!(GatewayError::Protocol("x".into()).code(), 3000);
-    assert_eq!(GatewayError::NoReply.code(), 0);
+    assert_eq!(GatewayError::NoReply.code(), 3001);
     assert_eq!(GatewayError::Queue("x".into()).code(), 4000);
     assert_eq!(GatewayError::Mqtt("x".into()).code(), 5000);
     assert_eq!(GatewayError::Formula("x".into()).code(), 7000);
@@ -46,8 +46,37 @@ fn code_classified_unknown_message_stays_9999() {
 
 #[test]
 fn code_classified_non_message_uses_code() {
-    assert_eq!(GatewayError::NoReply.code_classified(), 0);
+    assert_eq!(GatewayError::NoReply.code_classified(), 3001);
     assert_eq!(GatewayError::Config("x".into()).code_classified(), 1000);
+}
+
+/// 契约：错误码 **不得为 0**。
+///
+/// 0 在 API 信封与前端里表示「成功」。`NoReply` 曾返回 0，经 `ApiError` 回传后
+/// 前端把失败读成成功（数据为空而非报错）。这里遍历全部变体，任何新增变体
+/// 若再给 0 会立刻红。
+#[test]
+fn no_error_code_is_zero() {
+    let all = [
+        GatewayError::Config("x".into()),
+        GatewayError::Io("x".into()),
+        GatewayError::Protocol("x".into()),
+        GatewayError::NoReply,
+        GatewayError::Queue("x".into()),
+        GatewayError::Mqtt("x".into()),
+        GatewayError::Formula("x".into()),
+        GatewayError::Auth("x".into()),
+        GatewayError::NotFound("x".into()),
+        GatewayError::Message("x".into()),
+    ];
+    for err in &all {
+        assert_ne!(err.code(), 0, "错误码不得为 0（0 表示成功）: {err}");
+        assert_ne!(
+            err.code_classified(),
+            0,
+            "错误码不得为 0（0 表示成功）: {err}"
+        );
+    }
 }
 
 #[test]
