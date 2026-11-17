@@ -235,28 +235,56 @@ impl RateRuleStore {
         Ok(n > 0)
     }
 
-    /// 追加一条访问日志。写入频繁，故：
-    /// - 每行只一条 INSERT（WAL 下毫秒级）；
-    /// - 每 ACCESS_LOG_PRUNE_BATCH 行才做一次保留裁剪。
+    /// 追加一条访问日志（单条便捷入口，内部转批量写）。
     pub fn append_access_log(&self, entry: &ApiAccessLog) -> GatewayResult<()> {
-        let conn = self.conn();
-        conn.execute(
-            "INSERT INTO api_access_logs (ts, method, path, status, latency_ms, client_ip, limited)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                entry.ts,
-                entry.method,
-                entry.path,
-                entry.status as i64,
-                entry.latency_ms as i64,
-                entry.client_ip,
-                entry.limited as i64,
-            ],
-        )
-        .map_err(|e| db_err("insert access log", e))?;
-        let id = conn.last_insert_rowid();
-        if id % (ACCESS_LOG_PRUNE_BATCH as i64) == 0 {
-            let keep_from = id - ACCESS_LOG_KEEP as i64;
+        self.append_access_logs(std::slice::from_ref(entry))
+    }
+
+    /// 批量追加访问日志（**单事务**）。
+    ///
+    /// 原实现每个请求一条 `conn.execute`，在 SQLite 自动提交下等于「一条 INSERT =
+    /// 一次事务」；库为 `synchronous=FULL` 时每条都要 fsync。管理台并发轮询多个端点
+    /// 时，这些写既在连接互斥后串行，又各自承担一次提交/落盘开销（Bug 171）。
+    /// 批量后一次事务写完一整批：提交次数与 fsync 次数按批大小下降。
+    ///
+    /// 保留裁剪仍按「跨过 `ACCESS_LOG_PRUNE_BATCH` 边界」触发一次，用
+    /// `last_id / BATCH` 是否变化判定 —— 批量写会让 id 跳跃，单纯取模会漏剪。
+    pub fn append_access_logs(&self, entries: &[ApiAccessLog]) -> GatewayResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn();
+        {
+            let tx = conn
+                .transaction()
+                .map_err(|e| db_err("begin access log tx", e))?;
+            {
+                let mut stmt = tx
+                    .prepare_cached(
+                        "INSERT INTO api_access_logs (ts, method, path, status, latency_ms, client_ip, limited)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    )
+                    .map_err(|e| db_err("prepare insert access log", e))?;
+                for entry in entries {
+                    stmt.execute(params![
+                        entry.ts,
+                        entry.method,
+                        entry.path,
+                        entry.status as i64,
+                        entry.latency_ms as i64,
+                        entry.client_ip,
+                        entry.limited as i64,
+                    ])
+                    .map_err(|e| db_err("insert access log", e))?;
+                }
+            }
+            tx.commit().map_err(|e| db_err("commit access log tx", e))?;
+        }
+        let last_id = conn.last_insert_rowid();
+        let prev_id = last_id - entries.len() as i64;
+        let batch = ACCESS_LOG_PRUNE_BATCH as i64;
+        if last_id / batch != prev_id / batch {
+            let keep_from = last_id - ACCESS_LOG_KEEP as i64;
             if let Err(e) = conn.execute(
                 "DELETE FROM api_access_logs WHERE id < ?1",
                 params![keep_from],
@@ -432,5 +460,60 @@ mod tests {
         assert_eq!(stats.total_requests, 1);
         assert_eq!(stats.limited_requests, 1);
         assert_eq!(stats.avg_latency_ms, 0);
+    }
+
+    fn log_entry(i: usize) -> ApiAccessLog {
+        ApiAccessLog {
+            id: 0,
+            ts: now_ms() + i as i64,
+            method: "GET".into(),
+            path: format!("/api/batch{i}"),
+            status: 200,
+            latency_ms: i as u64,
+            client_ip: "10.0.0.1".into(),
+            limited: false,
+        }
+    }
+
+    /// Bug 171：批量追加必须一次写完所有行，且保持入参顺序（id 递增）。
+    #[test]
+    fn append_access_logs_writes_all_rows() {
+        let (store, _dir) = temp_store();
+        let entries: Vec<ApiAccessLog> = (0..5).map(log_entry).collect();
+        store.append_access_logs(&entries).expect("batch append");
+
+        let logs = store.recent_access_logs(10).expect("recent");
+        assert_eq!(logs.len(), 5, "批量写必须全部落库");
+        assert_eq!(logs[0].path, "/api/batch4", "最新在前");
+        assert_eq!(logs[4].path, "/api/batch0", "最旧在后（顺序未被批量打乱）");
+
+        // 空批量：no-op，不报错也不写入
+        store.append_access_logs(&[]).expect("empty batch is no-op");
+        assert_eq!(store.recent_access_logs(10).expect("recent").len(), 5);
+    }
+
+    /// Bug 171 衍生：保留裁剪的触发条件改为「本批次是否跨过 PRUNE_BATCH 边界」。
+    ///
+    /// 批量写会让 id 跳跃，原实现「id % BATCH == 0」在批大小 > 1 时会漏剪
+    /// （例如一批写 64 行，只有恰好落在整数倍那次才剪），长期下来表会无界增长。
+    #[test]
+    fn retention_prunes_even_with_large_batches() {
+        let (store, _dir) = temp_store();
+        let total = ACCESS_LOG_KEEP + ACCESS_LOG_PRUNE_BATCH;
+        let entries: Vec<ApiAccessLog> = (0..total).map(log_entry).collect();
+        store.append_access_logs(&entries).expect("bulk append");
+
+        let logs = store.recent_access_logs(total + 10).expect("recent");
+        assert!(
+            logs.len() < total,
+            "一次写入 {} 行后必须发生裁剪，实际仍剩 {} 行",
+            total,
+            logs.len()
+        );
+        assert!(
+            logs.len() <= ACCESS_LOG_KEEP + ACCESS_LOG_PRUNE_BATCH,
+            "裁剪后应回落到 KEEP + BATCH 量级，实际 {} 行",
+            logs.len()
+        );
     }
 }
