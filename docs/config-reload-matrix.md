@@ -3,7 +3,8 @@
 回答一个问题：**在前端改完并保存后，哪些参数立刻生效，哪些必须重启进程？**
 
 判定逻辑的唯一来源是 [`gateway-core/src/config/reload_scope.rs`](../gateway-core/src/config/reload_scope.rs)；
-保存链路是 `POST /api/config` → `reload_then_save`（先热重载内存，再原子落盘 + 写入配置版本库）。
+保存链路是 `POST /api/config` → `persist_then_apply`（先原子落盘，再热重载内存，最后写入配置版本库）。
+落盘失败时整次保存不生效：内存、运行态、磁盘都保持旧配置，接口直接报错。
 本表与代码由守护用例 `every_config_section_is_classified_in_reload_scope` 对齐，新增分节必须同步登记。
 
 ## 一、保存后立即生效（热更）

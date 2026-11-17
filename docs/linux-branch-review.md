@@ -579,11 +579,16 @@ Unix 默认权限 **0644**（同机其它用户可读可改）。
 | 落盘实现 | `atomic_write()`，临时文件建在**目标同目录** `/etc/gateway/`，需要该目录对 `gateway` 用户**可写** |
 | 目录权限（修复前） | `chown -R root:gateway` + `chmod -R g+rX,o-rwx` → 组只有 `r-x`，**无 `w`** |
 | systemd 沙箱（修复前） | `ProtectSystem=strict` 令 `/etc` 只读，而 `ReadWritePaths` 只含 `/var/lib/gateway /var/log/gateway /tmp`，**不含 `/etc/gateway`** |
-| 唯一写回路径 | `reload_then_save()`：先 reload + 更新内存 → 再 `save()` → 失败返回 500 `runtime reloaded but disk save failed` |
+| 唯一写回路径 | `persist_then_apply()`（当时的名称是 `reload_then_save()`）：先 reload + 更新内存 → 再 `save()` → 失败返回 500 `runtime reloaded but disk save failed` |
 
 **后果**：Web 端改点表 / 总线 / 上行 / 认证 → 界面提示成功、运行时已生效，
 **磁盘未更新**，设备一重启配置全部回滚。受影响端点：config / points / groups /
 assets / virtual_points / find-replace / uplink / auth。
+
+> 后续（E 批）：写回顺序已反转为**落盘前置**（save → reload → store → notify）。
+> 落盘失败时整次保存不生效，接口直接报错，不再出现「运行态已改、磁盘未改」的
+> 半新半旧状态；函数也据此改名为 `persist_then_apply`（原名 `reload_then_save`
+> 与顺序相反，容易误导）。本文档下列「后果」描述的是当时的行为。
 
 **修复**：
 - `gateway.service` 的 `ReadWritePaths` 增加 `/etc/gateway`；

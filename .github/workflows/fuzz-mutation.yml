@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
 
 # 与 ci.yml / release-gate.yml 的重作业共用 heavy-farm 并发组，串行执行：
-# public 仓的并发配额只有 20 个 job，变异分片（最多 8 片）+ 3 个 fuzz 与
+# public 仓的并发配额只有 20 个 job，变异分片（最多 8 片）+ 6 个 fuzz 与
 # 13 个重作业并行必然超限，超限时 runner 被回收，表现为
 #   ERROR interrupted / The runner has received a shutdown signal
 # cancel-in-progress: false —— 已经派发的变异测试不该被后来的运行顶掉。
@@ -36,13 +36,13 @@ env:
 
 jobs:
   mutation:
-    name: mutation (queue/formula/decode) shard ${{ matrix.idx }}/16
+    name: mutation (queue/formula/decode/protocol) shard ${{ matrix.idx }}/16
     runs-on: ubuntu-26.04
     timeout-minutes: 300
     strategy:
       fail-fast: false
       # 并发上限 8 而不是 16：GitHub public 仓库的并发配额是 20 个 job，
-      # 16 个分片 + 3 个 fuzz 已经把额度占到 19，任何别的分支再起一轮 CI
+      # 16 个分片 + 6 个 fuzz 已经把额度占到 22，任何别的分支再起一轮 CI
       # 就会超限，runner 直接被回收——表现为日志里的
       #   ERROR interrupted
       #   The runner has received a shutdown signal
@@ -58,12 +58,15 @@ jobs:
         # GitHub Actions 表达式只有比较/逻辑运算符，没有加法，
         # 写 ${{ matrix.shard + 1 }} 会让整个工作流文件解析失败。
         #
-        # 分片数为什么是 16：主 job 全量 1565 个变异体（1601 - 36 条按
-        # .cargo/mutants.toml 的 exclude_re 划出变异范围），实测单个变异体约 81s
-        # （cargo test --no-run 编译 40s + 跑测试 43s），
+        # 分片数为什么是 16：主 job 全量 2387 个变异体（E 批把协议层
+        # s7comm/mc/fins 的帧编解码纳入 examine_globs，+822），按
+        # .cargo/mutants.toml 的 exclude_re 再划掉等价变体后参与分片，
+        # 实测单个变异体约 81s（cargo test --no-run 编译 40s + 跑测试 43s），
         #   8 路 -> 每片约 200 个 -> 约 270 分钟，贴着 300 分钟上限，
         #           上一轮 8 路实测有 4 片被 runner 取消在 140~217 分钟；
-        #  16 路 -> 每片约 98 个 -> 约 133 分钟，留出一倍以上的抖动余量。
+        #  16 路 -> 每片约 149 个 -> 约 200 分钟，仍留出约 100 分钟抖动余量。
+        # 若后续再扩变异范围导致单片超过 240 分钟，应加 shard 而不是放宽
+        # timeout-minutes（超时取消比跑不完更难排查）。
         # （另有 10 条加密分支的变异体由下面的 mutation-encryption 窄 job 独占，
         #   不参与这里的分片。）
         include:
@@ -227,7 +230,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [modbus_decode, dlt645_decode, bacnet_mstp_decode]
+        target: [modbus_decode, dlt645_decode, bacnet_mstp_decode, s7comm_decode, mc_decode, fins_decode]
     steps:
       - uses: actions/checkout@v7
 
