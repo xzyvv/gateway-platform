@@ -63,7 +63,7 @@
           </div>
           <div class="version-meta">
             <span><el-icon><Clock /></el-icon> {{ formatTime(v.created_at) }}</span>
-            <span v-if="v.size"><el-icon><Coin /></el-icon> {{ formatSize(v.size) }}</span>
+            <span v-if="v.size"><el-icon><Coin /></el-icon> {{ formatBytes(v.size) }}</span>
           </div>
         </el-card>
       </el-timeline-item>
@@ -154,7 +154,7 @@ const {
   showCompare, compareFrom, compareTo, compareResult,
   compareFromJson, compareToJson, compareLoading,
   load, backup, viewSnapshot, openCompare, compareWithCurrent, runCompare, rollback,
-  formatTime, formatSize, fieldLabel,
+  formatTime, formatBytes, fieldLabel,
 } = useConfigVersions()
 
 /**

@@ -150,6 +150,7 @@ import { usePolling } from '@/composables/core/usePolling'
 import { usePermission } from '@/composables/auth/usePermission'
 import { extractErrorMessage, failureMessage } from '@/utils/errorHandler'
 import { formatDateTime } from '@/utils/datetime'
+import { formatDuration } from '@/utils/format'
 
 const status = ref<SimConsumerStatus | null>(null)
 const starting = ref(false)
@@ -196,19 +197,6 @@ function toNumber(v: bigint | number | null | undefined): number | null {
   if (v == null) return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
-}
-
-/** 毫秒 → 可读时长（如「1 分 5 秒」） */
-function formatDuration(ms: number | null): string {
-  if (ms == null || !Number.isFinite(ms)) return '-'
-  const total = Math.floor(ms / 1000)
-  const d = Math.floor(total / 86400)
-  const h = Math.floor((total % 86400) / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  if (d > 0) return `${d} 天 ${h} 小时 ${m} 分`
-  if (h > 0) return `${h} 小时 ${m} 分 ${s} 秒`
-  return `${m} 分 ${s} 秒`
 }
 
 /** epoch 毫秒 → 本地时间文本 */

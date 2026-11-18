@@ -111,7 +111,7 @@ describe('ConfigVersions 配置版本历史', () => {
     ])
     expect(wrapper.findAll('.remark').map((n) => n.text())).toEqual(['当前版本', '(无备注)', '初始'])
     expect(wrapper.findAll('.version-meta').map((n) => n.text())).toEqual([
-      expect.stringContaining('2.00 MB'),
+      expect.stringContaining('2.0 MB'),
       expect.stringContaining('1.5 KB'),
       expect.stringContaining('120 B'),
     ])

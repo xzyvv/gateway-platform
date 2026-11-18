@@ -316,7 +316,7 @@ async function onToggle(t: ScheduleTask) {
 async function runNow(t: ScheduleTask) {
   try {
     const r = await runTaskNow(t.id)
-    if (r.status === 'success') ElMessage.success('执行成功')
+    if (r.status === 'success') ElMessage.success('已执行')
     else ElMessage.error(`执行失败：${r.error || '未知错误'}`)
     load()
   } catch (e) {

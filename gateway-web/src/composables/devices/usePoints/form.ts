@@ -274,11 +274,11 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
       if (formMode.value === 'create') {
         await createPoint(selectedDevice.value, payload)
         if (state.isUnmounted()) return
-        ElMessage.success('点位创建成功')
+        ElMessage.success('已创建点位')
       } else {
         await updatePoint(pointForm.id, payload)
         if (state.isUnmounted()) return
-        ElMessage.success('点位更新成功')
+        ElMessage.success('已更新点位')
       }
       showForm.value = false
       loadPoints()

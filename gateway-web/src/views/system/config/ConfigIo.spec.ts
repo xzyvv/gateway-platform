@@ -131,7 +131,7 @@ describe('ConfigIo 配置导入导出', () => {
     await settle()
 
     expect(importConfig).toHaveBeenCalledOnce()
-    expect(ElMessage.success).toHaveBeenCalledWith('配置导入成功')
+    expect(ElMessage.success).toHaveBeenCalledWith('配置已导入')
     expect(wrapper.findAllComponents(ImportOutcome)[0]!.props('success')).toBe(true)
     // 提交后预览关闭、待导入内容释放（v-if 直接卸载）
     expect(wrapper.findComponent({ name: 'ConfigChangePreview' }).exists()).toBe(false)
@@ -186,7 +186,7 @@ describe('ConfigIo 配置导入导出', () => {
     // 校验是异步的：接口调用发生在 validate 之后，轮询等它真正提交
     await vi.waitFor(() => expect(importProject).toHaveBeenCalledOnce())
     expect(wrapper.findComponent({ name: 'ConfigChangePreview' }).exists()).toBe(false)
-    expect(ElMessage.success).toHaveBeenCalledWith('工程文件导入成功')
+    expect(ElMessage.success).toHaveBeenCalledWith('工程文件已导入')
   })
 
   it('工程文件导入失败时结果面板如实报错', async () => {

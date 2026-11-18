@@ -211,7 +211,7 @@ async function confirmImport() {
   try {
     await importConfig(pendingImport.value)
     importResult.value = { success: true }
-    ElMessage.success('配置导入成功')
+    ElMessage.success('配置已导入')
   } catch (e) {
     importResult.value = { success: false, error: extractErrorMessage(e) }
   } finally {
@@ -275,7 +275,7 @@ async function doImportProject() {
   try {
     await importProject(parsed)
     projectImportResult.value = { success: true }
-    ElMessage.success('工程文件导入成功')
+    ElMessage.success('工程文件已导入')
   } catch (e) {
     projectImportResult.value = { success: false, error: extractErrorMessage(e) }
   } finally {

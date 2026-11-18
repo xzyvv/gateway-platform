@@ -23,7 +23,7 @@ export function createPointCrud(state: PointsState, loadPoints: () => Promise<vo
     try {
       await deletePoint(row.id)
       if (state.isUnmounted()) return
-      ElMessage.success('删除成功')
+      ElMessage.success('已删除')
       // 软删除：成功后给 8 秒可撤销窗口，点击「撤销」直接走恢复接口
       const notice = ElNotification({
         type: 'success',

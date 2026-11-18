@@ -68,6 +68,7 @@ import DataTable, { type ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
 import EmptyState from '@/components/EmptyState.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import { formatBytes } from '@/utils/format'
 import {
   downloadArchive,
   listArchives,
@@ -84,12 +85,6 @@ const viewDate = ref('')
 const loadingLines = ref(false)
 const viewError = ref('')
 const logLines = ref<ArchiveLogLine[]>([])
-
-function formatSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB'
-  const kb = bytes / 1024
-  return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`
-}
 
 /** RFC3339 时间戳只保留时分秒，列表里更好扫读 */
 function shortTime(ts: string): string {
@@ -109,7 +104,7 @@ const archiveColumns: ColumnDef<LogArchiveItem>[] = [
     key: 'size_bytes',
     title: '大小',
     width: 110,
-    cell: (row) => formatSize(row.size_bytes),
+    cell: (row) => formatBytes(row.size_bytes),
   },
   {
     key: 'current',

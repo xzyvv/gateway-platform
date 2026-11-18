@@ -55,7 +55,7 @@
             <el-icon class="file-icon"><Document /></el-icon>
             <div class="file-detail">
               <div class="file-name">{{ firmware.name }}</div>
-              <div class="file-meta">{{ formatSize(firmware.size) }} · {{ firmware.type || 'firmware' }}</div>
+              <div class="file-meta">{{ formatBytes(firmware.size) }} · {{ firmware.type || 'firmware' }}</div>
             </div>
           </div>
           <el-button
@@ -94,6 +94,7 @@ import { confirmAction } from '@/utils/confirm'
 import { getOtaStatus, otaUpload, otaRollback } from '@/api/ota'
 import { useWebhook } from '@/composables/uplink/useWebhook'
 import { usePermission } from '@/composables/auth/usePermission'
+import { formatBytes } from '@/utils/format'
 const webhook = useWebhook()
 // 按钮级权限：升级需 ota.upgrade，回滚需 ota.rollback
 const { can } = usePermission()
@@ -145,13 +146,6 @@ function onFileExceed() {
   ElMessage.warning('只能选择一个固件文件')
 }
 
-// 格式化文件大小
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
-}
-
 async function doUpload() {
   if (!firmware.value) {
     ElMessage.warning('请选择固件文件')
@@ -161,7 +155,7 @@ async function doUpload() {
   // 或后端接收体。64MB 是工业网关常见固件上限（含 kernel+rootfs+app）。
   const MAX_FIRMWARE_SIZE = 64 * 1024 * 1024
   if (firmware.value.size > MAX_FIRMWARE_SIZE) {
-    ElMessage.warning(`固件文件过大（${formatSize(firmware.value.size)} > 64MB），请检查`)
+    ElMessage.warning(`固件文件过大（${formatBytes(firmware.value.size)} > ${formatBytes(MAX_FIRMWARE_SIZE)}），请检查`)
     return
   }
   if (!(await confirmAction({

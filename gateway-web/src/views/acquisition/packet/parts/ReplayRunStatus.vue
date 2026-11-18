@@ -11,7 +11,7 @@
     <el-tag type="success" size="small">一致 {{ result.match }}</el-tag>
     <el-tag type="warning" size="small">不一致 {{ result.mismatch }}</el-tag>
     <el-tag type="danger" size="small">失败 {{ result.failed }}</el-tag>
-    <span class="duration">耗时 {{ ((result.finishedAtMs - result.startedAtMs) / 1000).toFixed(1) }}s · 总线 {{ result.bus }}</span>
+    <span class="duration">耗时 {{ formatElapsed(result.finishedAtMs - result.startedAtMs) }} · 总线 {{ result.bus }}</span>
   </div>
 </template>
 
@@ -33,6 +33,7 @@
  * - result：回放汇总结果（null 表示尚未执行）
  */
 import type { ReplayExecuteResult } from '@/api/protocolTools'
+import { formatElapsed } from '@/utils/format'
 
 defineProps<{
   /** 回放进行中 */

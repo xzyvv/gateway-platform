@@ -35,10 +35,10 @@
               <el-tag v-if="isBelowSuggestion" type="warning" size="small" class="hint-tag">当前偏低</el-tag>
               <el-button v-if="isBelowSuggestion" link type="primary" size="small" @click="applySuggestion">应用</el-button>
             </el-descriptions-item>
-            <el-descriptions-item label="建议卡容量">{{ formatGiB(estimate.suggestedCardBytes) }}</el-descriptions-item>
+            <el-descriptions-item label="建议卡容量">{{ formatBytes(estimate.suggestedCardBytes) }}</el-descriptions-item>
             <el-descriptions-item label="每天写入">{{ formatRows(estimate.rowsPerDay) }}</el-descriptions-item>
             <el-descriptions-item label="原始库+备份">
-              {{ formatGiB(estimate.rawBytes) }} × 2
+              {{ formatBytes(estimate.rawBytes) }} × 2
             </el-descriptions-item>
           </el-descriptions>
 
@@ -64,7 +64,8 @@
 import { computed, ref, watch } from 'vue'
 import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
 import type { GatewayConfig } from '@/api/types'
-import { estimateCapacity, aggregateCoverageDays, formatGiB } from '@/utils/capacityPlan'
+import { estimateCapacity, aggregateCoverageDays } from '@/utils/capacityPlan'
+import { formatBytes } from '@/utils/format'
 
 const queue = defineModel<GatewayConfig['queue']>({ required: true })
 

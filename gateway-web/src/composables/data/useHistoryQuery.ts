@@ -348,7 +348,7 @@ export function useHistoryQuery() {
     const blob = await fetchExportBlob()
     if (!blob) return
     triggerDownload(blob, `${query.point_id}-${Date.now()}.csv`)
-    ElMessage.success('导出成功')
+    ElMessage.success('已导出')
   }
 
   /**

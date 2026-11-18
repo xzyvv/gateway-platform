@@ -134,8 +134,3 @@ export function estimateCapacity(inputs: CapacityInputs): CapacityEstimate {
 
   return { rowsPerDay: perDay, suggestedMaxRows, rawBytes, backupBytes, suggestedCardBytes }
 }
-
-/** 字节数转人类可读（GiB 保留 2 位小数）。 */
-export function formatGiB(bytes: number): string {
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
-}

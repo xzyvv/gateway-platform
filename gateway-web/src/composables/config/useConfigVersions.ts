@@ -8,6 +8,7 @@ import {
 } from '@/api/config'
 import { failureMessage } from '@/utils/errorHandler'
 import { formatDateTime } from '@/utils/datetime'
+import { formatBytes } from '@/utils/format'
 
 /** 字段中文标签映射（配置对比时使用） */
 const FIELD_LABELS: Record<string, string> = {
@@ -50,12 +51,6 @@ export function useConfigVersions() {
   function formatTime(t?: number) {
     if (!t) return '-'
     return formatDateTime(t * 1000)
-  }
-
-  function formatSize(bytes: number) {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / 1024 / 1024).toFixed(2)} MB`
   }
 
   // 快照查看
@@ -185,6 +180,6 @@ export function useConfigVersions() {
     // actions
     load, backup, viewSnapshot, openCompare, compareWithCurrent, runCompare, rollback,
     // formatters
-    formatTime, formatSize, fieldLabel,
+    formatTime, formatBytes, fieldLabel,
   }
 }

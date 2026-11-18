@@ -5,7 +5,6 @@ import {
   aggregatedRowCap,
   aggregateCoverageDays,
   estimateCapacity,
-  formatGiB,
   BYTES_PER_RAW_ROW,
   MIN_QUEUE_ROWS,
   MAX_QUEUE_ROWS,
@@ -116,12 +115,5 @@ describe('estimateCapacity', () => {
     expect(est.suggestedMaxRows).toBe(MAX_QUEUE_ROWS)
     // 钳位后原始库约 9.3 GB ×2（含备份）+ 聚合/固定，32 GB 卡即可满足 75% 口径
     expect(est.suggestedCardBytes).toBe(32 * GB)
-  })
-})
-
-describe('formatGiB', () => {
-  it('按 1024 进制格式化', () => {
-    expect(formatGiB(2 * GB)).toBe('2.00 GB')
-    expect(formatGiB(1536 ** 1 * 1024 ** 2)).toBe('1.50 GB')
   })
 })

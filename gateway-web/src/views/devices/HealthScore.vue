@@ -145,7 +145,7 @@
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="设备">{{ currentShadow.deviceName }}</el-descriptions-item>
           <el-descriptions-item label="协议">{{ currentShadow.protocol }}</el-descriptions-item>
-          <el-descriptions-item label="期望周期">{{ formatInterval(currentShadow.expectedIntervalMs) }}</el-descriptions-item>
+          <el-descriptions-item label="期望周期">{{ expectedIntervalText(currentShadow.expectedIntervalMs) }}</el-descriptions-item>
           <el-descriptions-item label="最后上报">{{ timeAgo(currentShadow.lastUpdateAt > 0 ? currentShadow.lastUpdateAt : null) }}</el-descriptions-item>
           <el-descriptions-item label="最近值提示" :span="2">{{ currentShadow.lastValueHint || '—' }}</el-descriptions-item>
         </el-descriptions>
@@ -178,6 +178,7 @@ import {
 } from '@/utils/healthVerdict'
 import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { formatElapsed } from '@/utils/format'
 const { showToast } = useErrorDisplay()
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
 import {
@@ -295,15 +296,18 @@ function shadowQualityTag(q: string): QualityTagType {
   return 'danger'
 }
 
+/**
+ * 期望周期展示：0 表示「未配置」，不能落成 `0 ms`（看起来像真的要求 0 毫秒一次）。
+ * 这是本页的领域规则，格式化本身走 utils/format。
+ */
+function expectedIntervalText(ms: number): string {
+  return ms > 0 ? formatElapsed(ms) : '—'
+}
+
 function lastQualityText(q: string): string {
   return q === 'good' ? '良好' : q === 'uncertain' ? '不确定' : '异常'
 }
 
-/** 期望周期 → 可读文本（秒级优先，避免 5000ms 这类裸数字） */
-function formatInterval(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '—'
-  return ms >= 1000 ? `${Number((ms / 1000).toFixed(2))} 秒` : `${ms} ms`
-}
 
 /** 期望 vs 实测：最后上报距今超过 2 个期望周期即视为超期（0 = 从未上报，不冒充正常） */
 function freshness(row: DeviceShadowView): { text: string; type: QualityTagType } {
@@ -333,7 +337,7 @@ const shadowColumns: ColumnDef<DeviceShadowView>[] = [
         h(ElTag, { size: 'small', type: 'info', effect: 'plain' }, () => row.protocol),
       ]),
   },
-  { key: 'expectedIntervalMs', title: '期望周期', width: 110, cell: (row) => formatInterval(row.expectedIntervalMs) },
+  { key: 'expectedIntervalMs', title: '期望周期', width: 110, cell: (row) => expectedIntervalText(row.expectedIntervalMs) },
   {
     key: 'lastUpdateAt',
     title: '最后上报',

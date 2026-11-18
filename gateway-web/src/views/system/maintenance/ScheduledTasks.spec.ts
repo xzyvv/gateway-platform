@@ -150,7 +150,7 @@ describe('ScheduledTasks.vue', () => {
     await settle()
 
     expect(runTaskNowMock).toHaveBeenCalledWith('t1')
-    expect(ElMessage.success).toHaveBeenCalledWith('执行成功')
+    expect(ElMessage.success).toHaveBeenCalledWith('已执行')
     expect(listTasksMock).toHaveBeenCalledTimes(2)
   })
 

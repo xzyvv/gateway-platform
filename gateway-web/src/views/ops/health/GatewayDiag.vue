@@ -50,6 +50,7 @@ import { tagColumn } from '@/utils/commonColumns'
 import { getGatewayDiagView as getDiag, type GatewayDiagView as GatewayDiag, type NetInterfaceView, type SerialPortView } from '@/api/diagnostics'
 import { useHealthReport } from '@/composables/system/useHealthReport'
 import { healthRowsFromComponents } from '@/utils/healthStatus'
+import { formatBytes } from '@/utils/format'
 import HealthStatus from '@/views/overview/HealthStatus.vue'
 import HealthConclusionBar from '@/components/HealthConclusionBar.vue'
 import HealthProblemList from './HealthProblemList.vue'
@@ -90,13 +91,6 @@ const netColumns: ColumnDef<NetInterfaceView>[] = [
   { key: 'rx', title: '接收', width: 100, cell: (row) => formatBytes(row.rx) },
   { key: 'tx', title: '发送', width: 100, cell: (row) => formatBytes(row.tx) },
 ]
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 const serialColumns: ColumnDef<SerialPortView>[] = [
   { key: 'name', title: '串口' },

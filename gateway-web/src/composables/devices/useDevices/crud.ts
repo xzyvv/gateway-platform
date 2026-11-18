@@ -143,13 +143,13 @@ export function createDeviceCrud(state: DeviceState, deps: DeviceCrudDeps) {
       if (editing.value) {
         await updateDevice(form.id, payload)
         if (state.isUnmounted()) return
-        ElMessage.success('更新成功')
+        ElMessage.success('已更新')
       } else {
         form.id = deriveDeviceId(form.name)
         payload.id = form.id
         await createDevice(payload)
         if (state.isUnmounted()) return
-        ElMessage.success('创建成功')
+        ElMessage.success('已创建')
       }
       showCreate.value = false
       resetForm()
@@ -217,7 +217,7 @@ export function createDeviceCrud(state: DeviceState, deps: DeviceCrudDeps) {
     try {
       await deleteDevice(row.id)
       if (state.isUnmounted()) return
-      ElMessage.success('删除成功')
+      ElMessage.success('已删除')
       // 撤销窗口：通知停留 8s，期间可一键恢复；误删高发场景（选错行）无需重填整张表单
       const snapshot: DeviceSnapshot = {
         id: row.id,

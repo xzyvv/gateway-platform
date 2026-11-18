@@ -133,7 +133,7 @@ async function send() {
     // 统一写入口（B2/E2）：单点写也传单元素数组，单/批分发由后端决定
     const outcome = await writeOnce(point.id, val)
     if (outcome.ok) {
-      ElMessage.success('下发成功')
+      ElMessage.success('已下发')
       lastResult.value = `写入成功：${outcome.value ?? val}`
       lastType.value = 'success'
     } else {

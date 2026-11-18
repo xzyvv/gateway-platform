@@ -288,7 +288,7 @@ async function handleLogin() {
     try { scopedSet('gw_username', form.username.trim()) } catch { /* 存储不可用不阻断登录 */ }
     // getStatus 仅用于预热连接，失败不应阻断登录流程
     try { await getStatus() } catch { /* ignore */ }
-    ElMessage.success('登录成功')
+    ElMessage.success('已登录')
     router.push('/overview')
   } catch (e) {
     // W6: 在开发/调试场景展示真实错误（含网络错误、401、403、500 等），

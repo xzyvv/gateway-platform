@@ -69,7 +69,7 @@ export function useVerifyStep() {
     verified.value = ok > 0
     verifying.value = false
     if (failed) ElMessage.warning('部分点位读取失败，请按提示核对配置')
-    else ElMessage.success('所有点位读取成功')
+    else ElMessage.success('已读取全部点位')
   }
 
   return {
