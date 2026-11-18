@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   getInflightCount: vi.fn(() => 0),
   onInflightCountChange: vi.fn(() => () => { /* unsub */ }),
   abortAllInflight: vi.fn(),
+  refreshAfterGatewaySwitch: vi.fn(),
 }))
 
 vi.mock('@/api', () => ({
@@ -26,6 +27,7 @@ vi.mock('@/api', () => ({
   getInflightCount: mocks.getInflightCount,
   onInflightCountChange: mocks.onInflightCountChange,
   abortAllInflight: mocks.abortAllInflight,
+  refreshAfterGatewaySwitch: mocks.refreshAfterGatewaySwitch,
 }))
 
 import { useGatewaySwitcher } from './useGatewaySwitcher'
@@ -133,17 +135,19 @@ describe('useGatewaySwitcher', () => {
       gateways: [{ name: 'new', url: 'http://new:8080' }],
       active: 'new',
     })
-    // web 模式 fetch 探测走通
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+    // Tauri 下探测走 Rust 的 check_url_health（须可达才能进入持久化环节）
+    mocks.checkUrlHealth.mockResolvedValue({ reachable: true })
 
     const { api } = harness()
     const p1 = api.performGatewaySwitch('new')
     const p2 = api.performGatewaySwitch('new')
-    await nextTick()
+    // 流程里有 drain → 探测 → 持久化 三段 await，等持久化真正发起再断言
+    await vi.waitFor(() => expect(mocks.setActiveGateway).toHaveBeenCalledTimes(1))
     expect(api.isSwitchingGateway.value).toBe(true)
     release()
     await p1
     await p2
+    // 第二次调用被 isSwitchingGateway 挡住，没有再发起持久化
     expect(mocks.setActiveGateway).toHaveBeenCalledTimes(1)
   })
 
@@ -157,5 +161,59 @@ describe('useGatewaySwitcher', () => {
     await api.refreshGateways()
     await api.addDiscoveredGateway({ ip: '1.2.3.4', port: 8080, name: 'dup', latency_ms: 3 })
     expect(mocks.saveGatewayConfig).not.toHaveBeenCalled()
+  })
+
+  /**
+   * 回归：新网关不可达时，配置与刷新都不应发生。
+   *
+   * 原实现顺序是「先 setActiveGateway（内部就启动 200ms 后的 reload）→ 再探测」，
+   * 目标不可达时页面已经开始刷新：错误提示来不及展示，配置已指向坏网关，
+   * 且没有回滚路径——用户被刷新到一个不可达的网关上。
+   */
+  it('探测不通过：不持久化、不刷新页面', async () => {
+    mocks.isTauri.mockReturnValue(true)
+    mocks.loadGatewayConfig.mockResolvedValue({
+      gateways: [{ name: 'old', url: 'http://old:8080' }],
+      active: 'old',
+    })
+    // Tauri 下探测走 Rust 的 check_url_health
+    mocks.checkUrlHealth.mockResolvedValue({ reachable: false })
+    const { api } = harness()
+
+    await api.performGatewaySwitch('bad', 'http://bad:8080')
+
+    // 关键断言：持久化与刷新都没发生
+    expect(mocks.setActiveGateway).not.toHaveBeenCalled()
+    expect(mocks.refreshAfterGatewaySwitch).not.toHaveBeenCalled()
+  })
+
+  /**
+   * 回归：探测通过后才持久化并刷新，且顺序是「探测 → 持久化 → 刷新」。
+   */
+  it('探测通过：先探测再持久化，最后刷新页面', async () => {
+    mocks.isTauri.mockReturnValue(true)
+    mocks.loadGatewayConfig.mockResolvedValue({
+      gateways: [{ name: 'new', url: 'http://new:8080' }],
+      active: 'new',
+    })
+
+    const order: string[] = []
+    mocks.checkUrlHealth.mockImplementation(async () => {
+      order.push('probe')
+      return { reachable: true }
+    })
+    mocks.setActiveGateway.mockImplementation(async () => {
+      order.push('persist')
+    })
+    mocks.refreshAfterGatewaySwitch.mockImplementation(() => {
+      order.push('refresh')
+    })
+
+    const { api } = harness()
+    await api.performGatewaySwitch('new', 'http://new:8080')
+
+    expect(order).toEqual(['probe', 'persist', 'refresh'])
+    expect(mocks.setActiveGateway).toHaveBeenCalledWith('new')
+    expect(mocks.refreshAfterGatewaySwitch).toHaveBeenCalledTimes(1)
   })
 })

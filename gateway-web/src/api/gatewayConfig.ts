@@ -66,13 +66,26 @@ export async function loadGatewayConfig(): Promise<GatewayConfig> {
   return configPromise
 }
 
-/** 切换激活的网关并刷新缓存 */
+/**
+ * 切换激活的网关并刷新缓存。
+ *
+ * 注意：这里**不**触发页面刷新。切换流程（探测可达性 → 持久化 → 刷新页面）
+ * 由 composables/layout/useGatewaySwitcher 编排——持久化与刷新是两件独立的事，
+ * 焊在一起会让「先探测新网关可达再切」无法实现：刷新定时器会在探测前就启动，
+ * 目标不可达时页面已经刷新，错误提示来不及展示，配置也已指向坏网关。
+ */
 export async function setActiveGateway(name: string): Promise<void> {
   if (!isTauri()) return
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('set_active_gateway', { name })
   cachedConfig = await invoke<GatewayConfig>('get_config')
-  // 切网关后刷新页面：先 abort 所有在飞请求（防打到旧网关），再 reload 加载新网关上下文
+}
+
+/**
+ * 切网关完成后的页面刷新：先 abort 所有在飞请求（防打到旧网关），再 reload
+ * 加载新网关上下文。由切换流程在**确认新网关可达并持久化之后**显式调用。
+ */
+export function refreshAfterGatewaySwitch(): void {
   triggerGatewaySwitchRefresh()
 }
 

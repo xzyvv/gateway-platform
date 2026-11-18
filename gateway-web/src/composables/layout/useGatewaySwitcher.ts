@@ -2,7 +2,7 @@ import { ref, onUnmounted } from 'vue'
 import { ElLoading, ElMessage, ElMessageBox } from 'element-plus'
 import {
   isTauri, loadGatewayConfig, setActiveGateway, saveGatewayConfig,
-  scanGatewayLan, checkUrlHealth,
+  scanGatewayLan, checkUrlHealth, refreshAfterGatewaySwitch,
   getInflightCount, onInflightCountChange, abortAllInflight,
   type GatewayEntry, type DiscoveredGateway,
 } from '@/api'
@@ -70,23 +70,28 @@ export function useGatewaySwitcher() {
     }
   }
 
-  /** 探测新网关的 liveness（仅 desktop 模式有意义）。 */
+  /**
+   * 探测新网关的 liveness（仅 desktop 模式有意义）。
+   */
   async function probeNewGateway(url: string): Promise<boolean> {
     // Tauri 模式：通过 Rust 健康检测命令，避免 webview 直连 HTTP（CSP 收紧后必需）
     if (isTauri()) {
       const health = await checkUrlHealth(url)
       return health?.reachable ?? false
     }
+    const controller = new AbortController()
+    const tid = setTimeout(() => controller.abort(), 4000)
     try {
-      const controller = new AbortController()
-      const tid = setTimeout(() => controller.abort(), 4000)
       const resp = await fetch(`${url.replace(/\/$/, '')}/health/live`, {
         signal: controller.signal,
       })
-      clearTimeout(tid)
       return resp.ok
     } catch {
       return false
+    } finally {
+      // 成功与失败路径都要清定时器，否则失败时会有一个 4s 后才触发的
+      // 残留定时器，对已废弃的 controller 调 abort
+      clearTimeout(tid)
     }
   }
 
@@ -94,9 +99,13 @@ export function useGatewaySwitcher() {
    * 统一切网关入口。
    *   1. 锁定下拉防并发
    *   2. 等 in-flight 收尾
-   *   3. desktop 持久化新激活项
-   *   4. 探测新网关 liveness
-   *   5. 通过后才 reload
+   *   3. **先探测新网关 liveness**（不通就直接返回，配置完全不动）
+   *   4. desktop 持久化新激活项
+   *   5. 刷新页面加载新网关上下文
+   *
+   * 探测必须在持久化**之前**：原实现先 setActiveGateway（内部就启动了
+   * 200ms 后的 reload）再探测，目标不可达时页面已经开始刷新，
+   * 错误提示来不及展示、配置也已指向坏网关，且没有回滚路径。
    */
   async function performGatewaySwitch(targetName: string, targetUrl?: string): Promise<void> {
     if (isSwitchingGateway.value) return
@@ -110,17 +119,26 @@ export function useGatewaySwitcher() {
 
     try {
       await waitForInflightDrain(3000)
-      await setActiveGateway(targetName)
-      await refreshGateways()
 
+      // 先刷新网关列表再解析目标 URL：列表是探测与切换的共同数据源，
+      // 列表为空时（如页面刚加载、尚未 refreshGateways）会解析不出 URL。
+      await refreshGateways()
       const url = targetUrl || gateways.value.find((g) => g.name === targetName)?.url
       if (!url) throw new Error(`未找到网关 ${targetName} 的 URL`)
+
+      // 探测前置：不可达就到此为止，配置与 active 都不动
       const reachable = await probeNewGateway(url)
       if (!reachable) throw new Error(`新网关 ${targetName} 不可达（health/live 未响应）`)
 
+      // 探测通过才持久化
+      await setActiveGateway(targetName)
+      await refreshGateways()
+
       loading.close()
       ElMessage.success(`已切换到网关 "${targetName}"`)
-      setTimeout(() => window.location.reload(), 200)
+      // 持久化成功后再刷新：abort 在飞请求 + reload 加载新网关上下文
+      // （内部有 200ms 延迟，不再另加一次 reload）
+      refreshAfterGatewaySwitch()
     } catch (e) {
       loading.close()
       const msg = extractErrorMessage(e)
@@ -146,10 +164,19 @@ export function useGatewaySwitcher() {
         )
         const url = value.trim()
         const name = url
-        // 去重：同名则覆盖
+        // 先探测新地址可达，再落配置：地址填错（IP 打错一位、端口写错）是
+        // 「新增网关」最常见的失误，若先把 active 切过去再探测，失败时
+        // 配置已指向不可达地址，且当前工作状态的 active 已被改掉。
+        const reachable = await probeNewGateway(url)
+        if (!reachable) {
+          ElMessage.error(`网关 ${url} 不可达（health/live 未响应），未添加`)
+          return
+        }
+        // 去重：同名则覆盖。active 保持不变——切换交给下面的 performGatewaySwitch，
+        // 由它统一走「持久化 + 刷新」流程。
         const list = gateways.value.filter((g) => g.name !== name)
         list.push({ name, url })
-        await saveGatewayConfig({ gateways: list, active: name })
+        await saveGatewayConfig({ gateways: list, active: activeGatewayName.value || name })
         await refreshGateways()
         await performGatewaySwitch(name, url)
       } catch { /* 用户取消 */ }

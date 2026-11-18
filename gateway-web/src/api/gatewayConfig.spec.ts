@@ -121,9 +121,14 @@ describe('gatewayConfig（网关配置缓存 + Tauri 适配器契约）', () => 
     expect(mod.getActiveGatewayName()).toBe('gw1')
   })
 
-  // 锁定切换网关契约：先 invoke set_active_gateway{name}，再重新拉 get_config，
-  // 最后触发刷新（abort 在飞请求 + reload），顺序错了会打到旧网关。
-  it('setActiveGateway 依次调用 set_active_gateway / get_config 并触发刷新', async () => {
+  // 锁定切换网关契约：setActiveGateway 只负责持久化（invoke set_active_gateway
+  // + 重新拉 get_config），**不**触发刷新。
+  //
+  // 刷新必须由切换流程在「探测到新网关可达」之后显式调用（refreshAfterGatewaySwitch）。
+  // 原契约把两者焊在一起，导致持久化一完成就启动 200ms 后的 reload，
+  // 探测（最长 4s）必然来不及——目标不可达时页面已开始刷新，错误提示看不见，
+  // 且配置已指向坏网关。
+  it('setActiveGateway 依次调用 set_active_gateway / get_config 且不触发刷新', async () => {
     isTauriMock.mockReturnValue(true)
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_config') return { gateways: [{ name: 'gw2', url: 'http://1.2.3.4' }], active: 'gw2' }
@@ -136,6 +141,16 @@ describe('gatewayConfig（网关配置缓存 + Tauri 适配器契约）', () => 
     const calls = invokeCalls()
     expect(calls.map((c) => c.cmd)).toEqual(['set_active_gateway', 'get_config'])
     expect(calls[0]!.args).toEqual({ name: 'gw2' })
+    // 持久化本身不刷新
+    expect(switchRefreshMock).not.toHaveBeenCalled()
+  })
+
+  // 刷新是独立的显式调用：切换流程在探测通过、持久化成功之后才调它
+  it('refreshAfterGatewaySwitch 显式触发刷新（abort 在飞请求 + reload）', async () => {
+    const mod = await loadModule()
+
+    mod.refreshAfterGatewaySwitch()
+
     expect(switchRefreshMock).toHaveBeenCalledTimes(1)
   })
 
