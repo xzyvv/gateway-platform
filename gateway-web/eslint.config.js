@@ -16,7 +16,6 @@ const LINE_BUDGET_EXEMPT = [
   'src/utils/ep-icons-compact.ts',
   // ── 存量超限（债务清单：只许减少，不许新增）──
   'src/views/acquisition/console/DebugWizard.vue',
-  'src/views/devices/DeviceList.vue',
   'src/views/ops/delivery/selfCheck.ts',
 ]
 
