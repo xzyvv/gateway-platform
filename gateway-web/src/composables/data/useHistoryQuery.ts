@@ -8,6 +8,7 @@ import { buildHistoryChartOption } from '@/utils/historyChart'
 import { buildHistoryCsv, downloadCsvText, triggerDownload } from '@/utils/exportCsv'
 import { qualityMap, qualityTagType } from '@/utils/qualityLabels'
 import { formatDateTime } from '@/utils/datetime'
+import { runConcurrent } from '@/utils/concurrency'
 
 /**
  * `/api/history` 的单个样本（P2-1）。
@@ -223,11 +224,12 @@ export function useHistoryQuery() {
         total: number
         truncated: boolean
       }[] = []
-      const queue = [...pointIds]
-      async function worker() {
-        while (!unmounted && seq === querySeq) {
-          const pid = queue.shift()
-          if (!pid) break
+      // 停止条件：组件卸载，或本轮查询已被更新的一轮取代（seq 守卫）。
+      // 与迁移前 worker 的 while 条件逐字等价——只在"领下一条"前求值，
+      // 已在飞的请求照常跑完，不会被中途掐断。
+      await runConcurrent(
+        pointIds,
+        async (pid) => {
           try {
             // P2-1：返回体由「裸数组」改为 { items, total, returned, truncated, ... }
             const res = await fetchHistorySamples({
@@ -245,10 +247,8 @@ export function useHistoryQuery() {
           } catch {
             results.push({ pointId: pid, data: [], total: 0, truncated: false })
           }
-        }
-      }
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, pointIds.length) }, () => worker()),
+        },
+        { concurrency: CONCURRENCY, shouldStop: () => unmounted || seq !== querySeq },
       )
       if (unmounted || seq !== querySeq) return
       const stamped = results.map((r) => ({

@@ -36,6 +36,7 @@ import { ElMessage } from 'element-plus'
 import { listPoints, createPoint } from '@/api/points'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 import { filterPointsForCopy, mapPointToTarget } from '@/utils/deviceCopy'
+import { runConcurrent } from '@/utils/concurrency'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
@@ -78,20 +79,16 @@ async function doCopy() {
     /** 单个点位创建失败数：写操作失败全局静默，必须在这里汇总告知用户 */
     let failed = 0
     const CONCURRENCY = 6
-    const queue = [...toCreate]
-    async function worker() {
-      while (!isUnmounted()) {
-        const p = queue.shift()
-        if (!p) break
+    await runConcurrent(
+      toCreate,
+      async (p) => {
         const newPoint = mapPointToTarget(p, props.selectedDevice)
         try {
           await createPoint(props.selectedDevice, newPoint)
           created++
         } catch { failed++ }
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, toCreate.length) }, () => worker()),
+      },
+      { concurrency: CONCURRENCY, shouldStop: () => isUnmounted() },
     )
     if (isUnmounted()) return
     // 有失败点时降级为 warning 并显式给出失败数，避免"成功 0 个"被当成正常

@@ -14,6 +14,7 @@ import { getDeviceStats, commsQuality, recordRead as recordDeviceRead, type Devi
 import { recordBusOp } from '@/utils/busStats'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import { statusTagType, type TagType } from '@/utils/statusType'
+import { runConcurrent } from '@/utils/concurrency'
 import type { DeviceConfig } from '@/api/types'
 import type { DeviceConnectivityDeps, DeviceState } from './types'
 
@@ -54,7 +55,6 @@ export function createDeviceConnectivity(state: DeviceState, deps: DeviceConnect
     }
     state.checking.value = true
     const CONCURRENCY = 8
-    const queue = [...state.devices.value]
     let ok = 0
     let fail = 0
     const results: { name: string; reachable: boolean; latency?: number }[] = []
@@ -88,15 +88,14 @@ export function createDeviceConnectivity(state: DeviceState, deps: DeviceConnect
       }
     }
 
-    async function worker() {
-      while (!state.isUnmounted()) {
-        const dev = queue.shift()
-        if (!dev) break
-        await checkOne(dev)
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, state.devices.value.length) }, () => worker()),
+    await runConcurrent(
+      // 快照：迁移前是 queue = [...state.devices.value]，执行期间的设备列表变化不应改队列
+      [...state.devices.value],
+      checkOne,
+      {
+        concurrency: CONCURRENCY,
+        shouldStop: () => state.isUnmounted(),
+      },
     )
 
     if (!state.isUnmounted()) {

@@ -21,6 +21,7 @@
 import { ref, type Ref } from 'vue'
 import { isTauri, scanGatewayLan } from '@/api'
 import { extractErrorMessage } from '@/utils/errorHandler'
+import { runConcurrent } from '@/utils/concurrency'
 
 export interface DiscoveredGateway {
   /** 形如 http://192.168.1.100:8080 */
@@ -47,14 +48,15 @@ async function probeHosts(
   onProgress?: (found: DiscoveredGateway[]) => void,
 ): Promise<DiscoveredGateway[]> {
   const found: DiscoveredGateway[] = []
-  let cursor = 0
   const startTime = performance.now()
 
-  async function worker() {
-    while (cursor < hosts.length && !signal.aborted) {
-      if (performance.now() - startTime > SCAN_BUDGET_MS) return
-      const idx = cursor++
-      const host = hosts[idx]
+  // 停止条件：组件卸载（abort）或超出整体扫描预算，两者都只停"领新任务"，
+  // 已在飞的探测照常跑完——与迁移前 worker 里的 return 语义一致。
+  const stopped = () => signal.aborted || performance.now() - startTime > SCAN_BUDGET_MS
+
+  await runConcurrent(
+    hosts,
+    async (host) => {
       for (const port of COMMON_PORTS) {
         if (signal.aborted) return
         const url = `http://${host}:${port}/health/live`
@@ -90,12 +92,9 @@ async function probeHosts(
           signal.removeEventListener('abort', onAbort)
         }
       }
-    }
-  }
-
-  // 启动 N 个并发 worker
-  const workers = Array.from({ length: SCAN_CONCURRENCY }, () => worker())
-  await Promise.all(workers)
+    },
+    { concurrency: SCAN_CONCURRENCY, shouldStop: stopped },
+  )
   return found
 }
 

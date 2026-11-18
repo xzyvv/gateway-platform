@@ -8,6 +8,7 @@ import { createDevice } from '@/api/devices'
 import { scanBus, respondedSlaves } from '@/api/protocolTools/slaveScan'
 import type { SlaveScanResult } from '@/api/protocolTools/types'
 import type { BusConfig, DeviceConfig } from '@/api/types'
+import { runConcurrent } from '@/utils/concurrency'
 
 interface FoundDevice {
   uid: string
@@ -160,13 +161,11 @@ export function useDiscoverWizard() {
   async function doImport() {
     if (selectedDevices.value.length === 0) { ElMessage.warning('请至少选择一台设备'); return }
     importing.value = true
-    const queue = [...selectedDevices.value]
     let success = 0
     let failed = 0
-    async function worker() {
-      while (true) {
-        const dev = queue.shift()
-        if (!dev) break
+    await runConcurrent(
+      selectedDevices.value,
+      async (dev) => {
         const device: DeviceConfig = {
           id: dev.id || `${dev.bus}_slave_${dev.slave_id}`,
           name: dev.name || `Slave_${dev.slave_id}`,
@@ -182,10 +181,8 @@ export function useDiscoverWizard() {
         } catch {
           failed++
         }
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(IMPORT_CONCURRENCY, selectedDevices.value.length) }, () => worker()),
+      },
+      { concurrency: IMPORT_CONCURRENCY },
     )
     importedCount.value = success
     importDone.value = true

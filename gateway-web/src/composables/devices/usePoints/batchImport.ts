@@ -4,6 +4,7 @@ import { createPoint } from '@/api/points'
 import { parseImportPoints } from '@/utils/importPoints'
 import { mapPointToTarget } from '@/utils/deviceCopy'
 import { clampInterval } from './validation'
+import { runConcurrent } from '@/utils/concurrency'
 import type { BatchImportResult, PointFailure, PointsState } from './types'
 
 /**
@@ -58,12 +59,10 @@ export function createPointBatchImport(state: PointsState, loadPoints: () => Pro
     const queue = [...payloads]
     let created = 0
     const failed: PointFailure[] = []
-    const CONCURRENCY = 8
     try {
-      async function worker() {
-        while (!state.isUnmounted()) {
-          const p = queue.shift()
-          if (!p) break
+      await runConcurrent(
+        queue,
+        async (p) => {
           try {
             await createPoint(target, p)
             created++
@@ -72,9 +71,9 @@ export function createPointBatchImport(state: PointsState, loadPoints: () => Pro
           } finally {
             importProgress.completed++
           }
-        }
-      }
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, payloads.length) }, () => worker()))
+        },
+        { concurrency: 8, shouldStop: () => state.isUnmounted() },
+      )
       if (state.isUnmounted()) return
       const total = payloads.length
       if (failed.length === 0) {

@@ -52,6 +52,7 @@ import type { DeviceConfig } from '@/api/types'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
+import { runConcurrent } from '@/utils/concurrency'
 
 const props = defineProps<{
   modelValue: boolean
@@ -127,10 +128,9 @@ async function doGenerate() {
     for (let i = 0; i < genForm.count; i++) {
       queue.push({ addr: genForm.startAddr + i * genForm.step, idx: i + 1 })
     }
-    async function worker() {
-      while (!isUnmounted()) {
-        const item = queue.shift()
-        if (!item) break
+    await runConcurrent(
+      queue,
+      async (item) => {
         try {
           await createPoint(props.deviceId, {
             id: genForm.namePrefix.toLowerCase() + '_' + item.addr,
@@ -163,10 +163,8 @@ async function doGenerate() {
           })
           ok++
         } catch { fail++ }
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, genForm.count) }, () => worker()),
+      },
+      { concurrency: CONCURRENCY, shouldStop: () => isUnmounted() },
     )
     if (isUnmounted()) return
     ElMessage.success('生成完成：成功 ' + ok + '，失败 ' + fail)

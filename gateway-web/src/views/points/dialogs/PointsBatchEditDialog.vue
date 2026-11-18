@@ -148,6 +148,7 @@ import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { BYTE_ORDERS, DATA_TYPES } from '@/composables/devices/decodeParams'
+import { runConcurrent } from '@/utils/concurrency'
 
 interface BatchEditFlags {
   name: boolean
@@ -348,22 +349,20 @@ const CONCURRENCY = 8
 /** 逐条调用 updatePoint（worker pool），单条失败不阻断其余点位 */
 async function applyUpdatesOneByOne(updates: PointConfig[]): Promise<BatchEditResult> {
   const total = updates.length
-  const queue = [...updates]
   let succeeded = 0
   const failed: BatchEditFailure[] = []
-  async function worker() {
-    while (!isUnmounted()) {
-      const p = queue.shift()
-      if (!p) break
+  await runConcurrent(
+    updates,
+    async (p) => {
       try {
         await updatePoint(p.id, p)
         succeeded++
       } catch (e) {
         failed.push({ id: p.id, name: p.name, reason: e instanceof Error ? e.message : String(e || '未知错误') })
       }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()))
+    },
+    { concurrency: CONCURRENCY, shouldStop: () => isUnmounted() },
+  )
   return { total, succeeded, failed }
 }
 

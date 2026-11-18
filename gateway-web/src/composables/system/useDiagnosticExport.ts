@@ -34,6 +34,7 @@ import { buildDiagnosticReport, downloadDiagnosticReport, type DiagnosticInput }
 import { buildHar } from '@/utils/har'
 import { buildZip } from '@/utils/zip'
 import { csvEscapeFieldOptionalQuote } from '@/utils/exportCsv'
+import { runConcurrent } from '@/utils/concurrency'
 import { getPackets } from '@/api/protocolTools/packetCapture'
 import type { Packet } from '@/api/protocolTools/types'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
@@ -124,16 +125,14 @@ export function useDiagnosticExport() {
     ])
 
     const deviceChecks: { id: string; name: string; reachable: boolean; latency?: number }[] = []
-    const devQueue = [...devs]
-    async function worker() {
-      while (!cancelled) {
-        const d = devQueue.shift()
-        if (!d) break
+    await runConcurrent(
+      devs,
+      async (d) => {
         try {
           const pts = await listPoints(d.id).catch(() => [])
           if (pts.length === 0) {
             deviceChecks.push({ id: d.id, name: d.name, reachable: false })
-            continue
+            return
           }
           const outcome = await readOnce(pts[0]!.id)
           if (outcome.ok) {
@@ -152,10 +151,8 @@ export function useDiagnosticExport() {
           deviceChecks.push({ id: d.id, name: d.name, reachable: false })
           recordDeviceRead(d.id, false, 0)
         }
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(PROBE_CONCURRENCY, devs.length) }, () => worker()),
+      },
+      { concurrency: PROBE_CONCURRENCY, shouldStop: () => cancelled },
     )
 
     // 网关侧真实错误来源（两者都是网关自己的数据）：

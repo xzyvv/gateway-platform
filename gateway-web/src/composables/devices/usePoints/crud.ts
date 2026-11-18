@@ -3,6 +3,7 @@ import { ElMessage, ElNotification, ElButton } from 'element-plus'
 import { confirmDelete, confirmAction } from '@/utils/confirm'
 import { deletePoint, restorePoint, updatePoint } from '@/api/points'
 import { extractErrorMessage, failureMessage } from '@/utils/errorHandler'
+import { runConcurrent } from '@/utils/concurrency'
 import type { PointConfig } from '@/api/types'
 import { clampInterval } from './validation'
 import type { BatchDeleteResult, InlinePatch, PointFailure, PointsState } from './types'
@@ -64,24 +65,19 @@ export function createPointCrud(state: PointsState, loadPoints: () => Promise<vo
    * 让用户能精准到「已删除点位」页重试（id 冲突时恢复必然失败）。
    */
   async function restoreBatch(ids: string[], closeNotice: () => void) {
-    const queue = [...ids]
-    const failed: string[] = []
     let restored = 0
-    const CONCURRENCY = 8
-    async function worker() {
-      while (!state.isUnmounted()) {
-        const id = queue.shift()
-        if (!id) break
+    const failed: string[] = []
+    await runConcurrent(
+      ids,
+      async (id) => {
         try {
           await restorePoint(id)
           restored++
         } catch {
           failed.push(id)
         }
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, ids.length) }, () => worker()),
+      },
+      { concurrency: 8, shouldStop: () => state.isUnmounted() },
     )
     if (state.isUnmounted()) return
     closeNotice()
@@ -111,18 +107,15 @@ export function createPointCrud(state: PointsState, loadPoints: () => Promise<vo
     if (selection.value.length === 0) return
     if (!(await confirmDelete(`选中的 ${selection.value.length} 个点位`, { title: '批量删除' }))) return
     if (state.isUnmounted()) return
-    const total = selection.value.length
-    const queue = [...selection.value]
     let deleted = 0
     // 记录删除成功的 id：批量撤销只恢复真正删掉的点位
     const deletedIds: string[] = []
     // 逐条收集失败原因：只报「N 个失败」等于没说，用户无法判断该重试哪几条
     const failed: PointFailure[] = []
-    const CONCURRENCY = 8
-    async function worker() {
-      while (!state.isUnmounted()) {
-        const p = queue.shift()
-        if (!p) break
+    await runConcurrent(
+      // 快照：迁移前是 queue = [...selection.value]，执行期间的勾选变化不应改队列
+      [...selection.value],
+      async (p) => {
         try {
           await deletePoint(p.id)
           deleted++
@@ -130,10 +123,8 @@ export function createPointCrud(state: PointsState, loadPoints: () => Promise<vo
         } catch (e) {
           failed.push({ id: p.id, reason: e instanceof Error ? e.message : String(e || '未知错误') })
         }
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()),
+      },
+      { concurrency: 8, shouldStop: () => state.isUnmounted() },
     )
     if (state.isUnmounted()) return
     if (failed.length === 0) {
