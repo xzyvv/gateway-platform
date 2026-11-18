@@ -79,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, h, type VNodeChild } from 'vue'
+import { ref, computed, onMounted, h, type VNodeChild } from 'vue'
 import { usePolling } from '@/composables/core/usePolling'
 import { ElTag } from 'element-plus'
 import {Refresh} from '@element-plus/icons-vue'
@@ -89,6 +89,7 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import TableSkeleton from '@/components/TableSkeleton.vue'
 import { formatClock, formatDateTime } from '@/utils/datetime'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const { showToast } = useErrorDisplay()
 
@@ -133,7 +134,7 @@ const autoRefresh = ref(true)
 const lastUpdate = ref('')
 const metricGroups = ref<MetricGroup[]>([])
 const activeGroups = ref<string[]>([])
-let unmounted = false
+const { isUnmounted } = useUnmountedGuard()
 
 const overviewItems = computed(() => {
   const findVal = (name: string) => {
@@ -214,7 +215,7 @@ async function loadMetrics(opts: { silent?: boolean } = {}) {
     }
     lastUpdate.value = formatClock()
   } catch (e) {
-    if (!unmounted) showToast(e, '获取指标失败')
+    if (!isUnmounted()) showToast(e, '获取指标失败')
   } finally {
     if (!silent) loading.value = false
   }
@@ -244,9 +245,6 @@ onMounted(() => {
   if (autoRefresh.value) startPoll()
 })
 
-onUnmounted(() => {
-  unmounted = true
-})
 </script>
 
 <style scoped>

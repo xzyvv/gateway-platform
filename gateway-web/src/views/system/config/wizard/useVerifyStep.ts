@@ -6,11 +6,12 @@
  *
  * 典型应用场景：部署向导的最后一步（验证采集）。
  */
-import { ref, onUnmounted } from 'vue'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useReadPointNow } from '@/composables/data/useReadPointNow'
 import type { PointConfig } from '@/api/types'
 import type { ReadResult } from './types'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 export function useVerifyStep() {
   const { readSequential } = useReadPointNow()
@@ -26,10 +27,7 @@ export function useVerifyStep() {
   const readResults = ref<ReadResult[]>([])
 
   /** 组件卸载后不再继续写状态 */
-  let unmounted = false
-  onUnmounted(() => {
-    unmounted = true
-  })
+  const { isUnmounted } = useUnmountedGuard()
 
   /** 逐点执行采集测试 */
   async function verify(points: PointConfig[]) {
@@ -46,7 +44,7 @@ export function useVerifyStep() {
     await readSequential(
       points.map((p) => p.id),
       {
-        shouldStop: () => unmounted,
+        shouldStop: () => isUnmounted(),
         onResult: (outcome) => {
           const p = byId.get(outcome.pointId)
           if (outcome.ok) ok++
@@ -60,7 +58,7 @@ export function useVerifyStep() {
         },
       },
     )
-    if (unmounted) return
+    if (isUnmounted()) return
     const failed = points.length - ok
     verifyFailed.value = failed > 0
     verifySummary.value = failed

@@ -13,6 +13,7 @@ import { formatValue, formatTime, qualityClass, qualityTagType, qualityLabel, ty
 // 图表与视口分配（W3b-13 拆出：本文件只留「连接 + 表格状态 + 空态」编排）
 import { useRealtimeChart } from './useRealtimeChart'
 import { useRealtimeViewport } from './useRealtimeViewport'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 type RealtimePoint = DataPoint & {
   _flash?: boolean
@@ -179,10 +180,10 @@ export function useRealtime() {
   let wsHandle: SharedWebSocketHandle | null = null
   let wsUnsubMessage: (() => void) | null = null
   let flashClearTimer: ReturnType<typeof setTimeout> | null = null
-  let unmounted = false
+  const { isUnmounted } = useUnmountedGuard()
 
   function onMessage(data: DataPoint[]) {
-    if (unmounted) return
+    if (isUnmounted()) return
     if (!Array.isArray(data)) return
     // P1: 收到帧即证明采集正常，清掉「停滞」标记并重置计时基准
     if (data.length > 0) {
@@ -228,7 +229,7 @@ export function useRealtime() {
     if (flashClearTimer) clearTimeout(flashClearTimer)
     flashClearTimer = setTimeout(() => {
       flashClearTimer = null
-      if (unmounted) return
+      if (isUnmounted()) return
       const next = pointList.value.slice()
       let mutated = false
       for (let i = 0; i < next.length; i++) {
@@ -261,7 +262,7 @@ export function useRealtime() {
   }
 
   function tickStall(): void {
-    if (unmounted) return
+    if (isUnmounted()) return
     // 有数据 → 一定不是「空态」，无需判定
     if (pointList.value.length > 0) {
       stalled.value = false
@@ -310,7 +311,6 @@ export function useRealtime() {
   })
 
   onUnmounted(() => {
-    unmounted = true
     wsStore.unsubscribe()
     wsUnsubMessage?.()
     wsUnsubMessage = null

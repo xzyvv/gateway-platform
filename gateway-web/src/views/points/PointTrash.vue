@@ -41,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, onUnmounted, ref } from 'vue'
+import { h, onMounted, ref } from 'vue'
 import { ElButton, ElMessage } from 'element-plus'
 import { Delete, Refresh } from '@element-plus/icons-vue'
 import { confirmAction } from '@/utils/confirm'
@@ -51,11 +51,12 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
 import { formatDateTime } from '@/utils/datetime'
 import { extractErrorReason } from '@/utils/errorHandler'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const items = ref<PointTrashEntry[]>([])
 const loading = ref(false)
 const clearing = ref(false)
-let unmounted = false
+const { isUnmounted } = useUnmountedGuard()
 
 /** 后端错误优先取响应体 message/error；包装层业务码错误已由拦截器转成 Error(message) */
 function backendMessage(e: unknown, fallback: string): string {
@@ -69,24 +70,24 @@ async function load() {
   loading.value = true
   try {
     const data = await listPointTrash()
-    if (unmounted) return
+    if (isUnmounted()) return
     items.value = data
   } catch {
     /* 读取失败由全局拦截器留痕，这里不再重复弹窗 */
   } finally {
-    if (!unmounted) loading.value = false
+    if (!isUnmounted()) loading.value = false
   }
 }
 
 async function restore(row: PointTrashEntry) {
   try {
     await restorePoint(row.point.id)
-    if (unmounted) return
+    if (isUnmounted()) return
     ElMessage.success('已恢复')
     load()
   } catch (e) {
     // id 已被占用时后端会拒绝恢复，把后端 message 原样透出
-    if (!unmounted) ElMessage.error(backendMessage(e, `恢复点位 ${row.point.id} 失败，请稍后重试`))
+    if (!isUnmounted()) ElMessage.error(backendMessage(e, `恢复点位 ${row.point.id} 失败，请稍后重试`))
   }
 }
 
@@ -97,14 +98,14 @@ async function purge(row: PointTrashEntry) {
     type: 'error',
     confirmText: '彻底删除',
   })
-  if (!ok || unmounted) return
+  if (!ok || isUnmounted()) return
   try {
     await purgeTrashPoint(row.point.id)
-    if (unmounted) return
+    if (isUnmounted()) return
     ElMessage.success('已彻底删除')
     load()
   } catch (e) {
-    if (!unmounted) ElMessage.error(backendMessage(e, `彻底删除点位 ${row.point.id} 失败，请稍后重试`))
+    if (!isUnmounted()) ElMessage.error(backendMessage(e, `彻底删除点位 ${row.point.id} 失败，请稍后重试`))
   }
 }
 
@@ -117,17 +118,17 @@ async function clearAll() {
     type: 'error',
     confirmText: '清空',
   })
-  if (!ok || unmounted) return
+  if (!ok || isUnmounted()) return
   clearing.value = true
   try {
     await purgeAllTrash()
-    if (unmounted) return
+    if (isUnmounted()) return
     ElMessage.success('已删除点位已清空')
     await load()
   } catch (e) {
-    if (!unmounted) ElMessage.error(backendMessage(e, '清空已删除点位失败，请稍后重试'))
+    if (!isUnmounted()) ElMessage.error(backendMessage(e, '清空已删除点位失败，请稍后重试'))
   } finally {
-    if (!unmounted) clearing.value = false
+    if (!isUnmounted()) clearing.value = false
   }
 }
 
@@ -180,7 +181,6 @@ const columns: ColumnDef<PointTrashEntry>[] = [
 const rowKey = (row: PointTrashEntry) => row.point.id
 
 onMounted(load)
-onUnmounted(() => { unmounted = true })
 </script>
 
 <style scoped>

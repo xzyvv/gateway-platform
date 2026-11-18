@@ -1,9 +1,10 @@
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 import { defaultPointConfig } from '@/utils/pointDefaults'
 import type { PointQuality } from '@/api/dataQuality'
 import type { PointRow, PointsState } from './types'
 import { FALLBACK_NORTH_INTERVAL } from './validation'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**
  * 点位页共享状态
@@ -32,8 +33,7 @@ export function createPointsState(): PointsState {
   const showGen = ref(false)
 
   /** 组件卸载标记：卸载后不再写状态、不再弹提示 */
-  let unmounted = false
-  onUnmounted(() => { unmounted = true })
+  const { isUnmounted } = useUnmountedGuard()
 
   const currentDeviceName = computed(() => {
     return devices.value.find((d) => d.id === selectedDevice.value)?.name || '—'
@@ -79,6 +79,6 @@ export function createPointsState(): PointsState {
     showCopy,
     showBatchEdit,
     showGen,
-    isUnmounted: () => unmounted,
+    isUnmounted,
   }
 }

@@ -87,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onUnmounted } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { usePolling } from '@/composables/core/usePolling'
 import { ElMessage } from 'element-plus'
 import { confirmAction } from '@/utils/confirm'
@@ -95,6 +95,11 @@ import { getOtaStatus, otaUpload, otaRollback } from '@/api/ota'
 import { useWebhook } from '@/composables/uplink/useWebhook'
 import { usePermission } from '@/composables/auth/usePermission'
 import { formatBytes } from '@/utils/format'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
+
+const { isUnmounted } = useUnmountedGuard()
+const refreshGuard = useRequestGuard()
 const webhook = useWebhook()
 // 按钮级权限：升级需 ota.upgrade，回滚需 ota.rollback
 const { can } = usePermission()
@@ -163,12 +168,12 @@ async function doUpload() {
     title: '确认升级',
   }))) return
   try {
-    if (unmounted) return
+    if (isUnmounted()) return
     uploading.value = true
     const buf = await firmware.value.arrayBuffer()
-    if (unmounted) return
+    if (isUnmounted()) return
     await otaUpload(buf)
-    if (unmounted) return
+    if (isUnmounted()) return
     ElMessage.success('固件上传成功，正在升级...')
     // Webhook 变更通知
     webhook.notify('ota_started', '固件升级已开始').catch(() => { /* ignore */ })
@@ -176,7 +181,7 @@ async function doUpload() {
     // 写操作失败全局不再弹窗（拦截器只留痕），无论 HTTP 错误还是客户端错误都在此提示
     ElMessage.error(`固件升级失败：${(e as Error)?.message || '未知错误'}`)
   } finally {
-    if (!unmounted) {
+    if (!isUnmounted()) {
       uploading.value = false
       firmware.value = null
       uploadRef.value?.clearFiles()
@@ -187,9 +192,9 @@ async function doUpload() {
 async function doRollback() {
   if (!(await confirmAction({ message: '确认回滚到上一个固件版本?', title: '确认回滚' }))) return
   try {
-    if (unmounted) return
+    if (isUnmounted()) return
     await otaRollback()
-    if (unmounted) return
+    if (isUnmounted()) return
     ElMessage.success('回滚已触发')
   } catch {
     // POST 回滚：全局拦截器只留痕不弹窗，需在此给出动作语境提示
@@ -197,14 +202,11 @@ async function doRollback() {
   }
 }
 
-let unmounted = false
-let refreshSeq = 0
-
 async function refresh() {
-  const seq = ++refreshSeq
+  const seq = refreshGuard.next()
   try {
     const s = await getOtaStatus()
-    if (unmounted || seq !== refreshSeq) return
+    if (!refreshGuard.isCurrent(seq)) return
     Object.assign(ota, s)
   } catch {
     // 忽略
@@ -213,11 +215,6 @@ async function refresh() {
 
 // 常驻轮询：usePolling 统一提供隐藏暂停 / 卸载清理（refresh 内部吞错，不触发退避）
 usePolling(refresh, 2000)
-
-onUnmounted(() => {
-  unmounted = true
-  refreshSeq++
-})
 </script>
 
 <style scoped src="./Ota.css"></style>

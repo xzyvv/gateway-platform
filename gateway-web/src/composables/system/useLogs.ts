@@ -8,6 +8,7 @@ import { precheckCommand, QUICK_DIAGNOSTIC_COMMANDS } from '@/utils/diagnosticsC
 import { useVirtualLogs } from './useVirtualLogs'
 import { triggerDownload } from '@/utils/exportCsv'
 import { copyText } from '@/utils/clipboard'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 interface LogItem { id: number; text: string }
 
@@ -112,7 +113,7 @@ export function useLogs() {
   const cmdLoading = ref(false)
   const atBottom = ref(true)
   const activeLevel = ref('all')
-  let unmounted = false
+  const { isUnmounted } = useUnmountedGuard()
 
   // B2 修复：响应式预校验结果——command 一变即重算，UI 可在用户输入时即时提示。
   const cmdPrecheck = computed(() =>
@@ -193,7 +194,7 @@ export function useLogs() {
   let flushTimer: ReturnType<typeof setTimeout> | null = null
 
   function flushLogs() {
-    if (unmounted) return
+    if (isUnmounted()) return
     if (flushTimer) {
       clearTimeout(flushTimer)
       flushTimer = null
@@ -219,7 +220,7 @@ export function useLogs() {
   }
 
   function onLog(line: string) {
-    if (unmounted || paused.value) return
+    if (isUnmounted() || paused.value) return
     checkAlert(line)
     logQueue.push({ id: ++logIdCounter, text: line })
     if (logQueue.length >= BATCH_SIZE) {
@@ -276,13 +277,13 @@ export function useLogs() {
     cmdLoading.value = true
     try {
       const resp = await diagnosticsExec(command.value.trim())
-      if (unmounted) return
+      if (isUnmounted()) return
       cmdOutput.value = resp.output
     } catch {
       // 写操作失败全局不再弹窗（拦截器只留痕），此处给出带动作语境的提示
       ElMessage.error('命令执行失败，请稍后重试')
     } finally {
-      if (!unmounted) cmdLoading.value = false
+      if (!isUnmounted()) cmdLoading.value = false
     }
   }
 
@@ -323,7 +324,6 @@ export function useLogs() {
   })
 
   onUnmounted(() => {
-    unmounted = true
     wsStore.unsubscribe()
     if (flushTimer) {
       clearTimeout(flushTimer)

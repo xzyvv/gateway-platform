@@ -5,6 +5,7 @@ import { useClock } from '@/composables/system/useClock'
 import { usePolling } from '@/composables/core/usePolling'
 import { healthComponentLabel, healthSeverity, healthStatusLabel, healthSnapshotDegraded } from '@/utils/healthStatus'
 import { globalGet, scopedGet, scopedKey } from '@/utils/gatewayStorage'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**
  * Layout 顶栏时钟 + 网关健康徽章 composable
@@ -50,11 +51,11 @@ export function useLayoutClock() {
   const lastSnapshot = ref<{ status: string; components: Record<string, string>; queue_len?: number } | null>(null)
   /** 队列积压条数（快照自带）；无此字段的老后端返回 null，横幅降级为无数值文案 */
   const queueLen = computed(() => lastSnapshot.value?.queue_len ?? null)
-  let unmounted = false
+  const { isUnmounted } = useUnmountedGuard()
 
   async function checkHealth() {
     const resp = await gateway.loadHealth()
-    if (unmounted) return
+    if (isUnmounted()) return
     // 请求失败时 store 会写入 errors.health；这是「连不上」的唯一可靠信号
     reachable.value = !gateway.errors.health
     failStreak.value = reachable.value ? 0 : failStreak.value + 1
@@ -178,7 +179,6 @@ export function useLayoutClock() {
   })
 
   onUnmounted(() => {
-    unmounted = true
     window.removeEventListener('storage', onStorage)
   })
 
@@ -208,7 +208,7 @@ export function useLayoutClock() {
     // 测试钩子：暴露 unmounted flag 与定时器引用，便于单元测试覆盖清理逻辑
     // （时钟定时器已移交 useClock 自管，由其 __clockTimerActive 断言）
     __internal: {
-      get unmounted() { return unmounted },
+      get unmounted() { return isUnmounted() },
       get clockTimerActive() { return clockActive() },
       get healthTimerActive() { return healthPolling.value },
     },

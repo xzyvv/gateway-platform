@@ -95,7 +95,7 @@
 /** 读取性能：对同一个点位连续 N 次读取，统计 P50/P95/P99 与成功率。
  *  从原 Tester.vue 拆出，避免读写测试页单页密度过高。
  */
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
@@ -110,6 +110,7 @@ import LogPanel from '@/components/LogPanel.vue'
 import { copyText } from '@/utils/clipboard'
 import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 interface PerfResult {
   count: number
@@ -147,7 +148,7 @@ const loading = ref(false)
 const result = ref<PerfResult | null>(null)
 const logs = ref<LogEntry[]>([])
 
-let unmounted = false
+const { isUnmounted } = useUnmountedGuard()
 /**
  * Bug 181：点位请求序号——快速切换设备时丢弃过期响应。
  * 本页此前没有这层保护，旧设备的点位列表可能在用户已切到新设备后回写，
@@ -190,14 +191,14 @@ async function loadDevices() {
   devicesLoading.value = true
   try {
     const data = await listDevices()
-    if (unmounted) return
+    if (isUnmounted()) return
     devices.value = data
     // 共享选择可能已失效（设备被删/配置变更）：本页不替用户改选，仅清空避免展示陈旧 id
     if (selectedDevice.value && !data.some((d) => d.id === selectedDevice.value)) selectedDevice.value = ''
   } catch {
     // HTTP 错误由拦截器处理
   } finally {
-    if (!unmounted) devicesLoading.value = false
+    if (!isUnmounted()) devicesLoading.value = false
   }
 }
 
@@ -245,7 +246,7 @@ async function doBatchRead() {
   let success = 0
   let fail = 0
   for (let i = 0; i < N; i++) {
-    if (unmounted) return
+    if (isUnmounted()) return
     const outcome = await readOnce(selectedPoint.value)
     latencies.push(outcome.latencyMs)
     if (outcome.ok) success++
@@ -254,7 +255,7 @@ async function doBatchRead() {
       recordDeviceRead(ptObj.device_id || ptObj.id, outcome.ok, outcome.latencyMs)
     }
   }
-  if (unmounted) return
+  if (isUnmounted()) return
   const sorted = [...latencies].sort((a, b) => a - b)
   const pct = (p: number): number => sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0
   const sum = sorted.reduce((a, b) => a + b, 0)
@@ -279,7 +280,6 @@ async function doBatchRead() {
 }
 
 onMounted(loadDevices)
-onUnmounted(() => { unmounted = true })
 </script>
 
 <style scoped>

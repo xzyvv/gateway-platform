@@ -117,6 +117,7 @@ import { formatDateTime } from '@/utils/datetime'
 import { failureMessage } from '@/utils/errorHandler'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import type { DeviceConfig, PointConfig } from '@/api/types'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const selectedDevice = ref('')
 const selectedPoint = ref('')
@@ -127,7 +128,7 @@ const loadingPoints = ref(false)
 const diagnosing = ref(false)
 const result = ref<DiagResult | null>(null)
 const activeStep = ref(0)
-let unmounted = false
+const { isUnmounted } = useUnmountedGuard()
 let stepTimer: ReturnType<typeof setTimeout> | null = null
 // 点位请求序号守卫：切换设备时丢弃过期响应
 const pointsGuard = useRequestGuard()
@@ -183,7 +184,7 @@ onMounted(async () => {
   } catch (e) {
     ElMessage.error(failureMessage('加载设备列表', e))
   } finally {
-    if (!unmounted) loadingDevices.value = false
+    if (!isUnmounted()) loadingDevices.value = false
   }
 })
 
@@ -223,7 +224,7 @@ async function runDiagnosis() {
   let i = 0
   const advance = () => {
     stepTimer = null
-    if (unmounted || i >= total) {
+    if (isUnmounted() || i >= total) {
       diagnosing.value = false
       return
     }
@@ -233,7 +234,7 @@ async function runDiagnosis() {
   }
   stepTimer = setTimeout(advance, 400)
 }
-onUnmounted(() => { unmounted = true; clearStepTimer() })
+onUnmounted(() => { clearStepTimer() })
 </script>
 
 <style scoped>

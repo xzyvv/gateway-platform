@@ -101,6 +101,7 @@ import { getConfig, postConfig } from '@/api/config'
 import type { SelfHealConfig } from '@/api/types'
 import { formatDateTime } from '@/utils/datetime'
 import { actionColumn, tagColumn } from '@/utils/commonColumns'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const { showToast } = useErrorDisplay()
 
@@ -121,7 +122,7 @@ const heal = ref<SelfHealConfig>({ ...DEFAULT_HEAL })
 const loading = ref(false)
 const saving = ref(false)
 const restarting = ref<string | null>(null)
-let unmounted = false
+const { isUnmounted } = useUnmountedGuard()
 let restartTimer: ReturnType<typeof setTimeout> | null = null
 
 async function load() {
@@ -167,7 +168,7 @@ async function restart(name: string) {
   try {
     await restartService(name)
     ElMessage.success(`已触发 ${name} 服务重启`)
-    restartTimer = setTimeout(() => { if (!unmounted) load() }, 1500)
+    restartTimer = setTimeout(() => { if (!isUnmounted()) load() }, 1500)
   } catch (e) {
     showToast(e, `重启 ${name} 服务失败`)
   } finally {
@@ -225,7 +226,7 @@ const serviceColumns: ColumnDef<ServiceInfo>[] = [
 ]
 
 onMounted(() => { load(); loadHeal() })
-onUnmounted(() => { unmounted = true; if (restartTimer) clearTimeout(restartTimer) })
+onUnmounted(() => { if (restartTimer) clearTimeout(restartTimer) })
 </script>
 
 <style scoped>

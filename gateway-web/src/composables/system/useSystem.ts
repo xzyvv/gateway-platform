@@ -19,6 +19,7 @@ import { buildBackup, downloadBackup, parseBackupFile, type SystemBackup } from 
 import { extractErrorMessage } from '@/utils/errorHandler'
 import { formatDateTime } from '@/utils/datetime'
 import { statusTagType, type TagType } from '@/utils/statusType'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**
  * System 页面数据层封装
@@ -196,7 +197,7 @@ export function useSystem() {
   const { diagLoading, bundleLoading, exportDiagnostic: genDiagnostic, exportBundle: genDiagnosticBundle } = useDiagnosticExport()
 
   /** 卸载后不再回写 loading，避免对已销毁组件做无意义更新（备份按钮使用） */
-  let unmounted = false
+  const { isUnmounted } = useUnmountedGuard()
 
   // ===== 系统备份 / 还原 =====
   const backupLoading = ref(false)
@@ -218,7 +219,7 @@ export function useSystem() {
     } catch (e) {
       showToast(e, '生成备份失败')
     } finally {
-      if (!unmounted) backupLoading.value = false
+      if (!isUnmounted()) backupLoading.value = false
     }
   }
   async function onRestoreFile(file: File) {
@@ -253,7 +254,6 @@ export function useSystem() {
   onUnmounted(() => {
     if (ntpTimer) clearTimeout(ntpTimer)
     // 在途请求的作废由 useRequestGuard 自己在卸载时处理
-    unmounted = true
   })
 
   return {

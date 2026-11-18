@@ -7,13 +7,14 @@
  * 之所以抽这一层：拆成多个文件后，form、devices、audit、route 等跨模块数据
  * 必须有唯一持有者，否则会出现两份 devices ref 之类的状态分裂。
  */
-import { onUnmounted, reactive, ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import type { FormInstance } from 'element-plus'
 import type { DeviceTemplate } from '@/api/templates'
 import type { BusConfig, DeviceConfig } from '@/api/types'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import type { DeviceFormModel, DeviceState } from './types'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**
  * 创建设备页面的共享状态
@@ -69,8 +70,7 @@ export function createDeviceState(): DeviceState {
   )
 
   /** 组件卸载标记：卸载后不再写状态、不再弹提示 */
-  let unmounted = false
-  onUnmounted(() => { unmounted = true })
+  const { isUnmounted } = useUnmountedGuard()
 
   return {
     devices, loading, loadError, saving, testingConn, checking,
@@ -78,6 +78,6 @@ export function createDeviceState(): DeviceState {
     templates, templatesLoading, templateLoadError,
     buses, busesLoading, busLoadError,
     route, formGuard,
-    isUnmounted: () => unmounted,
+    isUnmounted,
   }
 }

@@ -50,7 +50,7 @@
  *
  * 典型应用场景：点位读写测试页（Tester.vue）底部的批量写入区块（仅协议支持写入时出现）。
  */
-import { ref, watch, onUnmounted, h, Fragment } from 'vue'
+import { ref, watch, h, Fragment } from 'vue'
 import { ElMessage, ElButton, ElIcon, ElInputNumber, ElOption, ElSelect, ElTag } from 'element-plus'
 import { Check, Delete, Plus } from '@element-plus/icons-vue'
 import DataTable from '@/components/DataTable.vue'
@@ -62,6 +62,7 @@ import { confirmPointWrite, usePointWrite } from '@/composables/data/usePointWri
 import { withDiagHint } from '@/utils/diagHints'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import type { LogEntry } from './OperationLogPanel.vue'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 interface BatchRow {
   pointId: string
@@ -92,7 +93,7 @@ const batchLoading = ref(false)
 const batchSummary = ref('')
 const batchSummaryType = ref<'success' | 'warning' | 'danger'>('success')
 
-let unmounted = false
+const { isUnmounted } = useUnmountedGuard()
 
 /** 批量行无稳定主键，用数组下标做行键（行内编辑，无勾选/分页） */
 const batchRowKey = (row: BatchRow) => String(batchRows.value.indexOf(row))
@@ -216,7 +217,7 @@ async function doBatchWrite() {
   }
   const entries = rows.map((r) => ({ id: r.pointId, value: r.value as number }))
   if (!(await confirmPointWrite(entries))) return
-  if (unmounted) return
+  if (isUnmounted()) return
 
   batchLoading.value = true
   batchSummary.value = ''
@@ -225,7 +226,7 @@ async function doBatchWrite() {
   try {
     // 统一写入口：只传数组，1 条由后端按单写处理，≥2 条按批量写处理
     const outcome = await writeBatch(entries)
-    if (unmounted) return
+    if (isUnmounted()) return
     const latency = performance.now() - t0
     // results 与入参等长且逐位对应，按下标回填各行结果
     rows.forEach((r, i) => { r.result = outcome.results[i] ?? null })
@@ -244,7 +245,7 @@ async function doBatchWrite() {
     batchSummaryType.value = summaryType
     emit('log', summaryType, '批量写入', batchSummary.value)
   } catch (e) {
-    if (unmounted) return
+    if (isUnmounted()) return
     // 网络/权限等请求级异常没有逐条结果，同样按失败上报，避免「点了没反应」
     const msg = withDiagHint(extractErrorMessage(e, '未知错误'))
     batchSummary.value = `批量写入失败：${msg}`
@@ -252,11 +253,10 @@ async function doBatchWrite() {
     emit('log', 'danger', '批量写入', batchSummary.value)
     ElMessage.error(batchSummary.value)
   } finally {
-    if (!unmounted) batchLoading.value = false
+    if (!isUnmounted()) batchLoading.value = false
   }
 }
 
-onUnmounted(() => { unmounted = true })
 </script>
 
 <style scoped>

@@ -24,6 +24,7 @@ import { useWebhook } from '@/composables/uplink/useWebhook'
 import { protocolDefaultTimeoutMs } from '@/composables/devices/useProtocol'
 import { useRoute } from 'vue-router'
 import { triggerDownload } from '@/utils/exportCsv'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**
  * 运行参数页面状态与操作封装
@@ -70,8 +71,7 @@ export function useConfigActions() {
   const originalToken = ref('')
 
   // ===== 卸载标记（异步回调与提示的静默开关）=====
-  let unmounted = false
-  const isUnmounted = () => unmounted
+  const { isUnmounted } = useUnmountedGuard()
 
   /** 检测未知顶层键，触发一次性 toast 警告（不阻断；与 ts-rs 字段漂移兼容） */
   function warnUnknownTopKeys(source: Record<string, unknown>, origin: string) {
@@ -113,11 +113,7 @@ export function useConfigActions() {
   })
 
   onMounted(() => {
-    unmounted = false
     loadConfig()
-  })
-  onUnmounted(() => {
-    unmounted = true
   })
 
   function resetRawText() {

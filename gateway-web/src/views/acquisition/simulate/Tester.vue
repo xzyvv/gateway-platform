@@ -76,7 +76,7 @@
  * - parts/OperationLogPanel.vue  右侧操作记录（含原始报文 HEX）
  * - parts/BatchWritePanel.vue    批量写入（多点位）
  */
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
@@ -101,6 +101,7 @@ import OperationLogPanel from './parts/OperationLogPanel.vue'
 import BatchWritePanel from './parts/BatchWritePanel.vue'
 import type { LogEntry } from './parts/OperationLogPanel.vue'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const { readOnce } = useReadPointNow()
 const { writeOnce } = usePointWrite()
@@ -125,7 +126,7 @@ const diagLoading = ref(false)
 
 const logs = ref<LogEntry[]>([])
 
-let unmounted = false
+const { isUnmounted } = useUnmountedGuard()
 // Bug 181: 点位请求序号——快速切换设备时丢弃过期响应，避免旧设备的点位覆盖新选择。
 // 请求序号守卫：只接受最新一次请求的结果（旧响应不得覆盖新选择）
 const { next: nextRequest, isCurrent } = useRequestGuard()
@@ -151,7 +152,7 @@ function addLog(type: LogEntry['type'], tag: string, message: string): LogEntry 
 async function attachFrames(entry: LogEntry, startedAtMs: number, bus: string) {
   try {
     const pkts = await getPackets(30)
-    if (unmounted) return
+    if (isUnmounted()) return
     // 起点放宽 250ms 容忍前后端时钟偏差；按总线过滤（抓包缓冲是全局共享的），
     // 时间正序最多取 4 帧——一对请求/响应足够定位问题
     const hit = pkts
@@ -168,14 +169,14 @@ async function loadDevices() {
   devicesLoading.value = true
   try {
     const data = await listDevices()
-    if (unmounted) return
+    if (isUnmounted()) return
     devices.value = data
     // 共享选择可能已失效（设备被删/配置变更）：本页不替用户改选，仅清空避免展示陈旧 id
     if (selectedDevice.value && !data.some((d) => d.id === selectedDevice.value)) selectedDevice.value = ''
   } catch {
     // HTTP 错误由拦截器处理
   } finally {
-    if (!unmounted) devicesLoading.value = false
+    if (!isUnmounted()) devicesLoading.value = false
   }
 }
 
@@ -222,7 +223,7 @@ async function doRead() {
   const startedAtMs = Date.now()
   try {
     const outcome = await readOnce(selectedPoint.value)
-    if (unmounted) return
+    if (isUnmounted()) return
     const latency = outcome.latencyMs
     const pt = selectedPointObj.value
     if (outcome.ok) {
@@ -243,7 +244,7 @@ async function doRead() {
       }
     }
   } finally {
-    if (!unmounted) valueLoading.value = false
+    if (!isUnmounted()) valueLoading.value = false
   }
 }
 
@@ -260,7 +261,7 @@ async function doDiag() {
   diagLoading.value = true
   try {
     const resp = await getProtocolDiag(proto)
-    if (unmounted) return
+    if (isUnmounted()) return
     if (!resp.entries.length) {
       addLog('warning', '协议诊断', `${proto} 没有运行中的采集实例`)
       return
@@ -277,13 +278,13 @@ async function doDiag() {
       ElMessage.warning(`有 ${failed} 个总线未执行诊断，原因见操作记录`)
     }
   } catch (e) {
-    if (!unmounted) {
+    if (!isUnmounted()) {
       const msg = extractErrorMessage(e, '未知错误')
       addLog('danger', '协议诊断', `${proto} 诊断失败: ${msg}`)
       ElMessage.error(`协议诊断失败：${msg}`)
     }
   } finally {
-    if (!unmounted) diagLoading.value = false
+    if (!isUnmounted()) diagLoading.value = false
   }
 }
 
@@ -296,14 +297,14 @@ async function doWrite() {
   const ptName = selectedPointObj.value?.name || selectedPoint.value
   const target = writeValue.value
   if (!(await confirmPointWrite([{ id: selectedPoint.value, value: target }], ptName))) return
-  if (unmounted) return
+  if (isUnmounted()) return
   writeLoading.value = true
   const startedAtMs = Date.now()
   const bus = selectedPointObj.value?.bus || ''
   try {
     // 统一写入口：单点写仍传单元素数组，单/批分发由后端决定
     const outcome = await writeOnce(selectedPoint.value, target)
-    if (unmounted) return
+    if (isUnmounted()) return
     if (!outcome.ok) {
       const msg = withDiagHint(outcome.error)
       // 失败同样附报文：请求帧可能已发出（超时/异常码场景只有请求没有响应）
@@ -317,7 +318,7 @@ async function doWrite() {
     writeValue.value = null
     await doRead()
   } finally {
-    if (!unmounted) writeLoading.value = false
+    if (!isUnmounted()) writeLoading.value = false
   }
 }
 
@@ -369,7 +370,6 @@ function exportLogs() {
 }
 
 onMounted(loadDevices)
-onUnmounted(() => { unmounted = true })
 </script>
 
 <style scoped src="./Tester.css"></style>
