@@ -159,6 +159,7 @@ import { ElMessage } from 'element-plus'
 import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
 import type { WebConfig } from '@/api/types'
 import { changePassword } from '@/api/auth'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 const web = defineModel<WebConfig | null>({ required: true })
 const props = defineProps<{ originalToken: string; tokenStatusText: string }>()
@@ -257,7 +258,7 @@ async function submitPassword() {
     confirmPassword.value = ''
     ElMessage.success('访问密码已更新')
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '修改密码失败')
+    ElMessage.error(extractErrorReason(e, '修改密码失败'))
   } finally {
     savingPwd.value = false
   }

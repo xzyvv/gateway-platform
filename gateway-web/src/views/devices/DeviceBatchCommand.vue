@@ -168,6 +168,7 @@ import { listPoints } from '@/api/points'
 import { useReadPointNow } from '@/composables/data/useReadPointNow'
 import { usePointWrite } from '@/composables/data/usePointWrite'
 import { timeColumn } from '@/utils/commonColumns'
+import { extractErrorMessage } from '@/utils/errorHandler'
 
 export type BatchCmdType = 'read' | 'write'
 
@@ -260,7 +261,7 @@ const { writeBatch } = usePointWrite()
 const canNextOp = computed(() => cmdType.value === 'read' || writeValue.value.trim() !== '')
 
 function errMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
+  return extractErrorMessage(e)
 }
 
 async function load() {

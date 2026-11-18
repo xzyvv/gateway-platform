@@ -76,6 +76,7 @@ import {
   type ArchiveLogLine,
   type LogArchiveItem,
 } from '@/api/logArchive'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 const loading = ref(false)
 const archives = ref<LogArchiveItem[]>([])
@@ -155,7 +156,7 @@ async function view(date: string) {
     logLines.value = r.lines
   } catch (e) {
     // 取样失败时明确告知原因：不能让用户把空表当成「当天确实没有日志」
-    viewError.value = e instanceof Error && e.message ? e.message : '获取日志失败'
+    viewError.value = extractErrorReason(e, '获取日志失败')
   } finally {
     loadingLines.value = false
   }
@@ -166,7 +167,7 @@ async function download(date: string) {
     await downloadArchive(date)
     ElMessage.success(`已下载 ${date} 的日志`)
   } catch (e) {
-    ElMessage.error(e instanceof Error && e.message ? e.message : '下载日志失败')
+    ElMessage.error(extractErrorReason(e, '下载日志失败'))
   }
 }
 
@@ -175,7 +176,7 @@ async function downloadCurrent() {
     await downloadArchive()
     ElMessage.success('已下载当期日志')
   } catch (e) {
-    ElMessage.error(e instanceof Error && e.message ? e.message : '下载日志失败')
+    ElMessage.error(extractErrorReason(e, '下载日志失败'))
   }
 }
 

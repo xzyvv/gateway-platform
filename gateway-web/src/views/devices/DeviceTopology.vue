@@ -45,6 +45,7 @@ import type echarts from '@/utils/echarts-extra'
 import { initChart, disposeChart, cssVar } from '@/utils/echarts-extra'
 import { CHART_PRIMARY, CHART_SUCCESS, CHART_WARNING, CHART_DANGER, CHART_MUTED_TEXT, CHART_LINE } from '@/utils/chartTheme'
 import { getTopology } from '@/api/topology'
+import { extractErrorMessage } from '@/utils/errorHandler'
 
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
@@ -61,7 +62,7 @@ onMounted(async () => {
   try {
     topo = await getTopology()
   } catch (e) {
-    loadError.value = e instanceof Error ? e.message : String(e)
+    loadError.value = extractErrorMessage(e)
     loading.value = false
     return
   }

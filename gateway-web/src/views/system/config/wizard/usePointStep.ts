@@ -16,6 +16,7 @@ import {
 import type { PointConfig } from '@/api/types'
 import { defaultPointConfig } from '@/utils/pointDefaults'
 import type { ManualPointForm } from './types'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 export function usePointStep() {
   /** 已创建设备的点位列表 */
@@ -84,7 +85,7 @@ export function usePointStep() {
       manual.value = { name: '', address: '', dataType: 'i16' }
       await loadPoints(device.id)
     } catch (e) {
-      ElMessage.error(e instanceof Error && e.message ? e.message : '添加点位失败')
+      ElMessage.error(extractErrorReason(e, '添加点位失败'))
     } finally {
       addingPoint.value = false
     }

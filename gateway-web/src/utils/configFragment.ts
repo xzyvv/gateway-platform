@@ -9,6 +9,7 @@
  * （`GatewayConfig::validate_report` 为唯一来源），前端只负责「解析 + 合并 + 统计」。
  */
 import type { GatewayConfig } from '@/api/types'
+import { extractErrorMessage } from './errorHandler'
 
 export const FRAGMENT_SECTIONS = [
   'buses',
@@ -72,7 +73,7 @@ export function parseFragment(text: string): ParseFragmentResult {
   try {
     parsed = JSON.parse(trimmed)
   } catch (e) {
-    return { ok: false, error: `JSON 解析失败：${e instanceof Error ? e.message : String(e)}` }
+    return { ok: false, error: `JSON 解析失败：${extractErrorMessage(e)}` }
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     return { ok: false, error: '片段必须是 JSON 对象，例如 {"points": [ ... ]}' }

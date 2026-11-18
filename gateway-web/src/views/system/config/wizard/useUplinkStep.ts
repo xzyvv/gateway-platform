@@ -10,6 +10,7 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getConfig, postConfig } from '@/api/config'
 import type { UplinkFormModel } from './types'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 export function useUplinkStep() {
   /** 上行转发表单值 */
@@ -60,7 +61,7 @@ export function useUplinkStep() {
       ElMessage.success('上行转发配置已保存')
       return true
     } catch (e) {
-      ElMessage.error(e instanceof Error && e.message ? e.message : '保存上行配置失败')
+      ElMessage.error(extractErrorReason(e, '保存上行配置失败'))
       return false
     }
   }

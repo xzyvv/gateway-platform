@@ -23,6 +23,7 @@ import {
   formatPointCell,
   type PointFieldSpec,
 } from '@/utils/pointFields'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 /** 导出格式：精简 CSV / 完整 CSV / JSON 快照 */
 export type PointsExportFormat = 'csv-basic' | 'csv-full' | 'json'
@@ -85,7 +86,7 @@ export function createPointExport() {
       }
       ElMessage.success(`已导出 ${points.length} 个点位`)
     } catch (e) {
-      ElMessage.error(`导出失败：${e instanceof Error ? e.message : '未知错误'}`)
+      ElMessage.error(`导出失败：${extractErrorReason(e, '未知错误')}`)
     } finally {
       exporting.value = false
     }

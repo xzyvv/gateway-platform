@@ -34,6 +34,28 @@ export function extractErrorMessage(e: unknown, fallback?: string): string {
 }
 
 /**
+ * 从 catch 的 unknown 值里提取错误原因，带「空值兜底」语义。
+ *
+ * 与 [`extractErrorMessage`] 的区别：后者对**字符串**入参原样返回（含空串），
+ * 而本函数把「没有可展示的原因」的所有形态都回落到 `fallback`：
+ * 空串 / null / undefined / 0 / false / NaN，以及 message 为空的 Error。
+ *
+ * 对应现场那批 `e instanceof Error && e.message ? e.message : '新增总线失败'`
+ * 与 `String(e || '未知错误')` 的写法——那些地方真正想要的是「无论如何都给
+ * 用户一句话」，而不是把 `undefined` 字面量、空串或「0」糊到界面上。
+ *
+ * @param e        catch 块中的 unknown 值
+ * @param fallback 没有可用原因时的兜底文案（如 '未知错误'）
+ */
+export function extractErrorReason(e: unknown, fallback: string): string {
+  if (e instanceof Error) return e.message || fallback
+  if (typeof e === 'string') return e || fallback
+  // null / undefined / 0 / false / NaN 都算「没有原因」
+  if (!e) return fallback
+  return String(e)
+}
+
+/**
  * 拼「动作 + 原因」：`<action>：<reason>`。
  *
  * 边界（都有用例钉住）：

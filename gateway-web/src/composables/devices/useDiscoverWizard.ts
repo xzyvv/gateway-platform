@@ -9,6 +9,7 @@ import { scanBus, respondedSlaves } from '@/api/protocolTools/slaveScan'
 import type { SlaveScanResult } from '@/api/protocolTools/types'
 import type { BusConfig, DeviceConfig } from '@/api/types'
 import { runConcurrent } from '@/utils/concurrency'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 interface FoundDevice {
   uid: string
@@ -123,7 +124,7 @@ export function useDiscoverWizard() {
       await loadBuses()
       return true
     } catch (e) {
-      ElMessage.error(`${e instanceof Error && e.message ? e.message : '新增总线失败'}，请到「系统设置 → 运行参数」手动新增`)
+      ElMessage.error(`${extractErrorReason(e, '新增总线失败')}，请到「系统设置 → 运行参数」手动新增`)
       return false
     } finally {
       quickAdding.value = false

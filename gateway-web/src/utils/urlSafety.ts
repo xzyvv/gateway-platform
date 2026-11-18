@@ -30,6 +30,7 @@
  * `invoke('forward_webhook', ...)` 同样会被拦截——不再需要"后续安全审计"跟进。
  */
 
+import { extractErrorMessage } from '@/utils/errorHandler'
 export type UrlSafetyError =
   | { kind: 'invalid-url'; reason: string }
   | { kind: 'scheme-not-allowed'; scheme: string }
@@ -143,7 +144,7 @@ export function validateOutboundUrl(
   } catch (e) {
     return {
       ok: false,
-      error: { kind: 'invalid-url', reason: e instanceof Error ? e.message : String(e) },
+      error: { kind: 'invalid-url', reason: extractErrorMessage(e) },
     }
   }
 

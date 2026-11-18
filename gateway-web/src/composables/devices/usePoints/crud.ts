@@ -2,7 +2,7 @@ import { h } from 'vue'
 import { ElMessage, ElNotification, ElButton } from 'element-plus'
 import { confirmDelete, confirmAction } from '@/utils/confirm'
 import { deletePoint, restorePoint, updatePoint } from '@/api/points'
-import { extractErrorMessage, failureMessage } from '@/utils/errorHandler'
+import { extractErrorMessage, extractErrorReason, failureMessage } from '@/utils/errorHandler'
 import { runConcurrent } from '@/utils/concurrency'
 import type { PointConfig } from '@/api/types'
 import { clampInterval } from './validation'
@@ -121,7 +121,7 @@ export function createPointCrud(state: PointsState, loadPoints: () => Promise<vo
           deleted++
           deletedIds.push(p.id)
         } catch (e) {
-          failed.push({ id: p.id, reason: e instanceof Error ? e.message : String(e || '未知错误') })
+          failed.push({ id: p.id, reason: extractErrorReason(e, '未知错误') })
         }
       },
       { concurrency: 8, shouldStop: () => state.isUnmounted() },

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   composeFailure,
   extractErrorMessage,
+  extractErrorReason,
   failureMessage,
   isUserNotified,
   markUserNotified,
@@ -93,5 +94,29 @@ describe('extractErrorMessage', () => {
     expect(extractErrorMessage(new Error('x'))).toBe('x')
     expect(extractErrorMessage('y')).toBe('y')
     expect(extractErrorMessage(null, '兜底')).toBe('兜底')
+  })
+})
+
+describe('extractErrorReason', () => {
+  it('Error 取 message；message 为空则回落兜底', () => {
+    expect(extractErrorReason(new Error('磁盘已满'), '未知错误')).toBe('磁盘已满')
+    expect(extractErrorReason(new Error(''), '未知错误')).toBe('未知错误')
+  })
+
+  it('字符串原样返回；空串回落兜底', () => {
+    expect(extractErrorReason('连接超时', '未知错误')).toBe('连接超时')
+    expect(extractErrorReason('', '未知错误')).toBe('未知错误')
+  })
+
+  it('null / undefined / 0 / false / NaN 都算「没有原因」', () => {
+    expect(extractErrorReason(null, '未知错误')).toBe('未知错误')
+    expect(extractErrorReason(undefined, '未知错误')).toBe('未知错误')
+    expect(extractErrorReason(0, '未知错误')).toBe('未知错误')
+    expect(extractErrorReason(false, '未知错误')).toBe('未知错误')
+    expect(extractErrorReason(Number.NaN, '未知错误')).toBe('未知错误')
+  })
+
+  it('非空对象转字符串，不吞掉信息', () => {
+    expect(extractErrorReason({ code: 500 }, '未知错误')).toBe('[object Object]')
   })
 })

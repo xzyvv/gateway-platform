@@ -110,6 +110,7 @@ import ImportFileUpload from './ImportFileUpload.vue'
 import ImportValidatePreview from './ImportValidatePreview.vue'
 import ImportResultPanel from './ImportResultPanel.vue'
 import type { HistoryRow, OutcomeRow } from './types'
+import { extractErrorMessage } from '@/utils/errorHandler'
 
 const { showToast } = useErrorDisplay()
 
@@ -219,7 +220,7 @@ async function doImport() {
         rows.push({ line: r.line, name: r.name, id: r.id, ok: true })
         success += 1
       } catch (e) {
-        rows.push({ line: r.line, name: r.name, id: r.id, ok: false, error: e instanceof Error ? e.message : String(e) })
+        rows.push({ line: r.line, name: r.name, id: r.id, ok: false, error: extractErrorMessage(e) })
       }
     }
     outcomes.value = rows

@@ -50,6 +50,7 @@ import type { PointTrashEntry } from '@/api/points'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
 import { formatDateTime } from '@/utils/datetime'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 const items = ref<PointTrashEntry[]>([])
 const loading = ref(false)
@@ -61,8 +62,7 @@ function backendMessage(e: unknown, fallback: string): string {
   const data = (e as { response?: { data?: { error?: unknown; message?: unknown } } })?.response?.data
   const msg = data?.error ?? data?.message
   if (typeof msg === 'string' && msg.trim()) return msg
-  if (e instanceof Error && e.message) return e.message
-  return fallback
+  return extractErrorReason(e, fallback)
 }
 
 async function load() {

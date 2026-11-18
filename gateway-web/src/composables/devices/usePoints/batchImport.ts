@@ -6,6 +6,7 @@ import { mapPointToTarget } from '@/utils/deviceCopy'
 import { clampInterval } from './validation'
 import { runConcurrent } from '@/utils/concurrency'
 import type { BatchImportResult, PointFailure, PointsState } from './types'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 /**
  * 批量导入点位
@@ -67,7 +68,7 @@ export function createPointBatchImport(state: PointsState, loadPoints: () => Pro
             await createPoint(target, p)
             created++
           } catch (e) {
-            failed.push({ id: p.id, reason: e instanceof Error ? e.message : String(e || '未知错误') })
+            failed.push({ id: p.id, reason: extractErrorReason(e, '未知错误') })
           } finally {
             importProgress.completed++
           }

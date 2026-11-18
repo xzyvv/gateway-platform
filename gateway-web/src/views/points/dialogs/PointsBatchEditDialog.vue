@@ -149,6 +149,7 @@ import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { BYTE_ORDERS, DATA_TYPES } from '@/composables/devices/decodeParams'
 import { runConcurrent } from '@/utils/concurrency'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 interface BatchEditFlags {
   name: boolean
@@ -358,7 +359,7 @@ async function applyUpdatesOneByOne(updates: PointConfig[]): Promise<BatchEditRe
         await updatePoint(p.id, p)
         succeeded++
       } catch (e) {
-        failed.push({ id: p.id, name: p.name, reason: e instanceof Error ? e.message : String(e || '未知错误') })
+        failed.push({ id: p.id, name: p.name, reason: extractErrorReason(e, '未知错误') })
       }
     },
     { concurrency: CONCURRENCY, shouldStop: () => isUnmounted() },

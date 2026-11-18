@@ -19,15 +19,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { useDialogVisible } from '@/composables/core/useDialogVisible'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit('update:modelValue', v),
-})
+const visible = useDialogVisible(props, emit)
 
 /**
  * 仅收录代码中真实存在的键位：

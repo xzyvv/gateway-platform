@@ -19,6 +19,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
 import { logWarn, logError } from '../utils/logger'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 const app = createApp(App)
 
@@ -60,7 +61,7 @@ let _lastUnhandledMsg = ''
 window.addEventListener('unhandledrejection', (event) => {
   const reason = event.reason
   logError('main', reason, '[未处理的 Promise 拒绝]')
-  const msg = reason instanceof Error ? reason.message : String(reason || 'unknown')
+  const msg = extractErrorReason(reason, 'unknown')
   const now = Date.now()
   // 同消息 3 秒内只弹一次
   if (msg === _lastUnhandledMsg && now - _lastUnhandledAt < 3000) return

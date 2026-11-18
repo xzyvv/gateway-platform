@@ -27,6 +27,7 @@ import {
   type CheckItem,
   type SelfCheckResult,
 } from './selfCheckEvals'
+import { extractErrorMessage } from '@/utils/errorHandler'
 
 export {
   LEVEL_LABEL,
@@ -60,7 +61,7 @@ function failed(title: string, id: string, reason: string): CheckItem {
 
 function rejectionReason(result: PromiseSettledResult<unknown>, fallback: string): string {
   if (result.status !== 'rejected') return fallback
-  return result.reason instanceof Error ? result.reason.message : String(result.reason)
+  return extractErrorMessage(result.reason)
 }
 
 /* ============================== 采集与汇总 ============================== */

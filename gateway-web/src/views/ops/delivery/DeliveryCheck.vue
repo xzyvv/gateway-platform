@@ -154,6 +154,7 @@ import {
   type CheckItem,
   type SelfCheckResult,
 } from './selfCheck'
+import { extractErrorMessage } from '@/utils/errorHandler'
 
 interface TemplateDef {
   name: string
@@ -237,7 +238,7 @@ async function handleSelfCheck() {
     else if (level === 'warn') ElMessage.warning('自检有提醒项，请按说明确认后再交付')
     else ElMessage.error(`自检未通过：${items.filter((i) => i.level === 'fail').map((i) => i.title).join('、')}`)
   } catch (e) {
-    ElMessage.error(`自检执行失败：${e instanceof Error ? e.message : String(e)}`)
+    ElMessage.error(`自检执行失败：${extractErrorMessage(e)}`)
   } finally {
     checking.value = false
   }
@@ -262,7 +263,7 @@ async function downloadTemplate(tpl: TemplateDef) {
     )
     ElMessage.success('模板已下载')
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    ElMessage.error(extractErrorMessage(e))
   }
 }
 
@@ -280,7 +281,7 @@ async function applyTemplate(tpl: TemplateDef) {
     refresh(true)
     ElMessage.success('模板已应用，请点击「一键自检」确认采集与链路状态')
   } catch (e) {
-    ElMessage.error(`应用模板失败：${e instanceof Error ? e.message : String(e)}`)
+    ElMessage.error(`应用模板失败：${extractErrorMessage(e)}`)
   } finally {
     applying.value = ''
   }

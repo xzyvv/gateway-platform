@@ -20,6 +20,7 @@
  */
 
 import { logWarn } from './logger'
+import { extractErrorMessage } from './errorHandler'
 
 const DB_NAME = 'gateway_secure_store'
 const STORE_NAME = 'keys'
@@ -133,7 +134,7 @@ async function getOrCreateKey(): Promise<CryptoKey | null> {
     }
   } catch (e) {
     logWarn('secureStorage', 'idb read failed, falling back to plaintext:', e)
-    recordDegrade(`IndexedDB read failed: ${e instanceof Error ? e.message : String(e)}`)
+    recordDegrade(`IndexedDB read failed: ${extractErrorMessage(e)}`)
     return null
   }
 
@@ -149,7 +150,7 @@ async function getOrCreateKey(): Promise<CryptoKey | null> {
     return key
   } catch (e) {
     logWarn('secureStorage', 'key generation failed, falling back to plaintext:', e)
-    recordDegrade(`AES-GCM key generation failed: ${e instanceof Error ? e.message : String(e)}`)
+    recordDegrade(`AES-GCM key generation failed: ${extractErrorMessage(e)}`)
     return null
   }
 }
@@ -196,7 +197,7 @@ export async function setToken(token: string): Promise<void> {
     localStorage.setItem(LEGACY_TOKEN_KEY, ENC_PREFIX + JSON.stringify(payload))
   } catch (e) {
     logWarn('secureStorage', 'encrypt failed, falling back to plaintext:', e)
-    recordDegrade(`encrypt failed: ${e instanceof Error ? e.message : String(e)}`)
+    recordDegrade(`encrypt failed: ${extractErrorMessage(e)}`)
     localStorage.setItem(LEGACY_TOKEN_KEY, token)
   }
 }

@@ -8,6 +8,7 @@ import { closeSocketQuietly, detachSocketHandlers } from './socket'
 import { publishErrorToStore, publishStatusToStore } from './state'
 import { SubscriberRegistry } from './subscribers'
 import type { BrowserNetSnapshot, ConnectionState } from './types'
+import { extractErrorReason } from '../errorHandler'
 
 /**
  * 网关 WebSocket 客户端
@@ -141,7 +142,7 @@ export class GatewayWebSocket {
     try {
       await this.connectInternal()
     } catch (e) {
-      const detail = e instanceof Error ? e.message : 'WebSocket 连接失败'
+      const detail = extractErrorReason(e, 'WebSocket 连接失败')
       publishErrorToStore(detail)
       if (this.manualClose) {
         this.setStatus('disconnected')

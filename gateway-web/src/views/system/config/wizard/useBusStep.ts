@@ -15,6 +15,7 @@ import { getConfig, postConfig } from '@/api/config'
 import { protocolDefaultTimeoutMs } from '@/composables/devices/useProtocol'
 import type { BusConfig } from '@/api/types'
 import type { NewBusForm } from './types'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 export function useBusStep() {
   const { showToast } = useErrorDisplay()
@@ -85,7 +86,7 @@ export function useBusStep() {
       await loadBuses()
       ElMessage.success(`已新增总线 ${port}`)
     } catch (e) {
-      ElMessage.error(e instanceof Error && e.message ? e.message : '新增总线失败')
+      ElMessage.error(extractErrorReason(e, '新增总线失败'))
     } finally {
       addingBus.value = false
     }

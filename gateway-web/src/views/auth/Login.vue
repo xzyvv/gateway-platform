@@ -161,6 +161,7 @@ import { isTauri, getGatewayBaseUrl, loadGatewayConfig, saveGatewayConfig } from
 import { useGatewayDiscovery } from '@/composables/system/useGatewayDiscovery'
 import { scopedSet } from '@/utils/gatewayStorage'
 import { statusTagType, type TagType } from '@/utils/statusType'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -293,7 +294,7 @@ async function handleLogin() {
   } catch (e) {
     // W6: 在开发/调试场景展示真实错误（含网络错误、401、403、500 等），
     // 生产场景运维可借此快速定位（凭据错 vs 网络不通 vs 服务异常）。
-    const detail = (e instanceof Error && e.message) ? e.message : String(e ?? '')
+    const detail = extractErrorReason(e, '')
     ElMessage.error(detail ? `登录失败：${detail}` : '用户名或密码错误')
   } finally {
     loading.value = false

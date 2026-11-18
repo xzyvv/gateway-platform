@@ -79,6 +79,7 @@ import { actionColumn } from '@/utils/commonColumns'
 import { getConfig, postConfig } from '@/api/config'
 import { getUplinkConfig, getNorthStatus, testUplink } from '@/api/uplink'
 import { testWebhook } from '@/api/webhook'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 type ForwardType = 'mqtt' | 'http'
 
@@ -317,7 +318,7 @@ async function testConn(c: Channel) {
     testResult.value = {
       ok: false,
       latency: null,
-      message: e instanceof Error && e.message ? e.message : '连接测试请求失败',
+      message: extractErrorReason(e, '连接测试请求失败'),
     }
   } finally {
     testing.value = false

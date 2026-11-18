@@ -5,6 +5,7 @@ import { formatTimeOfDay } from '@/utils/datetime'
 import { logError } from '@/utils/logger'
 import { compactAxis } from '@/utils/realtimeFormat'
 import type { DataPoint } from '@/api/types'
+import { extractErrorMessage } from '@/utils/errorHandler'
 
 /** 每个点位保留的历史点位数（图表窗口 60 点） */
 const HISTORY_CAP = 60
@@ -188,7 +189,7 @@ export function useRealtimeChart(options: ChartOptions) {
       chartError.value = null
     } catch (e) {
       // 渲染失败必须可见：否则画布永久空白，用户会误判成「采集没有数据」
-      chartError.value = e instanceof Error ? e.message : String(e)
+      chartError.value = extractErrorMessage(e)
       logError('realtime:chart', e, '图表渲染失败')
     }
   }

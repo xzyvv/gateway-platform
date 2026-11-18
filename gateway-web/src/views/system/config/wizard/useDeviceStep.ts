@@ -12,6 +12,7 @@ import { createDevice } from '@/api/devices'
 import { listTemplates, saveTemplate, type DeviceTemplate } from '@/api/templates'
 import type { DeviceConfig } from '@/api/types'
 import type { DeviceFormModel, NewTemplateForm } from './types'
+import { extractErrorReason } from '@/utils/errorHandler'
 
 export function useDeviceStep() {
   /** 网关模板库 */
@@ -78,7 +79,7 @@ export function useDeviceStep() {
       ElMessage.success(`已创建设备 ${name}`)
       return true
     } catch (e) {
-      ElMessage.error(e instanceof Error && e.message ? e.message : '创建设备失败')
+      ElMessage.error(extractErrorReason(e, '创建设备失败'))
       return false
     }
   }
@@ -116,7 +117,7 @@ export function useDeviceStep() {
       showNewTemplate.value = false
       ElMessage.success(`已创建模板「${name}」并自动选用，点位可到「点位管理」补充`)
     } catch (e) {
-      ElMessage.error(e instanceof Error && e.message ? e.message : '创建模板失败')
+      ElMessage.error(extractErrorReason(e, '创建模板失败'))
     } finally {
       savingTemplate.value = false
     }
