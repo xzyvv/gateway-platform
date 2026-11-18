@@ -1,0 +1,243 @@
+.dw {
+  padding: 16px;
+}
+
+.cap {
+  margin: 8px 0 12px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.section-card {
+  margin-bottom: 16px;
+}
+
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.filter-row .lbl {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.symptom-select {
+  width: 340px;
+  max-width: 100%;
+}
+
+.flow-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flow-head .progress {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.intro {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--border-base);
+}
+
+.step:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.step.done .title > span:first-child {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.tick {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.idx {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: rgba(var(--color-primary-rgb), 0.1);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.detail {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.probe {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-small);
+  background: rgba(var(--color-primary-rgb), 0.06);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.probe.success {
+  border-color: var(--color-success);
+  background: var(--color-success-bg);
+  color: var(--text-success);
+}
+
+.probe.warning {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--text-warning);
+}
+
+.probe.danger {
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
+  color: var(--text-danger);
+}
+
+.problems {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.problems li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+}
+
+/* 汇总卡：结论色调跟随 verdictTone，一眼区分「处理完 / 还有事」 */
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border-base);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-small);
+  background: var(--bg-fill);
+}
+
+.summary-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary-head .probe-count {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.summary .verdict {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.summary.danger {
+  border-left-color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+.summary.danger .verdict {
+  color: var(--text-danger);
+}
+
+.summary.warning {
+  border-left-color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.summary.warning .verdict {
+  color: var(--text-warning);
+}
+
+.summary.success {
+  border-left-color: var(--color-success);
+  background: var(--color-success-bg);
+}
+
+.summary.success .verdict {
+  color: var(--text-success);
+}
+
+.summary .next {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary .next .lbl {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
