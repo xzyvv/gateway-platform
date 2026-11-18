@@ -159,6 +159,8 @@ import PointsGenerateDialog from './dialogs/PointsGenerateDialog.vue'
 import { pointFormContextKey } from './pointFormContext'
 import { createPointColumns } from './parts/pointColumns'
 import type { PointRow } from '@/composables/devices/usePoints'
+import { flashHighlightRow } from '@/utils/tableHighlight'
+import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const router = useRouter()
 const route = useRoute()
@@ -292,6 +294,14 @@ function pointRowClass({ row }: { row: PointRow }): string {
 }
 
 /**
+ * 滚动到高亮行并闪烁提示（与设备清单共用同一实现）。
+ *
+ * 定时器在组件卸载时自动作废——不会往已销毁的 DOM 上写 class。
+ */
+const { isUnmounted } = useUnmountedGuard()
+const scrollToHighlightedRow = flashHighlightRow('.points', () => isUnmounted())
+
+/**
  * 跳转到目标点位所在页并滚动到视口中央。
  *
  * 点位是分页的，目标点可能不在当前页：先在已筛选全量里找到索引，
@@ -309,14 +319,7 @@ function navigateToHighlightedPoint() {
   }
   // 翻页后表格重新渲染，等下一帧再滚动
   nextTick(() => {
-    setTimeout(() => {
-      const row = document.querySelector('.points .el-table__row.is-highlighted') as HTMLElement | null
-      if (row) {
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        row.classList.add('is-highlighted-flash')
-        setTimeout(() => row.classList.remove('is-highlighted-flash'), 3000)
-      }
-    }, 100)
+    scrollToHighlightedRow()
   })
 }
 

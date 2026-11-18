@@ -181,3 +181,17 @@ describe('formFieldError', () => {
     setFormFieldErrors(form, { start: 'err' })
   })
 })
+
+describe('formRef 未挂载时的空值防护', () => {
+  it('setFormFieldErrors 传 undefined 不抛错', () => {
+    // 调用方普遍写 `formRef.value!`，非空断言骗过编译器，运行时仍会抛
+    // "Cannot read properties of undefined"。表单未挂载时必须安全跳过。
+    expect(() => setFormFieldErrors(undefined, { start: 'err' })).not.toThrow()
+    expect(() => setFormFieldErrors(null, { start: 'err' })).not.toThrow()
+  })
+
+  it('clearFormFieldErrors 传 undefined 不抛错', () => {
+    expect(() => clearFormFieldErrors(undefined, ['start'])).not.toThrow()
+    expect(() => clearFormFieldErrors(null)).not.toThrow()
+  })
+})

@@ -54,7 +54,7 @@
         <div v-if="form.users.length === 0" class="form-hint">
           未配置用户：须开启「允许匿名/明文」，否则服务没有任何可用的登录方式（保存会被拦截）。
         </div>
-        <div v-for="(u, idx) in form.users" :key="idx" class="user-row">
+        <div v-for="(u, idx) in form.users" :key="userKey(u)" class="user-row">
           <el-input v-model="u.username" placeholder="用户名" />
           <el-input v-model="u.password" type="password" show-password placeholder="密码" />
           <el-button text type="danger" @click="removeUser(idx)">删除</el-button>
@@ -83,6 +83,7 @@
 import { computed, ref } from 'vue'
 import { Share } from '@element-plus/icons-vue'
 import type { OpcuaConfig } from '@/api/types'
+import { createRowKey } from '@/utils/rowKey'
 
 const opcua = defineModel<OpcuaConfig | null>({ required: true })
 /** 表单渲染只在 opcua 非空时发生；此视图仅用于让模板拿到非空类型 */
@@ -130,6 +131,9 @@ const securitySummary = computed(() => {
   const trust = c.trust_client_certs ? '自动信任客户端' : '仅信任已登记客户端'
   return `${cert} · ${trust}`
 })
+
+/** 用户行的稳定 key：按对象引用分配，不用数组下标（行可删除，下标会错位） */
+const userKey = createRowKey()
 
 function addUser() {
   opcua.value?.users.push({ username: '', password: '' })

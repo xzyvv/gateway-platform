@@ -15,10 +15,10 @@
  *
  * 用法：
  *   const formRef = ref<FormInstance>()
- *   // 校验失败时：
- *   setFormFieldErrors(formRef!, { start: '不能大于结束地址', end: '不能小于起始地址' })
+ *   // 校验失败时（form 未挂载时会被安全跳过，不必写非空断言）：
+ *   setFormFieldErrors(formRef.value, { start: '不能大于结束地址', end: '不能小于起始地址' })
  *   // 校验通过 / 提交前：
- *   clearFormFieldErrors(formRef!, ['start', 'end'])
+ *   clearFormFieldErrors(formRef.value, ['start', 'end'])
  */
 import { nextTick } from 'vue'
 import type { FormInstance } from 'element-plus'
@@ -39,7 +39,11 @@ export type FieldErrors = Record<string, string>
  * @param formRef el-form 实例（模板里 `ref="formRef"`）
  * @param errors 字段 prop → 错误消息的映射；空字符串视为清除该字段错误
  */
-export function setFormFieldErrors(formRef: FormInstance, errors: FieldErrors): void {
+export function setFormFieldErrors(formRef: FormInstance | null | undefined, errors: FieldErrors): void {
+  // form 尚未挂载（formRef.value 还是 undefined）时直接跳过：
+  // 调用方普遍写 `formRef.value!`，非空断言只是骗过编译器，运行时仍会抛
+  // "Cannot read properties of undefined"。此时表单还没渲染，无从高亮。
+  if (!formRef) return
   const getField = (formRef as unknown as { getField?: (prop: string) => FormItemContext | undefined })
     .getField
   if (typeof getField !== 'function') return
@@ -65,7 +69,8 @@ export function setFormFieldErrors(formRef: FormInstance, errors: FieldErrors): 
  * aria-invalid / aria-describedby；残留属性会在下次 setFormFieldErrors 覆盖或页面
  * 切换时复位。需要彻底清理的场景请带 props 调用（本项目用法均带 props）。
  */
-export function clearFormFieldErrors(formRef: FormInstance, props?: string[]): void {
+export function clearFormFieldErrors(formRef: FormInstance | null | undefined, props?: string[]): void {
+  if (!formRef) return
   if (props) {
     formRef.clearValidate(props)
     // EP 的 clearValidate 只清校验状态，不管理 ARIA——逐字段摘掉关联属性

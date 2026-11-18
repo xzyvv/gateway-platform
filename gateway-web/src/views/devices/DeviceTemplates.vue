@@ -37,7 +37,7 @@
         </el-form-item>
         <el-form-item label="点位列表">
           <div class="point-list">
-            <div v-for="(p, i) in form.points" :key="i" class="point-row">
+            <div v-for="(p, i) in form.points" :key="p._uid" class="point-row">
               <el-input v-model="p.name" placeholder="名称" style="width: 120px" />
               <el-input v-model="p.address" placeholder="0 基偏移" style="width: 96px" />
               <!-- 功能码决定读哪个区（保持/输入/线圈/离散），也决定列表展示地址的区段 -->
@@ -97,7 +97,18 @@ interface FormPoint extends TemplatePoint {
   data_type: string
   ct_ratio: number | null
   pt_ratio: number | null
+  /**
+   * 表单内唯一标识，仅用于 Vue 的 v-for key。
+   *
+   * 不能用 index 当 key：点位行可被删除，删中间一行时 index 会整体前移，
+   * Vue 复用了错误的 DOM，输入框里已填的值会错位到隔壁行。
+   * 该字段不提交后端（保存时只挑业务字段）。
+   */
+  _uid: number
 }
+
+/** 表单内 uid 计数器（只增不减，删除行不影响已有 uid） */
+let formPointUid = 0
 
 /** Modbus 功能码：区段决定读请求类型，也决定列表展示地址的首位 */
 const FUNCTION_CODES = [
@@ -126,6 +137,7 @@ function emptyPoint(): FormPoint {
     unit: '',
     ct_ratio: null,
     pt_ratio: null,
+    _uid: ++formPointUid,
   }
 }
 
@@ -199,6 +211,8 @@ function openEdit(t: DeviceTemplate) {
   // 否则「编辑模板再保存」会把这些字段整体抹掉，等于静默破坏模板
   form.points = (Array.isArray(t.points) ? t.points : []).map((p) => ({
     ...p,
+    // 每行补一个新的表单内 key（后端数据没有 _uid）
+    _uid: ++formPointUid,
     name: String(p.name ?? ''),
     address: String(p.default_address ?? p.address ?? ''),
     function_code: Number(p.function_code ?? 3),
@@ -239,10 +253,13 @@ async function save() {
       default_interval: form.defaultInterval,
       points: form.points.map((p) => {
         const addr = p.address.trim() === '' ? undefined : Number(p.address)
+        // _uid 只是表单内的 v-for key，不属于后端契约，提交前摘掉
+        const { _uid: _uidForKey, ...business } = p
+        void _uidForKey
         return {
           // 展开保留表单未编辑的字段（unit/scale/offset/register_count/function_code…），
           // 否则编辑模板再保存会把它们整体抹掉
-          ...p,
+          ...business,
           name: p.name.trim(),
           address: p.address,
           default_address: addr,

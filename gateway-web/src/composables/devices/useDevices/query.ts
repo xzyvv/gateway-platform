@@ -9,6 +9,7 @@ import { listDevices } from '@/api/devices'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import type { DeviceConfig } from '@/api/types'
 import type { DeviceState } from './types'
+import { flashHighlightRow } from '@/utils/tableHighlight'
 
 /**
  * 设备列表查询
@@ -25,16 +26,7 @@ export function createDeviceQuery(state: DeviceState) {
   }
 
   /** 滚动到高亮行并闪烁提示（列表渲染完再滚，否则目标行还不存在） */
-  function scrollToHighlightedRow() {
-    setTimeout(() => {
-      const row = document.querySelector('.device-table .el-table__row.is-highlighted') as HTMLElement | null
-      if (row) {
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        row.classList.add('is-highlighted-flash')
-        setTimeout(() => row.classList.remove('is-highlighted-flash'), 3000)
-      }
-    }, 100)
-  }
+  const scrollToHighlightedRow = flashHighlightRow('.device-table', () => state.isUnmounted())
 
   async function loadDevices() {
     state.loading.value = true

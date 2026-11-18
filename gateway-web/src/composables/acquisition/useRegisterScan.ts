@@ -169,14 +169,14 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
     if (!scanSupported.value) { ElMessage.warning('当前总线协议不支持寄存器扫描'); return }
     // ROI: 跨字段校验同时高亮涉及的字段（原实现只弹 toast）
     if (endAddr.value < startAddr.value) {
-      setFormFieldErrors(formRef.value!, {
+      setFormFieldErrors(formRef.value, {
         startAddr: '不能大于结束地址',
         endAddr: '不能小于起始地址',
       })
       ElMessage.warning('结束地址必须大于等于起始地址')
       return
     }
-    clearFormFieldErrors(formRef.value!, ['startAddr', 'endAddr'])
+    clearFormFieldErrors(formRef.value, ['startAddr', 'endAddr'])
     scanning.value = true
     scanError.value = ''
     // Bug 178: 重复点击「开始扫描」前先停掉上一轮轮询（usePolling.stop 幂等）
