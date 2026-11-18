@@ -15,7 +15,6 @@ const LINE_BUDGET_EXEMPT = [
   // 自动生成，勿手改（vite alias 重定向 @element-plus/icons-vue 的产物）
   'src/utils/ep-icons-compact.ts',
   // ── 存量超限（债务清单：只许减少，不许新增）──
-  'src/utils/echarts.ts',
   'src/views/acquisition/console/DebugWizard.vue',
   'src/views/devices/DeviceList.vue',
   'src/views/ops/delivery/selfCheck.ts',
