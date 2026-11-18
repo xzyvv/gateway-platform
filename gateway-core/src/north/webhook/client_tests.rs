@@ -196,6 +196,9 @@ async fn permanent_4xx_moves_pending_into_dead_letter() {
 #[tokio::test]
 async fn retriable_5xx_exhausts_attempts_then_dead_letters() {
     let (url, _status, hits) = spawn_stub(503).await;
+    // r15-WH2：new_client 把 max_retries 设为 3（旧实现硬编码 8），
+    // 这里断言 3 才能证明配置真正生效。
+    let max_retries = 3u32;
     let (client, metrics, _dir) = new_client(&url, 0);
     seed_pending(&client, b"payload");
 
@@ -228,12 +231,12 @@ async fn retriable_5xx_exhausts_attempts_then_dead_letters() {
         "重试用尽与 4xx 必须能区分，运维处置方式不同"
     );
     assert_eq!(
-        dead[0].attempt_count, MAX_WEBHOOK_ATTEMPTS as i32,
+        dead[0].attempt_count, max_retries as i32,
         "死信应记录实际尝试次数，便于排查是「端点一直挂着」还是「刚失败一次」"
     );
     assert_eq!(
         hits.load(Ordering::SeqCst),
-        MAX_WEBHOOK_ATTEMPTS as usize,
+        max_retries as usize,
         "实际请求次数应等于尝试上限"
     );
     assert_eq!(client.outbox.lock().pending_count(Some("http")).unwrap(), 0);

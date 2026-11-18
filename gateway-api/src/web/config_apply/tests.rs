@@ -394,3 +394,63 @@ fn active_points_include_only_enabled_virtual_points() {
     assert!(!active.writable_ids.contains("p_r"));
     assert!(!active.writable_ids.contains("v_on"));
 }
+
+/// `validate_all` 看不到模板库，手工点位与 devices 展开出的点位可能撞名。
+/// 队列去重索引不含 device_id，撞名会在同批次互相覆盖 → 必须在落盘前拒绝。
+#[test]
+fn expanded_point_ids_must_be_unique_across_sources() {
+    let manual = PointConfig {
+        id: "device_pt".into(),
+        ..Default::default()
+    };
+    let from_template = PointConfig {
+        id: "device_pt".into(),
+        ..Default::default()
+    };
+    // ApiError 未 derive Debug，不能用 expect_err（其边界要求 E: Debug）
+    match ensure_unique_expanded_point_ids(&[manual, from_template]) {
+        Err(err) => assert!(
+            err.message.contains("重复"),
+            "错误应说明重复原因: {}",
+            err.message
+        ),
+        Ok(()) => panic!("手工点位与模板展开点位撞名必须拒绝"),
+    }
+
+    let distinct = vec![
+        PointConfig {
+            id: "manual_pt".into(),
+            ..Default::default()
+        },
+        PointConfig {
+            id: "template_pt".into(),
+            ..Default::default()
+        },
+    ];
+    assert!(
+        ensure_unique_expanded_point_ids(&distinct).is_ok(),
+        "不同 id 应通过"
+    );
+}
+
+/// 自愈 / 看门狗重启必须走跳过配额的入口：license 失效时恰恰最需要重建运行态，
+/// 而它只是重新应用磁盘上已有的配置，不引入新的点位规模。
+///
+/// 用文本契约而非构造完整 AppState：本模块其余测试都是纯函数级，而这条约束的
+/// 失效方式是「调用点被改回普通入口」，一次断言即可守住注释里的豁免承诺。
+#[test]
+fn self_heal_reload_uses_quota_exempt_entry() {
+    let heal = include_str!("../heal.rs");
+    assert!(
+        heal.contains("config_apply::persist_then_apply_skip_quota(state, &old, &new)"),
+        "自愈重载必须调用 persist_then_apply_skip_quota，否则 license 降级后无法恢复采集"
+    );
+
+    let start = heal
+        .find("pub(crate) async fn reload_services")
+        .expect("reload_services 必须存在");
+    assert!(
+        !heal[start..].contains("persist_then_apply(state, &old, &new)"),
+        "自愈重载不得回到受配额校验的普通入口"
+    );
+}

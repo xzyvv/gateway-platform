@@ -285,6 +285,10 @@ pub struct HealPolicy {
     /// 说明上次恢复未奏效（如配置重载无法真正重启心跳僵死的任务循环），此时计入
     /// `fail_streak_after_action`。真正恢复时随 [`HealPolicy::update_streaks`] 清零。
     awaiting_resolution: HashSet<String>,
+    /// target -> 连续正常快照帧数。与 `bad_streak` 的进入防抖对称：
+    /// 只有连续 `debounce_k` 帧正常才认定「真正恢复」并清除熔断，
+    /// 单帧抖动不再足以解除已熔断的 target（r40-HEAL3）。
+    good_streak: HashMap<String, u32>,
 }
 
 impl HealPolicy {
@@ -297,6 +301,7 @@ impl HealPolicy {
             fused: HashSet::new(),
             fail_streak_after_action: HashMap::new(),
             awaiting_resolution: HashSet::new(),
+            good_streak: HashMap::new(),
         }
     }
 
@@ -376,7 +381,13 @@ impl HealPolicy {
         self.fused.contains(target)
     }
 
-    /// 依据快照更新各 target 的连续异常计数；已恢复的 target 清零并解除熔断。
+    /// 依据快照更新各 target 的连续异常计数；**连续** `debounce_k` 帧正常才
+    /// 认定真正恢复并清除熔断（r40-HEAL3）。
+    ///
+    /// 原实现只要单帧快照里 target 消失就立刻 `fused.remove` —— 心跳抖动、
+    /// 采集线程一次调度延迟都会让已熔断的 target 瞬间"恢复"，下一帧异常
+    /// 又重新动作，形成「熔断—解除—重载—再熔断」循环，熔断形同虚设。
+    /// 现在与异常进入的 `bad_streak` 对称，恢复也要求同样的确认帧数。
     fn update_streaks(&mut self, snap: &HealthSnapshot) {
         let mut present: HashSet<String> = HashSet::new();
         for name in &snap.stale_loops {
@@ -391,18 +402,50 @@ impl HealPolicy {
         present.extend(bad_serial_buses(snap));
         for t in &present {
             *self.bad_streak.entry(t.clone()).or_insert(0) += 1;
+            // 异常帧立刻打断恢复确认，避免"好-坏-好"两帧拼出连续恢复。
+            self.good_streak.remove(t);
         }
-        let recovered: Vec<String> = self
+
+        // bad_streak 保持原语义：单帧正常立即清零。若把它也纳入"连续确认"，
+        // 「坏-好-坏」会把旧计数带回来，瞬态抖动反而触发动作（破坏
+        // transient_blip_does_not_trigger 的契约）。
+        let stale_bad: Vec<String> = self
             .bad_streak
             .keys()
             .filter(|k| !present.contains(*k))
             .cloned()
             .collect();
+        for k in stale_bad {
+            self.bad_streak.remove(&k);
+        }
+
+        // 只有熔断相关状态要求连续 debounce_k 帧正常才清除；
+        // 正常且从未异常的 target 无需计数。
+        let known: HashSet<String> = self
+            .fused
+            .iter()
+            .chain(self.fail_streak_after_action.keys())
+            .chain(self.awaiting_resolution.iter())
+            .cloned()
+            .collect();
+        let confirm_frames = self.settings.debounce_k.max(1);
+        let mut recovered = Vec::new();
+        for k in known {
+            if present.contains(&k) {
+                continue;
+            }
+            let n = self.good_streak.entry(k.clone()).or_insert(0);
+            *n += 1;
+            if *n >= confirm_frames {
+                recovered.push(k);
+            }
+        }
         for k in recovered {
             self.bad_streak.remove(&k);
             self.fused.remove(&k);
             self.fail_streak_after_action.remove(&k);
             self.awaiting_resolution.remove(&k);
+            self.good_streak.remove(&k);
         }
     }
 
@@ -752,8 +795,11 @@ async fn restart_service(state: &Arc<AppState>, target: &str) -> Result<(), Stri
 }
 
 /// 统一的「重启内部服务」实现：持有 `config_reload_lock` → 重载磁盘配置 →
-/// [`crate::web::config_apply::persist_then_apply`]（E 批起为落盘前置：
+/// [`crate::web::config_apply::persist_then_apply_skip_quota`]（E 批起为落盘前置：
 /// save → reload → store → notify）。
+///
+/// 走 skip_quota 入口是刻意的：license 降级/失效时这一路径最需要生效，而它只是
+/// 重新应用已在磁盘上的配置，不引入新的点位规模。普通配置写端点仍受配额校验约束。
 ///
 /// 手动重启端点（`/api/watchdog/services/:name/restart`）与自愈执行器的 `RestartService`
 /// 动作共用此函数，确保恢复路径唯一、不新增旁路。返回 `Err` 时运行时未产生半更新。
@@ -769,7 +815,8 @@ pub(crate) async fn reload_services(
         .config_loader
         .reload()
         .map_err(|e| ApiError::internal(format!("reload failed: {}", e)))?;
-    let _ = crate::web::config_apply::persist_then_apply(state, &old, &new).await?;
+    // 新配置来自磁盘重载而非用户提交，不改变点位规模；license 失效时仍须能重建运行态。
+    let _ = crate::web::config_apply::persist_then_apply_skip_quota(state, &old, &new).await?;
     state
         .platform
         .audit

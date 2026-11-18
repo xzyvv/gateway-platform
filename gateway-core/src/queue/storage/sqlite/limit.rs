@@ -761,18 +761,43 @@ impl SqliteStorage {
                 return 0;
             }
         };
-        // 先统计拟删行里有多少是未送达的（这些行还计在 depth 里，删后要扣）。
+        // r15-QL5：原 DELETE 无 LIMIT，一次事务可删数十万行、长时间持写锁，
+        // 阻塞采集写入（与本模块 :301 的 1000 条批量上限自相矛盾）。
+        // 改为每维护周期（30s）只删一批，剩余下轮继续；id 升序保证公平。
+        const CLEANUP_BATCH: i64 = 1000;
+        let ids: Vec<i64> = tx
+            .prepare(
+                "SELECT id FROM data_queue \
+                 WHERE in_flight = 0 AND timestamp < ?1 \
+                 ORDER BY id LIMIT ?2",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map(rusqlite::params![cutoff_ms, CLEANUP_BATCH], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<i64>>>()
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            if let Err(e) = tx.commit() {
+                tracing::warn!("cleanup_old_records: commit failed: {}", e);
+            }
+            return 0;
+        }
+        // undelivered 必须与本批**同一 id 集合**，否则 depth 会按全表超期行
+        // 扣减（本批只删 1000 条）→ 计数被扣穿。
+        let placeholders = vec!["?"; ids.len()].join(",");
         let undelivered: i64 = tx
             .query_row(
-                "SELECT COUNT(*) FROM data_queue \
-                 WHERE in_flight = 0 AND delivered = 0 AND timestamp < ?1",
-                rusqlite::params![cutoff_ms],
+                &format!(
+                    "SELECT COUNT(*) FROM data_queue \
+                     WHERE id IN ({placeholders}) AND delivered = 0"
+                ),
+                rusqlite::params_from_iter(ids.iter().copied()),
                 |r| r.get(0),
             )
             .unwrap_or(0);
         let deleted = match tx.execute(
-            "DELETE FROM data_queue WHERE in_flight = 0 AND timestamp < ?1",
-            rusqlite::params![cutoff_ms],
+            &format!("DELETE FROM data_queue WHERE id IN ({placeholders})"),
+            rusqlite::params_from_iter(ids.iter().copied()),
         ) {
             Ok(n) => n as i64,
             Err(e) => {
@@ -780,10 +805,12 @@ impl SqliteStorage {
                 0
             }
         };
-        // 清理后仍超期的行 → 只可能是在途行（删不掉），需显式告警。
+        // 分批后仍会留下大量 in_flight=0 的超期行（下轮再删），因此只统计
+        // 真正删不掉、长期卡在在途状态的行，避免误报。
         let still_stale: i64 = tx
             .query_row(
-                "SELECT COUNT(*) FROM data_queue WHERE timestamp < ?1",
+                "SELECT COUNT(*) FROM data_queue \
+                 WHERE in_flight = 1 AND timestamp < ?1",
                 rusqlite::params![cutoff_ms],
                 |r| r.get(0),
             )

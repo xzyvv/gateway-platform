@@ -180,6 +180,17 @@ impl ProcessingPipeline {
         }
     }
 
+    /// 入队失败必须可观测。旧实现四处直接 `.ok()`，队列 actor 退出后所有入队
+    /// 都失败却没有任何信号，现场只表现为「采集正常、日志无异常、北向无数据」。
+    /// `persist_failed` 与 queue 任务侧共用同一 counter（queue 的 Err 路径本身不计数，
+    /// 不会重复统计）。
+    async fn enqueue_checked(&self, points: Vec<DataPoint>) {
+        let count = points.len();
+        if let Err(e) = self.queue.enqueue(points).await {
+            record_enqueue_failure(&self.metrics, count, &e);
+        }
+    }
+
     /// 后台处理循环
     ///
     /// M1: micro-batching —— 10ms 窗口内合并多个采集 batch 的入队请求，
@@ -209,7 +220,7 @@ impl ProcessingPipeline {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         if !accum.is_empty() {
-                            self.queue.enqueue(std::mem::take(&mut accum)).await.ok();
+                            self.enqueue_checked(std::mem::take(&mut accum)).await;
                         }
                         tracing::info!("处理管道收到退出信号，已 flush");
                         break;
@@ -218,7 +229,7 @@ impl ProcessingPipeline {
                 // f6: 定时兜底 flush 滞留在 accum 中的小批量数据
                 _ = flush_tick.tick() => {
                     if !accum.is_empty() {
-                        self.queue.enqueue(std::mem::take(&mut accum)).await.ok();
+                        self.enqueue_checked(std::mem::take(&mut accum)).await;
                         last_flush = std::time::Instant::now();
                     }
                 }
@@ -234,7 +245,7 @@ impl ProcessingPipeline {
                         accum.extend(to_upload);
                         let now = std::time::Instant::now();
                         if accum.len() >= batch_threshold || now.duration_since(last_flush) >= window_ms {
-                            self.queue.enqueue(std::mem::take(&mut accum)).await.ok();
+                            self.enqueue_checked(std::mem::take(&mut accum)).await;
                             last_flush = now;
                         }
                     }
@@ -246,7 +257,7 @@ impl ProcessingPipeline {
 
         // 最终 flush（防止 select 分支漏掉）
         if !accum.is_empty() {
-            self.queue.enqueue(std::mem::take(&mut accum)).await.ok();
+            self.enqueue_checked(std::mem::take(&mut accum)).await;
         }
         tracing::info!("处理管道退出");
     }
@@ -356,3 +367,56 @@ impl ProcessingPipeline {
 // 实时广播总线契约已下沉到 `engine::bus`（消除 `engine ↔ pipeline` 循环依赖）。
 // 这里保留重导出，`gateway_core::pipeline::RealtimeBus` 等既有调用点无需改动。
 pub use crate::engine::bus::{BusConsumerKind, LaggedCounts, RealtimeBus};
+
+/// 记录一次入队失败：错误日志 + Prometheus counter。
+/// 独立成函数便于单测直接验证指标，无需构造完整 Pipeline / actor。
+fn record_enqueue_failure(
+    metrics: &crate::engine::metrics::Metrics,
+    count: usize,
+    err: impl std::fmt::Display,
+) {
+    metrics
+        .queue_persist
+        .persist_failed
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tracing::error!(
+        "pipeline enqueue failed: {} data points not persisted: {}",
+        count,
+        err
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::record_enqueue_failure;
+    use crate::engine::metrics::Metrics;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn enqueue_failure_increments_persist_failed_counter() {
+        let metrics = Metrics::default();
+        assert_eq!(metrics.queue_persist.persist_failed.load(Ordering::Relaxed), 0);
+
+        record_enqueue_failure(&metrics, 42, "queue actor exited");
+        record_enqueue_failure(&metrics, 7, "queue actor exited");
+
+        assert_eq!(metrics.queue_persist.persist_failed.load(Ordering::Relaxed), 2);
+    }
+
+    /// 四条入队路径（退出 flush / 定时兜底 / 攒批 / 最终 flush）都必须走
+    /// `enqueue_checked`，任何一条退回 `.ok()` 都会重新引入静默丢数。
+    #[test]
+    fn every_enqueue_path_is_checked() {
+        let src = include_str!("mod.rs");
+        // 字面量必须拆分：include_str! 会把本测试的源码也读进去，
+        // 完整字串出现在断言里会让自己命中自己。
+        let swallowed = ".enqueue(std::mem::take(&mut accum)).await".to_owned() + ".ok()";
+        assert!(!src.contains(&swallowed), "入队结果不得再用 .ok() 吞掉");
+        let checked = "self.enqueue_checked(std::mem::take(&mut accum))".to_owned() + ".await;";
+        assert_eq!(
+            src.matches(&checked).count(),
+            4,
+            "退出/定时/攒批/最终四条 flush 路径都必须记录失败"
+        );
+    }
+}

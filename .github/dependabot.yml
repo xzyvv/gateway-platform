@@ -5,6 +5,8 @@
 #     已提交；Dependabot 支持 workspace，根目录一条即覆盖 gateway-core / gateway-api /
 #     gatewayd / tools/license-issuer。gateway-desktop 已冻结但仍在 members 里，它的
 #     依赖也会被升级 —— 合入前注意它不在 default-members，常规 CI 不编译它。
+#     fuzz/ 是独立 workspace（cargo-fuzz 约定），根条目**覆盖不到** fuzz/Cargo.lock，
+#     必须单独配一条，否则协议解码器的依赖永不升级（r15-SC1）。
 #   - github-actions：workflows 里大量使用第三方 action，tag 一旦被上游移动就是供应链
 #     风险，需要按固定节奏跟随（本项目 security.yml 只做静态扫描，不替代版本跟随）。
 #
@@ -35,6 +37,28 @@ updates:
       - "rust"
     groups:
       cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # r15-SC1：fuzz workspace 的锁文件必须单独升级——它正是畸形输入喂协议
+  # 解码器的第一道防线，脱离升级等于防线本身长期停留在旧依赖上。
+  - package-ecosystem: "cargo"
+    directory: "/fuzz"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:15"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(fuzz-deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "fuzzing"
+    groups:
+      fuzz-minor-patch:
         update-types:
           - "minor"
           - "patch"

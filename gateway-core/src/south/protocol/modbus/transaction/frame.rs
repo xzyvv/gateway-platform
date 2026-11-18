@@ -40,6 +40,11 @@ pub(crate) fn build_mbap_frame(
     Ok(buf)
 }
 
+/// MBAP length 字段上界。length = unit_id(1) + function_code(1) + pdu，
+/// 与 `build_mbap_frame` 的发送侧上限（pdu ≤ 253，故 length ≤ 255）保持同源口径。
+/// Modbus TCP 规范本身也把 ADU 限制在 260 字节内，65534 字节的帧不可能是合法响应。
+const MAX_MBAP_LENGTH: u16 = 255;
+
 /// 解析 Modbus TCP 响应：读 MBAP 头 + PDU。
 /// 返回 (tx_id, pdu)，其中 pdu = function_code + data（即 unit_id 之后的所有字节）。
 async fn read_mbap_response<R: AsyncReadExt + Unpin>(
@@ -63,6 +68,15 @@ async fn read_mbap_response<R: AsyncReadExt + Unpin>(
         return Err(TransactionError::Malformed(format!(
             "length < 1: {}",
             length
+        )));
+    }
+    // 上界必须在分配前校验：length 是 u16，旧实现可因一个畸形头分配 64KB 并
+    // read_exact 等待 65534 字节，直到 30s reader 超时才作废整条 TCP 总线上的
+    // 全部在途事务。超限按 Malformed 处理，reader_loop 会立即 abort_all 断链。
+    if length > MAX_MBAP_LENGTH {
+        return Err(TransactionError::Malformed(format!(
+            "length {} exceeds Modbus TCP limit {}",
+            length, MAX_MBAP_LENGTH
         )));
     }
     let _unit_id = header[6];
@@ -119,5 +133,70 @@ pub(super) async fn reader_loop(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_mbap_response, MAX_MBAP_LENGTH};
+    use crate::south::protocol::modbus::transaction::TransactionError;
+
+    fn header_with_length(tx_id: u16, length: u16) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(7);
+        buf.extend_from_slice(&tx_id.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&length.to_be_bytes());
+        buf.push(1); // unit_id
+        buf
+    }
+
+    /// 畸形头声称 65534 字节 PDU 却只发头：必须在分配/等待 body 之前判 Malformed。
+    /// 旧实现会走到 read_exact 并因 EOF 返回 Io，或真有后续数据时挂到 30s 超时。
+    #[tokio::test]
+    async fn oversized_mbap_length_is_rejected_before_reading_body() {
+        let bytes = header_with_length(0x1234, u16::MAX);
+        let mut reader: &[u8] = &bytes;
+        let started = std::time::Instant::now();
+
+        match read_mbap_response(&mut reader).await {
+            Err(TransactionError::Malformed(msg)) => assert!(msg.contains("exceeds"), "{msg}"),
+            other => panic!("expected Malformed for oversized length, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "超长帧必须立即拒绝，不得等待 body 填满"
+        );
+    }
+
+    #[tokio::test]
+    async fn mbap_length_one_over_limit_is_rejected() {
+        let mut bytes = header_with_length(1, MAX_MBAP_LENGTH + 1);
+        bytes.resize(7 + (MAX_MBAP_LENGTH + 1) as usize, 0);
+        let mut reader: &[u8] = &bytes;
+
+        match read_mbap_response(&mut reader).await {
+            Err(TransactionError::Malformed(msg)) => assert!(msg.contains("exceeds"), "{msg}"),
+            other => panic!("expected Malformed for length at limit + 1, got {other:?}"),
+        }
+    }
+
+    /// 边界内最大帧（PDU = function_code 1 + data 253）仍须正常解析，防止误杀合法大帧。
+    #[tokio::test]
+    async fn maximum_mbap_length_is_accepted() {
+        let tx_id = 0x1234u16;
+        let body_len = (MAX_MBAP_LENGTH - 1) as usize;
+        let mut bytes = header_with_length(tx_id, MAX_MBAP_LENGTH);
+        bytes.push(3); // function code
+        bytes.resize(7 + body_len, 0xAB);
+        let mut reader: &[u8] = &bytes;
+
+        let (got_tx_id, pdu) = match read_mbap_response(&mut reader).await {
+            Ok(v) => v,
+            Err(e) => panic!("maximum legal frame must parse, got {e:?}"),
+        };
+        assert_eq!(got_tx_id, tx_id);
+        assert_eq!(pdu.len(), body_len);
+        assert_eq!(pdu[0], 3);
+        assert_eq!(pdu[body_len - 1], 0xAB);
     }
 }

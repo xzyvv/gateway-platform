@@ -36,7 +36,10 @@ pub struct WebhookConfig {
     #[ts(type = "number")]
     pub interval_ms: u64,
 
-    /// 失败重试次数，默认 3
+    /// 单条消息最大重试次数，默认 8。
+    ///
+    /// r15-WH2：历史实现忽略本字段、硬编码 8；默认值保持 8 以确保升级后
+    /// 行为不变，但现已真正生效——配置 3 就只重试 3 次。
     #[serde(default = "default_retries")]
     pub max_retries: u32,
 }
@@ -51,7 +54,7 @@ fn default_interval() -> u64 {
     1000
 }
 fn default_retries() -> u32 {
-    3
+    8
 }
 
 /// `headers` 常装 Authorization 等凭据，不得随 `{:?}` 进入日志。

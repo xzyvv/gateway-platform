@@ -14,6 +14,9 @@ libfuzzer-sys = "0.4"
 # 不加 default-features，避免拉入 opcua 等重依赖。
 [dependencies.gateway-core]
 path = "../gateway-core"
+# cargo-deny 的 wildcards=deny 把无 version 的 path 依赖视为 wildcard；
+# 显式写出 workspace 版本（0.1.0）以保持与主工作区同一门禁口径。
+version = "0.1"
 default-features = false
 features = [
   "modbus",

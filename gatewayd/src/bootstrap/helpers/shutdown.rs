@@ -337,6 +337,28 @@ async fn graceful_shutdown_inner(inputs: ShutdownInputs) {
     // 并用 `tokio::time::timeout` 统一节流为 30s（保留与原实现的预算一致）。
     // 后续 mqtt/north_servers 仍按原序执行，timeout 命中时仅 warn，不强行
     // 推进 shutdown——未排空的数据落 SQLite 下次启动自动 replay。
+    //
+    // r15-SD2 (fix)：drain_and_wait 只看 SQLite/actor 队列，**看不见 fallback
+    // 缓冲**（纯内存 VecDeque，上限 FALLBACK_CAPACITY=5000 点）→ 原实现关机
+    // 时最多静默丢 5000 点。此处先同步冲刷（不经 actor 通道：此刻 actor 可能
+    // 已随停机序列退出，异步 flush_fallback 的 tx.send 会失败）；写进 SQLite
+    // 的点若来不及被北向消费，仍由下次启动 replay 兜底。
+    let fallback_before = queue.fallback_len();
+    if fallback_before > 0 {
+        match queue.flush_fallback_sync() {
+            Ok(n) => tracing::info!(
+                "graceful_shutdown: flushed {}/{} fallback point(s) to SQLite",
+                n,
+                fallback_before
+            ),
+            Err(e) => tracing::warn!(
+                "graceful_shutdown: fallback flush failed, {} point(s) retained in memory: {}",
+                queue.fallback_len(),
+                e
+            ),
+        }
+    }
+
     let drain_deadline = Duration::from_secs(30);
     let drain_start = std::time::Instant::now();
     let drain_result = tokio::time::timeout(drain_deadline, queue.drain_and_wait()).await;
@@ -514,6 +536,23 @@ mod tests {
         assert!(
             res.is_ok(),
             "r68: panic 路径必须在 timeout 内返回（helper 不能因 JoinError 而 panic 自身）"
+        );
+    }
+
+    /// r15-SD2 契约：同步冲刷 fallback 必须在 queue drain **之前**——
+    /// 反之后者看不到纯内存缓冲，SQLite 里也不会有这些点可供下次 replay。
+    #[test]
+    fn r15_sd2_fallback_flush_precedes_queue_drain() {
+        let src = include_str!("shutdown.rs");
+        let flush = src
+            .find("queue.flush_fallback_sync()")
+            .expect("关机必须冲刷 fallback 缓冲");
+        let drain = src
+            .find("queue.drain_and_wait()).await")
+            .expect("关机必须 drain 队列");
+        assert!(
+            flush < drain,
+            "fallback 冲刷必须在 drain 之前，否则写入 SQLite 的点赶不上下次 replay 兜底"
         );
     }
 }

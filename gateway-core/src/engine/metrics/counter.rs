@@ -67,6 +67,12 @@ impl Metrics {
         self.webhook.giveup.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// r15-WH4：outbox 超限背压丢弃的物理行数。按批计数（一次可丢多行），
+    /// 与逐条计数的 data_lost / giveup 区分，便于告警定位根因。
+    pub fn inc_webhook_outbox_dropped(&self, n: u64) {
+        self.webhook.outbox_dropped.fetch_add(n, Ordering::Relaxed);
+    }
+
     pub fn inc_watchdog_timeout(&self) {
         self.lifecycle
             .watchdog_timeouts

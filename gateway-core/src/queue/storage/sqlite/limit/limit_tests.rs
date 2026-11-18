@@ -326,3 +326,33 @@ fn cleanup_old_records_cutoff_is_hours_in_millis() {
         "rows_total 只应扣掉真正删掉的那 1 行"
     );
 }
+
+/// r15-QL5 回归：retention 每轮最多删 1000 行，避免单事务长锁阻塞采集写入；
+/// 未删完的行由后续维护周期（30s）继续回收，depth/rows_total 逐批同步扣减。
+#[test]
+fn retention_deletes_at_most_one_batch_per_cycle() {
+    let mut conn = setup_conn();
+    insert_rows(&conn, 2500, 0);
+    let depth = AtomicI64::new(2500);
+    let rows_total = AtomicI64::new(2500);
+    let order = std::sync::atomic::Ordering::Relaxed;
+
+    let first = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
+    assert_eq!(first, 1000, "单轮只能删一批");
+    assert_eq!(row_count(&conn), 1500);
+    assert_eq!(depth.load(order), 1500, "depth 按本批扣减，不得按全表超期行扣穿");
+    assert_eq!(rows_total.load(order), 1500);
+
+    let second = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
+    assert_eq!(second, 1000);
+    assert_eq!(row_count(&conn), 500);
+
+    let third = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
+    assert_eq!(third, 500, "最后一批按实际剩余行数删除");
+    assert_eq!(row_count(&conn), 0);
+    assert_eq!(depth.load(order), 0);
+    assert_eq!(rows_total.load(order), 0);
+
+    let fourth = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
+    assert_eq!(fourth, 0, "无超期行时应为空操作");
+}

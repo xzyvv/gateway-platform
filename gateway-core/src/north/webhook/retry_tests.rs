@@ -81,9 +81,31 @@ fn retry_backoff_handles_degenerate_inputs() {
 
 /// 重试上限固定为 8 次（超出即放弃并丢弃该条）。
 ///
-/// 这是"下游长时间不可用"时数据被丢弃的**唯一**闸门——上限被改大会拉长
-/// 积压期，被改小会误杀只是偶发抖动的端点，因此锁死。
+/// 默认值与升级前硬编码行为一致（8），但用户配置现在真正生效（r15-WH2）。
 #[test]
-fn max_webhook_attempts_is_eight() {
+fn max_webhook_attempts_default_matches_config() {
     assert_eq!(MAX_WEBHOOK_ATTEMPTS, 8);
+    assert_eq!(
+        crate::config::WebhookConfig::default().max_retries,
+        MAX_WEBHOOK_ATTEMPTS,
+        "默认行为不得因配置化而改变"
+    );
+}
+
+/// 生产路径必须读配置；常量只允许出现在测试里，防止配置再次失效。
+#[test]
+fn production_uses_configured_retry_limit() {
+    let src = include_str!("client.rs");
+    assert!(
+        src.contains("self.config.max_retries"),
+        "生产路径必须引用 WebhookConfig::max_retries"
+    );
+    let code: String = src
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//") && !l.trim_start().starts_with("///"))
+        .collect();
+    assert!(
+        !code.contains("MAX_WEBHOOK_ATTEMPTS"),
+        "业务代码不得再引用硬编码上限"
+    );
 }

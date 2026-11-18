@@ -340,12 +340,14 @@ impl WebhookClient {
     /// 仍走 in-memory `RetryState`，无需每次 SQL 检查。
     pub(crate) async fn drop_exhausted_pending(&self) -> GatewayResult<usize> {
         let outbox = self.outbox.clone();
+        // r15-WH2：上限来自配置；闭包需要值拷贝（不能借 self）。
+        let max_attempts = self.config.max_retries;
         let moved = tokio::task::spawn_blocking(move || {
             // parking_lot::Mutex::lock() 永不自毒、无需 unwrap。
             // 在 spawn_blocking 上下文中是同步调用，不阻塞 tokio 调度。
             outbox.lock().move_exhausted_pending_to_dead_letter(
                 "http",
-                MAX_WEBHOOK_ATTEMPTS,
+                max_attempts,
                 "retry_exhausted",
             )
         })
@@ -395,11 +397,18 @@ impl WebhookClient {
         .await;
         match joined {
             Ok(Ok(0)) => {}
-            Ok(Ok(n)) => tracing::error!(
-                "webhook outbox over limit ({}): dropped {} oldest pending rows (data lost)",
-                MAX_WEBHOOK_PENDING,
-                n
-            ),
+            Ok(Ok(n)) => {
+                // r15-WH4：原实现只打 error 日志，Grafana 告警看不到 →
+                // 端点健康但下游积压时的背压丢弃长期静默。
+                if let Some(m) = &self.metrics {
+                    m.inc_webhook_outbox_dropped(n as u64);
+                }
+                tracing::error!(
+                    "webhook outbox over limit ({}): dropped {} oldest pending rows (data lost)",
+                    MAX_WEBHOOK_PENDING,
+                    n
+                );
+            }
             Ok(Err(e)) => tracing::error!("webhook enforce_pending_limit failed: {}", e),
             Err(e) => tracing::warn!("webhook enforce_pending_limit join error: {}", e),
         }
@@ -537,7 +546,7 @@ impl WebhookClient {
                 if let Some(st) = retries.get(&outbox_id) {
                     // E-5：attempts 已达上限但仍留在 in-memory 表里，说明上次删 outbox 行失败
                     // （DB 故障）。此时必须**停止重试**：否则本轮及后续会无限重发死信。
-                    if st.attempts >= MAX_WEBHOOK_ATTEMPTS || now < st.next_at {
+                    if st.attempts >= self.config.max_retries || now < st.next_at {
                         processed.push(false);
                         continue;
                     }
@@ -584,7 +593,7 @@ impl WebhookClient {
                         outbox.lock().record_attempt(id_for_record)
                     })
                     .await;
-                    if attempts >= MAX_WEBHOOK_ATTEMPTS {
+                    if attempts >= self.config.max_retries {
                         // 达到尝试上限仍失败：移入**死信表**并删除 outbox 行，
                         // 避免永久重试占满带宽。
                         //
@@ -697,7 +706,7 @@ impl WebhookClient {
                             retries.insert(
                                 outbox_id,
                                 RetryState {
-                                    attempts: MAX_WEBHOOK_ATTEMPTS,
+                                    attempts: self.config.max_retries,
                                     next_at: now,
                                 },
                             );
@@ -712,7 +721,7 @@ impl WebhookClient {
                             retries.insert(
                                 outbox_id,
                                 RetryState {
-                                    attempts: MAX_WEBHOOK_ATTEMPTS,
+                                    attempts: self.config.max_retries,
                                     next_at: now,
                                 },
                             );

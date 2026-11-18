@@ -708,3 +708,50 @@ async fn busy_in_flight_blocks_whole_cycle_not_just_execution() {
     assert!(!in_flight.is_busy(), "动作完成后应允许下一轮动作");
     assert!(action_done.load(Ordering::SeqCst));
 }
+
+/// r40-HEAL3 回归：单帧抖动不得解除熔断；与异常进入一样，恢复也要求
+/// 连续 `debounce_k` 帧正常才认定真正恢复。
+#[test]
+fn transient_recovery_does_not_clear_fuse() {
+    let mut p = HealPolicy::new(SelfHealSettings {
+        enabled: true,
+        debounce_k: 3,
+        cooldown_secs: 0,
+        max_actions_per_window: 100,
+        fail_streak_to_fuse: 1,
+        ..Default::default()
+    });
+    let bad = snap(&["collect"], None);
+    let good = snap(&[], None);
+    let target = "loop:collect";
+
+    // 连续 3 帧异常才触发，恢复失败立即熔断
+    assert!(p.evaluate(&bad, 0).is_none());
+    assert!(p.evaluate(&bad, 1).is_none());
+    assert!(p.evaluate(&bad, 2).is_some(), "连续 3 帧异常应触发动作");
+    p.record_outcome(target, false);
+    assert!(p.is_fused(target), "恢复失败达阈值应熔断");
+
+    // 单帧正常：bad_streak 清零，但熔断仍在
+    assert!(p.evaluate(&good, 3).is_none());
+    assert!(p.is_fused(target), "单帧抖动不得解除熔断");
+
+    // 再次异常打断恢复确认（bad_streak 从 1 重新起算）
+    assert!(p.evaluate(&bad, 4).is_none(), "熔断期间不应动作");
+    assert!(p.is_fused(target));
+
+    // 连续两帧正常仍不足 3
+    assert!(p.evaluate(&good, 5).is_none());
+    assert!(p.is_fused(target));
+    assert!(p.evaluate(&good, 6).is_none());
+    assert!(p.is_fused(target));
+
+    // 第三帧正常才真正解除
+    assert!(p.evaluate(&good, 7).is_none());
+    assert!(!p.is_fused(target), "连续 3 帧正常才应解除熔断");
+
+    // 解除后重新异常需重新走 debounce
+    assert!(p.evaluate(&bad, 8).is_none());
+    assert!(p.evaluate(&bad, 9).is_none());
+    assert!(p.evaluate(&bad, 10).is_some(), "重新连续异常应再次动作");
+}

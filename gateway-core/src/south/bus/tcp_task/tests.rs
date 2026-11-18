@@ -465,3 +465,33 @@ async fn disconnect_aborts_pool_and_triggers_reconnect() {
     let _ = task.await;
     accept_task.abort();
 }
+
+/// r15-SD4 回归：退避只在"真正通信成功"后清零；单纯 TCP 建连成功（连上即断）
+/// 不得把累加的重连次数冲掉，否则设备半开时永远停在 1s 退避。
+#[test]
+fn reconnect_backoff_resets_only_after_real_communication() {
+    assert_eq!(advance_reconnect_backoff(0, false), 0);
+    assert_eq!(advance_reconnect_backoff(1, false), 1);
+    assert_eq!(advance_reconnect_backoff(5, false), 5);
+    assert_eq!(advance_reconnect_backoff(5, true), 0);
+}
+
+/// 文本契约：`Ok(s)` 建连成功分支不得再直接动退避计数，清零必须经上述判定函数。
+#[test]
+fn connect_success_does_not_clear_backoff() {
+    let src = include_str!("../tcp_task.rs");
+    let connect_ok = src.find("Ok(s) => {").expect("建连成功分支必须存在");
+    let err_branch = connect_ok
+        + src[connect_ok..]
+            .find("Err(e) => {")
+            .expect("建连失败分支必须存在");
+    let block = &src[connect_ok..err_branch];
+    assert!(
+        !block.contains("reconnect_failures"),
+        "建连成功分支不得直接改退避计数，否则连上即断会清零累加值"
+    );
+    assert!(
+        src.contains("advance_reconnect_backoff("),
+        "重连判定必须经过 had_successful_comm 判定函数"
+    );
+}

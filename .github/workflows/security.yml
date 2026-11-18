@@ -64,6 +64,12 @@ jobs:
       - name: cargo audit
         run: cargo audit --deny warnings
 
+      # r15-SC1：fuzz/ 是独立 workspace，其 Cargo.lock 有 363 个 crate，
+      # 根 lock 的审计完全覆盖不到。这里显式指向 fuzz 锁文件——它正是
+      # 畸形输入喂协议解码器的第一道防线，暴露面与风险最高。
+      - name: cargo audit (fuzz workspace)
+        run: cargo audit --file fuzz/Cargo.lock --deny warnings
+
   cargo-deny:
     name: cargo deny (licenses / bans / sources)
     runs-on: ubuntu-26.04
@@ -88,6 +94,11 @@ jobs:
 
       - name: cargo deny check (advisories + licenses + bans + sources)
         run: cargo deny check
+
+      # r15-SC1：同上，独立 workspace 必须单独检查许可证/来源/禁用项。
+      # 复用根 deny.toml（豁免清单与 .cargo/audit.toml 同步）。
+      - name: cargo deny check (fuzz workspace)
+        run: cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml check
 
   npm-audit:
     name: npm audit (frontend deps)

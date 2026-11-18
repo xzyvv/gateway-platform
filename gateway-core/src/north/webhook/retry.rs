@@ -18,7 +18,11 @@ pub(super) const PREV_FLUSH_WAIT: Duration = Duration::from_secs(10);
 /// north_servers / mqtt.stop；超时不 abort（可能撕裂 SQLite 写），仅告警继续。
 pub(super) const FINAL_FLUSH_WAIT: Duration = Duration::from_secs(5);
 
-/// Bug 171: 单条消息的最大重试次数，超过则放弃（显式记 error 后移出 outbox）。
+/// 单条消息的最大重试次数**默认值**（r15-WH2）。
+///
+/// 生产路径一律读 `WebhookConfig::max_retries`；本常量仅用于测试断言与
+/// 默认配置一致性，不要再在业务代码里引用它，否则配置又会失效。
+#[cfg(test)]
 pub(super) const MAX_WEBHOOK_ATTEMPTS: u32 = 8;
 
 /// P0：outbox 中 `protocol='http'` 的 pending 行上限（与 MQTT 的 100_000 同口径）。

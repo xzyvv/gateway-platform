@@ -153,6 +153,7 @@ impl GatewayConfig {
             errors.extend(msgs);
         }
         errors.extend(self.validate_convert_rules());
+        errors.extend(self.validate_point_id_uniqueness());
         // 单位格式：只挡超长 / 控制字符 / 首尾空白，不做白名单（存量历史写法不能被拒）。
         errors.extend(self.validate_units());
         // 队列行数上限：范围 + 与背压/容量压力阈值的顺序（阈值定义在队列内核）
@@ -167,6 +168,24 @@ impl GatewayConfig {
         } else {
             Err(errors)
         }
+    }
+
+    /// 点位 id 必须全局唯一：队列去重索引是 `(point_id, timestamp)`（不含 device_id），
+    /// 采集侧又用 `HashMap<point_id, DataPoint>` 跨设备分组记账。两个同 id 点位会在
+    /// 同一批次互相覆盖，且配置层此前完全不校验——`POST /api/config/import`、
+    /// 工程文件导入、手工编辑 config.json 三条路径都能写入重复 id。
+    fn validate_point_id_uniqueness(&self) -> Vec<String> {
+        let mut errs = Vec::new();
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (i, p) in self.points.iter().enumerate() {
+            if let Some(first) = seen.insert(p.id.as_str(), i) {
+                errs.push(format!(
+                    "points[{i}] id \"{}\" 与 points[{first}] 重复：点位 id 必须全局唯一",
+                    p.id
+                ));
+            }
+        }
+        errs
     }
 
     /// 单位格式校验：只挡明确有害的值（超长 / 控制字符 / 首尾空白），不做白名单。

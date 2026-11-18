@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// 历史查询/导出共用的 limit 上限：防止 `limit=999999999` 造成 OOM 与超大响应。
+const MAX_HISTORY_LIMIT: usize = 10000;
+
+fn clamp_history_limit(limit: usize) -> usize {
+    limit.min(MAX_HISTORY_LIMIT)
+}
+
 pub(crate) async fn history_export_csv(
     State(state): State<Arc<AppState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -15,10 +22,12 @@ pub(crate) async fn history_export_csv(
         .get("end")
         .and_then(|s| s.parse().ok())
         .unwrap_or(i64::MAX);
-    let limit: usize = params
-        .get("limit")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10000);
+    let limit: usize = clamp_history_limit(
+        params
+            .get("limit")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MAX_HISTORY_LIMIT),
+    );
     // P2-1：导出与查询共用同一套降采样语义（桶宽秒数，0/缺省 = 原始行）
     let downsample: Option<u32> = params.get("downsample").and_then(|s| s.parse().ok());
 
@@ -85,9 +94,8 @@ pub(crate) async fn history(
     State(state): State<Arc<AppState>>,
     Query(q): Query<HistoryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // limit 上限钳制：防止恶意请求 limit=999999999 导致 OOM
-    const MAX_HISTORY_LIMIT: usize = 10000;
-    let limit = q.limit.min(MAX_HISTORY_LIMIT);
+    // 与导出接口共用同一上限，防止恶意请求 limit=999999999 导致 OOM
+    let limit = clamp_history_limit(q.limit);
     // 缺省的窗口参数补成「最近 24 小时」；start/end 传反时按空区间处理
     let end = q.end.unwrap_or_else(now_ms);
     let start = q.start.unwrap_or(end - DEFAULT_HISTORY_WINDOW_MS).min(end);
@@ -98,4 +106,30 @@ pub(crate) async fn history(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_limit_is_clamped_for_both_endpoints() {
+        assert_eq!(clamp_history_limit(0), 0);
+        assert_eq!(clamp_history_limit(500), 500);
+        assert_eq!(clamp_history_limit(MAX_HISTORY_LIMIT), MAX_HISTORY_LIMIT);
+        assert_eq!(clamp_history_limit(999_999_999), MAX_HISTORY_LIMIT);
+    }
+
+    /// 文本契约：导出接口也必须走钳制，不能只修普通查询接口。
+    #[test]
+    fn export_endpoint_uses_clamped_limit() {
+        let src = include_str!("mod.rs");
+        let export_fn = src
+            .find("pub(crate) async fn history_export_csv")
+            .expect("导出 handler 必须存在");
+        let clamp = src
+            .find("let limit: usize = clamp_history_limit(")
+            .expect("导出接口必须使用统一钳制");
+        assert!(clamp > export_fn, "钳制必须出现在导出 handler 内部");
+    }
 }

@@ -496,3 +496,18 @@ fn test_record_collect_scoped_skips_empty_scope() {
     // 全局采集计数仍应累计（这是全局事实，与维度无关）
     assert_eq!(m.collect.collect_total.load(Ordering::Relaxed), 1);
 }
+
+/// r15-WH4：outbox 背压丢弃必须独立可告警，不能混进 data_lost（根因不同）。
+#[test]
+fn test_webhook_outbox_dropped_metric() {
+    let m = Metrics::new();
+    assert_eq!(m.webhook.outbox_dropped.load(Ordering::Relaxed), 0);
+    m.inc_webhook_outbox_dropped(7);
+    m.inc_webhook_outbox_dropped(3);
+    assert_eq!(m.webhook.outbox_dropped.load(Ordering::Relaxed), 10);
+    let out = m.prometheus_export();
+    assert!(
+        out.contains("gateway_webhook_outbox_dropped_total 10"),
+        "{out}"
+    );
+}

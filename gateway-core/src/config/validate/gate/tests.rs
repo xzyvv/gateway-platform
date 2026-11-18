@@ -129,6 +129,40 @@ fn mqtt_broker_scheme_matches_runtime_parser() {
     }
 }
 
+/// 点位 id 是队列去重索引 `(point_id, timestamp)` 与采集 HashMap 的键，必须全局唯一。
+/// 导入 / 工程文件 / 手工编辑 config 三条路径此前都能写入重复 id 并静默丢数。
+#[test]
+fn duplicate_point_ids_are_rejected_by_gate() {
+    let mut cfg = GatewayConfig::default();
+    let mut first = point_with("modbus");
+    first.id = "dup".to_string();
+    let mut second = point_with("modbus");
+    second.id = "dup".to_string();
+    cfg.points.push(first);
+    cfg.points.push(second);
+
+    let errs = cfg.validate_all().expect_err("重复点位 id 必须被拒");
+    assert!(
+        errs.iter().any(|e| e.contains("id") && e.contains("重复")),
+        "错误应指明重复点位: {errs:?}"
+    );
+}
+
+#[test]
+fn distinct_point_ids_pass_gate() {
+    let mut cfg = GatewayConfig::default();
+    let mut first = point_with("modbus");
+    first.id = "p1".to_string();
+    first.address_num = Some(1);
+    let mut second = point_with("modbus");
+    second.id = "p2".to_string();
+    second.address_num = Some(2);
+    cfg.points.push(first);
+    cfg.points.push(second);
+
+    cfg.validate_all().expect("不同 id 的点位应通过校验");
+}
+
 // ===== 配置负例：未知协议 / 非法枚举 / 缺失必填，必须在门禁期 fail-fast =====
 
 fn point_with(protocol: &str) -> crate::config::PointConfig {

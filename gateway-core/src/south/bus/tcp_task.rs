@@ -9,6 +9,7 @@
 //!
 //! 保留：MBAP 帧封装/解封（在 pool 内完成）、指数退避重连、retry_count 对 Timeout/Busy 的重试。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,19 @@ use crate::south::protocol::modbus::transaction::{
 use crate::south::protocol::CollectorError;
 
 use super::BusTransaction;
+
+/// 重连退避计数推进：只有确认「上次连接真正完成过一次事务」才清零。
+///
+/// r15-SD4：原实现只要 TCP `connect()` 成功就 `reconnect_failures = 0`，
+/// 设备半开 / 假在线（连上立刻断）时每轮都从 1s 退避重新起算，指数退避
+/// 形同虚设，表现为高频重连打满 CPU 且日志只有 1s 间隔。
+fn advance_reconnect_backoff(current: u32, had_successful_comm: bool) -> u32 {
+    if had_successful_comm {
+        0
+    } else {
+        current
+    }
+}
 
 /// Modbus TCP 总线 task：通过 TCP 连接与 Modbus TCP 设备通信
 ///
@@ -54,6 +68,9 @@ pub(crate) async fn bus_task_tcp(
 
     // S3: 重连退避序列由 bus_config.reconnect_backoff 参数化（默认 1/2/5/10/30 秒、无抖动）
     let mut reconnect_failures: u32 = 0;
+    // r15-SD4：由事务 task 在 `pool.submit` 成功时置位，主循环重连前消费。
+    // 与「TCP 建连成功」区分——后者不足以证明设备真的可用。
+    let had_successful_comm = Arc::new(AtomicBool::new(false));
     // 是否已经成功连接过：仅用于区分「首次连接」与「断线重连」，后者计入重连次数
     let mut ever_connected = false;
 
@@ -83,6 +100,11 @@ pub(crate) async fn bus_task_tcp(
         // 在指数退避期间（最长 30s）卡死，spawn 的 submit task 也无法置 pool=None。
         let need_reconnect = pool_slot.lock().await.is_none();
         if need_reconnect {
+            // r15-SD4：仅当上次连接真正通信过才清零；"连上即断"保留累加值。
+            reconnect_failures = advance_reconnect_backoff(
+                reconnect_failures,
+                had_successful_comm.swap(false, Ordering::Relaxed),
+            );
             // S3: 重连前先 sleep 退避（不持锁）
             if reconnect_failures > 0 {
                 // 默认 jitter_ratio=0.0 时无抖动，与历史硬编码序列等价；
@@ -122,7 +144,7 @@ pub(crate) async fn bus_task_tcp(
                     let pool = TransactionPool::with_stream(max_concurrent, s);
                     // 仅在赋值时短暂持锁
                     *pool_slot.lock().await = Some(pool);
-                    reconnect_failures = 0;
+                    // r15-SD4：此处不再清零——建连成功不等于设备可用。
                     if ever_connected {
                         metrics.inc_bus_reconnect(&name);
                     }
@@ -164,6 +186,7 @@ pub(crate) async fn bus_task_tcp(
             }
         };
         let pool_slot_clone = pool_slot.clone();
+        let had_successful_comm = had_successful_comm.clone();
         // 取 slave_id 用于构造 RTU 响应帧
         let slave_id = tx.request.first().copied().unwrap_or(0);
 
@@ -193,6 +216,8 @@ pub(crate) async fn bus_task_tcp(
             loop {
                 match pool.submit(req.clone()).await {
                     Ok(pdu_resp) => {
+                        // r15-SD4：一次真实事务成功才证明连接有效。
+                        had_successful_comm.store(true, Ordering::Relaxed);
                         let rtu = build_rtu_response(slave_id, &pdu_resp);
                         let _ = tx.response_tx.send(Ok(rtu));
                         return;

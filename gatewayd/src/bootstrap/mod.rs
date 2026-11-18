@@ -35,6 +35,31 @@ use gateway_core::shared::default_config_path;
 mod helpers;
 use helpers::*;
 
+/// 启动期清理守卫：覆盖正常退出与**任何** `?` 提前返回两条路径。
+///
+/// r15-WD8 (fix)：原实现把 `graceful_shutdown` 与 `shutdown_logging` 写在
+/// `run_with_config_path` 末尾，但 Step 1（配置加载）、Step 2-7、Step 8-11、
+/// Step 12-13 四处的 `?` 会直接从函数 return，绕过全部清理。现场表现：
+/// Linux 上配置校验失败 → 进程退出但 Step 3 已启动的硬件看门狗仍 armed
+/// → 15s 内无人喂狗 → 整机复位 → systemd 拉起 → 再次失败 → 启动-崩溃死循环。
+/// 原注释声称末尾调用「覆盖启动失败提前 return」与实际控制流不符。
+///
+/// 两个清理动作都幂等（`stop_platform_watchdog` 的 fd `take` 后为 no-op，
+/// `shutdown_logging` 的 WorkerGuard `take` 后为 no-op），因此正常路径上
+/// graceful_shutdown 已做过的清理不会重复产生副作用。
+struct StartupCleanupGuard;
+
+fn cleanup_on_startup_exit() {
+    gateway_core::platform::hardware_watchdog::stop_platform_watchdog();
+    gateway_core::engine::logging::shutdown_logging();
+}
+
+impl Drop for StartupCleanupGuard {
+    fn drop(&mut self) {
+        cleanup_on_startup_exit();
+    }
+}
+
 //  ============================================================================
 // 3 个结构体承载子函数之间的依赖传递
 // ============================================================================
@@ -108,6 +133,9 @@ pub async fn run() -> Result<()> {
 
 /// 指定配置文件路径启动（便于测试和回滚）
 pub async fn run_with_config_path(config_path: &str) -> Result<()> {
+    // r15-WD8：必须在**第一个 `?` 之前**建立；Drop 覆盖所有提前 return。
+    let _startup_cleanup = StartupCleanupGuard;
+
     // P3-5：在任何初始化之前记录进程启动时刻，供 /api/diagnostics/gateway
     // 与 /api/watchdog/services 区分「进程运行时长」与「主机开机时长」
     gateway_api::web::uptime::mark_process_start();
@@ -283,15 +311,42 @@ pub async fn run_with_config_path(config_path: &str) -> Result<()> {
     .await;
 
     info!("gateway stopped cleanly");
-    // OP-5：停机序的最后一步——冲刷日志管道。
-    //
-    // 必须放在 `info!` 之后、`run()` 返回之前：
-    // 1) `tracing_appender::non_blocking` 的 WorkerGuard 存在 gateway-core 的静态量里，
-    //    而 Rust 不为静态量执行 Drop，不显式调用则 channel 中未落盘的 JSON 行
-    //    （含上面这条 "gateway stopped cleanly"）会随进程退出丢失；
-    // 2) `run()` 是启动编排的唯一出口（main.rs 只有 `#[tokio::main] fn main`），
-    //    放此处可同时覆盖正常停机与启动失败提前 return 两条路径；
-    // 3) 调用后不得再写日志——文件 channel 已关闭（本行之后唯一动作是 `return`）。
-    gateway_core::engine::logging::shutdown_logging();
+    // OP-5：日志冲刷由函数入口的 `StartupCleanupGuard` 统一负责（见该文件顶部）。
+    // 其 Drop 发生在 `info!` 之后、函数返回之前，既覆盖正常停机也覆盖启动失败
+    // 提前 return；此处不再显式调用，避免两处语义漂移。
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 清理动作必须可重复调用：正常路径上 graceful_shutdown 已解除过看门狗，
+    /// 守卫 Drop 会再调一次；日志 guard 同理。
+    #[test]
+    fn startup_cleanup_is_idempotent() {
+        cleanup_on_startup_exit();
+        cleanup_on_startup_exit();
+    }
+
+    /// 文本契约：守卫必须在第一处 `?`（配置加载）之前建立。
+    /// 项目已有 arch_deps.rs 文本扫描门禁，风格一致。
+    #[test]
+    fn cleanup_guard_precedes_first_early_return() {
+        let src = include_str!("mod.rs");
+        let guard = src
+            .find("let _startup_cleanup = StartupCleanupGuard;")
+            .expect("启动清理守卫必须存在");
+        let first_load = src.find("config_loader").expect("配置加载调用必须存在");
+        assert!(
+            guard < first_load,
+            "守卫必须建立在配置加载之前，否则加载失败提前 return 仍会绕过清理"
+        );
+        let call = "shutdown_logging".to_owned() + "()";
+        assert_eq!(
+            src.matches(&call).count(),
+            1,
+            "日志冲刷只能由守卫唯一负责，避免两处语义漂移"
+        );
+    }
 }

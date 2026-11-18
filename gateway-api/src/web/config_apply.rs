@@ -24,6 +24,7 @@
 //! （`AuditLog`，非 tracing 桩），消除原先「仅 `POST /api/config` 有审计、
 //! 增量编辑与元数据端点多无记录」的覆盖不一致。
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -265,6 +266,23 @@ pub(crate) fn expand_points(state: &Arc<AppState>, cfg: &GatewayConfig) -> Vec<P
     all
 }
 
+/// 模板展开后的点位 id 也必须唯一。`validate_all` 只检查 `cfg.points` 内部，
+/// 看不到模板库；手工点位和 devices 展开出的点位可能撞名（模板点位 id 形如
+/// `{device.name}_{pt.name}`）。队列去重索引是 `(point_id, timestamp)`，不含 device_id，
+/// 撞名会在同一批次互相覆盖，造成确定性丢数。必须在落盘前拒绝。
+fn ensure_unique_expanded_point_ids(points: &[PointConfig]) -> Result<(), ApiError> {
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    for (i, p) in points.iter().enumerate() {
+        if let Some(first) = seen.insert(p.id.as_str(), i) {
+            return Err(ApiError::bad_request(format!(
+                "点位 id \"{}\" 重复（第 {first} 与第 {i} 项，含设备模板展开）：点位 id 必须全局唯一",
+                p.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// 保存前的模板展开校验（fail-fast）。
 ///
 /// S1：`validate_config` 只做结构校验，看不到模板库，无法发现「模板名拼错 / 设备重名」。
@@ -427,22 +445,52 @@ pub(crate) fn restore_redacted_secrets(old: &GatewayConfig, new: &mut GatewayCon
 /// 前端可能原样回传 `GET /api/config` 的 `"********"` 占位值，若拿入参做快照
 /// 会把占位串当作凭据落库（回滚时读到错误凭据），也会因占位值 != 旧值而误报「已变更」。
 ///
-/// D-06：本函数是**唯一**的配置写回路径（整份替换 / 增量编辑 / 元数据变更共用），
+/// D-06：本函数是**唯一**的用户配置写回路径（整份替换 / 增量编辑 / 元数据变更共用），
 /// 在此集中做 license 配额前置校验（V-8），避免各端点各自校验导致覆盖不全。
+/// 唯一例外是 [`persist_then_apply_skip_quota`]，仅供自愈重建运行态使用。
 pub(crate) async fn persist_then_apply(
     state: &Arc<AppState>,
     old: &GatewayConfig,
     new: &GatewayConfig,
+) -> Result<(ReloadOutcome, GatewayConfig), ApiError> {
+    persist_then_apply_inner(state, old, new, false).await
+}
+
+/// 自愈 / 看门狗重启专用入口：重新应用**磁盘上已经保存的**配置，跳过 license 配额校验。
+///
+/// 为什么不校验：这里的 `new` 来自 `config_loader.reload()`，不是用户新提交的规模变更，
+/// 重建运行态不会让点位变多。license 失效或降级时恰恰最需要让采集恢复，若仍按当前
+/// 档位拒绝，就把「授权问题」升级成「服务永久停摆」——`system::handlers::config`
+/// 的回滚注释也明确要求自愈路径豁免此校验。
+///
+/// 普通配置写端点必须继续走 [`persist_then_apply`]，配额校验不得被绕过。
+pub(crate) async fn persist_then_apply_skip_quota(
+    state: &Arc<AppState>,
+    old: &GatewayConfig,
+    new: &GatewayConfig,
+) -> Result<(ReloadOutcome, GatewayConfig), ApiError> {
+    persist_then_apply_inner(state, old, new, true).await
+}
+
+async fn persist_then_apply_inner(
+    state: &Arc<AppState>,
+    old: &GatewayConfig,
+    new: &GatewayConfig,
+    skip_quota: bool,
 ) -> Result<(ReloadOutcome, GatewayConfig), ApiError> {
     // P0-2：先还原脱敏占位值，校验/热重载/落盘看到的都是真实值。
     let mut new = new.clone();
     restore_redacted_secrets(old, &mut new);
     validate_config(&new)?;
     validate_template_expansion(state, &new)?;
-    check_config_quota(state, &new)?;
+    if !skip_quota {
+        check_config_quota(state, &new)?;
+    }
     // 契约层如实上报：本次变更哪些分节可在线生效、哪些需重启（基于还原后的真实配置比较）
     let scope = reload_scope(old, &new);
     let expanded = expand_points(state, &new);
+    // 跨源（手工点位 + 模板展开）撞名同样会丢数，validate_all 看不到模板库，须在此补拦。
+    ensure_unique_expanded_point_ids(&expanded)?;
     // 活跃点位集在 reload 前按配置口径算好（expanded 随后会被 move 进 reload_config）。
     let active_points = build_active_points(&expanded, &new);
 

@@ -33,6 +33,9 @@ ignore = [
     "RUSTSEC-2024-0449",
     # unsound：glib（冻结桌面端依赖链）
     "RUSTSEC-2024-0429",
+    # unmaintained：chrono（根锁与 fuzz 锁均 0.4.45，无补丁版本）
+    #   93 处调用依赖其时区/时间戳解析，迁移需单独排期；与 audit.toml 同步
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
@@ -53,6 +56,9 @@ allow = [
     # OTA 差分升级（qbsdiff → bzip2 → libbz2-rs-sys 纯 Rust bz2 后端）间接引入。
     # bzip2-1.0.6 为 BSD 风格宽松许可（OSI 批准，允许闭源商用再分发），仅此一处使用。
     "bzip2-1.0.6",
+    # fuzz workspace 的 libfuzzer-sys 为 (MIT OR Apache-2.0) AND NCSA；
+    # NCSA 是 OSI/FSF 认可的宽松许可（与 BSD-3 等价），仅 fuzz target 使用，不进交付产物。
+    "NCSA",
     # 以下三项均为宽松许可，来自桌面端（tauri）与 reqwest 的依赖链：
     # Unlicense = 公共领域弃权；MIT-0 = MIT 无署名版；CDLA-Permissive-2.0 = 数据许可宽松版。
     "Unlicense",

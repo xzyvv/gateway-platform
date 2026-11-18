@@ -17,6 +17,9 @@ pub struct WebhookMetrics {
     pub data_lost: AtomicU64,
     /// r79-OBX1：重试用尽（MAX_WEBHOOK_ATTEMPTS）后放弃、outbox 行被删除次数。
     pub giveup: AtomicU64,
+    /// r15-WH4：outbox pending 超上限时按最旧物理删除的行数（数据丢失）。
+    /// 与 giveup 分开：这一路是**背压丢弃**，端点可能完全健康，只是下游消费不过来。
+    pub outbox_dropped: AtomicU64,
 }
 
 impl WebhookMetrics {
@@ -45,6 +48,13 @@ impl WebhookMetrics {
              # TYPE gateway_webhook_giveup_total counter\n\
              gateway_webhook_giveup_total {}",
             self.giveup.load(Ordering::Relaxed),
+        );
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_webhook_outbox_dropped_total Webhook pending rows dropped by outbox backpressure\n\
+             # TYPE gateway_webhook_outbox_dropped_total counter\n\
+             gateway_webhook_outbox_dropped_total {}",
+            self.outbox_dropped.load(Ordering::Relaxed),
         );
     }
 }
