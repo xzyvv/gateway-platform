@@ -1,0 +1,299 @@
+/**
+ * 交付自检的六项判定（纯函数）。
+ *
+ * 从 `selfCheck.ts` 拆出：六项判定互相独立、输入输出都是纯数据，
+ * 不涉及请求与状态——把它们集中在一个「判定」模块里，
+ * 既能单测每一项的边界，也能让 `selfCheck.ts` 只剩下编排职责。
+ */
+import type { GatewayConfig } from '@/api/types'
+import type { HealthReport, HealthBusRow } from '@/api/status'
+import type { ProtocolCapabilityEntry } from '@/api/protocols'
+import type { NorthStatus } from '@/api/uplink'
+import type { NtpStatus } from '@/api/network'
+import type { Certificate } from '@/api/certificates'
+import type { ServiceInfo } from '@/api/watchdog'
+import { formatDateTime } from '@/utils/datetime'
+import { DELIVERY_BUS_SUCCESS_RATE_WARN, queueBacklogged } from '@/utils/healthVerdict'
+
+/** 单项结论：通过 / 提醒（不阻断交付）/ 未通过 */
+export type CheckLevel = 'pass' | 'warn' | 'fail'
+
+export const LEVEL_LABEL: Record<CheckLevel, string> = {
+  pass: '通过',
+  warn: '提醒',
+  fail: '未通过',
+}
+
+export const LEVEL_TAG_TYPE: Record<CheckLevel, 'success' | 'warning' | 'danger'> = {
+  pass: 'success',
+  warn: 'warning',
+  fail: 'danger',
+}
+
+export interface CheckItem {
+  /** 固定标识：protocol / bus / north / clock / certificate / watchdog */
+  id: string
+  title: string
+  level: CheckLevel
+  detail: string
+}
+
+export interface SelfCheckResult {
+  generatedAt: number
+  items: CheckItem[]
+  level: CheckLevel
+}
+
+/** 汇总多项结论：任一未通过即未通过；任一提醒即提醒；否则通过 */
+export function summarizeLevel(levels: CheckLevel[]): CheckLevel {
+  if (levels.includes('fail')) return 'fail'
+  if (levels.includes('warn')) return 'warn'
+  return 'pass'
+}
+
+/** 协议：配置里用到的协议必须都在后端注册表中 */
+export function evalProtocols(
+  capabilities: ProtocolCapabilityEntry[],
+  config: GatewayConfig,
+): CheckItem {
+  const title = '协议'
+  if (config.buses.length === 0) {
+    return { id: 'protocol', title, level: 'fail', detail: '未配置任何总线，无法开始采集' }
+  }
+  const used = new Set<string>()
+  for (const bus of config.buses) used.add(bus.protocol)
+  for (const point of config.points) used.add(point.protocol)
+  for (const device of config.devices ?? []) used.add(device.protocol)
+  const registered = new Set(capabilities.map((c) => c.name))
+  const unknown = [...used].filter((p) => !registered.has(p))
+  if (unknown.length > 0) {
+    return {
+      id: 'protocol',
+      title,
+      level: 'fail',
+      detail: `配置使用了未注册协议：${unknown.join('、')}（已注册 ${registered.size} 种）`,
+    }
+  }
+  return {
+    id: 'protocol',
+    title,
+    level: 'pass',
+    detail: `已注册 ${registered.size} 种协议；当前使用 ${used.size} 种（${[...used].join('、')}），全部可用`,
+  }
+}
+
+/** 总线：每条总线都要有采集、设备在线率达标、成功率达标 */
+export function evalBuses(report: HealthReport, config: GatewayConfig): CheckItem {
+  const title = '总线'
+  if (config.buses.length === 0) {
+    return { id: 'bus', title, level: 'fail', detail: '未配置任何总线' }
+  }
+
+  const levels: CheckLevel[] = []
+  const notes: string[] = []
+  for (const bus of config.buses) {
+    const row = report.buses.find((b: HealthBusRow) => b.bus === bus.port_name)
+    if (!row) {
+      levels.push('warn')
+      notes.push(`${bus.port_name}：暂无采集统计（网关可能刚启动）`)
+      continue
+    }
+    if (row.total_reads === 0) {
+      levels.push('warn')
+      notes.push(`${bus.port_name}：近 24h 无采集数据`)
+      continue
+    }
+    if (row.total_devices > 0 && row.online_devices === 0) {
+      levels.push('fail')
+      notes.push(`${bus.port_name}：${row.total_devices} 台设备全部离线`)
+      continue
+    }
+    if (row.online_devices < row.total_devices) {
+      levels.push('warn')
+      notes.push(`${bus.port_name}：在线 ${row.online_devices}/${row.total_devices} 台`)
+    } else {
+      levels.push('pass')
+    }
+    if (row.success_rate !== null && row.success_rate < DELIVERY_BUS_SUCCESS_RATE_WARN) {
+      levels.push('warn')
+      notes.push(`${bus.port_name}：成功率 ${row.success_rate.toFixed(1)}%`)
+    }
+  }
+
+  const level = summarizeLevel(levels)
+  const summary = `共 ${config.buses.length} 条总线，设备在线 ${report.summary.online_devices}/${report.summary.total_devices}，采集成功率 ${
+    report.summary.success_rate === null ? '—' : `${report.summary.success_rate.toFixed(1)}%`
+  }`
+  return {
+    id: 'bus',
+    title,
+    level,
+    detail: notes.length > 0 ? `${summary}；${notes.join('；')}` : summary,
+  }
+}
+
+/** 北向：启用的通道必须连接，队列不能明显积压 */
+export function evalNorth(status: NorthStatus): CheckItem {
+  const title = '北向'
+  const enabled = status.channels.filter((c) => c.enabled)
+  const levels: CheckLevel[] = []
+  const notes: string[] = []
+
+  if (enabled.length === 0) {
+    levels.push('warn')
+    notes.push('未启用任何北向通道（当前仅本地采集，MQTT/Webhook 可在「上行」页启用）')
+  }
+  const disconnected = enabled.filter((c) => c.connected !== true)
+  if (disconnected.length > 0) {
+    levels.push('fail')
+    notes.push(`未连接：${disconnected.map((c) => c.name).join('、')}`)
+  }
+  const stoppedServers = status.servers.filter((s) => !s.running)
+  if (stoppedServers.length > 0) {
+    levels.push('fail')
+    notes.push(`北向 Server 未运行：${stoppedServers.map((s) => s.name).join('、')}`)
+  }
+  if (queueBacklogged(status.aggregated.pending_messages)) {
+    levels.push('warn')
+    notes.push(`待发送队列积压 ${status.aggregated.pending_messages} 条`)
+  }
+  if ((status.aggregated.lagged_dropped_batches ?? 0) > 0) {
+    levels.push('warn')
+    notes.push(`扇出订阅丢帧 ${status.aggregated.lagged_dropped_batches} 批`)
+  }
+
+  if (levels.length === 0) {
+    return {
+      id: 'north',
+      title,
+      level: 'pass',
+      detail: `${enabled.length} 个通道已连接，待发送 ${status.aggregated.pending_messages} 条`,
+    }
+  }
+  return { id: 'north', title, level: summarizeLevel(levels), detail: notes.join('；') }
+}
+
+/** 时钟：NTP 已校时且偏差在可接受范围 */
+export function evalClock(ntp: NtpStatus): CheckItem {
+  const title = '时钟'
+  // 时钟不可信时网关会暂停全部计划任务：这是比「偏差多少 ms」更重要的结论
+  if (ntp.clock_trusted === false) {
+    return {
+      id: 'clock',
+      title,
+      level: 'fail',
+      detail: `系统时钟不可信：${ntp.clock_untrust_reason ?? '原因未知'}；计划任务已暂停（校时恢复后自动重排）`,
+    }
+  }
+  const status = String(ntp.status ?? '')
+  if (status.startsWith('error')) {
+    return { id: 'clock', title, level: 'fail', detail: `NTP 校时失败：${status}` }
+  }
+  if (status !== 'synced') {
+    return {
+      id: 'clock',
+      title,
+      level: 'warn',
+      detail: '尚未完成 NTP 校时（status=idle），可稍后重试或检查时间源网络',
+    }
+  }
+  const offset = Math.abs(ntp.offset_ms ?? 0)
+  if (offset > 5000) {
+    return {
+      id: 'clock',
+      title,
+      level: 'fail',
+      detail: `时钟偏差 ${offset} ms，超过 5000 ms 上限`,
+    }
+  }
+  if (offset > 1000) {
+    return {
+      id: 'clock',
+      title,
+      level: 'warn',
+      detail: `时钟偏差 ${offset} ms（建议 ≤1000 ms）`,
+    }
+  }
+  return {
+    id: 'clock',
+    title,
+    level: 'pass',
+    detail: `NTP 已同步（${ntp.source ?? 'NTP'}），偏差 ${offset} ms${
+      ntp.last_sync ? `，最近校时 ${formatDateTime(ntp.last_sync)}` : ''
+    }`,
+  }
+}
+
+/** 证书：已安装且未临近过期（无证书时提醒：HTTP 明文可交付内网） */
+export function evalCertificates(certificates: Certificate[]): CheckItem {
+  const title = '证书'
+  const enabled = certificates.filter((c) => c.enabled)
+  if (enabled.length === 0) {
+    return {
+      id: 'certificate',
+      title,
+      level: 'warn',
+      detail: '未安装 TLS 证书，当前为 HTTP 明文访问（内网可接受，公网交付建议启用）',
+    }
+  }
+  const expired = enabled.filter((c) => c.days_remaining < 0)
+  if (expired.length > 0) {
+    return {
+      id: 'certificate',
+      title,
+      level: 'fail',
+      detail: `证书已过期：${expired.map((c) => c.name).join('、')}`,
+    }
+  }
+  const shortest = enabled.reduce((a, c) => (c.days_remaining < a.days_remaining ? c : a))
+  if (shortest.days_remaining < 30) {
+    return {
+      id: 'certificate',
+      title,
+      level: 'warn',
+      detail: `证书「${shortest.name}」剩余 ${shortest.days_remaining} 天（建议 ≥30 天）`,
+    }
+  }
+  return {
+    id: 'certificate',
+    title,
+    level: 'pass',
+    detail: `${enabled.length} 张证书有效，最短剩余 ${shortest.days_remaining} 天（${shortest.name}）`,
+  }
+}
+
+/** 看门狗：不得有已停止的服务；重启中的服务只提醒 */
+export function evalWatchdog(services: ServiceInfo[]): CheckItem {
+  const title = '看门狗'
+  if (services.length === 0) {
+    return { id: 'watchdog', title, level: 'warn', detail: '未获取到服务状态' }
+  }
+  const stopped = services.filter((s) => s.status === 'Stopped')
+  if (stopped.length > 0) {
+    return {
+      id: 'watchdog',
+      title,
+      level: 'fail',
+      detail: `服务已停止：${stopped.map((s) => s.name).join('、')}`,
+    }
+  }
+  const restarting = services.filter((s) => s.status === 'Restarting')
+  if (restarting.length > 0) {
+    return {
+      id: 'watchdog',
+      title,
+      level: 'warn',
+      detail: `服务重启中：${restarting.map((s) => s.name).join('、')}`,
+    }
+  }
+  const unknown = services.filter((s) => s.status === 'Unknown')
+  const restarts = services.reduce((sum, s) => sum + s.restarts, 0)
+  return {
+    id: 'watchdog',
+    title,
+    level: 'pass',
+    detail: `${services.length} 个服务运行正常，累计重启 ${restarts} 次${
+      unknown.length > 0 ? `（${unknown.length} 个未启用/平台不支持）` : ''
+    }`,
+  }
+}

@@ -15,7 +15,7 @@ const LINE_BUDGET_EXEMPT = [
   // 自动生成，勿手改（vite alias 重定向 @element-plus/icons-vue 的产物）
   'src/utils/ep-icons-compact.ts',
   // ── 存量超限（债务清单：只许减少，不许新增）──
-  'src/views/ops/delivery/selfCheck.ts',
+  // 当前已全部清空：存量巨型文件已按 §3.3 约定拆分完毕
 ]
 
 export default tseslint.config(
