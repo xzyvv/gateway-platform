@@ -1,5 +1,6 @@
 import { computed, onUnmounted, ref } from 'vue'
 import type { DeviceConfig, PointConfig } from '@/api/types'
+import { defaultPointConfig } from '@/utils/pointDefaults'
 import type { PointQuality } from '@/api/dataQuality'
 import type { PointRow, PointsState } from './types'
 import { FALLBACK_NORTH_INTERVAL } from './validation'
@@ -51,33 +52,13 @@ export function createPointsState(): PointsState {
       if (!selectedDevice.value || rp.device_id !== selectedDevice.value) continue
       if (configured.has(rp.point_id)) continue
       rows.push({
-        id: rp.point_id,
-        name: rp.point_name,
-        device_id: rp.device_id,
-        bus: dev?.bus ?? '',
-        protocol: dev?.protocol ?? '',
-        address: '',
-        slave_id: null,
-        address_num: null,
-        data_id: null,
-        function_code: null,
-        data_type: null,
-        byte_order: null,
-        register_count: null,
-        interval: 1,
-        scale: 1,
-        offset: 0,
-        formula: null,
-        ct_ratio: null,
-        pt_ratio: null,
-        deadband: 0,
-        on_change: false,
-        unit: null,
-        alarm_high: null,
-        alarm_low: null,
-        aggregation: null,
-        modbus_register: null,
-        writable: false,
+        ...defaultPointConfig({
+          id: rp.point_id,
+          name: rp.point_name,
+          device_id: rp.device_id,
+          bus: dev?.bus ?? '',
+          protocol: dev?.protocol ?? '',
+        }),
         _source: 'template',
       })
     }

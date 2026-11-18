@@ -20,6 +20,7 @@ import {
   parsePointCell,
 } from '@/utils/pointFields'
 import type { PointConfig } from '@/api/types'
+import { defaultPointConfig as defaultPointValues } from '@/utils/pointDefaults'
 import type { PointParseResult, PointRow } from './types'
 
 /** CSV 解析结果：成功时带回校验结果与待提交数据，失败时带回提示文案 */
@@ -30,38 +31,14 @@ export type PointCsvParseOutcome =
 /** 写入语义 */
 export type PointWriteMode = 'merge' | 'replace'
 
-/** 新增点位的默认基底（字段与后端 serde default 对齐） */
+/**
+ * 新增点位的默认基底（字段与后端 serde default 对齐）。
+ *
+ * 转发到 @/utils/pointDefaults —— 该文件是「点位默认值」的唯一出处，
+ * 批量导入 / 模板展开 / 批量生成 / 向导添加四条路径共用同一份语义。
+ */
 export function defaultPointConfig(): PointConfig {
-  return {
-    id: '',
-    name: null,
-    device_id: null,
-    bus: '',
-    protocol: '',
-    address: '',
-    slave_id: null,
-    address_num: null,
-    data_id: null,
-    function_code: null,
-    data_type: null,
-    byte_order: null,
-    register_count: null,
-    interval: 1,
-    scale: 1,
-    offset: 0,
-    formula: null,
-    ct_ratio: null,
-    pt_ratio: null,
-    deadband: 0,
-    on_change: false,
-    unit: null,
-    alarm_high: null,
-    alarm_low: null,
-    aggregation: null,
-    modbus_register: null,
-    // S11: 批量导入的点位默认不在写入白名单内（避免误写现场寄存器）
-    writable: false,
-  }
+  return defaultPointValues()
 }
 
 /** 解析点位 CSV：按列名定位字段并逐行校验 */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatBytes, formatDuration, formatElapsed } from './format'
+import { formatBytes, formatDuration, formatElapsed, formatRelative } from './format'
 
 /**
  * 契约：这三个函数是**全站唯一**的字节/时长格式化口径。
@@ -80,5 +80,42 @@ describe('formatElapsed', () => {
     expect(formatElapsed(1234)).toBe('1.23 秒')
     expect(formatElapsed(1250)).toBe('1.25 秒')
     expect(formatElapsed(5000)).toBe('5 秒')
+  })
+})
+
+describe('formatRelative', () => {
+  it('非法与负数返回占位符，不输出 NaN 秒前', () => {
+    expect(formatRelative(null)).toBe('-')
+    expect(formatRelative(undefined)).toBe('-')
+    expect(formatRelative(Number.NaN)).toBe('-')
+    expect(formatRelative(Number.POSITIVE_INFINITY)).toBe('-')
+    expect(formatRelative(-5)).toBe('-')
+  })
+
+  it('5 秒内显示「刚刚」，不显示「0 秒前」', () => {
+    expect(formatRelative(0)).toBe('刚刚')
+    expect(formatRelative(4)).toBe('刚刚')
+    expect(formatRelative(5)).toBe('5 秒前')
+  })
+
+  it('单位之间带空格（与 formatDuration / formatElapsed 口径一致）', () => {
+    expect(formatRelative(30)).toBe('30 秒前')
+    expect(formatRelative(60)).toBe('1 分钟前')
+    expect(formatRelative(3600)).toBe('1 小时前')
+  })
+
+  it('按 60 / 3600 边界截断，只保留有价值的单位', () => {
+    expect(formatRelative(59)).toBe('59 秒前')
+    expect(formatRelative(119)).toBe('1 分钟前')
+    expect(formatRelative(3599)).toBe('59 分钟前')
+    expect(formatRelative(7200)).toBe('2 小时前')
+  })
+
+  it('超过一天仍按小时计，不引入「N 天前」', () => {
+    expect(formatRelative(25 * 3600)).toBe('25 小时前')
+  })
+
+  it('小数秒向下取整，不显示「30.5 秒前」', () => {
+    expect(formatRelative(30.9)).toBe('30 秒前')
   })
 })

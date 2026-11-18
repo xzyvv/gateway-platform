@@ -26,6 +26,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { formatRelative } from '@/utils/format'
 
 const props = withDefaults(
   defineProps<{
@@ -68,18 +69,12 @@ const title = computed(() =>
   props.unreachable ? '无法连接网关' : '网关部分组件异常',
 )
 
-function relative(secs: number): string {
-  if (secs < 60) return `${secs} 秒前`
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟前`
-  return `${Math.floor(secs / 3600)} 小时前`
-}
-
 const detail = computed(() => {
   if (props.unreachable) {
     // 明确告知「看到的是历史数据」，这是现场最危险的误读场景
     return props.staleSeconds == null
       ? '尚未成功连接过网关，当前页面没有实时数据。'
-      : `页面数据停留在 ${relative(props.staleSeconds)}，不是实时值。`
+      : `页面数据停留在 ${formatRelative(props.staleSeconds)}，不是实时值。`
   }
   if (props.components.length) {
     // 队列积压附上具体条数，现场无需跳转即可判断严重程度

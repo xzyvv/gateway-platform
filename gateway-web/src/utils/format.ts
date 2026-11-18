@@ -13,6 +13,7 @@
  * - 时长分两种语义，别混用：
  *   - [`formatDuration`] 是「多久」的长跨度（排队积压 2 天 3 小时），带天/小时/分；
  *   - [`formatElapsed`] 是「耗时」的短跨度（一次读取 850 ms / 1.25 秒）。
+ *   - [`formatRelative`] 是「距今多久」的相对时间（N 秒前 / N 分钟前 / N 小时前）。
  */
 
 /** 字节单位（1024 进位） */
@@ -77,4 +78,29 @@ export function formatElapsed(ms: number | null | undefined): string {
   const rounded = Math.round(ms)
   if (rounded < 1000) return `${rounded} ms`
   return `${Number((rounded / 1000).toFixed(2))} 秒`
+}
+
+/**
+ * 相对时间：距今多少秒 → `N 秒前` / `N 分钟前` / `N 小时前`。
+ *
+ * 为什么要收口：这段「三档阈值 + 换算」过去在 5 个文件里各写一遍，口径已经漂了——
+ * 有的写「3秒前」（无空格），有的写「3 秒前」（有空格）；有的对 5 秒内返回「刚刚」，
+ * 有的直接显示「0 秒前」。同一批数据在顶栏横幅和表格徽章上显示得不一样。
+ *
+ * 约定：
+ * - 单位之间**带空格**（与本模块其它格式化函数一致）；
+ * - 5 秒内返回「刚刚」——「0 秒前」看着像坏了，实际是数据刚到；
+ * - 超过一天仍按小时计（「25 小时前」），不引入「N 天前」，避免同一条数据
+ *   在不同页面跳档；
+ * - 非法值（NaN / Infinity / 负数）返回 `-`，不把 "NaN 秒前" 抛到界面上。
+ *
+ * @param seconds 距今的秒数
+ */
+export function formatRelative(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '-'
+  const s = Math.floor(seconds)
+  if (s < 5) return '刚刚'
+  if (s < 60) return `${s} 秒前`
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`
+  return `${Math.floor(s / 3600)} 小时前`
 }

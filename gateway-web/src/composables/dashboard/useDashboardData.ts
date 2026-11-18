@@ -16,6 +16,7 @@ import { useDashboardLayout } from './useDashboardLayout'
 import { useHealthSignals, THRESHOLDS } from './useHealthSignals'
 import { formatTimeOfDay } from '@/utils/datetime'
 import { healthSeverity, healthRowsFromComponents } from '@/utils/healthStatus'
+import { formatRelative } from '@/utils/format'
 
 /**
  * Dashboard 页面数据层封装
@@ -212,18 +213,16 @@ export function useDashboardData() {
   const dataStaleText = computed(() => {
     const age = staleAgeSeconds.value
     if (age == null) return '离线旧数据'
-    if (age < 60) return `离线旧数据（${age} 秒前）`
-    if (age < 3600) return `离线旧数据（${Math.floor(age / 60)} 分钟前）`
-    return `离线旧数据（${Math.floor(age / 3600)} 小时前）`
+    return `离线旧数据（${formatRelative(age)}）`
   })
 
   const lastUpdateText = computed(() => {
     void updateTick.value
     if (!lastUpdate.value) return ''
     const s = Math.floor((Date.now() - lastUpdate.value.getTime()) / 1000)
-    if (s < 5) return '刚刚'
-    if (s < 60) return `${s} 秒前`
-    return formatTimeOfDay(lastUpdate.value)
+    // 超过 1 分钟改显示绝对时刻——「63 分钟前」不如「14:32」直观
+    if (s >= 60) return formatTimeOfDay(lastUpdate.value)
+    return formatRelative(s)
   })
 
   function fmtPct(v: unknown): string {

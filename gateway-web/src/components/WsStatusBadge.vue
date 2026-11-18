@@ -110,6 +110,7 @@ import { storeToRefs } from 'pinia'
 import { useWebsocketStore } from '@/stores/websocket'
 import { forceReconnectAll } from '@/utils/websocket'
 import { ElMessage } from 'element-plus'
+import { formatRelative } from '@/utils/format'
 
 const wsStore = useWebsocketStore()
 const { status, reconnectCount, lastError, reconnectHistory, isReconnecting, activeStreams } = storeToRefs(wsStore)
@@ -206,11 +207,7 @@ const tooltipText = computed(() => {
 })
 
 function relativeTime(ts: number): string {
-  const diff = Math.floor((Date.now() - ts) / 1000)
-  if (diff < 5) return '刚刚'
-  if (diff < 60) return `${diff}秒前`
-  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
-  return `${Math.floor(diff / 3600)}小时前`
+  return formatRelative(Math.floor((Date.now() - ts) / 1000))
 }
 
 function truncate(s: string | undefined, n: number): string {

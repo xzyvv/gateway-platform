@@ -53,6 +53,7 @@ import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { runConcurrent } from '@/utils/concurrency'
+import { defaultPointConfig } from '@/utils/pointDefaults'
 
 const props = defineProps<{
   modelValue: boolean
@@ -133,33 +134,17 @@ async function doGenerate() {
       async (item) => {
         try {
           await createPoint(props.deviceId, {
-            id: genForm.namePrefix.toLowerCase() + '_' + item.addr,
-            name: genForm.namePrefix + item.idx,
-            bus,
-            protocol: genForm.protocol,
-            address: String(item.addr),
-            slave_id: genForm.slaveId,
-            address_num: genForm.addressNum,
-            device_id: props.deviceId,
-            // 必填字段补默认值（与 PointsBatchImport 一致）
-            function_code: null,
-            data_type: null,
-            byte_order: null,
-            register_count: null,
-            data_id: null,
-            interval: 1,
-            scale: 1,
-            offset: 0,
-            formula: null,
-            ct_ratio: null,
-            pt_ratio: null,
-            deadband: 0,
-            on_change: false,
-            unit: null,
-            alarm_high: null,
-            alarm_low: null,
-            aggregation: null,
-            modbus_register: null,
+            // 必填字段补默认值（与批量导入 / 模板展开共用同一份语义）
+            ...defaultPointConfig({
+              id: genForm.namePrefix.toLowerCase() + '_' + item.addr,
+              name: genForm.namePrefix + item.idx,
+              bus,
+              protocol: genForm.protocol,
+              address: String(item.addr),
+              slave_id: genForm.slaveId,
+              address_num: genForm.addressNum,
+              device_id: props.deviceId,
+            }),
           })
           ok++
         } catch { fail++ }

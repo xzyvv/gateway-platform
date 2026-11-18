@@ -11,7 +11,6 @@ import { scanBus, respondedSlaves } from '@/api/protocolTools/slaveScan'
 import { listPoints } from '@/api/points'
 import { useReadPointNow } from '@/composables/data/useReadPointNow'
 import { getDeviceStats, commsQuality, recordRead as recordDeviceRead, type DeviceCommsStat } from '@/utils/deviceComms'
-import { recordBusOp } from '@/utils/busStats'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import { statusTagType, type TagType } from '@/utils/statusType'
 import { runConcurrent } from '@/utils/concurrency'
@@ -73,18 +72,15 @@ export function createDeviceConnectivity(state: DeviceState, deps: DeviceConnect
           results.push({ name: dev.name, reachable: true, latency: outcome.latencyMs })
           ok++
           recordDeviceRead(dev.id, true, outcome.latencyMs)
-          recordBusOp(dev.bus, true, outcome.latencyMs)
         } else {
           results.push({ name: dev.name, reachable: false })
           fail++
           recordDeviceRead(dev.id, false, outcome.latencyMs)
-          recordBusOp(dev.bus, false, outcome.latencyMs, 'read_error')
         }
       } catch {
         results.push({ name: dev.name, reachable: false })
         fail++
         recordDeviceRead(dev.id, false, 0)
-        recordBusOp(dev.bus, false, 0, 'connect_error')
       }
     }
 

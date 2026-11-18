@@ -178,7 +178,7 @@ import {
 } from '@/utils/healthVerdict'
 import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { formatElapsed } from '@/utils/format'
+import { formatElapsed, formatRelative } from '@/utils/format'
 const { showToast } = useErrorDisplay()
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
 import {
@@ -397,10 +397,7 @@ function levelLabel(l: DeviceHealthView['level']) {
 
 function timeAgo(t: number | null) {
   if (t == null) return '—'
-  const s = Math.floor((Date.now() - t) / 1000)
-  if (s < 60) return `${s}秒前`
-  if (s < 3600) return `${Math.floor(s / 60)}分钟前`
-  return `${Math.floor(s / 3600)}小时前`
+  return formatRelative(Math.floor((Date.now() - t) / 1000))
 }
 
 async function load() {

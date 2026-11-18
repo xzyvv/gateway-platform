@@ -46,7 +46,6 @@ vi.mock('@/utils/exportCsv', () => ({
   csvFilename: (prefix: string) => `${prefix}-stamp.csv`,
 }))
 vi.mock('@/utils/deviceComms', () => ({ recordRead: vi.fn() }))
-vi.mock('@/utils/busStats', () => ({ recordBusOp: vi.fn() }))
 
 import BatchReadTest from './BatchReadTest.vue'
 import { listDevices } from '@/api/devices'
@@ -54,7 +53,6 @@ import { listPoints } from '@/api/points'
 import { listProtocolCapabilities } from '@/api/protocols'
 import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
 import { recordRead } from '@/utils/deviceComms'
-import { recordBusOp } from '@/utils/busStats'
 
 const DEVICES = [
   { id: 'dev-1', name: '温控器', protocol: 'modbus-tcp' },
@@ -257,8 +255,6 @@ describe('BatchReadTest 读取性能测试', () => {
 
     expect(recordRead).toHaveBeenCalledTimes(2)
     expect(vi.mocked(recordRead).mock.calls[0]).toEqual(['dev-1', true, 10])
-    expect(recordBusOp).toHaveBeenCalledWith('COM1', true, 10, undefined)
-    expect(recordBusOp).toHaveBeenCalledWith('COM1', false, 20, 'read_error')
   })
 
   it('测试日志倒序追加：最新的完成结论在最上方', async () => {

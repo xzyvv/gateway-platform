@@ -102,7 +102,6 @@ import { listPoints } from '@/api/points'
 import { useReadPointNow } from '@/composables/data/useReadPointNow'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 import { recordRead as recordDeviceRead } from '@/utils/deviceComms'
-import { recordBusOp } from '@/utils/busStats'
 import { formatClock } from '@/utils/datetime'
 import { useSharedDebugTarget } from '@/composables/acquisition/useDebugTargets'
 import { useProtocolGates } from '@/composables/acquisition/useProtocolGates'
@@ -253,7 +252,6 @@ async function doBatchRead() {
     else fail++
     if (ptObj) {
       recordDeviceRead(ptObj.device_id || ptObj.id, outcome.ok, outcome.latencyMs)
-      recordBusOp(ptObj.bus, outcome.ok, outcome.latencyMs, outcome.ok ? undefined : 'read_error')
     }
   }
   if (unmounted) return

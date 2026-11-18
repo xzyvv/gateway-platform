@@ -7,6 +7,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useSharedTick } from '@/composables/core/useSharedTick'
+import { formatRelative } from '@/utils/format'
 
 const props = defineProps<{ timestamp: number }>()
 
@@ -67,9 +68,7 @@ const freshnessText = computed(() => {
   void tick.value
   const s = elapsed(props.timestamp)
   if (!isFinite(s)) return '—'
-  if (s < 60) return `${s}秒前`
-  if (s < 3600) return `${Math.floor(s / 60)}分钟前`
-  return `${Math.floor(s / 3600)}小时前`
+  return formatRelative(s)
 })
 </script>
 

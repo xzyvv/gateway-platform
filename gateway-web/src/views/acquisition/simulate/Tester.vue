@@ -85,7 +85,6 @@ import { confirmPointWrite, usePointWrite } from '@/composables/data/usePointWri
 import { getProtocolDiag } from '@/api/protocols'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 import { recordRead as recordDeviceRead } from '@/utils/deviceComms'
-import { recordBusOp } from '@/utils/busStats'
 import { useSharedDebugTarget } from '@/composables/acquisition/useDebugTargets'
 import { useProtocolGates } from '@/composables/acquisition/useProtocolGates'
 import { extractErrorMessage } from '@/utils/errorHandler'
@@ -232,7 +231,6 @@ async function doRead() {
       void attachFrames(entry, startedAtMs, bus)
       if (pt) {
         recordDeviceRead(pt.device_id || pt.id, true, latency)
-        recordBusOp(pt.bus, true, latency)
       }
     } else {
       valueError.value = true
@@ -242,7 +240,6 @@ async function doRead() {
       void attachFrames(entry, startedAtMs, bus)
       if (pt) {
         recordDeviceRead(pt.device_id || pt.id, false, latency)
-        recordBusOp(pt.bus, false, latency, 'read_error')
       }
     }
   } finally {

@@ -14,6 +14,7 @@ import {
   parseModbusAddress,
 } from '@/composables/devices/usePoints/modbusAddress'
 import type { PointConfig } from '@/api/types'
+import { defaultPointConfig } from '@/utils/pointDefaults'
 import type { ManualPointForm } from './types'
 
 export function usePointStep() {
@@ -66,32 +67,18 @@ export function usePointStep() {
     addingPoint.value = true
     try {
       await createPoint(device.id, {
-        id: `${device.id}_${address}`,
-        name: manual.value.name.trim(),
-        device_id: device.id,
-        bus: bus.port_name,
-        protocol: bus.protocol,
-        address,
-        slave_id: slaveId,
-        address_num: parsed.addressNum,
-        data_id: null,
-        function_code: parsed.functionCode,
-        data_type: manual.value.dataType,
-        byte_order: null,
-        register_count: null,
-        interval: 1,
-        scale: 1,
-        offset: 0,
-        formula: null,
-        ct_ratio: null,
-        pt_ratio: null,
-        deadband: 0,
-        on_change: false,
-        unit: null,
-        alarm_high: null,
-        alarm_low: null,
-        aggregation: null,
-        modbus_register: null,
+        ...defaultPointConfig({
+          id: `${device.id}_${address}`,
+          name: manual.value.name.trim(),
+          device_id: device.id,
+          bus: bus.port_name,
+          protocol: bus.protocol,
+          address,
+          slave_id: slaveId,
+          address_num: parsed.addressNum,
+          function_code: parsed.functionCode,
+          data_type: manual.value.dataType,
+        }),
       })
       ElMessage.success('点位已添加')
       manual.value = { name: '', address: '', dataType: 'i16' }
