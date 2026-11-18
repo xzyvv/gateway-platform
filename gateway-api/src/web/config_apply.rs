@@ -433,6 +433,69 @@ pub(crate) fn restore_redacted_secrets(old: &GatewayConfig, new: &mut GatewayCon
     }
 }
 
+/// 纯判定：还原脱敏后系统级凭据字段是否发生变更（便于无 AppState 单测）。
+fn system_secrets_changed(old: &GatewayConfig, effective: &GatewayConfig) -> bool {
+    match (&old.web, &effective.web) {
+        (Some(o), Some(n)) => {
+            o.api_token != n.api_token
+                || o.password_hash != n.password_hash
+                || o.allow_anon_read != n.allow_anon_read
+        }
+        // web 段整体增删属结构性变更
+        (None, Some(_)) | (Some(_), None) => true,
+        (None, None) => false,
+    }
+}
+
+/// 系统级凭据字段变更的主 token 门禁（P0 提权修复）。
+///
+/// 背景：`config:write` scope 的 API Key 只能改业务配置，但三个「整份配置替换」
+/// 入口（POST /api/config、PUT /api/config/import、版本回滚）会把请求体里的
+/// `web` 段原样落盘。持有 config:write 密钥者可构造请求把 `web.api_token`
+/// 改成自己知道的值，等价于自造管理员凭据——完全绕过 docs/api-access.md
+/// 定义的「系统域仅主 token」模型。
+///
+/// 判定必须在 [`restore_redacted_secrets`] **之后**：前端回传 "********" 是
+/// 「未改动」而非变更，否则每次普通保存都会被误判为提权。
+pub(crate) fn ensure_system_secrets_allowed(
+    state: &Arc<AppState>,
+    headers: &axum::http::HeaderMap,
+    old: &GatewayConfig,
+    new: &GatewayConfig,
+) -> Result<(), ApiError> {
+    use crate::web::middleware::{api_token, extract_token_from_headers, token_matches};
+
+    let mut effective = new.clone();
+    restore_redacted_secrets(old, &mut effective);
+
+    if !system_secrets_changed(old, &effective) {
+        return Ok(());
+    }
+
+    let provided = extract_token_from_headers(headers)
+        .ok_or_else(|| ApiError::unauthorized("missing api token"))?;
+    if !token_matches(&provided, &api_token(state)) {
+        state.platform.audit.log(
+            "config.system_secrets_denied",
+            "gateway",
+            "config:write attempted to change web.api_token / password_hash / allow_anon_read",
+            "api",
+        );
+        return Err(ApiError {
+            status: axum::http::StatusCode::FORBIDDEN,
+            code: 8005,
+            message: "changing system credentials requires the primary api token".to_string(),
+        });
+    }
+    state.platform.audit.log(
+        "config.system_secrets_changed",
+        "gateway",
+        "web credentials changed with primary token",
+        "api",
+    );
+    Ok(())
+}
+
 /// 整份替换路径（A5 / E 批）：expand → save → reload → store → notify，
 /// 返回 `(热重载说明列表, 实际生效配置)`。
 ///

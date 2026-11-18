@@ -16,7 +16,9 @@ use crate::south::protocol::CollectorError;
 
 use super::frame_extract::extract_frame;
 use super::transport::{BusDeps, GpioOutput};
-use super::{is_retryable, BusTransaction, SerialHandle};
+use super::{
+    is_retryable, BusTransaction, SerialHandle, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_DELAY_MS,
+};
 
 /// NoReply/ChecksumError 连续达到该次数后发一帧自检帧，区分设备级与端口级故障。
 const PROBE_AFTER_SILENT: u32 = 10;
@@ -26,6 +28,17 @@ const PROBE_AFTER_SILENT: u32 = 10;
 /// 防止「总线上的从站全都掉线」时每次自检都关端口重开——重开本身会让同总线
 /// 所有设备短暂拿到 BusClosed，需要节流。
 const MIN_REOPEN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Modbus ASCII 接收缓冲硬上限（字节）。
+///
+/// Modbus RTU ADU 最大 256 字节，ASCII 编码后每字节变 2 个 hex 字符，
+/// 再加起始 `:`、2 字节 LRC 与 CRLF，合法帧最长约 517 字节。取 1024
+/// 留出约一倍余量（容忍少量前导噪声 / 粘连帧），同时对异常设备持续发
+/// 无换行数据做硬约束——原实现用裸 `Vec<u8>` 无上限累积，可撑爆内存。
+///
+/// 同一进程内的 RTU 分帧缓冲已有 `FrameBuffer::MAX_FRAME_BYTES`(2048) 保护，
+/// 但 ASCII 分支的 `ascii_buf` 是独立缓冲，此前没有任何上限（原 #112）。
+const ASCII_BUF_LIMIT: usize = 1024;
 
 /// 构造端口自检帧：Modbus RTU FC03 最小读（addr=0, count=1）。
 ///
@@ -75,8 +88,14 @@ pub(crate) async fn run_serial_bus_task(
     let name = bus_config.port_name.clone();
     let protocol = bus_config.protocol.clone();
     let timeout = Duration::from_millis(bus_config.timeout_ms);
-    let retry_delay = Duration::from_millis(bus_config.retry_delay_ms.unwrap_or(200));
-    let retry_count = bus_config.retry_count.unwrap_or(2);
+    // 重试参数与 `BusManager` 的应答预算同源（DEFAULT_RETRY_* 定义在 bus/mod.rs），
+    // 保证「重试循环最坏耗时」不会超出上层「等应答」预算（原 #107）。
+    let retry_delay = Duration::from_millis(
+        bus_config
+            .retry_delay_ms
+            .unwrap_or(DEFAULT_RETRY_DELAY_MS),
+    );
+    let retry_count = bus_config.retry_count.unwrap_or(DEFAULT_RETRY_COUNT);
     let de_pin = bus_config.de_pin;
     // 决策表 #24：统一变体作为唯一解析点（显式 variant 优先，回退遗留 modbus_mode）。
     let modbus_mode = bus_config
@@ -173,6 +192,7 @@ pub(crate) async fn run_serial_bus_task(
                     baud: bus_config.baud_rate,
                 },
                 deps.gpio.as_ref(),
+                Some(metrics.as_ref()),
             )
             .await;
             match &result {
@@ -185,7 +205,9 @@ pub(crate) async fn run_serial_bus_task(
                         attempt,
                         retry_count,
                         e,
-                        bus_config.retry_delay_ms.unwrap_or(200)
+                        bus_config
+                            .retry_delay_ms
+                            .unwrap_or(DEFAULT_RETRY_DELAY_MS)
                     );
                     tokio::time::sleep(retry_delay).await;
                 }
@@ -259,6 +281,7 @@ pub(crate) async fn run_serial_bus_task(
                                 baud: bus_config.baud_rate,
                             },
                             deps.gpio.as_ref(),
+                            Some(metrics.as_ref()),
                         )
                         .await;
                         match probe {
@@ -508,6 +531,7 @@ async fn do_transaction(
     serial: &mut SerialHandle,
     params: TransactionParams<'_>,
     gpio: &dyn GpioOutput,
+    metrics: Option<&Metrics>,
 ) -> Result<Vec<u8>, CollectorError> {
     let TransactionParams {
         request,
@@ -557,6 +581,20 @@ async fn do_transaction(
                 // Modbus ASCII 模式：将读到的 ASCII 转回 RTU 再分帧
                 if protocol == "modbus" && modbus_mode == "ascii" {
                     ascii_buf.extend_from_slice(&buf[..n]);
+                    // 原 #112：硬上限保护。异常设备持续发无 CRLF 数据时，
+                    // ascii_buf 会无限增长直到 OOM。超限即整段丢弃，继续等下一个完整帧。
+                    // 计数与 warn 让现场能区分「设备灌噪声」与「正常的偶发 CRC 错帧」。
+                    if ascii_buf.len() > ASCII_BUF_LIMIT {
+                        tracing::warn!(
+                            "bus serial: ASCII buffer overflow ({} bytes > {}), dropping partial frame",
+                            ascii_buf.len(),
+                            ASCII_BUF_LIMIT
+                        );
+                        if let Some(m) = metrics {
+                            m.inc_ascii_frame_dropped();
+                        }
+                        ascii_buf.clear();
+                    }
                     while let Some(crlf_pos) = ascii_buf.windows(2).position(|w| w == b"\r\n") {
                         let frame_end = crlf_pos + 2;
                         // 查找帧起始符 :

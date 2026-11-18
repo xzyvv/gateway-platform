@@ -407,6 +407,9 @@ pub(crate) fn allow_anon_read(state: &Arc<AppState>) -> bool {
 /// - `/api/license*`：授权信息
 /// - `/api/certificates*`：证书清单
 /// - `/api/devices/health*`：设备健康度（可推断产线停机情况）
+/// - `/api/north/dead-letters*`：死信队列（含失败报文原文与可能的凭据）
+/// - `/api/diagnostics/logs*`：运行日志（历史日志行可能含敏感串）
+/// - `/api/watchdog*`：自愈事件与服务状态（可推断故障与拓扑）
 fn is_sensitive_read_path(path: &str) -> bool {
     let p = path.trim_end_matches('/');
     p == "/api/config"
@@ -417,6 +420,12 @@ fn is_sensitive_read_path(path: &str) -> bool {
         || p.starts_with("/api/certificates")
         || p == "/api/devices/health"
         || p.starts_with("/api/devices/health/")
+        || p == "/api/north/dead-letters"
+        || p.starts_with("/api/north/dead-letters/")
+        || p == "/api/diagnostics/logs"
+        || p.starts_with("/api/diagnostics/logs/")
+        || p == "/api/watchdog"
+        || p.starts_with("/api/watchdog/")
 }
 
 pub(crate) async fn require_auth_if_anon_disabled(

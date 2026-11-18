@@ -16,6 +16,8 @@ async fn transaction_fails_fast_bus_closed_when_task_dead() {
         name: "bus_dead".to_string(),
         tcp_addr: None,
         timeout_ms: 500,
+        // 该用例走 BusClosed 快速失败路径，等应答预算取任意有限值即可
+        reply_budget: std::time::Duration::from_millis(1100),
         max_inflight: 1,
         variant: None,
         asdu_addr_len: 2,
@@ -631,5 +633,81 @@ async fn self_check_skipped_without_known_good_slave_keeps_handle() {
         "句柄应被保留（设备级失败），实际 {err:?}"
     );
 
+    drop(bm);
+}
+
+// ===== 原 #107: 应答等待预算必须覆盖总线重试最坏耗时 =====
+//
+// 现场复盘：默认配置下总线 task 重试最坏耗时 = 3×timeout + 2×200ms；
+// 原等应答预算只有 2×timeout+100ms。重试成功的应答还在回传途中，
+// 上层就判超时丢弃该结果 → 采集值为空且无任何错误日志，极难定位。
+// 修复后两处共用 `bus_retry_budget` 推导，这里用纯数值关系钉住，不 sleep。
+
+#[test]
+fn bus_retry_budget_covers_all_attempts_and_retry_delays() {
+    use std::time::Duration;
+
+    let t = Duration::from_millis(1000);
+    let delay = Duration::from_millis(200);
+
+    // 默认：2 次重试 → 首试 + 2 次 = 3 次完整 timeout，2 段 retry_delay
+    assert_eq!(bus_retry_budget(t, 2, delay), Duration::from_millis(3400));
+    // 无重试：仅一次 timeout
+    assert_eq!(bus_retry_budget(t, 0, delay), t);
+    // 3 次重试：4T + 3×200ms
+    assert_eq!(bus_retry_budget(t, 3, delay), Duration::from_millis(4600));
+    // 饱和运算：极端配置不得 panic / 数值回绕
+    assert_eq!(
+        bus_retry_budget(Duration::MAX, u32::MAX, Duration::MAX),
+        Duration::MAX
+    );
+}
+
+#[test]
+fn config_defaults_match_shared_retry_constants() {
+    // 运行期兜底常量必须与 BusConfig 默认保持一致，否则
+    // 「显式配置为 None」与「缺省字段」两条路径的重试预算会漂移。
+    let cfg = BusConfig::default();
+    assert_eq!(cfg.retry_count, Some(DEFAULT_RETRY_COUNT));
+    assert_eq!(cfg.retry_delay_ms, Some(DEFAULT_RETRY_DELAY_MS));
+}
+
+// spawn_with 内部 tokio::spawn 总线 task，必须在 Tokio runtime 内运行；
+// 同文件其余 spawn_with 用例均为 #[tokio::test]，此处保持一致。
+#[tokio::test]
+async fn spawn_snapshots_reply_budget_above_retry_budget() {
+    use std::time::Duration;
+
+    let bus = BusConfig {
+        port_name: "bus_budget".into(),
+        timeout_ms: 1000,
+        retry_count: Some(2),
+        retry_delay_ms: Some(200),
+        ..Default::default()
+    };
+    let bm = BusManager::spawn_with(
+        &bus,
+        None,
+        Arc::new(crate::engine::metrics::Metrics::new()),
+        BusDeps::production(),
+    );
+
+    let retry_budget = bus_retry_budget(
+        Duration::from_millis(1000),
+        2,
+        Duration::from_millis(200),
+    );
+    assert_eq!(bm.reply_budget, retry_budget, "spawn 必须快照同一推导结果");
+    assert!(bm.reply_deadline() >= bm.reply_budget, "应答预算必须覆盖重试预算");
+    assert_eq!(
+        bm.reply_deadline(),
+        retry_budget + Duration::from_millis(100)
+    );
+    // 旧口径 2T+100ms 严格小于新预算——固定住这个关系防回归
+    let legacy = Duration::from_millis(1000) * 2 + Duration::from_millis(100);
+    assert!(
+        bm.reply_deadline() > legacy,
+        "新预算必须严格大于旧 2T+100ms（否则重试成功仍会被误判超时）"
+    );
     drop(bm);
 }

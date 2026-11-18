@@ -164,10 +164,24 @@ impl From<gateway_core::engine::error::GatewayError> for ApiError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
+        // P1：500 类错误的 Display 文本常含内部细节（文件路径、SQLite 语句、
+        // MQTT broker 地址、设备寄存器调试串），原样回给客户端等于免费的情报收集。
+        // 用户可纠正的 4xx/504 保留原文（便于现场排障），内部错误统一泛化 + 日志留痕。
+        // 注意：不能用 is_server_error()（504 GATEWAY_TIMEOUT 也返回 true）——
+        // 「设备无响应」是用户可纠正的上游错误，必须保留原文供现场排障。
+        let is_internal = status == StatusCode::INTERNAL_SERVER_ERROR;
+        let client_message = if is_internal {
+            "internal server error".to_string()
+        } else {
+            e.to_string()
+        };
+        if is_internal {
+            tracing::error!(error_code = code, error = %e, "internal error returned to client (detail suppressed)");
+        }
         Self {
             status,
             code,
-            message: e.to_string(),
+            message: client_message,
         }
     }
 }
@@ -230,4 +244,32 @@ mod tests {
             );
         }
     }
+
+    /// P1：500 类错误不得把内部细节回给客户端；4xx/504 保留原文供现场排障。
+    #[test]
+    fn internal_errors_suppress_detail_but_keep_client_correctable_text() {
+        let internal = [
+            GatewayError::Io("/var/lib/gateway/db.sqlite: permission denied".into()),
+            GatewayError::Queue("SELECT * FROM data_queue WHERE ...".into()),
+            GatewayError::Mqtt("tcp://10.0.0.5:1883 refused".into()),
+            GatewayError::Message("secret path /etc/shadow".into()),
+        ];
+        for e in internal {
+            let err: ApiError = e.into();
+            assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(err.message, "internal server error", "内部细节不得外泄");
+        }
+
+        let client_facing = [
+            (GatewayError::Config("invalid baud rate".into()), StatusCode::BAD_REQUEST),
+            (GatewayError::NotFound("point p1".into()), StatusCode::NOT_FOUND),
+            (GatewayError::NoReply, StatusCode::GATEWAY_TIMEOUT),
+        ];
+        for (e, status) in client_facing {
+            let err: ApiError = e.into();
+            assert_eq!(err.status, status);
+            assert_ne!(err.message, "internal server error", "用户可纠正错误应保留原文");
+        }
+    }
+
 }

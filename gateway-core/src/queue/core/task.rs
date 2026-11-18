@@ -26,14 +26,16 @@ pub(crate) enum QueueCommand {
     Enqueue(Vec<DataPoint>),
     Dequeue {
         limit: usize,
-        reply: oneshot::Sender<Vec<QueuedItem>>,
+        // #104 (fix): DB 错误必须上抛，reply 从裸 Vec 改为 Result。
+        reply: oneshot::Sender<GatewayResult<Vec<QueuedItem>>>,
     },
     /// 快照出队：每个点位只返回最新一行，且只取 `id <= cutoff` 的行。
     DequeueSnapshot {
         limit: usize,
         /// 周期出队上界（折叠时刻的 `MAX(id)`），用于隔离本周期新到的样本。
         cutoff: i64,
-        reply: oneshot::Sender<Vec<QueuedItem>>,
+        // #104 (fix): 同上，DB 错误不再伪装成空批。
+        reply: oneshot::Sender<GatewayResult<Vec<QueuedItem>>>,
     },
     /// 快照折叠：只标记不发送。返回折叠行数与本周期出队上界。
     CollapseSnapshot {
@@ -112,12 +114,18 @@ fn sqlite_code_from_message(msg: &str) -> Option<i32> {
 /// 修复(审查#B6)：Dequeue 的反压 / 陈旧 in_flight 清理逻辑从 match 分支中抽离，
 /// 原分支用 `continue` 跳过本轮循环，但 `continue` 无法跨越 catch_unwind 用的
 /// async 块边界，故改为返回值语义（返回空批 = 本次拒绝 dequeue）。
+///
+/// #104 (fix): 返回类型由 `Vec<QueuedItem>` 改为 `GatewayResult<Vec<QueuedItem>>`。
+/// 反压与「队列确实为空」仍返回 `Ok(空批)`；只有存储层真实报错（DB Err /
+/// JoinError）才返回 `Err`，避免「DB 错误伪装成空队列 → 北向静默无数据、
+/// 既不告警也不触发熔断」。
 async fn dequeue_with_backpressure(
     storage: &Arc<dyn QueueStorage>,
     limit: usize,
     cutoff: i64,
     snapshot: bool,
-) -> Vec<QueuedItem> {
+    metrics: &Arc<parking_lot::Mutex<Arc<Metrics>>>,
+) -> GatewayResult<Vec<QueuedItem>> {
     let cur_in_flight = storage.in_flight_count();
     if cur_in_flight >= super::limit::MAX_IN_FLIGHT {
         // 释放陈旧 in_flight（5 分钟未确认），避免 broker 长时间不可达，
@@ -139,11 +147,11 @@ async fn dequeue_with_backpressure(
                     super::limit::MAX_IN_FLIGHT,
                     e
                 );
-                return Vec::new();
+                return Ok(Vec::new());
             }
             Err(e) => {
                 tracing::error!("cleanup_stale_in_flight join failed: {}", e);
-                return Vec::new();
+                return Ok(Vec::new());
             }
         };
         if released > 0 {
@@ -157,7 +165,7 @@ async fn dequeue_with_backpressure(
                 if snapshot {
                     collapse_quietly(storage).await;
                 }
-                return Vec::new();
+                return Ok(Vec::new());
             }
         } else {
             tracing::warn!(
@@ -170,14 +178,15 @@ async fn dequeue_with_backpressure(
                 // 避免旧样本持续占磁盘、把队列水位推到淘汰阈值。
                 collapse_quietly(storage).await;
             }
-            return Vec::new();
+            return Ok(Vec::new());
         }
     }
     let storage_clone = storage.clone();
     // r15-Q2 (fix): 旧实现 `dequeue_batch(limit).unwrap_or_default()` 把 DB 错误
     // 伪装成「队列为空」——上层拿到空批，无法区分「确实没有数据」与「DB 查询失败」
     // → 表现为**北向静默无数据**（采集正常、MQTT 收不到东西、日志无异常）。
-    // 现在错误必须上抛。
+    // #104 (fix): 现在 DB Err / JoinError 一律打 error + 递增 persist_failed +
+    // 上抛 Err；空批只代表「存储层成功返回 0 行」或「反压拒绝」。
     match tokio::task::spawn_blocking(move || {
         if snapshot {
             storage_clone.dequeue_snapshot_batch(limit, cutoff)
@@ -187,18 +196,34 @@ async fn dequeue_with_backpressure(
     })
     .await
     {
-        Ok(Ok(items)) => items,
+        Ok(Ok(items)) => Ok(items),
         Ok(Err(e)) => {
+            metrics
+                .lock()
+                .queue_persist
+                .persist_failed
+                .fetch_add(1, Ordering::Relaxed);
             tracing::error!(
                 "dequeue_batch failed (DB error): {} — the batch is NOT empty, it is UNREADABLE; \
-                 the northbound channel will see no data for this round",
+                 returning Err so the northbound can detect the failure",
                 e
             );
-            Vec::new()
+            Err(GatewayError::Queue(format!(
+                "dequeue_batch failed (DB error): {}",
+                e
+            )))
         }
         Err(e) => {
+            metrics
+                .lock()
+                .queue_persist
+                .persist_failed
+                .fetch_add(1, Ordering::Relaxed);
             tracing::error!("dequeue spawn_blocking failed: {}", e);
-            Vec::new()
+            Err(GatewayError::Queue(format!(
+                "dequeue spawn_blocking failed: {}",
+                e
+            )))
         }
     }
 }
@@ -216,6 +241,45 @@ async fn collapse_quietly(storage: &Arc<dyn QueueStorage>) {
         Ok(Err(e)) => tracing::warn!("snapshot collapse failed under backpressure: {}", e),
         Err(e) => tracing::warn!("snapshot collapse join failed: {}", e),
     }
+}
+
+/// #106 (fix): fallback 冲刷发生 JoinError（任务被取消 / runtime 关闭）时，
+/// 把调用方持有的 Arc 副本里的整批点重新塞回 fallback 缓冲，避免永久丢点。
+///
+/// 与 `Ok(Err(..))` 分支共用同一套反弹计数 / 优先级淘汰语义：达到
+/// `FALLBACK_MAX_RETRIES` 后被淘汰的点计入 `persist_dropped` 与 `fallback_bounce`，
+/// 因此「JoinError 回退」不会绕过丢弃上限造成无限循环 / 重复计数。
+fn reclaim_fallback_points(
+    points: &[DataPoint],
+    fallback: &Arc<parking_lot::Mutex<std::collections::VecDeque<DataPoint>>>,
+    retry_count: &Arc<parking_lot::Mutex<u32>>,
+    metrics: &Arc<parking_lot::Mutex<Arc<Metrics>>>,
+) -> (usize, usize) {
+    let mut cnt = retry_count.lock();
+    let (retained, dropped) = {
+        let mut buf = fallback.lock();
+        crate::queue::push_into_fallback(
+            &mut buf,
+            crate::queue::FALLBACK_CAPACITY,
+            points.to_vec(),
+            &mut cnt,
+        )
+    };
+    if dropped > 0 {
+        metrics
+            .lock()
+            .queue_persist
+            .persist_dropped
+            .fetch_add(dropped as u64, Ordering::Relaxed);
+        if *cnt == 0 {
+            metrics
+                .lock()
+                .queue_persist
+                .fallback_bounce
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    (retained, dropped)
 }
 
 /// 队列处理 task
@@ -433,11 +497,13 @@ pub(crate) async fn queue_task(
         // #5 修复：硬上限分支主动跑一次 stale in_flight 清理
                                     // （cutoff 与 storage.maintenance 内部一致：5 分钟前），见
                                     // dequeue_with_backpressure。
-        let items = dequeue_with_backpressure(&storage, limit, i64::MAX, false).await;
-                                    if !items.is_empty() {
-                                        let n = storage.in_flight_count();
-                                        if n > 5000 {
-                                            tracing::warn!("in_flight count {} exceeds 5000, broker may be slow", n);
+        let items = dequeue_with_backpressure(&storage, limit, i64::MAX, false, &metrics).await;
+                                    if let Ok(ref batch) = items {
+                                        if !batch.is_empty() {
+                                            let n = storage.in_flight_count();
+                                            if n > 5000 {
+                                                tracing::warn!("in_flight count {} exceeds 5000, broker may be slow", n);
+                                            }
                                         }
                                     }
                                     let _ = reply.send(items);
@@ -469,12 +535,14 @@ pub(crate) async fn queue_task(
                                     // 与普通出队共享反压 / 陈旧 in_flight 清理逻辑，
                                     // 仅出队语句不同（按点位取最新一行 + 周期 cutoff）。
                                     let items =
-                                        dequeue_with_backpressure(&storage, limit, cutoff, true)
+                                        dequeue_with_backpressure(&storage, limit, cutoff, true, &metrics)
                                             .await;
-                                    if !items.is_empty() {
-                                        let n = storage.in_flight_count();
-                                        if n > 5000 {
-                                            tracing::warn!("in_flight count {} exceeds 5000, broker may be slow", n);
+                                    if let Ok(ref batch) = items {
+                                        if !batch.is_empty() {
+                                            let n = storage.in_flight_count();
+                                            if n > 5000 {
+                                                tracing::warn!("in_flight count {} exceeds 5000, broker may be slow", n);
+                                            }
                                         }
                                     }
                                     let _ = reply.send(items);
@@ -510,11 +578,44 @@ pub(crate) async fn queue_task(
                                     }
                                 }
                                 QueueCommand::Release(ids) => {
-                                    // #2: release_in_flight 走 spawn_blocking
+                                    // #2: release_in_flight 走 spawn_blocking。
+                                    // #105 (fix): 旧实现 `let _ = ...await` 把 DB 错误与
+                                    // JoinError 全部丢弃——in_flight 行一直卡着，要等 5 分钟
+                                    // 才被 stale 清理。现在错误必须打日志 + 递增失败指标，
+                                    // 让运维能立刻看到 release 失败；不 panic（actor 不能停）。
+                                    let n_ids = ids.len();
                                     let storage_clone = storage.clone();
-                                    let _ = tokio::task::spawn_blocking(move || {
+                                    match tokio::task::spawn_blocking(move || {
                                         storage_clone.release_in_flight(&ids)
-                                    }).await;
+                                    })
+                                    .await
+                                    {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(e)) => {
+                                            metrics
+                                                .lock()
+                                                .queue_persist
+                                                .persist_failed
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            tracing::error!(
+                                                "release_in_flight failed for {} ids: {} — rows stay in_flight until stale cleanup",
+                                                n_ids,
+                                                e
+                                            );
+                                        }
+                                        Err(e) => {
+                                            metrics
+                                                .lock()
+                                                .queue_persist
+                                                .persist_failed
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            tracing::error!(
+                                                "release_in_flight spawn_blocking failed for {} ids: {}",
+                                                n_ids,
+                                                e
+                                            );
+                                        }
+                                    }
                                 }
                                 QueueCommand::Len(reply) => {
                                     let len = storage.len();
@@ -621,10 +722,14 @@ pub(crate) async fn queue_task(
         // 避免与上层 enqueue 路径行为漂移。
                 if !fallback.lock().is_empty()
             {
-        // 取一份快照（drain 出来的 items 已被 move 进闭包；失败时
-        // 由 push_into_fallback 推回——与上层 flush_fallback 行为一致）。
-        let items: Vec<DataPoint> = fallback.lock().drain(..).collect();
-                            let n = items.len();
+        // #106 (fix): items 改用 Arc 共享。旧实现把 Vec move 进 spawn_blocking
+        // 闭包，一旦 JoinError（task 被取消 / runtime 关闭），整批点随闭包被
+        // drop → 永久丢点。现在调用方保留 Arc 副本，JoinError 分支可把整批点
+        // 重新塞回 fallback 缓冲待下次重试（与 enqueue 路径 r15-Q3 同范式）。
+        let items_shared =
+            Arc::new(fallback.lock().drain(..).collect::<Vec<DataPoint>>());
+        let items_for_task = items_shared.clone();
+                            let n = items_shared.len();
                             let storage_clone = storage.clone();
                             let fallback_clone = fallback.clone();
                             let retry_count_clone = fallback_retry_count.clone();
@@ -632,17 +737,17 @@ pub(crate) async fn queue_task(
                             let sql_result = tokio::task::spawn_blocking(
                                 move || -> Result<usize, (Vec<DataPoint>, GatewayError)> {
                                     let inner = std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(|| storage_clone.enqueue_batch(&items))
+                                        std::panic::AssertUnwindSafe(|| storage_clone.enqueue_batch(&items_for_task))
                                     );
                                     match inner {
                                         Ok(Ok(n)) => Ok(n),
-                                        Ok(Err(e)) => Err((items, e)),
+                                        Ok(Err(e)) => Err(((*items_for_task).clone(), e)),
                                         Err(p) => {
                                             let msg = p.downcast_ref::<&str>()
                                                 .map(|s| (*s).to_string())
                                                 .or_else(|| p.downcast_ref::<String>().cloned())
                                                 .unwrap_or_else(|| "<unknown panic>".to_string());
-                                            Err((items, GatewayError::Queue(format!("fallback flush panic: {}", msg))))
+                                            Err(((*items_for_task).clone(), GatewayError::Queue(format!("fallback flush panic: {}", msg))))
                                         }
                                     }
                                 },
@@ -695,7 +800,30 @@ pub(crate) async fn queue_task(
                                         n, retained, dropped, *cnt
                                     );
                                 }
-                                Err(e) => tracing::error!("fallback flush spawn_blocking join failed: {}", e),
+                                Err(e) => {
+                                    // #106 (fix): JoinError 不再永久丢掉整批点。从调用方
+                                    // 持有的 Arc 副本取回全部点，按正常反弹语义塞回
+                                    // fallback 缓冲待下次重试；同时打 error + 递增失败指标。
+                                    metrics_clone
+                                        .lock()
+                                        .queue_persist
+                                        .persist_failed
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    let pts = (*items_shared).clone();
+                                    let (retained, dropped) = reclaim_fallback_points(
+                                        &pts,
+                                        &fallback_clone,
+                                        &retry_count_clone,
+                                        &metrics_clone,
+                                    );
+                                    tracing::error!(
+                                        "fallback flush spawn_blocking join failed: {} — {} points reclaimed into fallback (retained={}, dropped={})",
+                                        e,
+                                        n,
+                                        retained,
+                                        dropped
+                                    );
+                                }
                             }
                         }
                         // 等待排空的调用方检查

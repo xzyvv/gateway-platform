@@ -138,6 +138,7 @@ pub(crate) async fn get_config(
 
 pub(crate) async fn post_config(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(new_config): Json<GatewayConfig>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     // 1.5 v2.0 license 配额校验（点位/协议/北向）—— 在变更前拦截超限保存
@@ -148,6 +149,10 @@ pub(crate) async fn post_config(
     // A5: 串行化整个热重载流程，防止并发配置更新交错产生半旧状态
     let _reload_guard = state.config.config_reload_lock.lock().await;
     let old = state.config.load_full();
+    // P0 提权门禁：整份配置可覆盖 web.api_token，须主 token
+    crate::web::config_apply::ensure_system_secrets_allowed(
+        &state, &headers, &old, &new_config,
+    )?;
 
     // 2-5. 展开设备模板 + 落盘 + 热重载（E 批起落盘前置：save → reload → store → notify）
     //      统一走 config_apply，消除与 rollback / restart_service 的重复实现。
@@ -291,6 +296,7 @@ pub(crate) async fn compare_config_versions(
 
 pub(crate) async fn rollback_config_version(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
     // A5: 串行化整个回滚流程
@@ -309,6 +315,10 @@ pub(crate) async fn rollback_config_version(
     // （自愈/重启路径 reload_services 刻意豁免此校验：license 降级后仍须能恢复运行，
     // 否则会因配额卡死重启，违背「稳定性第一」。）
     crate::web::config_apply::check_config_quota(&state, &new_config)?;
+    // P0 提权门禁：历史版本里可能含被篡改的 web.api_token，回滚同样须主 token
+    crate::web::config_apply::ensure_system_secrets_allowed(
+        &state, &headers, &old, &new_config,
+    )?;
 
     // 展开设备模板 + 落盘 + 热重载（E 批起落盘前置：save → reload → store → notify）
     // 结构完整性校验（D1）已收敛到 config_apply::persist_then_apply 内部统一执行。

@@ -76,7 +76,14 @@ impl std::error::Error for TemplateError {}
 #[derive(Debug, Clone)]
 pub(super) enum Segment {
     Literal(String),
-    Variable(String),
+    Variable {
+        name: String,
+        /// #108：该变量是否位于 JSON 字符串上下文（模板中形如 `"${var}"`）。
+        /// 为 true 时渲染必须对其值做 JSON 内容转义，否则含引号 / 反斜杠 /
+        /// 换行的点位值会破坏外层 JSON 结构或被注入内容。裸上下文（如
+        /// InfluxDB line protocol、JSON key 位置之外）保持裸渲染。
+        json_escaped: bool,
+    },
 }
 
 /// 模板渲染引擎（编译后的不可变结构）
@@ -143,7 +150,18 @@ impl TemplateEngine {
                                 name: name.to_string(),
                             });
                         }
-                        segments.push(Segment::Variable(name.to_string()));
+                        // #108：判断变量是否处于 JSON 字符串上下文——左字面量
+                        // 紧邻 `"` 结尾且右字面量紧邻 `"` 开头（模板形如
+                        // `"${var}"`）。此类值渲染时必须做 JSON 内容转义。
+                        // 裸值语义上下文（如 `device=${var}`）不标记，保持原样。
+                        let json_escaped = i > 0
+                            && bytes[i - 1] == b'"'
+                            && j + 1 < bytes.len()
+                            && bytes[j + 1] == b'"';
+                        segments.push(Segment::Variable {
+                            name: name.to_string(),
+                            json_escaped,
+                        });
                         i = j + 1;
                         literal_start = i;
                     }

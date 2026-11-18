@@ -19,10 +19,45 @@ pub use transport::{BusDeps, GpioOutput, SerialOpener};
 
 use tokio::sync::{mpsc, oneshot};
 
+use std::time::Duration;
+
 use crate::config::{BusConfig, OpcUaClientConfig};
 use crate::engine::metrics::Metrics;
 use crate::south::protocol::CollectorError;
 use std::sync::Arc;
+
+/// 失败重试次数的运行期兜底（BusConfig 未显式配置时使用）。
+///
+/// 与 `BusConfig` 的 serde 默认值一致（见 `tests::config_defaults_match_shared_retry_constants`
+/// 的契约断言）。串口与 TCP 两条总线 task 的 retry 循环共用本常量，避免
+/// 「配置默认 / 运行期兜底」两处硬编码漂移。
+pub(crate) const DEFAULT_RETRY_COUNT: u32 = 2;
+
+/// 重试间隔的运行期兜底（ms），与 `DEFAULT_RETRY_COUNT` 同源。
+pub(crate) const DEFAULT_RETRY_DELAY_MS: u64 = 200;
+
+/// 应答等待预算在「总线重试最坏耗时」之上保留的调度余量。
+const REPLY_MARGIN: Duration = Duration::from_millis(100);
+
+/// 单笔总线事务在最坏情况下占用总线 task 的时长（不含调用侧排队等待）：
+/// 首试 + `retry_count` 次重试，每次最多 `timeout`，重试之间 sleep `retry_delay`。
+///
+/// 默认配置下 = 3×T + 2×200ms = `3T+400ms`，与 DLT645/CJT188 采集器
+/// 「`io_timeout × 3`（首试 + 2 次重试）」的口径一致。
+///
+/// 这是**应答等待预算的唯一来源**：`BusManager::transaction` 必须按本函数
+/// 推导出的预算等待应答。原实现硬编码 `2T+100ms`，小于重试预算，导致
+/// 重试刚成功的应答在回传途中就被上层判超时丢弃——静默丢数（原 #107）。
+pub(crate) fn bus_retry_budget(
+    timeout: Duration,
+    retry_count: u32,
+    retry_delay: Duration,
+) -> Duration {
+    let attempts = retry_count.saturating_add(1);
+    timeout
+        .saturating_mul(attempts)
+        .saturating_add(retry_delay.saturating_mul(retry_count))
+}
 
 /// 一次总线事务：写请求 + 读响应
 pub struct BusTransaction {
@@ -51,6 +86,11 @@ pub struct BusManager {
     /// 供**直连型采集器**（fins/mc/s7comm/bacnet/iec104 等不经总线 task 自建连接的协议）
     /// 统一取值，与串口/TCP 总线 task 的超时口径一致，避免各协议各自硬编码。
     pub timeout_ms: u64,
+    /// 应答等待预算：≥ 总线 task 的重试最坏耗时（见 [`bus_retry_budget`]）。
+    ///
+    /// 在 `spawn_with` 时按 `BusConfig` 快照一次，使「等应答」与「总线重试」
+    /// 引用同一套超时 / 重试参数，避免两处硬编码漂移（原 #107）。
+    reply_budget: Duration,
     /// 读路径可用的最大并发在途事务数（见 [`BusManager::max_concurrency`]）。
     /// Modbus TCP 取自 `BusConfig.tcp_concurrent`（默认 8）；串口总线恒为 1。
     max_inflight: usize,
@@ -93,6 +133,16 @@ impl BusManager {
         let name = bus.port_name.clone();
         let tcp_addr = bus.tcp_addr.clone();
         let timeout_ms = bus.timeout_ms;
+        // 与串口/TCP 总线 task 的 retry 循环共用同一套参数与推导函数，
+        // 快照应答预算：重试成功的应答不会在回传途中被上层误判超时（原 #107）。
+        let reply_budget = bus_retry_budget(
+            Duration::from_millis(bus.timeout_ms),
+            bus.retry_count.unwrap_or(DEFAULT_RETRY_COUNT),
+            Duration::from_millis(
+                bus.retry_delay_ms
+                    .unwrap_or(DEFAULT_RETRY_DELAY_MS),
+            ),
+        );
         // Bug 217: 记录读路径并发上限——TCP 支持单 socket 多事务并发（MBAP 事务号路由），
         // 串口为半双工物理上只能串行。采集器据此决定并发提交帧的上限，
         // 使 tcp_concurrent 真正生效，同时不破坏串口总线的物理串行化。
@@ -112,6 +162,7 @@ impl BusManager {
             name,
             tcp_addr,
             timeout_ms,
+            reply_budget,
             max_inflight,
             variant: bus.effective_variant(),
             asdu_addr_len: bus.asdu_addr_len.unwrap_or(2),
@@ -149,10 +200,11 @@ impl BusManager {
         // 若总线 task 因任何原因不再应答（例如 modbus tcp 的事务任务卡在写 socket、
         // 或任务已被取消却没 drop sender），采集 task 会永久阻塞 → 上层
         // supervision_loop 卡在 task_fn() 上 → 该组所有 tick 全部停摆且只能重启。
-        // 现给"等应答"补一道超时，口径取 2×io_timeout + 100ms：
-        // 串口路径一次事务是"写一帧 + 读一帧"共用 timeout_ms 预算，
-        // 直接复用单个 io_timeout 会把正常的长帧读写误判为超时。
-        let reply_deadline = self.io_timeout() * 2 + std::time::Duration::from_millis(100);
+        // 原实现硬编码 `2T+100ms`（串口路径"写一帧 + 读一帧"共用 timeout 的假设），
+        // 但总线 task 的重试循环最坏要 `3T+400ms`（默认 2 次重试，每次一整个 timeout，
+        // 间隔 200ms）。重试成功的应答还在回传途中，上层就判超时丢弃 → 静默丢数（原 #107）。
+        // 现按 [`bus_retry_budget`] 同一来源推导，并保留固定调度余量。
+        let reply_deadline = self.reply_deadline();
         let result = match tokio::time::timeout(self.io_timeout(), self.tx.send(msg)).await {
             Ok(Ok(())) => match tokio::time::timeout(reply_deadline, resp_rx).await {
                 // 内层 Ok = 总线 task 回传了事务结果（成功或设备级失败），必须原样透传。
@@ -265,6 +317,15 @@ impl BusManager {
     /// 使「单次请求等待应答」的超时与串口/TCP 总线口径统一，现场可在配置中调整。
     pub fn io_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeout_ms)
+    }
+
+    /// 应答等待预算：总线重试最坏耗时 + 固定调度余量。
+    ///
+    /// 必须 ≥ [`bus_retry_budget`]，否则重试成功的应答还没回传就被判超时丢弃
+    /// （原 #107 静默丢数）。`spawn_with` 时已把重试参数快照进 `reply_budget`，
+    /// 这里只做纯加法，便于测试以纯函数断言数值关系。
+    fn reply_deadline(&self) -> Duration {
+        self.reply_budget.saturating_add(REPLY_MARGIN)
     }
 
     /// 统一协议变体（决策表 #24），采集器按此分派帧构建逻辑。

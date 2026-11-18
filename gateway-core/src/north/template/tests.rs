@@ -30,13 +30,16 @@ fn test_unknown_var_yields_empty() {
 
 #[test]
 fn test_string_literal_output() {
-    // 字符串变量裸输出，不含 JSON 转义 —— 由模板中的 \" 负责包裹
+    // #108：JSON 字符串上下文（"${device_id}"）中含特殊字符的点位值必须转义，
+    // 否则引号 / 换行会破坏外层 JSON。裸值语义仍适用于非引号包裹的上下文。
     let engine = TemplateEngine::new("{\"x\":\"${device_id}\"}").unwrap();
     let mut vars = TemplateVars::new();
     vars.device_id = "a\"b\nc".into();
     let out = engine.render(&vars);
-    // 警告：原始字符保留，JSON 不合法。需调用 render_str 单独包装。
-    assert_eq!(out, "{\"x\":\"a\"b\nc\"}");
+    assert_eq!(out, "{\"x\":\"a\\\"b\\nc\"}");
+    // 渲染结果必须是合法 JSON，且能还原出原始点位值
+    let parsed: serde_json::Value = serde_json::from_str(&out).expect("rendered JSON must be valid");
+    assert_eq!(parsed["x"].as_str(), Some("a\"b\nc"));
 }
 
 #[test]
@@ -305,4 +308,82 @@ fn test_render_str_escapes_bidi_and_line_separators() {
     // 回归：既有转义行为不变
     assert_eq!(render_str("a\"b"), "\"a\\\"b\"");
     assert_eq!(render_str("中文"), "\"中文\"");
+}
+
+// ============================================================
+// #108: JSON 字符串上下文转义回归
+// ============================================================
+
+#[test]
+fn test_json_context_escapes_quote_backslash_and_newline() {
+    // 含引号、反斜杠、换行的点位值在 "..." 上下文中必须被转义，
+    // 否则会破坏外层 JSON 结构或被注入内容。
+    let engine = TemplateEngine::new("{\"v\":\"${raw}\"}").unwrap();
+    let vars = TemplateVars::new().with_extra("raw", ExtraValue::Str("a\"b\\c\nd".into()));
+    let out = engine.render(&vars);
+    assert_eq!(out, "{\"v\":\"a\\\"b\\\\c\\nd\"}");
+    let parsed: serde_json::Value = serde_json::from_str(&out).expect("rendered JSON must be valid");
+    assert_eq!(parsed["v"].as_str(), Some("a\"b\\c\nd"));
+}
+
+#[test]
+fn test_json_context_plain_values_unchanged() {
+    // 向后兼容：简单字符串与数字在 JSON 上下文的渲染结果不得改变。
+    let engine = TemplateEngine::new("{\"d\":\"${device_id}\",\"v\":${value}}").unwrap();
+    let mut vars = TemplateVars::new();
+    vars.device_id = "meter1".into();
+    vars.value = 220.5;
+    assert_eq!(engine.render(&vars), "{\"d\":\"meter1\",\"v\":220.5}");
+}
+
+#[test]
+fn test_non_json_context_not_json_escaped() {
+    // 裸值语义：无引号包裹的上下文（如 InfluxDB line protocol）不得套用 JSON 转义。
+    let engine = TemplateEngine::new("m,device=${device_id} value=${value}").unwrap();
+    let mut vars = TemplateVars::new();
+    vars.device_id = "m1".into();
+    vars.value = 1.5;
+    assert_eq!(engine.render(&vars), "m,device=m1 value=1.5");
+}
+
+#[test]
+fn test_render_bytes_escapes_json_context_value() {
+    // render_bytes 与 render 在转义场景下必须逐字节一致（MQTT publish 走 bytes 路径）。
+    let engine = TemplateEngine::new("{\"v\":\"${raw}\"}").unwrap();
+    let vars = TemplateVars::new().with_extra("raw", ExtraValue::Str("a\"b\nc".into()));
+    let s = engine.render(&vars);
+    let b = engine.render_bytes(&vars);
+    assert_eq!(s.as_bytes(), b.as_slice());
+    assert!(serde_json::from_str::<serde_json::Value>(&s).is_ok());
+}
+
+#[test]
+fn test_render_checked_escapes_json_context_value() {
+    // render_checked（诊断路径）必须与 render 一致地转义 JSON 上下文值。
+    let engine = TemplateEngine::new("{\"v\":\"${raw}\"}").unwrap();
+    let vars = TemplateVars::new().with_extra("raw", ExtraValue::Str("a\"b\nc".into()));
+    let (out, missing) = engine.render_checked(&vars);
+    assert!(missing.is_empty());
+    assert_eq!(out, engine.render(&vars));
+    assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok());
+}
+
+#[test]
+fn test_json_key_variable_escaped() {
+    // JSON key 位置（"${key}":...）同样需要转义，防止 key 含引号破坏结构。
+    let engine = TemplateEngine::new("{\"${key}\":1}").unwrap();
+    let vars = TemplateVars::new().with_extra("key", ExtraValue::Str("a\"b".into()));
+    let out = engine.render(&vars);
+    assert_eq!(out, "{\"a\\\"b\":1}");
+    assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok());
+}
+
+#[test]
+fn test_escaped_context_control_char() {
+    // 控制字符（U+0001）在 JSON 上下文中必须转义为 \u0001。
+    let engine = TemplateEngine::new("{\"v\":\"${raw}\"}").unwrap();
+    let vars = TemplateVars::new().with_extra("raw", ExtraValue::Str("a\u{1}b".into()));
+    let out = engine.render(&vars);
+    assert_eq!(out, "{\"v\":\"a\\u0001b\"}");
+    assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok());
 }

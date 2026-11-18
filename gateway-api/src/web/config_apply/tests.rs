@@ -454,3 +454,68 @@ fn self_heal_reload_uses_quota_exempt_entry() {
         "自愈重载不得回到受配额校验的普通入口"
     );
 }
+
+
+// ===== P0 提权门禁：系统级凭据字段变更须主 token =====
+
+/// 前端回传占位符（未触碰凭据）不得被判为变更，否则每次保存都要主 token。
+#[test]
+fn redacted_web_secrets_are_not_treated_as_change() {
+    let old = sample_config();
+    let mut new = old.clone();
+    if let Some(w) = new.web.as_mut() {
+        w.api_token = "********".to_string();
+        w.password_hash = "********".to_string();
+    }
+    let mut effective = new.clone();
+    restore_redacted_secrets(&old, &mut effective);
+    assert!(
+        !system_secrets_changed(&old, &effective),
+        "回传占位符经还原后应与旧值一致"
+    );
+}
+
+/// 真实改写 api_token / password_hash / allow_anon_read 必须被识别为变更。
+#[test]
+fn real_web_secret_changes_are_detected() {
+    let old = sample_config();
+    for mutate in [
+        |w: &mut WebConfig| w.api_token = "attacker-token".to_string(),
+        |w: &mut WebConfig| w.password_hash = "attacker-hash".to_string(),
+        |w: &mut WebConfig| w.allow_anon_read = !w.allow_anon_read,
+    ] {
+        let mut new = old.clone();
+        if let Some(w) = new.web.as_mut() {
+            mutate(w);
+        }
+        assert!(
+            system_secrets_changed(&old, &new),
+            "系统级凭据变更必须触发主 token 门禁"
+        );
+    }
+}
+
+/// 非系统字段（如点位）变更不应触发门禁。
+#[test]
+fn non_secret_changes_do_not_trigger_primary_token_gate() {
+    let old = sample_config();
+    let mut new = old.clone();
+    new.points.push(gateway_core::config::PointConfig::default());
+    assert!(!system_secrets_changed(&old, &new));
+}
+
+/// 三个整份配置入口必须全部接入门禁（文本契约，防止新增入口漏接）。
+#[test]
+fn all_whole_config_entrypoints_call_primary_token_gate() {
+    let import_src = include_str!("../api/config/handlers/config.rs");
+    assert!(
+        import_src.contains("ensure_system_secrets_allowed"),
+        "PUT /api/config/import 必须校验主 token"
+    );
+    let system_src = include_str!("../api/system/handlers/config.rs");
+    let gate_count = system_src.matches("ensure_system_secrets_allowed").count();
+    assert!(
+        gate_count >= 2,
+        "POST /api/config 与版本回滚必须都校验主 token（实际 {gate_count} 处）"
+    );
+}

@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+# 可复现性：所有「编译 / 测试」阶段统一带 --locked，强制按 Cargo.lock 解析依赖，
+# 与 heavy.yml / perf-baseline.yml 的门禁口径对齐，避免 CI 拉到不同依赖版本。
+# cargo fmt 不解析依赖，无需（也不该）加 --locked。
 # 脚本位于 <workspace>/gateway-core/scripts/ → 上两级即工作区根
 cd "$(dirname "$0")/../.."
 
@@ -32,24 +35,24 @@ cargo fmt --all -- --check || fail "代码格式不符（运行 cargo fmt 修复
 
 # 2. check
 log "2/6 cargo check --all-targets"
-cargo check --all-targets --all-features || fail "编译检查失败"
+cargo check --all-targets --all-features --locked || fail "编译检查失败"
 
 # 3. clippy (D warnings)
 log "3/6 cargo clippy --all-targets -- -D warnings"
-cargo clippy --all-targets --all-features -- -D warnings || fail "clippy 警告存在"
+cargo clippy --all-targets --all-features --locked -- -D warnings || fail "clippy 警告存在"
 
 # 4. unit tests
 log "4/6 cargo test --lib"
-cargo test --lib --quiet || fail "单元测试失败"
+cargo test --lib --locked --quiet || fail "单元测试失败"
 
 # 4b. license-issuer unit tests（F-08）
 # 该 crate 只有 [[bin]] 没有 lib target，`cargo test --lib` 覆盖不到它的
 # 签发侧单测（签名/哈希/编码），必须显式按包名跑。
 log "5/6 cargo test -p license-issuer"
-cargo test -p license-issuer --quiet || fail "license-issuer 单元测试失败"
+cargo test -p license-issuer --locked --quiet || fail "license-issuer 单元测试失败"
 
 # 6. debug build
 log "6/6 cargo build (debug)"
-cargo build --quiet || fail "调试构建失败"
+cargo build --locked --quiet || fail "调试构建失败"
 
 log "全部通过 ✅"

@@ -27,19 +27,27 @@ from pathlib import Path
 # 按"下取整、留约 3pp 余量"定档。口径 = 目录内 covered/total 聚合。
 #
 # 修改规则：补测试后允许上调；**不许下调**（下调等于把已补的测试价值退回去）。
+#
+# 本次修正：删掉已不存在的 core/support；补上三个真实存在却漏配下限的目录
+# core/domain、core/runtime、core/shared。这三个目录未纳入上面那次标定，且测试
+# 很少（domain 3 个 #[test]、其中 license.rs 整文件无测试；runtime 3 个；
+# shared 42 个），真实覆盖率偏低，故按"当前基线 + 小幅提升"设保守地板，
+# 先建立防回落下限、保证 CI 不误红；待补测试并拿到新 lcov 实测值后，按上规则只上调。
 THRESHOLDS: dict[str, dict[str, int]] = {
     "total": {"lines": 66, "functions": 66},
     "core": {"lines": 69, "functions": 70},
     "core/config": {"lines": 80, "functions": 75},
     "core/crypto": {"lines": 81, "functions": 72},
+    "core/domain": {"lines": 10, "functions": 10},
     "core/engine": {"lines": 80, "functions": 81},
     "core/license": {"lines": 88, "functions": 85},
     "core/north": {"lines": 62, "functions": 63},
     "core/pipeline": {"lines": 82, "functions": 89},
     "core/platform": {"lines": 53, "functions": 61},
     "core/queue": {"lines": 73, "functions": 74},
+    "core/runtime": {"lines": 10, "functions": 10},
+    "core/shared": {"lines": 30, "functions": 30},
     "core/south": {"lines": 60, "functions": 63},
-    "core/support": {"lines": 63, "functions": 63},
     "api/web": {"lines": 59, "functions": 56},
 }
 

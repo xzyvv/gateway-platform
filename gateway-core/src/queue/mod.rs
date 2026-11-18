@@ -462,6 +462,8 @@ impl DataQueue {
     }
 
     /// 出队（按 ID 升序，保证时序）
+    ///
+    /// #104 (fix): 存储层 DB 错误作为 Err 上抛，不再用空批伪装成「正常无数据」。
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self), fields(limit = limit)))]
     pub async fn dequeue(&self, limit: usize) -> GatewayResult<Vec<QueuedItem>> {
         let (reply, rx) = oneshot::channel();
@@ -470,7 +472,7 @@ impl DataQueue {
             .await
             .map_err(|e| GatewayError::Queue(format!("dequeue send failed: {}", e)))?;
         rx.await
-            .map_err(|e| GatewayError::Queue(format!("dequeue recv failed: {}", e)))
+            .map_err(|e| GatewayError::Queue(format!("dequeue recv failed: {}", e)))?
     }
 
     /// 快照折叠（`report_mode = snapshot`）：把「非最新」的未送达行标记为已送达。
@@ -493,6 +495,8 @@ impl DataQueue {
     /// `id <= cutoff` 的行（`cutoff` 由同周期 [`DataQueue::collapse_snapshot`] 给出）。
     ///
     /// 更早样本已由折叠标记为已送达（不上行，但仍保留供历史查询）。
+    ///
+    /// #104 (fix): 与普通出队一致，DB 错误上抛为 Err。
     pub async fn dequeue_snapshot(
         &self,
         limit: usize,
@@ -508,7 +512,7 @@ impl DataQueue {
             .await
             .map_err(|e| GatewayError::Queue(format!("dequeue snapshot send failed: {}", e)))?;
         rx.await
-            .map_err(|e| GatewayError::Queue(format!("dequeue snapshot recv failed: {}", e)))
+            .map_err(|e| GatewayError::Queue(format!("dequeue snapshot recv failed: {}", e)))?
     }
 
     /// 确认已发送，删除记录

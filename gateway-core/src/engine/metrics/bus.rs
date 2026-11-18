@@ -29,6 +29,9 @@ pub struct BusMetrics {
     pub self_check_skipped: AtomicU64,
     /// 因自检失败实际丢句柄重开的次数（不含冷却期内被抑制的）。
     pub port_reopen_by_self_check: AtomicU64,
+    /// Modbus ASCII 接收缓冲触及硬上限、整段丢弃的次数（异常设备持续发无
+    /// CRLF 数据时的内存保护信号；持续增长说明有设备/线路在灌噪声）。
+    pub ascii_frame_dropped: AtomicU64,
 }
 
 impl BusMetrics {
@@ -48,11 +51,15 @@ impl BusMetrics {
              gateway_bus_self_check_skipped_total {}\n\
              # HELP gateway_bus_port_reopen_by_self_check_total Serial port reopened because self-check failed (excludes cooldown-suppressed)\n\
              # TYPE gateway_bus_port_reopen_by_self_check_total counter\n\
-             gateway_bus_port_reopen_by_self_check_total {}",
+             gateway_bus_port_reopen_by_self_check_total {}\n\
+             # HELP gateway_bus_ascii_frame_dropped_total Modbus ASCII receive buffer overflow: partial frame dropped\n\
+             # TYPE gateway_bus_ascii_frame_dropped_total counter\n\
+             gateway_bus_ascii_frame_dropped_total {}",
             self.self_check_ok.load(Ordering::Relaxed),
             self.self_check_fail.load(Ordering::Relaxed),
             self.self_check_skipped.load(Ordering::Relaxed),
             self.port_reopen_by_self_check.load(Ordering::Relaxed),
+            self.ascii_frame_dropped.load(Ordering::Relaxed),
         );
     }
 }
@@ -68,6 +75,7 @@ mod tests {
         m.self_check_fail.fetch_add(2, Ordering::Relaxed);
         m.self_check_skipped.fetch_add(1, Ordering::Relaxed);
         m.port_reopen_by_self_check.fetch_add(1, Ordering::Relaxed);
+        m.ascii_frame_dropped.fetch_add(4, Ordering::Relaxed);
 
         let mut out = String::new();
         m.render(&mut out);
@@ -82,12 +90,17 @@ mod tests {
             out.contains("gateway_bus_port_reopen_by_self_check_total 1"),
             "{out}"
         );
+        assert!(
+            out.contains("gateway_bus_ascii_frame_dropped_total 4"),
+            "{out}"
+        );
         // 每个指标都必须带 HELP / TYPE，否则 Prometheus 抓取端告警
         for name in [
             "gateway_bus_self_check_ok_total",
             "gateway_bus_self_check_fail_total",
             "gateway_bus_self_check_skipped_total",
             "gateway_bus_port_reopen_by_self_check_total",
+            "gateway_bus_ascii_frame_dropped_total",
         ] {
             assert!(out.contains(&format!("# HELP {name}")), "缺少 HELP: {name}");
             assert!(

@@ -22,6 +22,14 @@ impl Metrics {
         self.collect.serial_errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// 记录一次 Modbus ASCII 接收缓冲溢出（超限的半帧被整段丢弃）。
+    ///
+    /// 用于暴露「异常设备持续发无换行数据」这类内存/日志风险；持续增长
+    /// 应触发现场排查（线路干扰或设备固件异常）。
+    pub fn inc_ascii_frame_dropped(&self) {
+        self.bus.ascii_frame_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// 记录一次 MQTT ConnAck 被拒（鉴权失败 / 服务不可用 / 标识被拒）
     ///
     /// R2: 与普通断网重连分离统计——ConnAck 被拒不属网络抖动，持续增长即

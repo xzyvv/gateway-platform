@@ -13,9 +13,15 @@ impl TemplateEngine {
         for seg in &self.segments {
             match seg {
                 Segment::Literal(s) => out.push_str(s),
-                Segment::Variable(name) => {
+                Segment::Variable { name, json_escaped } => {
                     if let Some(val) = vars.lookup(name) {
-                        out.push_str(&val);
+                        // #108：JSON 字符串上下文的值转义后再写入，避免引号 /
+                        // 反斜杠 / 换行破坏外层 JSON 结构；裸值上下文原样写入。
+                        if *json_escaped {
+                            out.push_str(&escape_json_content(&val));
+                        } else {
+                            out.push_str(&val);
+                        }
                     }
                 }
             }
@@ -29,9 +35,14 @@ impl TemplateEngine {
         for seg in &self.segments {
             match seg {
                 Segment::Literal(s) => out.extend_from_slice(s.as_bytes()),
-                Segment::Variable(name) => {
+                Segment::Variable { name, json_escaped } => {
                     if let Some(val) = vars.lookup(name) {
-                        out.extend_from_slice(val.as_bytes());
+                        // #108：与 render 完全同构，保证字节路径同样转义。
+                        if *json_escaped {
+                            out.extend_from_slice(escape_json_content(&val).as_bytes());
+                        } else {
+                            out.extend_from_slice(val.as_bytes());
+                        }
                     }
                 }
             }
@@ -48,7 +59,7 @@ impl TemplateEngine {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for seg in &self.segments {
-            if let Segment::Variable(name) = seg {
+            if let Segment::Variable { name, .. } = seg {
                 if vars.lookup(name).is_none() && seen.insert(name.as_str()) {
                     out.push(name.clone());
                 }
@@ -67,8 +78,15 @@ impl TemplateEngine {
         for seg in &self.segments {
             match seg {
                 Segment::Literal(s) => out.push_str(s),
-                Segment::Variable(name) => match vars.lookup(name) {
-                    Some(val) => out.push_str(&val),
+                Segment::Variable { name, json_escaped } => match vars.lookup(name) {
+                    Some(val) => {
+                        // #108：与 render 一致，诊断路径同样转义。
+                        if *json_escaped {
+                            out.push_str(&escape_json_content(&val));
+                        } else {
+                            out.push_str(&val);
+                        }
+                    }
                     None => {
                         if seen.insert(name.as_str()) {
                             missing.push(name.clone());
@@ -85,16 +103,20 @@ impl TemplateEngine {
             .iter()
             .map(|s| match s {
                 Segment::Literal(s) => s.len(),
-                Segment::Variable(_) => 8,
+                Segment::Variable { .. } => 8,
             })
             .sum()
     }
 }
 
-/// JSON 字符串字面量渲染（转义控制字符和引号）— 公开给用户做自定义字符串包装
-pub fn render_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
+/// JSON 字符串**内容**转义（不含外层引号）。
+///
+/// #108：供模板 `"${var}"` 这类「引号已由模板提供」的 JSON 字符串上下文使用——
+/// 只转义内容中的控制字符 / 引号 / 反斜杠 / 危险 Unicode，避免点位值中的
+/// `"`、`\`、换行破坏外层 JSON 结构或注入内容。普通可打印字符（含中文、数字）
+/// 原样保留，保证普通值渲染结果不变。
+pub(crate) fn escape_json_content(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
@@ -120,6 +142,15 @@ pub fn render_str(s: &str) -> String {
             c => out.push(c),
         }
     }
+    out
+}
+
+/// JSON 字符串字面量渲染（转义控制字符和引号）— 公开给用户做自定义字符串包装。
+/// 行为不变：输出带外层引号的完整 JSON 字符串字面量。
+pub fn render_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    out.push_str(&escape_json_content(s));
     out.push('"');
     out
 }

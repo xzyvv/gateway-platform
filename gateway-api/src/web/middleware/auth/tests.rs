@@ -370,3 +370,20 @@ fn unclassified_path_falls_back_to_any_write_scope() {
         "/api/unknown-endpoint"
     ));
 }
+
+
+/// 死信 / 日志 / 看门狗三类读端点此前漏登记，匿名读模式下可直接拉到失败报文
+/// 与故障拓扑，必须补齐强制鉴权。
+#[test]
+fn sensitive_read_covers_dead_letters_logs_watchdog() {
+    assert!(is_sensitive_read_path("/api/north/dead-letters"));
+    assert!(is_sensitive_read_path("/api/north/dead-letters/dl-1"));
+    assert!(is_sensitive_read_path("/api/diagnostics/logs"));
+    assert!(is_sensitive_read_path("/api/diagnostics/logs/download"));
+    assert!(is_sensitive_read_path("/api/watchdog"));
+    assert!(is_sensitive_read_path("/api/watchdog/events"));
+    assert!(is_sensitive_read_path("/api/watchdog/services"));
+    // 相邻非敏感路径不得误伤
+    assert!(!is_sensitive_read_path("/api/north/dead-letter"));
+    assert!(!is_sensitive_read_path("/api/watchdogx"));
+}

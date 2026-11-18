@@ -14,6 +14,7 @@ use gateway_core::engine::error::{GatewayError, GatewayResult};
 /// PUT /api/config/import — 批量覆盖配置
 pub async fn import_config(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(mut payload): Json<ConfigImport>,
 ) -> Result<ApiResponse<serde_json::Value>, ApiError> {
     // 导入老版本备份时，「mqtt + 模拟消费者」双开的组合按存量策略降级，
@@ -25,6 +26,10 @@ pub async fn import_config(
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;
     let old = state.config.load_full();
+    // P0 提权门禁：整份导入可覆盖 web.api_token，须主 token
+    crate::web::config_apply::ensure_system_secrets_allowed(
+        &state, &headers, &old, &payload.config,
+    )?;
     // 审计所需的规模数字必须在 persist_then_apply 消费配置之前取好
     let device_count = payload
         .config

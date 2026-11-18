@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::{do_transaction, write_timeout_for, TransactionParams};
+use super::{do_transaction, write_timeout_for, ASCII_BUF_LIMIT, TransactionParams};
 #[cfg(feature = "modbus")]
 use crate::engine::codec::crc::crc16;
 use crate::engine::error::GatewayResult;
@@ -270,6 +270,7 @@ async fn write_hang_hits_short_write_timeout_and_releases_de() {
             baud: 9600,
         },
         &gpio,
+        None,
     )
     .await;
     let elapsed = t0.elapsed();
@@ -371,6 +372,7 @@ async fn silent_device_waits_full_timeout_before_no_reply() {
             baud: 9600,
         },
         &gpio,
+        None,
     )
     .await;
     let elapsed = t0.elapsed();
@@ -421,6 +423,7 @@ async fn de_goes_high_before_write_and_low_before_read() {
             baud: 9600,
         },
         &gpio,
+        None,
     )
     .await;
 
@@ -482,6 +485,7 @@ async fn ascii_mode_converts_request_and_handles_fragmented_response() {
             baud: 9600,
         },
         &gpio,
+        None,
     )
     .await;
 
@@ -534,6 +538,7 @@ async fn fragmented_rtu_response_is_reassembled() {
             baud: 9600,
         },
         &gpio,
+        None,
     )
     .await;
 
@@ -570,6 +575,7 @@ async fn stale_input_is_drained_before_transaction() {
             baud: 9600,
         },
         &gpio,
+        None,
     )
     .await;
 
@@ -577,5 +583,74 @@ async fn stale_input_is_drained_before_transaction() {
         res.expect("清缓冲后应解析出本次响应"),
         response,
         "必须返回本次请求的响应，而不是上一事务的残留帧"
+    );
+}
+
+// ============================================================
+// 原 #112: Modbus ASCII 接收缓冲必须有硬上限
+// ============================================================
+
+/// 纯数值契约：硬上限既要容纳合法的最长 ASCII 帧，又不能大到失去保护意义。
+///
+/// Modbus RTU ADU 最大 256 字节 → ASCII 最长 `:`(1) + hex(512) + LRC(2) + CRLF(2)
+/// = 517 字节。
+// 纯常量契约：故意断言编译期常量，便于未来若把上限改为配置项时立刻发现漂移。
+#[allow(clippy::assertions_on_constants)]
+#[test]
+fn ascii_buffer_limit_covers_max_legal_frame_without_being_unbounded() {
+    assert!(
+        ASCII_BUF_LIMIT >= 517,
+        "硬上限必须容得下合法的最长 Modbus ASCII 帧（517 字节），实际 {ASCII_BUF_LIMIT}"
+    );
+    assert!(
+        ASCII_BUF_LIMIT <= 4096,
+        "硬上限过大会失去防内存膨胀意义，实际 {ASCII_BUF_LIMIT}"
+    );
+}
+
+/// 现场复盘：异常设备持续发送无 CRLF 的数据时，原实现用裸 `Vec<u8>` 无限累积，
+/// 最终撑爆内存。修复后超限整段丢弃，仍能在同一事务里解析随后到达的合法帧。
+///
+/// 桩响应 = 1280 字节垃圾（无 CRLF）+ 合法 ASCII 帧。读缓冲 256 字节/次，
+/// 第 5 次读后累计 1280 > 1024 触发超限清空；第 6 次读恰好从合法帧起始，
+/// 应被正常解析并回传。
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn ascii_overflow_drops_partial_frame_and_accepts_next_valid_frame() {
+    let rtu_response = modbus_fc03_response(0x002A);
+    let ascii_frame = rtu_to_ascii(&rtu_response);
+    // 恰好 5 × 256 字节垃圾，确保清缓冲发生在合法帧起始之前
+    let mut wire = vec![b'A'; 5 * 256];
+    wire.extend_from_slice(&ascii_frame);
+    let port = MockPort::responding(wire, 0);
+
+    let mut handle = SerialHandle::from_stream(port.clone());
+    let gpio = RecordingGpio::new();
+    let metrics = crate::engine::metrics::Metrics::new();
+
+    let res = do_transaction(
+        &mut handle,
+        TransactionParams {
+            request: &[0x01, 0x03, 0x00, 0x00, 0x00, 0x01],
+            timeout: Duration::from_millis(500),
+            protocol: "modbus",
+            expected_count: Some(1),
+            de_pin: None,
+            modbus_mode: "ascii",
+            baud: 9600,
+        },
+        &gpio,
+        Some(&metrics),
+    )
+    .await;
+
+    assert_eq!(
+        res.expect("超限清空后应能解析随后到达的合法 ASCII 帧"),
+        rtu_response,
+        "合法帧不应被前序垃圾数据污染"
+    );
+    assert!(
+        metrics.bus.ascii_frame_dropped.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+        "缓冲超限必须递增丢弃计数，供运维识别异常设备灌噪声"
     );
 }

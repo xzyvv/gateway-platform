@@ -25,7 +25,7 @@ use crate::south::protocol::modbus::transaction::{
 };
 use crate::south::protocol::CollectorError;
 
-use super::BusTransaction;
+use super::{BusTransaction, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_DELAY_MS};
 
 /// 重连退避计数推进：只有确认「上次连接真正完成过一次事务」才清零。
 ///
@@ -59,8 +59,14 @@ pub(crate) async fn bus_task_tcp(
 ) {
     let name = bus_config.port_name.clone();
     let timeout = Duration::from_millis(bus_config.timeout_ms);
-    let retry_count = bus_config.retry_count.unwrap_or(2);
-    let retry_delay = Duration::from_millis(bus_config.retry_delay_ms.unwrap_or(200));
+    // 与 `BusManager` 的应答预算同源（原 #107）：「重试循环最坏耗时」不得超出
+    // 上层「等应答」预算，故两处共用 DEFAULT_RETRY_* 常量。
+    let retry_count = bus_config.retry_count.unwrap_or(DEFAULT_RETRY_COUNT);
+    let retry_delay = Duration::from_millis(
+        bus_config
+            .retry_delay_ms
+            .unwrap_or(DEFAULT_RETRY_DELAY_MS),
+    );
     // 下限 1：与 `south/bus/mod.rs` 的 `.max(1)` 保持一致。
     // 若为 0，`TransactionPool::with_stream(0, …)` 后每个事务都判定 `active.len() >= 0`
     // 而恒返回 Busy，该 TCP 总线会静默全线失效。
