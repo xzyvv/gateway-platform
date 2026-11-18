@@ -90,7 +90,7 @@ import { usePolling } from '@/composables/core/usePolling'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import {Refresh} from '@element-plus/icons-vue'
-import echarts, { initChart, disposeChart } from '@/utils/echarts-extra'
+import echarts, { disposeChart, ensureChart } from '@/utils/echarts-extra'
 import { defaultGrid, valueAxisStyle, categoryAxisStyle, axisNameStyle } from '@/utils/chartStyle'
 import { CHART_PRIMARY, CHART_DANGER, CHART_WARNING } from '@/utils/chartTheme'
 import { getDiskHistory, type DiskHistory } from '@/api/status'
@@ -164,8 +164,17 @@ function formatTime(ts: number): string {
 }
 
 function render() {
-  if (!chartRef.value || !history.value || !history.value.samples.length) return
-  if (!chart) chart = initChart(chartRef.value)
+  if (!history.value || !history.value.samples.length) {
+    // 采样被清空（网关重启 / 历史窗口裁剪）时宿主被 v-if 卸载，
+    // 顺手释放实例，避免它留在 liveCharts 注册表里泄漏。
+    chart = ensureChart(chart, null)
+    return
+  }
+  // 宿主被 v-if 卸载后重新创建时，旧实例绑定的是已移除的 DOM。
+  // ensureChart 比对 getDom()，宿主变了就重建，否则 setOption 会写向
+  // 已销毁的 DOM —— 新宿主的图表区将永久空白。
+  chart = ensureChart(chart, chartRef.value)
+  if (!chart) return
 
   const samples = history.value.samples
   chart.setOption({
@@ -273,6 +282,16 @@ function handleResize() {
 }
 
 watch(() => history.value, () => { nextTick(render) })
+
+// 图表宿主被 v-if 卸载（采样清空）时，实例绑定的 DOM 已被移除。
+// 此时释放实例，避免它留在 liveCharts 注册表里泄漏；
+// 条件恢复时 ensureChart 会按新宿主重建。
+watch(chartRef, (el) => {
+  if (!el && chart) {
+    disposeChart(chart)
+    chart = null
+  }
+})
 
 onMounted(() => {
   load()

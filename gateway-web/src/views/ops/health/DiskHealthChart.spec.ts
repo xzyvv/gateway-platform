@@ -4,17 +4,50 @@ import { nextTick } from 'vue'
 import DiskHealthChart from './DiskHealthChart.vue'
 
 // Mock echarts
-const mockChart = {
-  setOption: vi.fn(),
-  resize: vi.fn(),
-  dispose: vi.fn(),
+//
+// 注意：initChart 每次返回**新**实例（真实 echarts 行为）。早前这里返回同一个
+// mockChart 单例，恰好掩盖了「宿主被 v-if 卸载后旧实例成孤儿」的缺陷——
+// 单例下 getDom() 永远等于当前宿主，看不出实例与宿主的错配。
+type MockChart = {
+  setOption: ReturnType<typeof vi.fn>
+  resize: ReturnType<typeof vi.fn>
+  dispose: ReturnType<typeof vi.fn>
+  getDom: ReturnType<typeof vi.fn<() => HTMLElement>>
+  isDisposed: ReturnType<typeof vi.fn<() => boolean>>
 }
+const mockCharts: MockChart[] = []
+
+/** 造一个绑定到指定宿主的 mock 实例（行为对齐真实 echarts） */
+function newMockChart(dom: HTMLElement): MockChart {
+  const c: MockChart = {
+    setOption: vi.fn(),
+    resize: vi.fn(),
+    dispose: vi.fn(),
+    getDom: vi.fn(() => dom),
+    isDisposed: vi.fn(() => false),
+  }
+  mockCharts.push(c)
+  return c
+}
+
 vi.mock('@/utils/echarts', () => ({
-  default: { init: () => mockChart, graphic: { LinearGradient: class {} } },
-  // 页面统一从 initChart 初始化（暗色主题注入包装），mock 与 default.init 同返回
-  initChart: () => mockChart,
+  default: { init: () => mockCharts[mockCharts.length - 1], graphic: { LinearGradient: class {} } },
+  // 页面统一从 initChart 初始化（暗色主题注入包装）
+  initChart: (dom: HTMLElement) => newMockChart(dom),
   // 卸载走 disposeChart（同步摘除 liveCharts 注册表）
   disposeChart: vi.fn((c: { dispose: () => void }) => c?.dispose?.()),
+  // 宿主与实例一致性检查：宿主变了就重建，宿主消失就释放
+  ensureChart: (current: { getDom: () => HTMLElement; dispose: () => void } | null, dom: HTMLElement | null | undefined) => {
+    if (!dom) {
+      current?.dispose?.()
+      return null
+    }
+    if (!current || current.getDom() !== dom) {
+      current?.dispose?.()
+      return newMockChart(dom)
+    }
+    return current
+  },
 }))
 
 // Mock API
@@ -33,6 +66,9 @@ function loadingOf(wrapper: ReturnType<typeof mount>): any {
 describe('DiskHealthChart.vue — D10 磁盘健康', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // clearAllMocks 只清调用记录，不清数组；实例列表要显式重置，
+    // 否则「采样为空时显示空状态」这类断言会看到上一个用例留下的实例
+    mockCharts.length = 0
   })
 
   /**
@@ -124,7 +160,7 @@ describe('DiskHealthChart.vue — D10 磁盘健康', () => {
     // 危险阈值来自常量 DANGER_THRESHOLD=10
     expect(wrapper.text()).toContain('10%')
     // 调用了 echarts.setOption
-    expect(mockChart.setOption).toHaveBeenCalled()
+    expect(mockCharts.at(-1)!.setOption).toHaveBeenCalled()
   })
 
   it('采样为空时显示空状态', async () => {
@@ -133,7 +169,7 @@ describe('DiskHealthChart.vue — D10 磁盘健康', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('暂无磁盘采样数据')
-    expect(mockChart.setOption).not.toHaveBeenCalled()
+    expect(mockCharts.every((c) => !c.setOption.mock.calls.length)).toBe(true)
   })
 
   it('API 失败时提示错误', async () => {
@@ -169,6 +205,53 @@ describe('DiskHealthChart.vue — D10 磁盘健康', () => {
     await nextTick()
 
     wrapper.unmount()
-    expect(mockChart.dispose).toHaveBeenCalled()
+    expect(mockCharts.some((c) => c.dispose.mock.calls.length > 0)).toBe(true)
+  })
+
+  /**
+   * 回归：图表宿主被 v-if 卸载后重新创建时，旧实例绑定的是已移除的 DOM。
+   *
+   * 原实现 `if (!chart) chart = initChart(...)`——旧实例非空就跳过重建，
+   * setOption 写向已销毁的 DOM → 新宿主的图表区永久空白。
+   * 修法：ensureChart 比对 getDom()，宿主变了就重建。
+   */
+  it('采样清空后恢复：图表实例随宿主重建，不复用绑定旧 DOM 的孤儿实例', async () => {
+    mockGetDiskHistory.mockResolvedValue({
+      count: 1,
+      samples: [{ ts: 1700000000000, free_pct: 50 }],
+    })
+    const wrapper = mount(DiskHealthChart)
+    await flushPromises()
+    await nextTick()
+
+    const first = mockCharts.at(-1)!
+    expect(first.setOption).toHaveBeenCalled()
+    expect(mockCharts.length).toBe(1)
+
+    // 采样被清空（网关重启 / 历史窗口裁剪）→ v-if 卸载宿主
+    mockGetDiskHistory.mockResolvedValue({ count: 0, samples: [] })
+    await wrapper.findAll('button').find((b) => b.text().trim() === '刷新')!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // 旧实例应被释放，不留在 liveCharts 注册表里泄漏
+    expect(first.dispose).toHaveBeenCalled()
+    expect(mockCharts.length).toBe(1)
+
+    // 采样恢复 → v-if 重新创建宿主 → 必须新建实例并写 option
+    mockGetDiskHistory.mockResolvedValue({
+      count: 1,
+      samples: [{ ts: 1700000000000, free_pct: 42 }],
+    })
+    await wrapper.findAll('button').find((b) => b.text().trim() === '刷新')!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(mockCharts.length).toBe(2)
+    const second = mockCharts.at(-1)!
+    expect(second).not.toBe(first)
+    // 新实例绑定的宿主必须是被重建的那个 DOM
+    expect(second.getDom()).toBeTruthy()
+    expect(second.setOption).toHaveBeenCalled()
   })
 })

@@ -101,6 +101,7 @@ import WriteSection from './parts/WriteSection.vue'
 import OperationLogPanel from './parts/OperationLogPanel.vue'
 import BatchWritePanel from './parts/BatchWritePanel.vue'
 import type { LogEntry } from './parts/OperationLogPanel.vue'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 
 const { readOnce } = useReadPointNow()
 const { writeOnce } = usePointWrite()
@@ -127,7 +128,8 @@ const logs = ref<LogEntry[]>([])
 
 let unmounted = false
 // Bug 181: 点位请求序号——快速切换设备时丢弃过期响应，避免旧设备的点位覆盖新选择。
-let pointsSeq = 0
+// 请求序号守卫：只接受最新一次请求的结果（旧响应不得覆盖新选择）
+const { next: nextRequest, isCurrent } = useRequestGuard()
 
 const selectedPointObj = computed(() =>
   points.value.find((p) => p.id === selectedPoint.value),
@@ -183,17 +185,17 @@ async function onDeviceChange(id: string) {
   currentValue.value = '—'
   valueError.value = false
   // Bug 181: 递增序列号；仅最新一次请求的响应可写入状态，过期响应直接丢弃。
-  const seq = ++pointsSeq
+  const seq = nextRequest()
   if (!id) { points.value = []; return }
   pointsLoading.value = true
   try {
     const data = await listPoints(id)
-    if (unmounted || seq !== pointsSeq) return
+    if (!isCurrent(seq)) return
     points.value = data
   } catch {
-    if (!unmounted && seq === pointsSeq) points.value = []
+    if (isCurrent(seq)) points.value = []
   } finally {
-    if (!unmounted && seq === pointsSeq) pointsLoading.value = false
+    if (isCurrent(seq)) pointsLoading.value = false
   }
 }
 

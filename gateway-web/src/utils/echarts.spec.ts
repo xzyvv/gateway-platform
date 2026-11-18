@@ -10,8 +10,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
  */
 
 // initMock 每次调用都返回**新对象**——避免 Set 去重把同引用当成同一图表
-const initMock = vi.fn((_dom: unknown, _theme?: string) => {
+const initMock = vi.fn((dom: unknown, _theme?: string) => {
   return {
+    // getDom 返回初始化时的宿主：ensureChart 靠它比对「实例绑定的宿主」
+    // 与「当前宿主」是否一致，决定复用还是重建
+    getDom: vi.fn(() => dom),
+    isDisposed: vi.fn(() => false),
     getOption: vi.fn(() => ({ xAxis: { type: 'category' } })),
     setOption: vi.fn(),
     resize: vi.fn(),
@@ -66,6 +70,7 @@ const {
   registerChart,
   unregisterChart,
   applyEchartsTheme,
+  ensureChart,
   __liveChartCountForTests,
   __resetLiveChartsForTests,
 } = echartsMod
@@ -233,6 +238,76 @@ describe('echarts — #1 修复：图表注册表 + 主题运行时切换', () =
 
     expect(disposedChart.setOption).not.toHaveBeenCalled()
     expect(mockChartA.setOption).toHaveBeenCalledTimes(1)
+    expect(__liveChartCountForTests()).toBe(1)
+  })
+})
+
+/**
+ * ensureChart：保证图表实例与当前宿主元素匹配。
+ *
+ * 背景：图表宿主常被 v-if 包着（"有数据才显示图表"）。宿主被卸载后，页面侧
+ * 仍持有绑定在**已移除 DOM** 上的旧实例；条件恢复时 v-if 会创建**全新**宿主，
+ * 若按 `if (!chart)` 判断就会跳过重建 → setOption 写向已销毁的 DOM →
+ * 新宿主图表区永久空白 + 旧实例持续泄漏。
+ */
+describe('echarts — ensureChart：实例与宿主一致性', () => {
+  beforeEach(() => {
+    initMock.mockClear()
+    __resetLiveChartsForTests()
+  })
+
+  it('宿主未变时复用同一实例，不重复 init', () => {
+    const dom = makeDom()
+    const first = ensureChart(null, dom)
+    expect(first).not.toBeNull()
+
+    const second = ensureChart(first, dom)
+    expect(second).toBe(first)
+    expect(initMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('宿主被换成新元素时重建实例，并释放旧实例', () => {
+    const domA = makeDom()
+    const domB = makeDom()
+    const first = ensureChart(null, domA)!
+    expect(first.getDom()).toBe(domA)
+
+    const second = ensureChart(first, domB)!
+    expect(second).not.toBe(first)
+    expect(second.getDom()).toBe(domB)
+    // 旧实例必须被 dispose，否则它会一直挂在 liveCharts 注册表里泄漏
+    expect(first.dispose).toHaveBeenCalled()
+    expect(initMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('宿主为空（v-if 卸载）时释放实例并返回 null', () => {
+    const dom = makeDom()
+    const chart = ensureChart(null, dom)!
+    expect(ensureChart(chart, null)).toBeNull()
+    expect(chart.dispose).toHaveBeenCalled()
+  })
+
+  it('旧实例已被 dispose 时重建，不复用失效实例', () => {
+    const dom = makeDom()
+    const stale = {
+      getDom: vi.fn(() => dom),
+      isDisposed: vi.fn(() => true),
+      dispose: vi.fn(),
+      setOption: vi.fn(),
+    }
+    const fresh = ensureChart(stale as never, dom)!
+    expect(fresh).not.toBe(stale)
+    expect(initMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('重建后旧实例已从活动注册表摘除（不泄漏）', () => {
+    const domA = makeDom()
+    const domB = makeDom()
+    const first = ensureChart(null, domA)!
+    expect(__liveChartCountForTests()).toBe(1)
+
+    ensureChart(first, domB)
+    // 旧的被摘除、新的被注册 → 净数量仍为 1
     expect(__liveChartCountForTests()).toBe(1)
   })
 })

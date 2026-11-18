@@ -1,4 +1,4 @@
-import { ref, reactive, computed, onUnmounted } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { getStatusSnapshot, getVersion, getMetrics, parsePrometheusText } from '@/api/status'
 import { listDevices } from '@/api/devices'
@@ -9,6 +9,7 @@ import { loadConfigIssues, type ConfigIssue } from '@/utils/configHealth'
 import { pushMetrics, getMetricsHistory, clearMetricsHistory } from '@/utils/metricsHistory'
 import { usePolling } from '@/composables/core/usePolling'
 import { useSharedTick } from '@/composables/core/useSharedTick'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { useGatewayStore } from '@/stores/gateway'
 import { useHealthReport } from '@/composables/system/useHealthReport'
 import { useDashboardLayout } from './useDashboardLayout'
@@ -239,8 +240,11 @@ export function useDashboardData() {
     return `${Math.min(100, Math.max(0, n))}%`
   }
 
-  // ===== refresh 防覆盖（seq 机制）=====
-  let refreshSeq = 0
+  // ===== refresh 防覆盖（请求序号守卫）=====
+  // 状态流（3s）与辅助流（30s）是两条独立的数据流，各用各的守卫——
+  // 共用一个计数器会让两条流互相作废对方的响应。
+  const statusGuard = useRequestGuard()
+  const auxGuard = useRequestGuard()
 
   /**
    * 高频刷新（3s）：取运行状态，并读取 Layout 已维护的健康快照。
@@ -253,7 +257,7 @@ export function useDashboardData() {
    * 用于把旧快照显示为「离线旧数据」，而不是当作刚刚更新。
    */
   async function refreshStatus() {
-    const seq = ++refreshSeq
+    const seq = statusGuard.next()
     // P1 修复：仅首次加载显示遮罩；3s 轮询属后台静默刷新，避免整页反复闪烁
     if (!hasLoadedOnce) loading.value = true
     // try/finally 保证 loading 一定复位：任一分支抛错若未捕获，
@@ -261,7 +265,7 @@ export function useDashboardData() {
     try {
       // 健康快照与 /api/status 同批刷新；composable 的 TTL 保证 10s 内不会重复请求
       const [sRes] = await Promise.allSettled([getStatusSnapshot(), refreshHealthReport()])
-      if (seq !== refreshSeq) return
+      if (!statusGuard.isCurrent(seq)) return
       if (sRes.status === 'fulfilled') {
         Object.assign(status, sRes.value.status)
         dataStale.value = sRes.value.stale
@@ -302,17 +306,20 @@ export function useDashboardData() {
     } finally {
       // 无论成败都标记"已加载过"：后续轮询（含持续失败的场景）都不再遮挡整页
       hasLoadedOnce = true
-      if (seq === refreshSeq) loading.value = false
+      if (statusGuard.isCurrent(seq)) loading.value = false
     }
   }
 
   /** 低频刷新（30s）：版本、设备卡片列表、采集指标 */
   async function refreshAux() {
+    // 手动 refresh() 与 30s 轮询可能并发；旧响应不得覆盖新快照
+    const seq = auxGuard.next()
     const [vRes, devsRes, mRes] = await Promise.allSettled([
       getVersion(),
       listDevices(),
       getMetrics(),
     ])
+    if (!auxGuard.isCurrent(seq)) return
     if (vRes.status === 'fulfilled') Object.assign(version, vRes.value)
     if (devsRes.status === 'fulfilled') deviceList.value = devsRes.value
     if (mRes.status === 'fulfilled') {
@@ -389,9 +396,7 @@ export function useDashboardData() {
   // "x 秒前"文案每秒走一次，只驱动文本，不触发请求。
   // 定时器走全站共享 tick（P0）：与顶栏时钟合并为一个 setInterval，切后台时停表。
   useSharedTick(() => { updateTick.value++ }, 1000)
-  onUnmounted(() => {
-    refreshSeq++
-  })
+  // 在途请求的作废由 useRequestGuard 自己在卸载时处理
 
   // 3s：状态（健康快照读 Layout 的 5s 轮询结果）；30s：版本/设备/指标。
   // 两者都在标签页隐藏时暂停、网关失联时指数退避（usePolling 统一策略）。

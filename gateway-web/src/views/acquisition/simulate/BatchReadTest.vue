@@ -110,6 +110,7 @@ import DevicePointSelector from './parts/DevicePointSelector.vue'
 import LogPanel from '@/components/LogPanel.vue'
 import { copyText } from '@/utils/clipboard'
 import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 
 interface PerfResult {
   count: number
@@ -153,7 +154,8 @@ let unmounted = false
  * 本页此前没有这层保护，旧设备的点位列表可能在用户已切到新设备后回写，
  * 导致下拉里出现不属于当前设备的点位。
  */
-let pointsSeq = 0
+// 请求序号守卫：只接受最新一次请求的结果（旧响应不得覆盖新选择）
+const { next: nextRequest, isCurrent } = useRequestGuard()
 
 /**
  * 复制全部测试日志：一轮 1000 次读取跑完，P50/P99 的结论通常要贴进工单，
@@ -203,17 +205,17 @@ async function loadDevices() {
 async function onDeviceChange(id: string) {
   selectedPoint.value = ''
   // 递增序号：仅最新一次请求的响应可写入状态，过期响应直接丢弃（Bug 181）
-  const seq = ++pointsSeq
+  const seq = nextRequest()
   if (!id) { points.value = []; return }
   pointsLoading.value = true
   try {
     const data = await listPoints(id)
-    if (unmounted || seq !== pointsSeq) return
+    if (!isCurrent(seq)) return
     points.value = data
   } catch {
-    if (!unmounted && seq === pointsSeq) points.value = []
+    if (isCurrent(seq)) points.value = []
   } finally {
-    if (!unmounted && seq === pointsSeq) pointsLoading.value = false
+    if (isCurrent(seq)) pointsLoading.value = false
   }
 }
 

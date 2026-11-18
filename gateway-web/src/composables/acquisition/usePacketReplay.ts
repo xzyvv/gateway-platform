@@ -23,6 +23,7 @@ import {
 } from '@/api/protocolTools'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { statusTagType as baseStatusTagType, type TagType } from '@/utils/statusType'
 
 /** 预置会话不可删（后端也拒绝，前端灰色 + tooltip） */
@@ -80,6 +81,8 @@ export function usePacketReplay() {
   const liveFrames = ref<ReplayFrameResult[]>([])
   /** 流式 started 事件给出的计划总帧数（进度条分母）；0 = 未开始/阻塞模式 */
   const streamTotal = ref(0)
+  // 会话详情请求序号守卫：快速切换会话时，旧会话的详情不得覆盖新会话
+  const selectGuard = useRequestGuard()
   /** 流式 started 事件的开始时间戳（中断收尾时用于本地汇总） */
   const streamStartedAt = ref(0)
   let abortCtrl: AbortController | null = null
@@ -100,15 +103,26 @@ export function usePacketReplay() {
     return map
   })
 
+  /**
+   * 切换当前回放会话。
+   *
+   * 竞态守卫：快速切换两个会话时，先发的 getSession 可能后到 →
+   * session.value 会显示上一个会话的详情，而 currentId 已是新会话，
+   * 页面标题与详情和列表选中项对不上。
+   */
   async function select(id: string) {
+    const seq = selectGuard.next()
     currentId.value = id
     replayError.value = ''
     execResult.value = null
     liveFrames.value = []
     streamTotal.value = 0
     try {
-      session.value = (await getSession(id)) || null
+      const s = (await getSession(id)) || null
+      if (!selectGuard.isCurrent(seq)) return
+      session.value = s
     } catch (e) {
+      if (!selectGuard.isCurrent(seq)) return
       session.value = null
       replayError.value = message(e, '加载回放会话失败')
     }

@@ -52,6 +52,7 @@
 import { ref, reactive, watch, onMounted, h } from 'vue'
 import { ElTag } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 const { showToast } = useErrorDisplay()
 import { listAuditLogs, type AuditLogEntry, type AuditFilter } from '@/api/auditLog'
 import type { ColumnDef } from '@/components/DataTable.vue'
@@ -73,6 +74,8 @@ const filter = reactive<AuditFilter>({
   limit: 200,
 })
 const timeRange = ref<[string, string] | null>(null)
+// 加载序号守卫：旧请求的审计日志不得覆盖新筛选条件的结果
+const loadGuard = useRequestGuard()
 
 // 筛选条件与 URL 双向同步：切 tab 返回后还原，且可刷新/分享带筛选的链接
 // （limit 在 query 中为字符串，还原时转数字；时间范围为自定义控件不持久化）
@@ -173,16 +176,28 @@ function reset() {
   load()
 }
 
+/**
+ * 加载审计日志。
+ *
+ * 竞态守卫：连续改两次时间范围（或改完时间范围马上点「查询」）时，
+ * 先发的请求后到 → 列表显示的时间范围与筛选器上的不一致。
+ * 审计日志显示错数据比一般列表更严重，故加序号守卫。
+ */
 async function load() {
+  const seq = loadGuard.next()
   loading.value = true
   try {
-    logs.value = await listAuditLogs({ ...filter })
+    const data = await listAuditLogs({ ...filter })
+    if (!loadGuard.isCurrent(seq)) return
+    logs.value = data
     resetPage()
   } catch (e) {
-    showToast(e, '加载审计日志失败')
-    logError('audit-log', e)
+    if (loadGuard.isCurrent(seq)) {
+      showToast(e, '加载审计日志失败')
+      logError('audit-log', e)
+    }
   } finally {
-    loading.value = false
+    if (loadGuard.isCurrent(seq)) loading.value = false
   }
 }
 

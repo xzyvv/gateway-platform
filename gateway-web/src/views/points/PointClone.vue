@@ -62,6 +62,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { confirmAction } from '@/utils/confirm'
 import {Promotion} from '@element-plus/icons-vue'
 import {
@@ -87,6 +88,8 @@ const nameSuffix = ref('')
 const result = ref<{ total: number; targets: string[] } | null>(null)
 /** 源点位预览表的加载态：首次加载与切换源设备时都置位 */
 const loading = ref(false)
+// 源点位请求序号守卫：切换源设备时丢弃过期响应
+const sourceGuard = useRequestGuard()
 
 const currentSource = computed(() => sources.value.find((d) => d.id === sourceId.value))
 const canClone = computed(() => !!sourceId.value && targets.value.some((t) => t.selected))
@@ -106,14 +109,23 @@ async function loadSources() {
   }
 }
 
+/**
+ * 切换源设备后重新加载该设备的点位。
+ *
+ * 竞态守卫：快速切换源设备时，旧设备的 listPoints 响应可能后到 → 预览表显示
+ * A 设备的点位，而 sourceId 已是 B 设备；此时点「克隆」实际克隆的是 B 的点位，
+ * 用户核对的却是 A 的清单。
+ */
 async function onSourceChange() {
   if (!sourceId.value) {
     sourcePoints.value = []
     return
   }
+  const seq = sourceGuard.next()
   loading.value = true
   try {
     const all = await listPoints(sourceId.value)
+    if (!sourceGuard.isCurrent(seq)) return
     sourcePoints.value = all.map((p) => ({
       id: p.id,
       name: p.name || p.id,
@@ -121,10 +133,11 @@ async function onSourceChange() {
       data_type: p.data_type || 'f32',
     }))
   } catch (e) {
+    if (!sourceGuard.isCurrent(seq)) return
     sourcePoints.value = []
     showToast(e, '加载点位失败')
   } finally {
-    loading.value = false
+    if (sourceGuard.isCurrent(seq)) loading.value = false
   }
 }
 

@@ -4,6 +4,7 @@ import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { confirmAction } from '@/utils/confirm'
 import { useClock } from '@/composables/system/useClock'
 import { usePolling } from '@/composables/core/usePolling'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { getStatus, getVersion, getMetrics, parsePrometheusText } from '@/api/status'
 import { getNtpStatus, ntpSync, type NtpStatus } from '@/api/network'
 import type { VersionInfo, RunStatus } from '@/api/types'
@@ -144,13 +145,14 @@ export function useSystem() {
     return `${n.toFixed(1)}%`
   }
 
-  let refreshSeq = 0
+  // 轮询期间旧响应不得覆盖新响应：用统一的请求序号守卫
+  const { next: nextRequest, isCurrent } = useRequestGuard()
   // 仅首次加载显示整页遮罩：refresh 由 usePolling 5s 轮询驱动（见下方生命周期），
   // 而 loading 绑在根节点 v-loading 上。原实现每轮都置 loading=true，导致系统总览页
   // 每 5 秒被蒙层覆盖一次、期间无法操作（与首页 Dashboard 同类问题）。
   let hasLoadedOnce = false
   async function refresh() {
-    const seq = ++refreshSeq
+    const seq = nextRequest()
     if (!hasLoadedOnce) loading.value = true
     const [sRes, vRes, mRes, nRes] = await Promise.allSettled([
       getStatus(),
@@ -160,7 +162,7 @@ export function useSystem() {
       // 健康聚合报告：与 status 同批刷新，TTL 内直接复用共享快照
       health.refresh(),
     ])
-    if (seq !== refreshSeq) return
+    if (!isCurrent(seq)) return
     if (sRes.status === 'fulfilled') Object.assign(status, sRes.value)
     if (vRes.status === 'fulfilled') Object.assign(version, vRes.value)
     if (mRes.status === 'fulfilled') {
@@ -250,7 +252,7 @@ export function useSystem() {
   })
   onUnmounted(() => {
     if (ntpTimer) clearTimeout(ntpTimer)
-    refreshSeq++
+    // 在途请求的作废由 useRequestGuard 自己在卸载时处理
     unmounted = true
   })
 

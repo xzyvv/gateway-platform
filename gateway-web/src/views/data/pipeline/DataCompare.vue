@@ -14,17 +14,18 @@
         placeholder="选择要对比的点位"
         style="width: 100%"
         filterable
+        :disabled="loading"
       >
         <el-option v-for="p in allPoints" :key="p.id" :label="`${p.deviceName} / ${p.pointName}`" :value="p.id" />
       </el-select>
       <div class="time-range">
-        <el-radio-group v-model="timeRange" size="small">
+        <el-radio-group v-model="timeRange" size="small" :disabled="loading">
           <el-radio-button value="1">最近 1 小时</el-radio-button>
           <el-radio-button value="6">最近 6 小时</el-radio-button>
           <el-radio-button value="24">最近 24 小时</el-radio-button>
           <el-radio-button value="168">最近 7 天</el-radio-button>
         </el-radio-group>
-        <el-button type="primary" size="small" :disabled="selectedPointIds.length === 0" @click="loadData">
+        <el-button type="primary" size="small" :disabled="selectedPointIds.length === 0" :loading="loading" @click="loadData">
           <el-icon><Search /></el-icon> 查询
         </el-button>
         <span v-if="selectedPointIds.length === 0" class="query-hint">请先选择点位</span>
@@ -59,11 +60,12 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onMounted, onUnmounted, nextTick, h} from 'vue'
+import {ref, computed, onMounted, onUnmounted, nextTick, h, watch} from 'vue'
 import {Search} from '@element-plus/icons-vue'
-import echarts, { initChart, disposeChart } from '@/utils/echarts'
+import echarts, { disposeChart, ensureChart } from '@/utils/echarts'
 import { tooltipStyle, defaultGrid, valueAxisStyle, categoryAxisStyle, legendStyle } from '@/utils/chartStyle'
 import { fetchHistorySamples } from '@/composables/data/useHistoryQuery'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
 import type { ColumnDef } from '@/components/DataTable.vue'
@@ -90,6 +92,10 @@ const selectedPoints = computed(() =>
 const dataRows = ref<Record<string, string | number>[]>([])
 type StatRow = { name: string; min: number; max: number; avg: number; range: number; std: number }
 const stats = ref<StatRow[]>([])
+// 查询进行中：禁用选择器与查询按钮，避免 await 期间改选择导致结果与选择错位
+const loading = ref(false)
+// 查询序号守卫：旧查询的结果不得覆盖新查询
+const queryGuard = useRequestGuard()
 
 // 表格统一走 DataTable；对比列随所选点位动态生成
 const dataColumns = computed<ColumnDef<Record<string, string | number>>[]>(() => [
@@ -118,13 +124,22 @@ async function loadData() {
   const now = Date.now()
   const start = now - hours * 3600000
 
+  // 快照本次查询的点位：await 期间用户仍可改选择（el-select 未禁用），
+  // 若继续读 computed 的 selectedPoints，长度会变短，
+  // 后面的 selectedPoints.value[j]! 非空断言就会越界抛 TypeError。
+  const picked = [...selectedPoints.value]
+  // 竞态守卫：连续点两次查询（或查询后改时间范围再查）时，
+  // 先发的请求后到会用旧数据覆盖新结果。
+  const seq = queryGuard.next()
+  loading.value = true
+
   const series: { name: string; data: number[]; color: string }[] = []
   const rows: Record<string, string | number>[] = []
   const statsList: typeof stats.value = []
 
   // Fetch real history data for each selected point
   const results = await Promise.all(
-    selectedPoints.value.map(async (p) => {
+    picked.map(async (p) => {
       try {
         // P2-1：返回体为信封内的 { items, total, ... } 而非裸数组
         // W1：不再视图内手拼 query 串，统一走 `/api/history` 的唯一取数入口
@@ -155,18 +170,26 @@ async function loadData() {
   for (let i = 0; i < allTs.length; i++) {
     const row: Record<string, string | number> = { time: times[i]! }
     for (let j = 0; j < results.length; j++) {
-      const sp = selectedPoints.value[j]!
+      // 用快照而非实时 computed：results 与 picked 一一对应，长度始终一致
+      const sp = picked[j]!
       const sd = series[j]!.data
       row[sp.id] = sd[i] ?? '-'
     }
     rows.push(row)
   }
 
+  // 旧请求的结果不得写入（已有更新的查询发出）。
+  // 注意这里不复位 loading：当前那一轮才负责把它置回 false。
+  if (!queryGuard.isCurrent(seq)) return
+
   dataRows.value = rows
   stats.value = statsList
 
   await nextTick()
-  if (!chart && chartEl.value) chart = initChart(chartEl.value)
+  // 宿主被 v-if 卸载后重新创建时，旧实例绑定的是已移除的 DOM。
+  // ensureChart 比对 getDom()，宿主变了就重建，否则 setOption 会写向
+  // 已销毁的 DOM —— 新宿主的图表区将永久空白。
+  chart = ensureChart(chart, chartEl.value)
   if (chart) {
     chart.setOption({
       grid: { ...defaultGrid, top: 40 },
@@ -182,6 +205,7 @@ async function loadData() {
       })),
     })
   }
+  loading.value = false
 }
 
 async function loadPoints() {
@@ -212,6 +236,17 @@ onUnmounted(() => {
     resizeHandler = null
   }
   disposeChart(chart)
+  chart = null
+})
+
+// 图表宿主被 v-if 卸载（清空所选点位）时，实例绑定的 DOM 已被移除。
+// 此时释放实例，避免它留在 liveCharts 注册表里泄漏；
+// 条件恢复时 ensureChart 会按新宿主重建。
+watch(chartEl, (el) => {
+  if (!el && chart) {
+    disposeChart(chart)
+    chart = null
+  }
 })
 </script>
 

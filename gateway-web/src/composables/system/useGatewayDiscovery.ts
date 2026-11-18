@@ -22,6 +22,7 @@ import { ref, type Ref } from 'vue'
 import { isTauri, scanGatewayLan } from '@/api'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import { runConcurrent } from '@/utils/concurrency'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 
 export interface DiscoveredGateway {
   /** 形如 http://192.168.1.100:8080 */
@@ -182,11 +183,20 @@ export function useGatewayDiscovery(): UseGatewayDiscoveryReturn {
   const elapsedMs = ref(0)
   const error = ref<string | null>(null)
   let controller: AbortController | null = null
+  // 桌面端（Rust 扫描）与 Web 端（fetch 探测）各自的请求序号守卫
+  const tauriGuard = useRequestGuard()
+  const webGuard = useRequestGuard()
 
   async function scan(): Promise<DiscoveredGateway[]> {
+    // 扫描中不重复启动：Rust 侧 scanGatewayLan 成本高（整段网段探测），
+    // 并发调用会拖慢彼此。取消后 scanning 复位，可重新发起。
     if (scanning.value) return found.value
     // Tauri 桌面端：用 Rust 原生扫描，避免 webview 直连 HTTP（CSP 收紧后必需）
     if (isTauri()) {
+      // 桌面端走 Rust 的 scanGatewayLan，无法用 AbortController 中断，
+      // 因此用请求序号作废「取消后仍在途」的扫描：cancel() 之后回来的结果
+      // 不会重新写进候选列表（否则「取消扫描」按钮形同虚设）。
+      const seq = tauriGuard.next()
       scanning.value = true
       found.value = []
       error.value = null
@@ -194,6 +204,8 @@ export function useGatewayDiscovery(): UseGatewayDiscoveryReturn {
       const t0 = performance.now()
       try {
         const result = await scanGatewayLan(8080)
+        // 已取消或已有更新的扫描 → 丢弃本次结果
+        if (!tauriGuard.isCurrent(seq)) return found.value
         found.value = result.map((g) => ({
           url: `http://${g.ip}:${g.port}`,
           latencyMs: g.latency_ms,
@@ -201,14 +213,15 @@ export function useGatewayDiscovery(): UseGatewayDiscoveryReturn {
         }))
         elapsedMs.value = Math.round(performance.now() - t0)
       } catch (e) {
-        error.value = extractErrorMessage(e)
+        if (tauriGuard.isCurrent(seq)) error.value = extractErrorMessage(e)
       } finally {
-        scanning.value = false
+        if (tauriGuard.isCurrent(seq)) scanning.value = false
       }
       return found.value
     }
     controller?.abort()
     controller = new AbortController()
+    const seq = webGuard.next()
     scanning.value = true
     found.value = []
     error.value = null
@@ -217,6 +230,7 @@ export function useGatewayDiscovery(): UseGatewayDiscoveryReturn {
     try {
       const ips = await detectLocalIPs()
       if (controller.signal.aborted) return []
+      if (!webGuard.isCurrent(seq)) return []
       // 优先扫 .1 / .254 / .100（常见默认地址）
       const priority = ['.1', '.254', '.100', '.10']
       const priorityIps: string[] = []
@@ -242,19 +256,23 @@ export function useGatewayDiscovery(): UseGatewayDiscoveryReturn {
         if (!existing || existing.latencyMs > g.latencyMs) uniq.set(g.url, g)
       }
       const sorted = Array.from(uniq.values()).sort((a, b) => a.latencyMs - b.latencyMs)
+      if (!webGuard.isCurrent(seq)) return []
       found.value = sorted
       elapsedMs.value = Math.round(performance.now() - t0)
       return sorted
     } catch (e) {
-      error.value = extractErrorMessage(e)
+      if (webGuard.isCurrent(seq)) error.value = extractErrorMessage(e)
       return []
     } finally {
-      scanning.value = false
+      if (webGuard.isCurrent(seq)) scanning.value = false
     }
   }
 
   function cancel() {
     controller?.abort()
+    // 桌面端没有 controller，靠请求序号作废在途扫描
+    tauriGuard.next()
+    webGuard.next()
     scanning.value = false
   }
 

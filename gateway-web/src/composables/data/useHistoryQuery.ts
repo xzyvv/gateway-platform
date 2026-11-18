@@ -2,6 +2,7 @@ import { ref, reactive, computed, watch, nextTick, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import echarts, { initChart, disposeChart } from '@/utils/echarts-extra'
 import { aggregateHistory, type AggregateGranularity } from '@/utils/aggregateHistory'
 import { buildHistoryChartOption } from '@/utils/historyChart'
@@ -148,8 +149,8 @@ export function useHistoryQuery() {
   const queried = ref(false)
   const chartRef = ref<HTMLElement>()
   let chart: echarts.ECharts | null = null
-  let unmounted = false
-  let querySeq = 0
+  // 查询序号守卫：只接受最新一次查询的结果（旧响应不得覆盖新查询）
+  const { next: nextQuery, isCurrent } = useRequestGuard()
 
   function formatTime(ts: number): string {
     if (ts == null || !Number.isFinite(ts) || ts <= 0) return '-'
@@ -213,7 +214,7 @@ export function useHistoryQuery() {
       ElMessage.warning('请输入有效的点位 ID')
       return
     }
-    const seq = ++querySeq
+    const seq = nextQuery()
     loading.value = true
     truncation.value = null
     try {
@@ -248,9 +249,9 @@ export function useHistoryQuery() {
             results.push({ pointId: pid, data: [], total: 0, truncated: false })
           }
         },
-        { concurrency: CONCURRENCY, shouldStop: () => unmounted || seq !== querySeq },
+        { concurrency: CONCURRENCY, shouldStop: () => !isCurrent(seq) },
       )
-      if (unmounted || seq !== querySeq) return
+      if (!isCurrent(seq)) return
       const stamped = results.map((r) => ({
         pointId: r.pointId,
         data: r.data.map((h) => ({ ...h, rowKey: `${r.pointId}:${h.timestamp}` })),
@@ -271,7 +272,7 @@ export function useHistoryQuery() {
     } catch {
       /* 忽略 */
     } finally {
-      if (!unmounted) loading.value = false
+      if (isCurrent(seq)) loading.value = false
     }
   }
 
@@ -395,8 +396,6 @@ export function useHistoryQuery() {
   }
 
   onUnmounted(() => {
-    unmounted = true
-    querySeq++
     window.removeEventListener('resize', handleResize)
     // disposeChart 同步从 liveCharts 注册表摘除，防止已销毁实例被主题刷新持有（长驻内存）
     disposeChart(chart)

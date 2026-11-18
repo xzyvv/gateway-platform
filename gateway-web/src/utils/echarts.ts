@@ -277,6 +277,46 @@ export function disposeChart(c: echarts.ECharts | null | undefined): void {
 }
 
 /**
+ * 保证图表实例与当前宿主元素匹配，必要时重建。
+ *
+ * 历史问题（DataCompare / DiskHealthChart）：图表宿主被 `v-if` 包着，
+ * 条件不满足时整块 DOM 被卸载。此时页面侧的 `chart` 变量仍持有绑定在
+ * **已移除 DOM** 上的旧实例，且旧实例还挂在 `liveCharts` 注册表里没释放。
+ * 条件再次满足时 `v-if` 会创建**全新**的宿主元素，但调用方按
+ * `if (!chart)` 判断——旧实例非空 → 跳过 initChart → `setOption` 写向
+ * 已销毁的 DOM → 新宿主里永久空白，同时旧实例持续泄漏。
+ *
+ * 修法：用 `getDom()` 比对实例绑定的宿主与当前宿主；不一致（或实例已
+ * dispose / 宿主为空）就 dispose 旧的并对新宿主重新 initChart。
+ *
+ * 宿主为空（宿主被 v-if 卸载）时返回 null 并顺手释放旧实例——调用方
+ * 通常写成 `chart = ensureChart(chart, chartEl.value)`，即可自动完成
+ * 「卸载时释放、条件恢复时重建」两件事。
+ *
+ * 幂等：宿主未变时原样返回同一实例，不重复 init。
+ */
+export function ensureChart(
+  current: echarts.ECharts | null | undefined,
+  dom: HTMLElement | undefined | null,
+): echarts.ECharts | null {
+  // 宿主已消失（v-if 卸载）：释放旧实例并置空，等宿主回来时重建
+  if (!dom) {
+    if (current) disposeChart(current)
+    return null
+  }
+  // 旧实例已销毁，或绑定的宿主与当前宿主不是同一个元素 → 重建
+  const stale =
+    !current ||
+    typeof current.isDisposed === 'function' && current.isDisposed() ||
+    current.getDom() !== dom
+  if (stale) {
+    if (current) disposeChart(current)
+    return initChart(dom)
+  }
+  return current
+}
+
+/**
  * 测试用：查询当前注册的图表数量。
  */
 export function __liveChartCountForTests(): number {

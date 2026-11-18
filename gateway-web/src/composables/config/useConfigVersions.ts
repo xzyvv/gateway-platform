@@ -9,6 +9,7 @@ import {
 import { failureMessage } from '@/utils/errorHandler'
 import { formatDateTime } from '@/utils/datetime'
 import { formatBytes } from '@/utils/format'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 
 /** 字段中文标签映射（配置对比时使用） */
 const FIELD_LABELS: Record<string, string> = {
@@ -83,6 +84,8 @@ export function useConfigVersions() {
   const compareFromJson = ref('')
   const compareToJson = ref('')
   const compareLoading = ref(false)
+  // 版本对比请求序号守卫：旧对比结果不得覆盖新一轮对比
+  const compareGuard = useRequestGuard()
 
   function openCompare() {
     if (versions.value.length < 2) {
@@ -110,6 +113,12 @@ export function useConfigVersions() {
     await runCompare()
   }
 
+  /**
+   * 对比两个配置版本。
+   *
+   * 竞态守卫：连续触发两次版本对比时，先发的对比结果后到 → 展示的是上一次
+   * 的两版本 diff，而 compareFrom/compareTo 却是新选的，差异内容与标题不符。
+   */
   async function runCompare() {
     if (compareFrom.value == null || compareTo.value == null) {
       ElMessage.warning('请选择两个版本')
@@ -119,6 +128,7 @@ export function useConfigVersions() {
       ElMessage.warning('请选择两个不同的版本')
       return
     }
+    const seq = compareGuard.next()
     compareLoading.value = true
     try {
       const [result, fromCfg, toCfg] = await Promise.all([
@@ -126,14 +136,17 @@ export function useConfigVersions() {
         getConfigVersion(compareFrom.value),
         getConfigVersion(compareTo.value),
       ])
+      if (!compareGuard.isCurrent(seq)) return
       compareResult.value = result
       compareFromJson.value = JSON.stringify(fromCfg, null, 2)
       compareToJson.value = JSON.stringify(toCfg, null, 2)
     } catch (e) {
-      ElMessage.error(failureMessage('对比版本', e))
-      logError('cfg-ver', e)
+      if (compareGuard.isCurrent(seq)) {
+        ElMessage.error(failureMessage('对比版本', e))
+        logError('cfg-ver', e)
+      }
     } finally {
-      compareLoading.value = false
+      if (compareGuard.isCurrent(seq)) compareLoading.value = false
     }
   }
 

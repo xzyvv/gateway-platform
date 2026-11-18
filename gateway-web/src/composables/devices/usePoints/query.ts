@@ -2,6 +2,7 @@ import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
 import { getConfig } from '@/api/config'
 import { fetchPointQualities } from '@/composables/data/usePointQuality'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import type { PointQuality } from '@/api/dataQuality'
 import type { PointConfig } from '@/api/types'
@@ -70,18 +71,18 @@ export function createPointQuery(state: PointsState) {
   }
 
   /**
-   * 点位请求序号。
+   * 点位请求序号守卫。
    *
    * 修复（切换设备竞态）：原实现 `await listPoints(...)` 之后直接写 `points.value`，
    * 只有 `unmounted` 守卫。快速把设备从 A 切到 B 时，若 A 的响应后到，就会用 A 的点位
    * 覆盖 B 的列表——表格显示 A 的点位而下拉框是 B，后续删除/复制等操作会作用在错误
    * 设备上（复制对话框以 points 为源、selectedDevice 为目标，可直接写错设备）。
-   * 与 useSystem / useDashboardData 同用序号守卫：只接受最新一次请求的结果。
+   * 用统一的 useRequestGuard：只接受最新一次请求的结果。
    */
-  let loadSeq = 0
+  const { next: nextRequest, isCurrent } = useRequestGuard()
 
   async function loadPoints() {
-    const seq = ++loadSeq
+    const seq = nextRequest()
     selection.value = []
     if (!selectedDevice.value) {
       points.value = []
@@ -91,14 +92,14 @@ export function createPointQuery(state: PointsState) {
     loadError.value = ''
     try {
       const data = await listPoints(selectedDevice.value)
-      if (state.isUnmounted() || seq !== loadSeq) return
+      if (!isCurrent(seq)) return
       points.value = data
     } catch (e) {
       // 失败时不能只留空表：会被误读为「该设备没有点位」
-      if (!state.isUnmounted() && seq === loadSeq) loadError.value = extractErrorMessage(e, '无法获取点位列表')
+      if (isCurrent(seq)) loadError.value = extractErrorMessage(e, '无法获取点位列表')
     } finally {
       // 旧请求不得清掉新请求的 loading
-      if (!state.isUnmounted() && seq === loadSeq) loading.value = false
+      if (isCurrent(seq)) loading.value = false
     }
   }
 

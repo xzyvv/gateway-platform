@@ -115,6 +115,7 @@ import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
 import { formatDateTime } from '@/utils/datetime'
 import { failureMessage } from '@/utils/errorHandler'
+import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 
 const selectedDevice = ref('')
@@ -128,6 +129,8 @@ const result = ref<DiagResult | null>(null)
 const activeStep = ref(0)
 let unmounted = false
 let stepTimer: ReturnType<typeof setTimeout> | null = null
+// 点位请求序号守卫：切换设备时丢弃过期响应
+const pointsGuard = useRequestGuard()
 
 function clearStepTimer() {
   if (stepTimer) {
@@ -142,17 +145,23 @@ function clearStepTimer() {
  * 诊断只针对单个点位，而点位是「设备 → 点位」两级结构。原实现直接铺开一个全局
  * 点位下拉（且用的是写死的示例点位），现场设备一多就无法定位。这里改为先选设备，
  * 再加载该设备下的真实点位。
+ *
+ * 竞态守卫：快速切换设备时，旧设备的 listPoints 响应可能后到 → 点位下拉会显示
+ * A 设备的点位，而上方选中的是 B 设备；随后做的诊断会作用在错误的点位上。
  */
 async function loadPointsForDevice(deviceId: string) {
+  const seq = pointsGuard.next()
   points.value = []
   if (!deviceId) return
   loadingPoints.value = true
   try {
-    points.value = await listPoints(deviceId)
+    const data = await listPoints(deviceId)
+    if (!pointsGuard.isCurrent(seq)) return
+    points.value = data
   } catch (e) {
-    ElMessage.error(failureMessage('加载设备点位', e))
+    if (pointsGuard.isCurrent(seq)) ElMessage.error(failureMessage('加载设备点位', e))
   } finally {
-    if (!unmounted) loadingPoints.value = false
+    if (pointsGuard.isCurrent(seq)) loadingPoints.value = false
   }
 }
 
