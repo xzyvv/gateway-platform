@@ -130,17 +130,5 @@
 .cell-readonly {
   color: var(--text-secondary);
 }
-/* N3: 点位弹窗中继承自设备的字段说明（总线/协议只读，指向设备列表调整） */
-.point-inherit-hint {
-  margin-top: 4px;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-/* BUG-B: 弹窗中成对出现的数值输入（倍率/偏移、死区、告警限值、聚合） */
-.point-pair {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-}
+/* N3 / BUG-B 的「继承提示」与「成对输入」样式随单点表单弹窗一起迁到
+   src/views/points/dialogs/PointsFormDialog.vue 的 scoped 样式里。 */

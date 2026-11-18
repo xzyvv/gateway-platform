@@ -19,7 +19,6 @@ const LINE_BUDGET_EXEMPT = [
   'src/views/acquisition/console/DebugWizard.vue',
   'src/views/devices/DeviceList.vue',
   'src/views/ops/delivery/selfCheck.ts',
-  'src/views/points/PointList.vue',
 ]
 
 export default tseslint.config(
