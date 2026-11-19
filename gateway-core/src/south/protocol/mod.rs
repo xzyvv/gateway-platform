@@ -88,11 +88,18 @@ use crate::engine::metrics::CollectErrorCode;
 use crate::engine::model::{AddressReadResult, DataPoint, Quality};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 
 /// 采集结果类型
 pub type CollectorResult<T> = Result<T, CollectorError>;
+
+/// 共享进度槽：批量读取每完成一个点位就把结果写入对应下标。
+///
+/// 调度层在 `tokio::time::timeout` 下使用：超时 drop 掉 future 时，已完成点位的
+/// 结果仍保留在槽中，由调用方逐一取回，不会被整批判成 Timeout（缺陷 #7）。
+pub(crate) type ResultSlots = Arc<std::sync::Mutex<Vec<Option<CollectorResult<DataPoint>>>>>;
 
 /// 采集错误枚举（§3.8）
 #[derive(Debug, Error)]
@@ -222,6 +229,28 @@ pub trait Collector: Send + Sync {
                 results.push(self.read(p).await);
             }
             results
+        })
+    }
+
+    /// 与 [`Collector::read_batch`] 等价的批量读取，但每完成一个点位就立即把结果
+    /// 写入 `slots` 对应下标（锁外 await、锁内立即写，锁不跨 await）。
+    ///
+    /// 调度层在 `tokio::time::timeout` 下使用本方法：超时 drop 掉 future 时，
+    /// 已完成点位的结果仍保留在槽中，由调用方逐一取回，不会被整批判 Timeout
+    /// （缺陷 #7）。覆写 `read_batch` 做批量合并的协议（如 modbus）必须同时覆写
+    /// 本方法，在产生结果的每一处同步写槽，以保留其合并 / 串行语义。
+    // ResultSlots 是 pub(crate) 别名（底层类型均 public），仅供 crate 内调度层调用。
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(
+        &'a self,
+        points: &'a [PointConfig],
+        slots: ResultSlots,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            for (i, p) in points.iter().enumerate() {
+                let r = self.read(p).await;
+                slots.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
+            }
         })
     }
 

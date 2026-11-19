@@ -192,18 +192,40 @@ impl ClockGuard {
         Ok(verdict)
     }
 
-    /// NTP 校时成功后重置基准为校时结果（直接覆盖，断电恢复自然洗白）
+    /// NTP 校时成功后前推基准：校时结果晚于当前基准时覆盖（断电恢复自然洗白），
+    /// 否则保持基准不变——污染/错配 NTP 源给出更早的时间不得把 `last_seen` 拉低
+    /// 从而绕过到期与 Tampered 判定。
     pub fn resync(&self, ntp_now: i64) -> Result<(), String> {
-        // 写入计数保持单调递增（尽量从任一可用副本续上）
-        let writes = self
-            .read_db()
-            .ok()
-            .flatten()
-            .or_else(|| self.read_replica())
-            .map_or(0, |r| r.writes)
+        // 与 check_and_update 同口径：主库读失败 fail-closed；仅旁路副本幸存不采信。
+        let db_copy = self.read_db()?;
+        let file_copy = self.read_replica();
+        let last = match (db_copy, file_copy) {
+            (Some(db), Some(fb)) => Some(db.last_seen.max(fb.last_seen)),
+            (Some(db), None) => Some(db.last_seen),
+            (None, Some(_)) | (None, None) => None,
+        };
+        // 写入计数取两副本 max 后 +1，保持单调（任一份被回滚也不倒退）。
+        let writes = db_copy
+            .iter()
+            .chain(file_copy.iter())
+            .map(|r| r.writes)
+            .max()
+            .unwrap_or(0)
             .saturating_add(1);
-        self.write_db(ntp_now, writes)?;
-        self.write_replica(ntp_now, writes);
+
+        let next = match last {
+            Some(last) if ntp_now < last => {
+                tracing::warn!(
+                    "license clock resync ignored backward NTP time (ntp={}, baseline={})",
+                    ntp_now,
+                    last
+                );
+                last
+            }
+            _ => ntp_now,
+        };
+        self.write_db(next, writes)?;
+        self.write_replica(next, writes);
         Ok(())
     }
 

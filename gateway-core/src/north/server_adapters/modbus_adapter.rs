@@ -1,6 +1,6 @@
 //! Modbus 从站适配器：将 RealtimeBus 数据推送到 Modbus 寄存器空间。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -119,6 +119,17 @@ impl ModbusServerAdapter {
             mappings.push(RegisterMapping::from_point(p, addr));
         }
         *self.mappings.write() = mappings;
+    }
+
+    /// 依据点位配置刷新 Modbus Server 的写白名单（仅 writable=true 的点位）。
+    pub fn set_writable_addrs(&self, points: &[PointConfig]) {
+        let writable_ids: HashSet<String> = points
+            .iter()
+            .filter(|p| p.writable)
+            .map(|p| p.id.clone())
+            .collect();
+        let mappings = self.mappings.read();
+        self.server.set_writable_addrs(&mappings, &writable_ids);
     }
 
     /// sink 标识（用于 metrics key，与 send() 内部一致）。

@@ -697,3 +697,70 @@ fn ab_partition_default_matches_resolve_rules() {
     assert_eq!(actual.slot_b, expected.slot_b);
     assert_eq!(actual.active_slot, 'a');
 }
+
+// ===== 缺陷#1：OTA 块设备写入不截断 =====
+
+/// 核心复现：`scrub_stale_tail` 把新固件之后残留的旧尾部（0xAB）全部清零。
+#[test]
+fn scrub_stale_tail_zeroes_stale_trailer() {
+    use std::io::{Seek, SeekFrom, Write};
+    let (_dir, dir) = temp_dir();
+    let path = dir.join("scrub.bin");
+    // 旧镜像：4096 字节全 0xAB
+    std::fs::write(&path, vec![0xABu8; 4096]).expect("seed old image");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("open scrub.bin");
+    let new_img: Vec<u8> = (1u8..=64).collect(); // 64 字节"新镜像"
+    f.seek(SeekFrom::Start(0)).expect("seek 0");
+    f.write_all(&new_img).expect("write new image");
+    let scrubbed =
+        super::download::scrub_stale_tail(&mut f, 64, 4096).expect("scrub stale tail");
+    assert_eq!(scrubbed, 4096 - 64, "擦除字节数应为尾部长度");
+    drop(f);
+    let after = std::fs::read(&path).expect("read back");
+    assert_eq!(after.len(), 4096, "写零不改变文件长度");
+    assert_eq!(&after[..64], &new_img[..], "前 64 字节是新镜像");
+    assert!(
+        after[64..].iter().all(|&b| b == 0x00),
+        "旧尾部 4032 字节必须全为 0x00"
+    );
+}
+
+/// 校验局限性特征测试：`verify_partition` 只读前 `payload_len` 字节，
+/// CRC 也只覆盖前缀——「新 payload + 任意旧尾」仍判 Ok（固化当前口径，本修复不改）。
+#[tokio::test]
+async fn verify_partition_accepts_stale_trailer_beyond_payload() {
+    let (_dir, dir) = temp_dir();
+    let mgr = new_manager(&dir, None);
+    let payload: Vec<u8> = (1u8..=32).collect(); // 新 payload
+    let mut seeded = payload.clone();
+    seeded.extend_from_slice(&vec![0xABu8; 512]); // 任意旧尾
+    let slot_b = dir.join("slot_b.bin");
+    std::fs::write(&slot_b, &seeded).expect("seed slot_b with stale trailer");
+    let rc = mgr
+        .verify_partition(&slot_b, crypto::crc32(&payload), payload.len())
+        .await;
+    assert!(rc.is_ok(), "前缀匹配即应通过：{:?}", rc.err());
+}
+
+/// 普通文件端到端回归：seed 长旧固件 → process_firmware(短 payload) →
+/// slot_b.bin 恰为短 payload、无旧尾残留（守护既有 set_len 路径）。
+#[tokio::test]
+async fn short_firmware_truncates_long_old_image_on_regular_file() {
+    let (_dir, dir) = temp_dir();
+    let mgr = new_manager(&dir, None);
+    let slot_b = dir.join("slot_b.bin");
+    std::fs::write(&slot_b, vec![0xABu8; 4096]).expect("seed long old firmware");
+    let short_payload = b"short-v2";
+    mgr.clone()
+        .process_firmware(build_firmware(2, short_payload))
+        .await
+        .expect("ota ok");
+    let written = std::fs::read(&slot_b).expect("read slot_b");
+    assert_eq!(
+        written, short_payload,
+        "slot_b 应恰为短 payload，无旧尾残留"
+    );
+}

@@ -17,7 +17,7 @@ use super::db_init::init_queue_db;
 use super::history::{aggregate_minute_windows, query_history_ex, query_raw_rows};
 use super::read_pool::ReadPool;
 use super::retention::run_retention_cleanup;
-use super::wal::{check_wal_size, run_wal_checkpoint, wal_path_for};
+use super::wal::{backup_db_online, check_wal_size, run_wal_checkpoint, wal_path_for};
 
 use crate::queue::core::limit::{update_in_flight_metric, update_queue_depth_metric};
 use crate::queue::core::{ensure_key, QueuedItem};
@@ -46,6 +46,8 @@ pub struct SqliteStorage {
     in_flight: Arc<AtomicI64>,
     /// 数据库文件路径（备份用）
     db_path: PathBuf,
+    /// 队列库密钥 hex（定时在线备份需为 SQLCipher 目标库设同 key；非加密构建为空串）
+    key_hex: String,
     /// WAL 文件路径（大小监控用）
     wal_path: PathBuf,
     /// 维护 tick 计数器（每次 maintenance() 自增）
@@ -119,6 +121,7 @@ impl SqliteStorage {
             rows_total,
             in_flight,
             db_path,
+            key_hex,
             wal_path,
             maintenance_tick: AtomicU32::new(0),
             storage_retention_days: Arc::new(parking_lot::Mutex::new(Some(30))),

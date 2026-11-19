@@ -8,9 +8,9 @@ use crate::pipeline::{EdgeProcessor, PipelineSpawnInputs, ProcessingPipeline};
 use crate::queue::{DataQueue, MemoryStorage, QueueStorage};
 use crate::south::bus::{BusDeps, BusManager};
 use crate::south::protocol::skeleton::SkeletonCollector;
-use crate::south::protocol::CollectorResult;
+use crate::south::protocol::{CollectorError, CollectorResult, ResultSlots};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -652,4 +652,186 @@ fn timeline_clear_resets_state() {
     assert!(snap.groups.is_empty());
     assert!(snap.overlaps.is_empty());
     assert!(!snap.running);
+}
+
+// =========================================================================
+// 缺陷 #7：组超时后已完成点位的结果必须保留，不得整批判 Timeout
+// =========================================================================
+
+/// 前 `n_ok` 个点立即返回 Good 并写槽，其余点永久 sleep（模拟协议栈卡死，
+/// 不写槽）。组超时 drop 掉 future 后，已写槽的点应保留，未写槽的点由
+/// `collect_results` 回填 Timeout。
+struct PartialThenHang {
+    bus: String,
+    n_ok: usize,
+    started: Arc<AtomicBool>,
+}
+
+impl Collector for PartialThenHang {
+    fn name(&self) -> &'static str {
+        "partial_hang"
+    }
+
+    fn bus_name(&self) -> &str {
+        &self.bus
+    }
+
+    /// 缩短到 300ms，让测试无需等默认 5s 组预算。
+    fn batch_timeout_budget(&self, _n_points: usize) -> Duration {
+        Duration::from_millis(300)
+    }
+
+    fn read<'a>(
+        &'a self,
+        point: &'a PointConfig,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = CollectorResult<DataPoint>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            Ok(DataPoint::good(
+                &point.id,
+                &point.bus,
+                42.0,
+                42.0,
+                "f64",
+            ))
+        })
+    }
+
+    fn read_batch_with_slots<'a>(
+        &'a self,
+        points: &'a [PointConfig],
+        slots: ResultSlots,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        let started = self.started.clone();
+        let n_ok = self.n_ok;
+        Box::pin(async move {
+            started.store(true, Ordering::SeqCst);
+            for (i, p) in points.iter().enumerate() {
+                if i < n_ok {
+                    let dp = DataPoint::good(
+                        &p.id,
+                        p.device_id.as_deref().unwrap_or(&p.bus),
+                        42.0,
+                        42.0,
+                        "f64",
+                    );
+                    slots.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(Ok(dp));
+                } else {
+                    // 永久卡住；被超时 drop 后该槽保持 None → 判 Timeout
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+            }
+        })
+    }
+}
+
+/// 缺陷 #7 反证闭环：旧实现在 timeout 分支把整批替换为 Err(Timeout)，
+/// 已完成点的 Good 数据被吞；修复后前 n_ok 点必须保留 Good，
+/// 且每个点位恰好提交一次结果（无漏报、无重复）。
+#[tokio::test]
+async fn group_timeout_keeps_completed_points() {
+    let metrics = Arc::new(Metrics::new());
+    let bus = "b_partial";
+    let n_ok = 2;
+    let n_points = 5;
+    let started = Arc::new(AtomicBool::new(false));
+    let collectors: HashMap<String, Arc<dyn Collector>> = HashMap::from([(
+        bus.to_string(),
+        Arc::new(PartialThenHang {
+            bus: bus.to_string(),
+            n_ok,
+            started: started.clone(),
+        }) as Arc<dyn Collector>,
+    )]);
+    let pts: Vec<PointConfig> = (0..n_points)
+        .map(|i| point(&format!("p_{i}"), bus, &i.to_string()))
+        .collect();
+
+    let scheduler = Arc::new(Scheduler::new(
+        collectors,
+        pts.clone(),
+        test_pipeline(metrics.clone()),
+        metrics.clone(),
+    ));
+    scheduler.start();
+
+    // 等本组跑过至少一轮（含 300ms 组超时）且所有点位结果都已提交
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::SeqCst) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    while scheduler.device_states.lock().len() < pts.len() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    {
+        let states = scheduler.device_states.lock();
+        assert_eq!(
+            states.len(),
+            pts.len(),
+            "每个点位都应恰好提交一次结果（无漏报 / 无重复）"
+        );
+        for (i, p) in pts.iter().enumerate() {
+            let st = states.get(&p.id).expect("点位结果必须存在");
+            if i < n_ok {
+                assert_eq!(
+                    st.current_quality(),
+                    Quality::Good,
+                    "前 {n_ok} 个已完成点必须保留 Good 数据，不得被组超时吞掉"
+                );
+                assert_eq!(st.consecutive_failures, 0, "成功点不得计入失败");
+            } else {
+                assert!(
+                    st.consecutive_failures > 0,
+                    "未完成点必须被判失败（Timeout）"
+                );
+            }
+        }
+    }
+    scheduler.stop().await;
+}
+
+/// `collect_results` 纯数值断言：不依赖 tokio 时序。
+/// - Some → 原值（含错误变体）；None → Timeout；长度恒为 n；
+/// - `take()` 消费语义：二次聚合全部变 Timeout，证明未 clone、未重复。
+#[test]
+fn collect_results_keeps_done_and_marks_pending_timeout() {
+    let timeout = Duration::from_millis(250);
+    let dp = DataPoint::good("p_ok", "b", 7.0, 7.0, "f64");
+    let slots: ResultSlots = Arc::new(std::sync::Mutex::new(vec![
+        Some(Ok(dp.clone())),
+        None,
+        Some(Err(CollectorError::NoReply)),
+    ]));
+
+    let out = super::spawning::collect_results(slots.clone(), 3, timeout);
+    assert_eq!(out.len(), 3, "结果数必须与入参等长");
+    let first = out[0].as_ref().expect("已完成点必须保留原结果");
+    assert_eq!(first.point_id, "p_ok");
+    assert_eq!(first.value, 7.0);
+    assert_eq!(first.quality, Quality::Good);
+    assert!(
+        matches!(&out[1], Err(CollectorError::Timeout(d)) if *d == timeout),
+        "未完成点应回填 Timeout"
+    );
+    assert!(
+        matches!(&out[2], Err(CollectorError::NoReply)),
+        "已完成点的错误变体必须原样保留"
+    );
+
+    // take() 消费后槽已空：再次聚合全部判 Timeout（无 clone / 无重复上报）
+    let again = super::spawning::collect_results(slots, 3, timeout);
+    assert_eq!(again.len(), 3);
+    assert!(again
+        .iter()
+        .all(|r| matches!(r, Err(CollectorError::Timeout(_)))));
+
+    // n 决定结果长度，与槽长度无关
+    let short: ResultSlots = Arc::new(std::sync::Mutex::new(vec![None]));
+    assert_eq!(
+        super::spawning::collect_results(short, 3, timeout).len(),
+        3,
+        "长度必须恒为 n"
+    );
 }

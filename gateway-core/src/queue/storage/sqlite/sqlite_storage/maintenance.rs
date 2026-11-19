@@ -65,32 +65,20 @@ impl SqliteStorage {
             run_retention_cleanup(&mut guard, days, disk_level, disk_total);
         }
 
-        // 5. 每 240 ticks (2 小时): 定时备份
-        // #2 修复：原 `std::fs::copy(self.db_path, backup_path)` 三大问题
-        //   1. 不含 WAL 中已 commit 但未 checkpoint 的行——备份"看起来完整"但
-        //      恢复时丢近期数据
-        //   2. 没先 `wal_checkpoint(TRUNCATE)`：备份过程中 auto-checkpoint 触发
-        //      会改写主库页状态，备份文件可能撕裂
-        //   3. 没持 conn 锁：复制期间 SQLite 可能正在 commit/rollback，导致
-        //      备份中混有不同事务的页
-        // 修：先在 conn 锁内 `wal_checkpoint(TRUNCATE)` 把 WAL 全部刷回主库，
-        // 释放锁后再 fs::copy（复制期间 SQLite 仍能正常读写主库，因主库页已
-        // 完整且 fs::copy 是 page-aligned 顺序读）。VACUUM INTO 虽更优雅但
-        // 会整体重写主库（嵌入式 ARM 数百 ms 锁表），对在跑采集的网关过重；
-        // checkpoint + fs::copy 是 SQLite 官方推荐的"在线热备份"组合。
+        // 5. 每 240 ticks (2 小时): 定时在线一致性备份
+        // 缺陷 #8：旧实现 `checkpoint(TRUNCATE)` 在锁内、`fs::copy` 在锁外——释放锁后
+        //   主循环继续写 WAL，autocheckpoint（每 1000 页）可改写主库页导致备份撕裂；
+        //   fs::copy 还直接覆盖 .bak（非原子），中途崩溃留下半截文件，恢复路径用它
+        //   覆盖主库会数据全损。
+        // 改：全程持 conn 锁走 SQLite 在线备份 API，快照天然包含 WAL 已提交行且
+        //   不受 autocheckpoint 干扰；先写同目录临时文件再原子 rename，.bak 永远是
+        //   完整的一份。
         if new_tick.is_multiple_of(240) {
             let backup_path = self.db_path.with_extension("db.bak");
-            // 5a: checkpoint TRUNCATE（WAL → 主库同步写回）
-            {
-                let mut guard = self.conn.lock();
-                run_wal_checkpoint(&mut guard, "periodic_backup", Some(&self.metrics));
-            }
-            // 5b: 复制主库。checkpoint 已完成，复制窗口内新写入只会进 WAL
-            // （下次启动自动 replay），不会撕裂主库页
-            match std::fs::copy(&self.db_path, &backup_path) {
-                Ok(n) => tracing::info!(
-                    "periodic SQLite backup completed: {} bytes -> {}",
-                    n,
+            let guard = self.conn.lock();
+            match backup_db_online(&guard, &self.db_path, &backup_path, &self.key_hex) {
+                Ok(()) => tracing::info!(
+                    "periodic SQLite backup completed: {}",
                     backup_path.display()
                 ),
                 Err(e) => tracing::warn!("periodic SQLite backup failed: {}", e),

@@ -4,7 +4,7 @@ use super::*;
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
-use crate::south::protocol::{clone_collector_error, convert_value, Collector};
+use crate::south::protocol::{clone_collector_error, convert_value, Collector, ResultSlots};
 
 impl S7CommCollector {
     /// 单点读取（供 `Collector::read` 委托）；惰性建链 + 单 item Read Var。
@@ -113,11 +113,38 @@ impl S7CommCollector {
         &self,
         points: &[PointConfig],
     ) -> Vec<CollectorResult<DataPoint>> {
+        let slots: ResultSlots = std::sync::Arc::new(std::sync::Mutex::new(
+            (0..points.len()).map(|_| None).collect(),
+        ));
+        self.read_batch_points_with_slots(points, slots.clone()).await;
+        let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .iter_mut()
+            .map(|s| {
+                s.take().unwrap_or_else(|| {
+                    Err(CollectorError::InvalidFrame(
+                        "s7 batch internal: point not processed".into(),
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    /// 缺陷 #7：与 [`Self::read_batch_points`] 相同的多 item 合并读取语义，
+    /// 但每产生一个点位结果就立即写入共享槽 `slots`（await 在锁外、锁内立即写）。
+    /// 组超时 drop future 时，已完成合并的点位结果仍在槽中，不会被整批判 Timeout。
+    pub(super) async fn read_batch_points_with_slots(
+        &self,
+        points: &[PointConfig],
+        slots: ResultSlots,
+    ) {
         let n = points.len();
-        let mut slots: Vec<Option<CollectorResult<DataPoint>>> = (0..n).map(|_| None).collect();
         if n == 0 {
-            return Vec::new();
+            return;
         }
+        let set = |idx: usize, r: CollectorResult<DataPoint>| {
+            slots.lock().unwrap_or_else(|e| e.into_inner())[idx] = Some(r);
+        };
 
         // 阶段一：解析所有点位；建帧失败（地址错误/类型不支持）就地回填
         struct Pending {
@@ -139,21 +166,12 @@ impl S7CommCollector {
                     },
                     data_type: s7_addr.data_type,
                 }),
-                Err(e) => slots[idx] = Some(Err(e)),
+                Err(e) => set(idx, Err(e)),
             }
         }
 
-        let unfilled = || {
-            Err(CollectorError::InvalidFrame(
-                "s7 batch internal: point not processed".into(),
-            ))
-        };
-
         if pending.is_empty() {
-            return slots
-                .into_iter()
-                .map(|s| s.unwrap_or_else(unfilled))
-                .collect();
+            return;
         }
 
         // 阶段二：建链；失败整批同因回填
@@ -161,12 +179,9 @@ impl S7CommCollector {
             if let Err(e) = self.connect().await {
                 let msg = e.to_string();
                 for p in &pending {
-                    slots[p.idx] = Some(Err(CollectorError::IoError(msg.clone())));
+                    set(p.idx, Err(CollectorError::IoError(msg.clone())));
                 }
-                return slots
-                    .into_iter()
-                    .map(|s| s.unwrap_or_else(unfilled))
-                    .collect();
+                return;
             }
         }
 
@@ -183,7 +198,7 @@ impl S7CommCollector {
                 Ok(r) => r,
                 Err(e) => {
                     for p in chunk {
-                        slots[p.idx] = Some(Err(clone_collector_error(&e)));
+                        set(p.idx, Err(clone_collector_error(&e)));
                     }
                     continue;
                 }
@@ -192,7 +207,7 @@ impl S7CommCollector {
                 Ok(v) => v,
                 Err(e) => {
                     for p in chunk {
-                        slots[p.idx] = Some(Err(clone_collector_error(&e)));
+                        set(p.idx, Err(clone_collector_error(&e)));
                     }
                     continue;
                 }
@@ -200,7 +215,7 @@ impl S7CommCollector {
             for (i, item_result) in parsed.into_iter().enumerate() {
                 let p = &chunk[i];
                 let point_cfg = &points[p.idx];
-                slots[p.idx] = Some(match item_result {
+                set(p.idx, match item_result {
                     Err(rc) => Err(CollectorError::InvalidFrame(format!(
                         "S7 multi-read item {i} failed (return code 0x{rc:02X})"
                     ))),
@@ -227,10 +242,5 @@ impl S7CommCollector {
                 });
             }
         }
-
-        slots
-            .into_iter()
-            .map(|s| s.unwrap_or_else(unfilled))
-            .collect()
     }
 }

@@ -67,6 +67,34 @@ async fn spawn_stub(status: u16) -> (String, Arc<AtomicU16>, Arc<AtomicUsize>) {
     (format!("http://{addr}/ingest"), now_status, hits)
 }
 
+/// 缺陷 #2：返回 302 并指向给定 Location 的桩，用于验证重定向逐跳校验。
+/// 返回 `(首跳 URL, 首跳命中计数)`。
+async fn spawn_redirect_stub(location: &str) -> (String, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind redirect stub listener");
+    let addr = listener.local_addr().expect("redirect stub local_addr");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_in_task = hits.clone();
+    let location = location.to_string();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            hits_in_task.fetch_add(1, Ordering::SeqCst);
+            if read_full_request(&mut sock).await.is_ok() {
+                let resp = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+            let _ = sock.shutdown().await;
+        }
+    });
+    (format!("http://{addr}/ingest"), hits)
+}
+
 /// 读到「请求头结束 + Content-Length 声明的 body 全部到齐」为止。
 async fn read_full_request(sock: &mut tokio::net::TcpStream) -> std::io::Result<()> {
     let mut buf = Vec::new();
@@ -351,4 +379,60 @@ async fn send_outcome_carries_reason_of_its_own_request() {
         }
         _ => panic!("422 应判定为 Permanent"),
     }
+}
+
+/// 缺陷 #2：首跳返回 302 指向云元数据地址时，逐跳复检必须拒绝，不能当成投递成功。
+#[tokio::test]
+async fn redirect_to_cloud_metadata_is_blocked() {
+    let (url, hits) = spawn_redirect_stub("http://169.254.169.254/latest/meta-data/").await;
+    let (client, _metrics, _dir) = new_client(&url, 1_000);
+    let msg = OutgoingMsg {
+        data_id: TEST_DATA_ID,
+        data_ids: Vec::new(),
+        topic: url.clone(),
+        payload: b"payload".to_vec(),
+        qos: 1,
+        protocol: "http".into(),
+    };
+
+    match client.send_once(&msg).await {
+        SendOutcome::Ack => panic!("指向云元数据的 302 绝不能被当成成功投递"),
+        SendOutcome::Retriable(reason) | SendOutcome::Permanent(reason) => {
+            assert!(
+                reason.contains("redirect"),
+                "拒绝应来自重定向逐跳策略，实际={reason}"
+            );
+        }
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "只应打到首跳桩一次");
+}
+
+/// 缺陷 #2：被黑名单拦下的跳转目标不会被真正连接。
+/// 用本地桩作「内网替身」——把 host 写成 localhost 字面量，既能被域名黑名单
+/// 拦下，又能在本地观察到是否真的连了过去。
+#[tokio::test]
+async fn blocked_redirect_never_connects_to_target() {
+    let (internal_url, _internal_status, internal_hits) = spawn_stub(200).await;
+    let port = reqwest::Url::parse(&internal_url)
+        .expect("parse internal stub url")
+        .port()
+        .expect("internal stub port");
+    let (url, hits) = spawn_redirect_stub(&format!("http://localhost:{port}/secret")).await;
+    let (client, _metrics, _dir) = new_client(&url, 1_000);
+    let msg = OutgoingMsg {
+        data_id: TEST_DATA_ID,
+        data_ids: Vec::new(),
+        topic: url.clone(),
+        payload: b"payload".to_vec(),
+        qos: 1,
+        protocol: "http".into(),
+    };
+
+    assert!(!matches!(client.send_once(&msg).await, SendOutcome::Ack));
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "首跳桩应命中一次");
+    assert_eq!(
+        internal_hits.load(Ordering::SeqCst),
+        0,
+        "被黑名单拦截的内网地址绝不能被连接"
+    );
 }

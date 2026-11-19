@@ -3,7 +3,7 @@ use super::*;
 
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
-use crate::south::protocol::Collector;
+use crate::south::protocol::{Collector, ResultSlots};
 
 mod read;
 mod write;
@@ -209,6 +209,19 @@ impl Collector for S7CommCollector {
         Box<dyn std::future::Future<Output = Vec<CollectorResult<DataPoint>>> + Send + 'a>,
     > {
         Box::pin(self.read_batch_points(points))
+    }
+
+    /// 缺陷 #7：沿用 `read_batch` 的多 item 合并语义，每个点位结果产生即写共享槽，
+    /// 组超时 drop future 时已完成结果不丢失（await 在锁外、锁内立即写）。
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(
+        &'a self,
+        points: &'a [PointConfig],
+        slots: ResultSlots,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            self.read_batch_points_with_slots(points, slots).await;
+        })
     }
 
     fn write<'a>(

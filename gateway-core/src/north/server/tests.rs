@@ -7,6 +7,8 @@
 //! - mqtt_packet_passthrough.rs: 透传请求/响应序列化
 //! - modbus_gateway_bridge.rs: RTU/TCP 帧转换
 
+use std::collections::HashSet;
+
 use super::modbus_gateway_bridge::*;
 use super::modbus_server::*;
 use super::mqtt_packet_passthrough::*;
@@ -22,6 +24,7 @@ use crate::engine::model::DataPoint;
 fn default_server_config() {
     let cfg = ModbusServerConfig::default();
     assert!(!cfg.enabled);
+    assert!(!cfg.write_enabled, "写操作默认必须拒绝，与 OPC UA 对齐");
     assert_eq!(cfg.endpoint, "tcp://0.0.0.0:502");
 }
 
@@ -48,6 +51,15 @@ fn make_min_point() -> crate::config::PointConfig {
 }
 
 // ===== modbus_server.rs: ModbusServer =====
+
+fn test_mapping(id: &str, addr: u16) -> RegisterMapping {
+    RegisterMapping {
+        source_point_id: id.into(),
+        register_addr: addr,
+        scale: 1.0,
+        offset: 0.0,
+    }
+}
 
 #[test]
 fn server_construction() {
@@ -118,9 +130,15 @@ fn handle_read_missing_registers() {
 
 #[test]
 fn handle_write_fc06() {
-    let srv = ModbusServer::new(ModbusServerConfig::default());
+    let srv = ModbusServer::new(ModbusServerConfig {
+        write_enabled: true,
+        ..Default::default()
+    });
+    srv.set_writable_addrs(&[test_mapping("p1", 10)], &HashSet::from(["p1".to_string()]));
     let req = [0x00, 0x0A, 0xAB, 0xCD];
-    let resp = ModbusServer::handle_write_single(FC_WRITE_SINGLE, &req, &srv.registers);
+    let addrs = srv.writable_addrs.read();
+    let resp = ModbusServer::handle_request(FC_WRITE_SINGLE, &req, &srv.registers, true, &addrs);
+    drop(addrs);
     assert_eq!(resp[0], FC_WRITE_SINGLE);
     assert_eq!(&resp[1..3], &[0x00, 0x0A]);
     assert_eq!(&resp[3..5], &[0xAB, 0xCD]);
@@ -131,7 +149,8 @@ fn handle_write_fc06() {
 fn handle_unsupported_fc() {
     let srv = ModbusServer::new(ModbusServerConfig::default());
     // 0x05（写单线圈）未实现，应返回非法功能；FC16 已支持，不能再用作反例。
-    let resp = ModbusServer::handle_request(0x05, &[], &srv.registers);
+    let empty = HashSet::new();
+    let resp = ModbusServer::handle_request(0x05, &[], &srv.registers, false, &empty);
     assert_eq!(resp[0], 0x05 | 0x80);
     assert_eq!(resp[1], EX_ILLEGAL_FUNCTION);
 }
@@ -179,15 +198,95 @@ fn handle_read_bits_rejects_bad_quantity() {
 
 #[test]
 fn handle_write_fc16() {
-    let srv = ModbusServer::new(ModbusServerConfig::default());
+    let srv = ModbusServer::new(ModbusServerConfig {
+        write_enabled: true,
+        ..Default::default()
+    });
+    let mappings = [test_mapping("p1", 10), test_mapping("p2", 11)];
+    srv.set_writable_addrs(&mappings, &HashSet::from(["p1".to_string(), "p2".to_string()]));
     // addr=10, qty=2, byte_count=4, values=0x1111 0x2222
     let req = [0x00, 0x0A, 0x00, 0x02, 0x04, 0x11, 0x11, 0x22, 0x22];
-    let resp = ModbusServer::handle_write_multiple(FC_WRITE_MULTIPLE, &req, &srv.registers);
+    let addrs = srv.writable_addrs.read();
+    let resp = ModbusServer::handle_request(FC_WRITE_MULTIPLE, &req, &srv.registers, true, &addrs);
+    drop(addrs);
     assert_eq!(resp[0], FC_WRITE_MULTIPLE);
     assert_eq!(&resp[1..3], &[0x00, 0x0A]);
     assert_eq!(&resp[3..5], &[0x00, 0x02]);
     assert_eq!(srv.registers.read().get(&10).copied(), Some(0x1111));
     assert_eq!(srv.registers.read().get(&11).copied(), Some(0x2222));
+}
+
+/// 默认策略：write_enabled=false 时 FC06/FC16 一律拒绝，寄存器镜像不变。
+#[test]
+fn write_disabled_by_default_rejects_fc06_fc16() {
+    let srv = ModbusServer::new(ModbusServerConfig::default());
+    srv.set_writable_addrs(&[test_mapping("p1", 10)], &HashSet::from(["p1".to_string()]));
+    let fc06 = [0x00, 0x0A, 0xAB, 0xCD];
+    let fc16 = [0x00, 0x0A, 0x00, 0x02, 0x04, 0x11, 0x11, 0x22, 0x22];
+    let addrs = srv.writable_addrs.read();
+    assert_eq!(
+        ModbusServer::handle_request(FC_WRITE_SINGLE, &fc06, &srv.registers, false, &addrs),
+        vec![FC_WRITE_SINGLE | 0x80, EX_ILLEGAL_DATA_ADDRESS]
+    );
+    assert_eq!(
+        ModbusServer::handle_request(FC_WRITE_MULTIPLE, &fc16, &srv.registers, false, &addrs),
+        vec![FC_WRITE_MULTIPLE | 0x80, EX_ILLEGAL_DATA_ADDRESS]
+    );
+    drop(addrs);
+    assert!(srv.registers.read().is_empty());
+}
+
+/// write_enabled=true 但地址不在白名单 → 拒绝（即使地址在寄存器镜像中存在）。
+#[test]
+fn write_rejects_unlisted_addr() {
+    let srv = ModbusServer::new(ModbusServerConfig::default());
+    srv.set_writable_addrs(&[test_mapping("p1", 10)], &HashSet::from(["p1".to_string()]));
+    // 仅地址 10 可写；11、12 均不可写
+    let fc06 = [0x00, 0x0B, 0xAB, 0xCD];
+    let fc16 = [0x00, 0x0B, 0x00, 0x02, 0x04, 0x11, 0x11, 0x22, 0x22];
+    let addrs = srv.writable_addrs.read();
+    assert_eq!(
+        ModbusServer::handle_request(FC_WRITE_SINGLE, &fc06, &srv.registers, true, &addrs),
+        vec![FC_WRITE_SINGLE | 0x80, EX_ILLEGAL_DATA_ADDRESS]
+    );
+    assert_eq!(
+        ModbusServer::handle_request(FC_WRITE_MULTIPLE, &fc16, &srv.registers, true, &addrs),
+        vec![FC_WRITE_MULTIPLE | 0x80, EX_ILLEGAL_DATA_ADDRESS]
+    );
+    drop(addrs);
+    assert!(srv.registers.read().is_empty());
+}
+
+/// FC16 批量中部分地址不可写 → 整批拒绝、无部分写入（原子性）。
+#[test]
+fn fc16_partial_unwritable_rejects_entire_batch() {
+    let srv = ModbusServer::new(ModbusServerConfig::default());
+    srv.set_writable_addrs(&[test_mapping("p1", 10)], &HashSet::from(["p1".to_string()]));
+    srv.set_register(10, 0x9999); // 可写地址 10 的既有值
+    // addr=10 qty=2：10 可写、11 不可写 → 整批必须拒绝
+    let req = [0x00, 0x0A, 0x00, 0x02, 0x04, 0x11, 0x11, 0x22, 0x22];
+    let addrs = srv.writable_addrs.read();
+    let resp = ModbusServer::handle_request(FC_WRITE_MULTIPLE, &req, &srv.registers, true, &addrs);
+    drop(addrs);
+    assert_eq!(resp, vec![FC_WRITE_MULTIPLE | 0x80, EX_ILLEGAL_DATA_ADDRESS]);
+    assert_eq!(srv.registers.read().get(&10).copied(), Some(0x9999));
+    assert_eq!(srv.registers.read().get(&11).copied(), None);
+}
+
+/// 热更：on_points_changed 用新 writable_ids + 缓存 mappings 重建白名单。
+#[test]
+fn on_points_changed_refreshes_writable_addrs() {
+    let srv = ModbusServer::new(ModbusServerConfig::default());
+    let mappings = [test_mapping("p1", 10), test_mapping("p2", 11)];
+    srv.set_writable_addrs(&mappings, &HashSet::from(["p1".to_string()]));
+    assert!(srv.writable_addrs.read().contains(&10));
+    assert!(!srv.writable_addrs.read().contains(&11));
+
+    let mut active = ActivePointSet::default();
+    active.writable_ids.insert("p2".to_string());
+    srv.on_points_changed(&active);
+    assert!(!srv.writable_addrs.read().contains(&10));
+    assert!(srv.writable_addrs.read().contains(&11));
 }
 
 #[test]
@@ -222,15 +321,18 @@ fn handle_write_fc16_rejects_malformed() {
 #[test]
 fn handle_request_dispatches_new_function_codes() {
     let srv = ModbusServer::new(ModbusServerConfig::default());
+    srv.set_writable_addrs(&[test_mapping("p1", 0)], &HashSet::from(["p1".to_string()]));
+    let addrs = srv.writable_addrs.read();
     // FC01 走 handle_read_bits
     let req = [0x00, 0x00, 0x00, 0x01];
     assert_eq!(
-        ModbusServer::handle_request(FC_READ_COILS, &req, &srv.registers)[0],
+        ModbusServer::handle_request(FC_READ_COILS, &req, &srv.registers, true, &addrs)[0],
         FC_READ_COILS
     );
-    // FC16 走 handle_write_multiple
+    // FC16 走 handle_write_multiple（地址 0 在白名单内）
     let req = [0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x05];
-    let resp = ModbusServer::handle_request(FC_WRITE_MULTIPLE, &req, &srv.registers);
+    let resp = ModbusServer::handle_request(FC_WRITE_MULTIPLE, &req, &srv.registers, true, &addrs);
+    drop(addrs);
     assert_eq!(resp[0], FC_WRITE_MULTIPLE);
     assert_eq!(srv.registers.read().get(&0).copied(), Some(5));
 }

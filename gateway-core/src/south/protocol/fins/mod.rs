@@ -32,7 +32,7 @@ use tokio::sync::Mutex;
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
-    convert_value, reverse_convert, Collector, CollectorError, CollectorResult,
+    convert_value, reverse_convert, Collector, CollectorError, CollectorResult, ResultSlots,
 };
 
 pub(crate) mod frames;
@@ -300,6 +300,26 @@ impl FinsCollector {
             frames::decode_words(&data, PointDataType::U16).map(|v| v as i32),
         ))
     }
+
+    /// 缺陷 #7：与 `read_batch` 同语义（一次惰性建链 + 逐点 read），逐点结果立即写共享槽，组超时 drop 不丢已完成结果。
+    pub(crate) async fn read_batch_points_with_slots(&self, points: &[PointConfig], slots: ResultSlots) {
+        if points.is_empty() {
+            return;
+        }
+        if !self.is_connected() {
+            if let Err(e) = self.connect().await {
+                let reason = e.to_string();
+                let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
+                for slot in guard.iter_mut() {
+                    *slot = Some(Err(CollectorError::IoError(reason.clone())));
+                }
+                return;
+            }
+        }
+        for (i, p) in points.iter().enumerate() {
+            slots.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(self.read(p).await);
+        }
+    }
 }
 
 impl Collector for FinsCollector {
@@ -437,12 +457,8 @@ impl Collector for FinsCollector {
         })
     }
 
-    /// 批量读取：整批点位共享**一次**惰性建链（对齐 IEC 104 `read_batch` 策略）。
-    ///
-    /// 默认实现逐点 `read`，设备不可达时每个点都会各做一次 `connect`（含 TCP 连接
-    /// + 节点地址握手），叠加 N 倍 `io_timeout` 超时。这里批次开始先建链一次：
-    /// - 建链失败 → 整批返回**同因错误**，不再逐点重复等待连接超时
-    /// - 建链成功 → 逐点 `read`；`ensure_connected` 已短路，不会重复建链
+    /// 批量读取：整批共享一次惰性建链（对齐 IEC 104）；默认逐点 read 在设备
+    /// 不可达时叠加 N 倍 io_timeout，这里先建链一次：失败整批同因返回、成功则短路。
     fn read_batch<'a>(
         &'a self,
         points: &'a [PointConfig],
@@ -450,27 +466,25 @@ impl Collector for FinsCollector {
         Box<dyn std::future::Future<Output = Vec<CollectorResult<DataPoint>>> + Send + 'a>,
     > {
         Box::pin(async move {
-            let mut results: Vec<CollectorResult<DataPoint>> = Vec::with_capacity(points.len());
-            if points.is_empty() {
-                return results;
-            }
-
-            if !self.is_connected() {
-                if let Err(e) = self.connect().await {
-                    let msg = e.to_string();
-                    return points
-                        .iter()
-                        .map(|_| Err(CollectorError::IoError(msg.clone())))
-                        .collect();
-                }
-            }
-
-            for p in points {
-                results.push(self.read(p).await);
-            }
-            results
+            let slots: ResultSlots = std::sync::Arc::new(std::sync::Mutex::new(
+                (0..points.len()).map(|_| None).collect(),
+            ));
+            self.read_batch_points_with_slots(points, slots.clone()).await;
+            slots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter_mut()
+                .map(|s| s.take().unwrap_or_else(|| Err(CollectorError::NoReply)))
+                .collect()
         })
     }
+
+    /// 缺陷 #7：沿用 `read_batch` 的建链 + 逐点 read 语义，结果即写共享槽，组超时 drop 不丢。
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(&'a self, points: &'a [PointConfig], slots: ResultSlots) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move { self.read_batch_points_with_slots(points, slots).await; })
+    }
+
     fn write<'a>(
         &'a self,
         point: &'a PointConfig,

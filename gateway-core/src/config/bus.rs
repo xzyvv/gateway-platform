@@ -353,11 +353,12 @@ fn default_true() -> bool {
     true
 }
 
-/// Modbus TCP 重连退避默认值：精确复刻历史硬编码序列 1/2/5/10/30 秒、无抖动。
+/// Modbus TCP / 串口重连退避默认值：档位仍为历史序列 1/2/5/10/30 秒；
+/// 默认加 ±10% 抖动（0.2）打散成批掉电时的齐步重连。
 fn default_bus_reconnect_backoff() -> ReconnectBackoffConfig {
     ReconnectBackoffConfig {
         seconds: vec![1, 2, 5, 10, 30],
-        jitter_ratio: 0.0,
+        jitter_ratio: 0.2,
     }
 }
 
@@ -527,5 +528,13 @@ mod tests {
             ..Default::default()
         };
         assert!(ok.semantic_error().is_none());
+    }
+
+    /// 防回退：总线默认重连抖动必须为正，否则成批设备掉电会齐步重连。
+    #[test]
+    fn bus_default_reconnect_backoff_has_jitter() {
+        let cfg = default_bus_reconnect_backoff();
+        assert!(cfg.jitter_ratio > 0.0, "默认 jitter 必须打散惊群");
+        assert_eq!(cfg.seconds, vec![1, 2, 5, 10, 30]);
     }
 }

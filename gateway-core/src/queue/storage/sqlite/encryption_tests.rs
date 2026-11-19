@@ -214,3 +214,56 @@ fn rebuild_env_restores_self_heal_without_leaking_old_rows() {
         .unwrap_or(0);
     assert_eq!(leaked, 0, "重建出的空库里不得出现旧数据");
 }
+
+// ===== 缺陷 #8：加密库的在线备份必须用同 key，且原子替换 =====
+
+/// 在线备份库必须用与源库相同的密钥可读；错误密钥不可读。
+/// 生产路径（maintenance 定时备份 / db_init 启动备份）依赖这一点。
+#[test]
+fn online_backup_uses_same_key_and_rejects_wrong_key() {
+    use super::wal::backup_db_online;
+    use crate::queue::core::ensure_key;
+    use rusqlite::Connection;
+
+    let fx = Fixture::new();
+    drop(fx.open()); // 首次打开生成 keyfile
+    let key_hex = ensure_key(&fx.db_path).expect("load key hex");
+
+    let conn = Connection::open(&fx.db_path).expect("open encrypted source");
+    conn.pragma_update(None, "key", &key_hex)
+        .expect("set source key");
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; \
+         CREATE TABLE bak_t(x); \
+         INSERT INTO bak_t VALUES(42);",
+    )
+    .expect("setup encrypted source");
+
+    let bak = fx.db_path.with_extension("db.bak");
+    backup_db_online(&conn, &fx.db_path, &bak, &key_hex).expect("encrypted online backup");
+
+    // 同 key 可读
+    {
+        let check = Connection::open(&bak).expect("open backup");
+        check
+            .pragma_update(None, "key", &key_hex)
+            .expect("set backup key");
+        let v: i64 = check
+            .query_row("SELECT x FROM bak_t", [], |r| r.get(0))
+            .expect("read with correct key");
+        assert_eq!(v, 42);
+    }
+
+    // 错 key 不可读
+    {
+        let bad = Connection::open(&bak).expect("open backup with wrong key");
+        let wrong = "ff".repeat(32);
+        bad.pragma_update(None, "key", &wrong)
+            .expect("set wrong key");
+        assert!(
+            bad.query_row("SELECT x FROM bak_t", [], |r| r.get::<_, i64>(0))
+                .is_err(),
+            "错误密钥不得读出备份库内容"
+        );
+    }
+}

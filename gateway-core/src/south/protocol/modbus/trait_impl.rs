@@ -9,6 +9,7 @@ use std::pin::Pin;
 use crate::config::PointConfig;
 use crate::engine::codec::crc::crc16;
 use crate::engine::model::{DataPoint, Quality};
+use crate::south::protocol::ResultSlots;
 
 use super::merge::WriteItem;
 use super::{
@@ -143,6 +144,19 @@ impl Collector for ModbusCollector {
                 .into_iter()
                 .map(Ok)
                 .collect()
+        })
+    }
+
+    /// 缺陷 #7：批量读的共享进度槽版本——沿用与 `read_batch` 相同的分组合并
+    /// 算法，并在每个点位结果产生时同步写槽，使组超时后已完成结果不丢失。
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(
+        &'a self,
+        points: &'a [PointConfig],
+        slots: ResultSlots,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let _ = self.read_batch_points_with_slots(points, slots).await;
         })
     }
 

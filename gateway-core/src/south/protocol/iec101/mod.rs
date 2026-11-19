@@ -37,7 +37,7 @@ use crate::south::bus::BusManager;
 use crate::south::protocol::common::asdu::IoaDataMap;
 use crate::south::protocol::common::asdu::{is_interrogation_termination, parse_asdu};
 use crate::south::protocol::{
-    clone_collector_error, convert_value, Collector, CollectorError, CollectorResult,
+    clone_collector_error, convert_value, Collector, CollectorError, CollectorResult, ResultSlots,
 };
 
 mod frames;
@@ -273,6 +273,32 @@ impl Collector for Iec101Collector {
                 }
             }
             results
+        })
+    }
+
+    /// 缺陷 #7：与 `read_batch` 同一套「一次总召唤 + 本批点位复用快照」语义，
+    /// 但在每个点位结果产生的瞬间写入共享槽（await 在锁外、锁内立即写、锁不跨
+    /// await）。组超时 drop 掉 future 时，已完成点位的结果仍留在槽中不会丢失。
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(
+        &'a self,
+        points: &'a [PointConfig],
+        slots: ResultSlots,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if points.is_empty() {
+                return;
+            }
+            // 一次总召唤 + 轮询服务本批全部点位，避免逐点重复召唤
+            let refresh_result = self.refresh().await;
+            for (i, p) in points.iter().enumerate() {
+                let r = match (parse_ioa(&p.address), &refresh_result) {
+                    (Err(e), _) => Err(e),
+                    (Ok(_), Err(e)) => Err(clone_collector_error(e)),
+                    (Ok(ioa), Ok(())) => self.cached_point(p, ioa).await,
+                };
+                slots.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
+            }
         })
     }
 }

@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::frame_buffer::FrameBuffer;
-use crate::config::BusConfig;
+use crate::config::{next_reconnect_backoff, BusConfig, ReconnectBackoffConfig};
 use crate::engine::metrics::Metrics;
 use crate::south::protocol::codec::{ascii_to_rtu, rtu_to_ascii};
 use crate::south::protocol::CollectorError;
@@ -394,7 +394,7 @@ fn lock_slot(
 
 /// 确保后台重连任务在跑（单飞）。
 ///
-/// 任务以 1s 起始、倍增封顶 30s 的退避反复尝试重开串口；成功后把新句柄**回填状态桥**
+/// 任务按总线退避档位（默认 1/2/5/10/30 秒 + 抖动）反复尝试重开串口；成功后把新句柄**回填状态桥**
 /// （仅在槽位为空时回填，避免覆盖主循环正在使用的句柄），下一笔事务即可正常使用，
 /// 实现热插拔自愈且无需重启进程。总线存活标志被清除（主循环退出）时任务收尾，避免泄漏。
 fn ensure_background_reconnect(ctx: &ReconnectCtx) {
@@ -407,6 +407,7 @@ fn ensure_background_reconnect(ctx: &ReconnectCtx) {
         return;
     }
     let bus_config = ctx.bus_config.clone();
+    let backoff_cfg = bus_config.reconnect_backoff.clone();
     let name = ctx.name.clone();
     let deps = ctx.deps.clone();
     let state = Arc::clone(&ctx.state);
@@ -414,7 +415,8 @@ fn ensure_background_reconnect(ctx: &ReconnectCtx) {
     let alive = Arc::clone(&ctx.alive);
     let metrics = Arc::clone(&ctx.metrics);
     tokio::spawn(async move {
-        let mut backoff = Duration::from_secs(1);
+        // 与 Modbus TCP 重连共用同一档位与抖动公式（attempt 从 1 起）。
+        let mut attempt: u32 = 1;
         loop {
             if !alive.load(Ordering::Acquire) {
                 break;
@@ -447,16 +449,21 @@ fn ensure_background_reconnect(ctx: &ReconnectCtx) {
                     break;
                 }
                 Err(e) => {
+                    let delay = next_reconnect_backoff(
+                        &backoff_cfg,
+                        attempt,
+                        ReconnectBackoffConfig::time_rand01(),
+                    );
                     tracing::warn!(
                         "bus {} background reopen failed: {}, retrying in {:?}",
                         name,
                         e,
-                        backoff
+                        delay
                     );
+                    tokio::time::sleep(delay).await;
+                    attempt = attempt.saturating_add(1);
                 }
             }
-            tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(Duration::from_secs(30));
         }
         in_flight.store(false, Ordering::Release);
     });

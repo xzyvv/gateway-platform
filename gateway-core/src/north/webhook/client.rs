@@ -9,6 +9,7 @@ use crate::config::WebhookConfig;
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::model::DataPoint;
 use crate::north::mqtt::outbox::{OutboxStore, OutgoingMsg};
+use crate::shared::url_safety;
 
 use super::retry::*;
 /// Webhook 上报客户端。
@@ -62,12 +63,15 @@ impl WebhookClient {
         outbox: OutboxStore,
         metrics: Arc<crate::engine::metrics::Metrics>,
     ) -> Self {
+        // 缺陷 #2：SSRF 防护下沉到 shared/url_safety，逐跳复检重定向（防 302→元数据绕过）。
+        let ssrf = url_safety::SsrfPolicy::default();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
         // B3: connect_timeout 限制 DNS 解析 + TCP 建连 + TLS 握手阶段。
         // 单纯 timeout 在 DNS/TCP 阶段挂起时仍会等到 timeout 秒；
             // connect_timeout 提前 10s 失败，让 outbox 改走重试逻辑。
             .connect_timeout(Duration::from_secs(10))
+            .redirect(url_safety::redirect_policy(&ssrf))
             .build()
             // Bug 134: fallback 客户端也有 timeout——默认 reqwest::Client::new()
             // 无超时限制，可能导致网络 hang 时整个上报循环阻塞。
@@ -76,6 +80,7 @@ impl WebhookClient {
                 reqwest::Client::builder()
                     .timeout(Duration::from_secs(30))
                     .connect_timeout(Duration::from_secs(10))
+                    .redirect(url_safety::redirect_policy(&ssrf))
                     .build()
                     .unwrap_or_else(|_| reqwest::Client::new())
             });
@@ -129,17 +134,11 @@ impl WebhookClient {
             *self.last_error.write() = Some("webhook url is empty".to_string());
             return;
         }
-        // Bug 135: 协议前缀校验
-        if !(self.config.url.starts_with("http://") || self.config.url.starts_with("https://")) {
-            tracing::error!(
-                "webhook url must start with http:// or https://, got '{}'",
-                self.config.url
-            );
-            // 同上：run 循环退出后 health() 必须能如实报出未连接及原因。
-            *self.last_error.write() = Some(format!(
-                "invalid webhook url (must be http:// or https://): {}",
-                self.config.url
-            ));
+        // 协议前缀校验升级为 SSRF 字面量校验（scheme / 域名黑名单 / IP）。
+        if let Err(e) = url_safety::check_webhook_url(&self.config.url) {
+            let (log, err) = e.messages(&self.config.url);
+            tracing::error!("{}", log);
+            *self.last_error.write() = Some(err);
             return;
         }
 
@@ -731,22 +730,9 @@ impl WebhookClient {
             }
         }
 
-        // r49-WH1：本轮处理完所有取出的消息后，把游标前移到 max_id，使下一轮
-        // 自动跳过本轮已处理窗口——避免"首页 50 条卡在退避期、后续 51+ 全部
-        // 饥饿"这类持久积压。Retriable 消息会保留在 outbox 中（status=0），
-        // 下一轮仍会被取到（id > max_id 不命中），但由 attempt_count 与
-        // in-memory retries map 之外由退避闸门（next_at 早于 now 才放行）控制
-        // 实际发送频次——可重试消息会持续被处理，attempt_count 累计保障。
-        // 这里 max_id 仅推进"已尝试过"的窗口边界，不是"已成功"的边界。
-        // 换言之：即便本轮所有 50 条都 Retriable，下一轮仍会从 max_id 之后
-        // 探测并尝试新窗口——这正是修复"首页饥饿"的关键。
-        //
-        // r59-WH1：游标只前移到 `next_processed_max_id`（**实际被处理过**的最大 id），
-        // 而非窗口末元素 id。退避闸门 `continue` 跳过的行不计入——否则这些行
-        // 的 outbox id 落在 (`last_flush_cursor`, 上界 max_id] 之间，但下一轮用
-        // 新游标 = 到 max_id 查询时会被 `id > ?2` 过滤掉，永远不再被 flush。
-        // 全部退避期行都满足上述条件时 `next_processed_max_id` 返回 0，本函数
-        // 选择**不前进**游标（保留原 `after_id`）——保留这些行被重试的机会。
+        // r49/r59-WH1：游标只前移到实际处理过的最大 id（退避 continue 的行不计入）；
+        // 全部退避时 next_processed_max_id 返回 0，此时**不前进**游标以保留重试机会，
+        // 避免"首页 50 条卡退避、后续 51+ 饥饿"及退避行被 id>游标 永久跳过。
         let processed_max_id = next_processed_max_id(&msgs, &processed);
         if processed_max_id > 0 {
             self.last_flush_cursor
@@ -761,6 +747,16 @@ impl WebhookClient {
     /// tracing: Webhook 单条发送 span，tracing feature off 时 cfg_attr 剥离为零成本。
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self, msg), fields(data_id = msg.data_id), level = "debug"))]
     pub(super) async fn send_once(&self, msg: &OutgoingMsg) -> SendOutcome {
+        // 发送前对 outbox topic 再校验（残留地址 / 热变更绕过 run 校验）。
+        if let Err(reason) = url_safety::SsrfPolicy::default().check_url_str(&msg.topic) {
+            tracing::error!("webhook blocked by SSRF policy at send_once: {} ({})", msg.topic, reason);
+            *self.last_error.write() = Some(format!("webhook target blocked (SSRF): {}", reason));
+            if let Some(m) = &self.metrics {
+                m.inc_webhook_publish(false);
+            }
+            return SendOutcome::Permanent(reason);
+        }
+
         let mut req = self
             .client
             .post(&msg.topic)
@@ -880,11 +876,7 @@ impl crate::north::NorthConnector for WebhookClient {
     }
 }
 
-// 注：r49-WH1 的 `next_flush_after_id` 纯函数（窗口末元素取游标）已被 r59
-// 替换为 `next_processed_max_id`，r49 函数仅在 r49/r59 历史回归测试中被引用。
-// 为消除 `dead_code` 警告，把它的定义和专属 r49 单元测试一并移到下面
-// `#[cfg(test)]
-// mod tests` 块，限定为测试可见（r69 清理）。
+// 注：r49 的 next_flush_after_id 已由 r59 的 next_processed_max_id 取代，定义与专属测试移入下方测试模块（r69）。
 /// r59-WH1：在「每行是否被本轮处理」的标志序列中取最大 id。
 ///
 /// `flush_pending` 内联循环对每条消息按退避闸门 / 实际 send_once 判定

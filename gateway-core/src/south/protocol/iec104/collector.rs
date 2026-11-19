@@ -10,7 +10,9 @@ use tokio::net::TcpStream;
 
 use crate::config::PointConfig;
 use crate::engine::model::{AddressReadEntry, AddressReadResult, DataPoint, Quality};
-use crate::south::protocol::{convert_value, Collector, CollectorError, CollectorResult};
+use crate::south::protocol::{
+    convert_value, Collector, CollectorError, CollectorResult, ResultSlots,
+};
 
 use super::frames::{build_uframe, encode_command_object, read_frame, STARTDT_ACT};
 use super::{command_type_of, Iec104Collector};
@@ -75,32 +77,53 @@ impl Iec104Collector {
         &self,
         points: &[PointConfig],
     ) -> Vec<CollectorResult<DataPoint>> {
-        let mut results: Vec<CollectorResult<DataPoint>> = Vec::with_capacity(points.len());
+        let slots: ResultSlots = std::sync::Arc::new(std::sync::Mutex::new(
+            (0..points.len()).map(|_| None).collect(),
+        ));
+        self.read_batch_points_with_slots(points, slots.clone()).await;
+        let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .iter_mut()
+            .map(|s| s.take().unwrap_or(Err(CollectorError::NoReply)))
+            .collect()
+    }
+
+    /// 缺陷 #7：与 [`Self::read_batch_points`] 相同的「一次总召唤 + 共享快照」语义，
+    /// 但每产生一个点位结果就立即写入共享槽 `slots`（await 在锁外、锁内立即写）。
+    /// 组超时 drop future 时，已完成点位的结果仍在槽中，不会被整批判 Timeout。
+    pub(super) async fn read_batch_points_with_slots(
+        &self,
+        points: &[PointConfig],
+        slots: ResultSlots,
+    ) {
         if points.is_empty() {
-            return results;
+            return;
         }
+        let set = |idx: usize, r: CollectorResult<DataPoint>| {
+            slots.lock().unwrap_or_else(|e| e.into_inner())[idx] = Some(r);
+        };
 
         if !self.is_connected() {
             if let Err(e) = self.connect().await {
                 let msg = e.to_string();
-                return points
-                    .iter()
-                    .map(|_| Err(CollectorError::IoError(msg.clone())))
-                    .collect();
+                for i in 0..points.len() {
+                    set(i, Err(CollectorError::IoError(msg.clone())));
+                }
+                return;
             }
         }
 
         // 一次总召唤刷新整批点位；失败时整批返回同因错误（不逐点重复等待）
         if let Err(e) = self.interrogate().await {
             let msg = e.to_string();
-            return points
-                .iter()
-                .map(|_| Err(CollectorError::IoError(msg.clone())))
-                .collect();
+            for i in 0..points.len() {
+                set(i, Err(CollectorError::IoError(msg.clone())));
+            }
+            return;
         }
 
         let cache = self.data.lock().await;
-        for p in points {
+        for (i, p) in points.iter().enumerate() {
             let r = match p.address.parse::<u32>() {
                 Ok(ioa) => match cache.get(&ioa) {
                     Some((val, q, ts)) => Ok(Self::to_datapoint(p, *val, *q, *ts)),
@@ -111,9 +134,8 @@ impl Iec104Collector {
                     p.address
                 ))),
             };
-            results.push(r);
+            set(i, r);
         }
-        results
     }
 
     /// 按 IOA 直读（不依赖点位表）
@@ -327,6 +349,19 @@ impl Collector for Iec104Collector {
         Box<dyn std::future::Future<Output = Vec<CollectorResult<DataPoint>>> + Send + 'a>,
     > {
         Box::pin(self.read_batch_points(points))
+    }
+
+    /// 缺陷 #7：沿用 `read_batch` 的一次总召唤共享快照语义，每个点位结果产生即写
+    /// 共享槽，组超时 drop future 时已完成结果不丢失（await 在锁外、锁内立即写）。
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(
+        &'a self,
+        points: &'a [PointConfig],
+        slots: ResultSlots,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            self.read_batch_points_with_slots(points, slots).await;
+        })
     }
 
     fn read_addresses<'a>(

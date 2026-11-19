@@ -16,9 +16,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rusqlite::Connection;
 
+use super::wal::backup_db_online;
 use super::SqliteStorage;
 use crate::engine::metrics::Metrics;
 use crate::engine::model::DataPoint;
@@ -620,4 +622,133 @@ fn snapshot_slow_ack_can_resend_stale_row_after_newer_delivered() {
         .collect();
     assert_eq!(stale, vec![1.0], "已知边界：旧值会在新值之后重发一次");
     f.assert_consistent("snapshot slow ack");
+}
+
+// ===== 缺陷 #8：在线一致性热备份（SQLite 在线备份 API + 原子 rename）=====
+
+/// 前置：WAL 中已提交但未 checkpoint 的行必须出现在备份里（旧 fs::copy 会漏）。
+#[test]
+fn online_backup_includes_uncheckpointed_wal_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("wal.db");
+    let bak = dir.path().join("wal.db.bak");
+    let conn = Connection::open(&db).expect("open source");
+    // autocheckpoint=0：已提交行只留在 -wal，主库文件不含它。
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; \
+         PRAGMA wal_autocheckpoint=0; \
+         CREATE TABLE t(x); \
+         INSERT INTO t VALUES(7);",
+    )
+    .expect("setup WAL source");
+
+    // 前置条件：WAL 确实还有未回写内容。
+    let wal_len = std::fs::metadata(dir.path().join("wal.db-wal"))
+        .map(|m| m.len())
+        .expect("wal metadata");
+    assert!(wal_len > 0, "前置条件：WAL 中应有未 checkpoint 的数据");
+
+    backup_db_online(&conn, &db, &bak, "").expect("online backup");
+
+    let check = Connection::open(&bak).expect("open backup");
+    let v: i64 = check
+        .query_row("SELECT x FROM t", [], |r| r.get(0))
+        .expect("read committed WAL row from backup");
+    assert_eq!(v, 7, "备份必须包含 -wal 中已提交但未 checkpoint 的行");
+}
+
+/// 原子替换：旧 .bak 与残留 .tmp 都被清理；成功后 .tmp 消失、.bak 是完整可校验的新库。
+#[test]
+fn online_backup_replaces_bak_atomically() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("atomic.db");
+    let bak = dir.path().join("atomic.db.bak");
+    let tmp = db.with_extension("db.bak.tmp");
+
+    // 占位旧 .bak：确保 rename 走的是「覆盖已存在目标」路径。
+    std::fs::write(&bak, b"OLD-BAK").expect("seed old bak");
+    // 上次崩溃残留的 .tmp：备份目标须不存在，必须先清理否则 Backup 会失败。
+    std::fs::write(&tmp, b"STALE-TMP").expect("seed stale tmp");
+
+    let conn = Connection::open(&db).expect("open source");
+    conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES(9);")
+        .expect("setup source");
+
+    backup_db_online(&conn, &db, &bak, "").expect("online backup");
+
+    assert!(!tmp.exists(), "成功后临时文件必须已被 rename 掉");
+    let check = Connection::open(&bak).expect("open backup");
+    let integrity: String = check
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .expect("integrity");
+    assert_eq!(integrity, "ok", ".bak 必须是完整数据库，不能是半截文件");
+    let v: i64 = check
+        .query_row("SELECT x FROM t", [], |r| r.get(0))
+        .expect("read row");
+    assert_eq!(v, 9);
+}
+
+/// 并发写入 + 反复在线备份：每份备份都必须通过 integrity_check，行数单调不回退
+/// （无半事务 / 撕裂页）；写入结束后最终备份含全部已提交行。
+#[test]
+fn online_backup_under_concurrent_writes_is_consistent() {
+    use std::thread;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("concurrent.db");
+    let bak = dir.path().join("concurrent.db.bak");
+
+    let conn = Connection::open(&db).expect("open source");
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; \
+         PRAGMA wal_autocheckpoint=1; \
+         PRAGMA busy_timeout=5000; \
+         CREATE TABLE t(x INTEGER);",
+    )
+    .expect("setup source");
+
+    const ROWS: i64 = 400;
+    let writer_db = db.clone();
+    let writer = thread::spawn(move || {
+        let w = Connection::open(&writer_db).expect("writer open");
+        w.busy_timeout(Duration::from_secs(5))
+            .expect("writer busy timeout");
+        // 极小 autocheckpoint 放大「已提交行在 WAL、autocheckpoint 改写主库页」的窗口。
+        w.execute_batch("PRAGMA wal_autocheckpoint=1;")
+            .expect("writer tuning");
+        for i in 0..ROWS {
+            w.execute("INSERT INTO t VALUES (?1)", [i])
+                .expect("writer insert");
+        }
+    });
+
+    let mut last_count = 0i64;
+    for _ in 0..8 {
+        backup_db_online(&conn, &db, &bak, "").expect("online backup during writes");
+        let check = Connection::open(&bak).expect("open backup");
+        let integrity: String = check
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .expect("integrity");
+        assert_eq!(integrity, "ok", "并发写入期间的备份必须无撕裂页");
+        let n: i64 = check
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .expect("count");
+        assert!(
+            n >= last_count && n <= ROWS,
+            "备份行数必须是已提交事务的完整前缀: last={} now={}",
+            last_count,
+            n
+        );
+        last_count = n;
+        drop(check);
+    }
+
+    writer.join().expect("writer thread");
+
+    backup_db_online(&conn, &db, &bak, "").expect("final online backup");
+    let check = Connection::open(&bak).expect("open final backup");
+    let n: i64 = check
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .expect("final count");
+    assert_eq!(n, ROWS, "写入结束后的最终备份必须包含全部已提交行");
 }

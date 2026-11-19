@@ -127,11 +127,11 @@ pub(super) fn init_queue_db(
         }
     };
 
-    // r42-Q3: 启动备份必须先 checkpoint（TRUNCATE）把 -wal 中已 commit 但未落主库
-    // 的行刷回主库，再复制。旧实现直接 fs::copy 只复制主库文件：上一生命周期若异常
-    // 退出、-wal 残留已提交数据，备份会漏掉这些行并覆盖掉上一轮维护备份 → 之后从
-    // 备份恢复将丢失最近一次运行的数据。与维护路径（maintenance 第 5 步）保持同序。
-    let _ = backup_db_consistent(&mut conn, db_path, backup_path);
+    // 缺陷 #8 / r42-Q3: 启动备份统一走 SQLite 在线备份 API。旧实现 checkpoint +
+    // fs::copy 在释放锁后复制会撕裂，且直接覆盖 .bak 非原子；在线备份保证跨 WAL
+    // 一致快照，纳入 -wal 中已提交但未 checkpoint 的行，并以同目录临时文件 +
+    // 原子 rename 替换 .bak。与维护路径（maintenance 第 5 步）共用同一函数。
+    let _ = backup_db_consistent(&mut conn, db_path, backup_path, key_hex);
 
     // 空闲页回收：retention 只做 DELETE，SQLite 默认不把释放的页还给文件系统，
     // 主库文件因此只增不减。开启 `auto_vacuum=INCREMENTAL` 后，maintenance 周期

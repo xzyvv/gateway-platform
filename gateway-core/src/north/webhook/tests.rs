@@ -244,7 +244,7 @@ async fn invalid_url_run_exit_reports_disconnected() {
     assert!(!h.connected, "run 退出后不得再报 connected=true");
     assert_eq!(
         h.last_error.as_deref(),
-        Some("invalid webhook url (must be http:// or https://): ftp://example.com/hook"),
+        Some("invalid webhook url (SSRF): 仅支持 http/https，当前为 ftp"),
         "必须把 URL 非法原因透出到状态接口"
     );
 }

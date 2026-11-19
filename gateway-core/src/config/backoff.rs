@@ -6,6 +6,7 @@
 //! 保证升级后重连节奏不变。
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -76,6 +77,17 @@ impl ReconnectBackoffConfig {
         let mixed = (nanos ^ counter) & 0x3FFF_FFFF;
         (mixed as f64) / (0x3FFF_FFFF as f64 + 1.0)
     }
+}
+
+/// 把退避配置 + 失败次数 + 随机源换算为一次重连延迟。
+///
+/// 串口后台重连与 Modbus TCP 重连共用同一档位表与同一抖动公式，便于纯函数测试。
+pub(crate) fn next_reconnect_backoff(
+    cfg: &ReconnectBackoffConfig,
+    attempt: u32,
+    rand01: f64,
+) -> Duration {
+    Duration::from_secs_f64(cfg.delay_secs(attempt, rand01))
 }
 
 /// 退避档位默认值（仅当直接反序列化 `ReconnectBackoffConfig` 且缺失本字段时使用；

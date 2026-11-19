@@ -7,20 +7,42 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::PointConfig;
-use crate::engine::model::Quality;
+use crate::engine::model::{DataPoint, Quality};
 use crate::pipeline::CollectedBatch;
+use crate::south::protocol::{CollectorError, CollectorResult, ResultSlots};
 #[cfg(feature = "tracing")]
 use tracing::Instrument;
 
 use super::task::supervision_loop;
 use super::Scheduler;
 
+/// 缺陷 #7：把共享进度槽聚合成与入参等长的结果向量。
+///
+/// 每个点位恰好一个结果：已写入的 `Some` 用 `take()` 消费（`CollectorError` 未实现
+/// Clone），未写入的 `None` 回填 `Timeout`；长度恒为 `n`。纯数值逻辑，不依赖 tokio
+/// 时序，便于单测直接锁定「成功保留 / 未完成判超时 / 不漏报重复」三不变量。
+pub(crate) fn collect_results(
+    slots: ResultSlots,
+    n: usize,
+    timeout: Duration,
+) -> Vec<CollectorResult<DataPoint>> {
+    let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
+    (0..n)
+        .map(|i| {
+            guard
+                .get_mut(i)
+                .and_then(|slot| slot.take())
+                .unwrap_or(Err(CollectorError::Timeout(timeout)))
+        })
+        .collect()
+}
+
 impl Scheduler {
     /// 统一采集任务孵化（所有协议：modbus/dlt645/cjt188/gpio/opcua/iec104/bacnet/s7comm/...）
     ///
-    /// 通过 `Collector::read_batch` 统一读取：
-    /// - Modbus 在 read_batch 内部按 (slave_id, fc) 批量合并
-    /// - DLT645/CJT188/GPIO 默认逐点读取（read_batch 默认实现）
+    /// 通过 `Collector::read_batch_with_slots` 统一读取（共享进度槽，超时不丢已完成点）：
+    /// - Modbus 在 read_batch_with_slots 内部按 (slave_id, fc) 批量合并并逐结果写槽
+    /// - DLT645/CJT188 逐点读取并逐点写槽；其他协议走 trait 默认逐点写槽实现
     ///
     /// 组键 `format!("{}:{}", collector.name(), bus_name)`，与 group_key_for_point 一致。
     pub(crate) fn spawn_collector_task(self: &Arc<Self>, bus_name: &str, points: Vec<PointConfig>) {
@@ -102,32 +124,28 @@ impl Scheduler {
                     // 批量读取：Modbus 内部按 (slave,fc) 合并；其他协议默认逐点
                     // 超时保护：防止协议栈卡死拖垮整个采集循环
                     let start = std::time::Instant::now();
-                    let all_results = match tokio::time::timeout(
-                        group_timeout,
-                        collector.read_batch(&points),
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => {
-                            tracing::error!(
-                                "collector {} read_batch timeout after {:?}, {} points skipped",
-                                collector.name(),
-                                group_timeout,
-                                points.len()
-                            );
-                            // 超时：所有点位返回 Timeout 错误（区别于 IoError，
-                            // 便于监控按"协议栈卡死/无响应"与"链路 IO 故障"分类告警）
-                            points
-                                .iter()
-                                .map(|_| {
-                                    Err(crate::south::protocol::CollectorError::Timeout(
-                                        group_timeout,
-                                    ))
-                                })
-                                .collect()
-                        }
-                    };
+                    // 缺陷 #7：共享进度槽——每个点位完成即写槽，组超时 drop 掉 future 后
+                    // 已完成结果仍可取回；未完成点位由 collect_results 统一判 Timeout。
+                    let slots: ResultSlots = Arc::new(std::sync::Mutex::new(
+                        (0..points.len()).map(|_| None).collect(),
+                    ));
+                    let read_fut = collector.read_batch_with_slots(&points, slots.clone());
+                    let timed_out = tokio::time::timeout(group_timeout, read_fut).await.is_err();
+                    let all_results = collect_results(slots, points.len(), group_timeout);
+                    if timed_out {
+                        let n_timeout = all_results
+                            .iter()
+                            .filter(|r| matches!(r, Err(CollectorError::Timeout(_))))
+                            .count();
+                        let n_returned = all_results.len() - n_timeout;
+                        tracing::error!(
+                            "collector {} read_batch timeout after {:?}, {} points timed out, {} points returned",
+                            collector.name(),
+                            group_timeout,
+                            n_timeout,
+                            n_returned
+                        );
+                    }
                     let elapsed_us = start.elapsed().as_micros() as u64;
                     for (point, result) in points.iter().zip(all_results.iter()) {
                         // 成功判定必须同时看错误和质量码：modbus `read_batch` 把失败

@@ -74,7 +74,7 @@ use tokio::task::JoinHandle;
 use crate::config::{OpcUaClientConfig, PointConfig};
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
-use crate::south::protocol::{Collector, CollectorError, CollectorResult};
+use crate::south::protocol::{Collector, CollectorError, CollectorResult, ResultSlots};
 
 mod frames;
 use frames::{extract_value, parse_node_id};
@@ -312,6 +312,148 @@ impl OpcUaCollector {
             // 极端情况：调用方在持锁时调 spawn（实际不可能）——直接 abort 防泄漏
             handle.abort();
         }
+    }
+
+    /// 缺陷 #7：与 read_batch 同批量语义，逐点结果即写共享槽（锁不跨 await），组超时 drop 不丢已完成结果。
+    pub(crate) async fn read_batch_points_with_slots(&self, points: &[PointConfig], slots: ResultSlots) -> Vec<CollectorResult<DataPoint>> {
+        if points.is_empty() {
+            return Vec::new();
+        }
+        let s = slots.clone();
+        let set = move |i: usize, r: CollectorResult<DataPoint>| {
+            s.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
+        };
+
+        // C-11: 惰性建链（同 read 入口说明）。建链失败时逐点回填同因错误。
+        if !self.is_connected() {
+            if let Err(e) = self.connect().await {
+                let msg = e.to_string();
+                for i in 0..points.len() {
+                    set(i, Err(CollectorError::IoError(msg.clone())));
+                }
+                return Vec::new();
+            }
+        }
+
+        let session_guard = self.session.lock().await;
+        let session = match session_guard.as_ref() {
+            Some(s) => s,
+            None => {
+                // C-11: 整批失败计数 +1（而不是 N 次）
+                self.record_read_failure().await;
+                for i in 0..points.len() {
+                    set(i, Err(CollectorError::IoError("OPC UA session not connected".into())));
+                }
+                return Vec::new();
+            }
+        };
+
+        let mut read_value_ids = Vec::with_capacity(points.len());
+        let mut parse_ok = vec![true; points.len()];
+        let mut parse_errors: Vec<String> = Vec::with_capacity(points.len());
+        for (i, p) in points.iter().enumerate() {
+            match parse_node_id(&p.address) {
+                Ok(nid) => {
+                    read_value_ids.push(ReadValueId {
+                        node_id: nid,
+                        attribute_id: AttributeId::Value as u32,
+                        index_range: NumericRange::default(),
+                        data_encoding: QualifiedName::null(),
+                    });
+                }
+                Err(e) => {
+                    parse_ok[i] = false;
+                    parse_errors.push(e.to_string());
+                    read_value_ids.push(ReadValueId {
+                        node_id: NodeId::null(),
+                        attribute_id: AttributeId::Value as u32,
+                        index_range: NumericRange::default(),
+                        data_encoding: QualifiedName::null(),
+                    });
+                }
+            }
+        }
+
+        let data_values = match session
+            .read(&read_value_ids, TimestampsToReturn::Both, 0.0)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("OPC UA batch read failed: {}", e);
+                // C-11: 整批失败一次计数
+                self.record_read_failure().await;
+                for i in 0..points.len() {
+                    set(i, Err(CollectorError::IoError(msg.clone())));
+                }
+                return Vec::new();
+            }
+        };
+
+        // C-11: 整批 read 成功（server 端响应了）→ 清零失败计数
+        self.record_read_ok();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut err_idx = 0;
+        for (i, p) in points.iter().enumerate() {
+            if !parse_ok[i] {
+                let msg = parse_errors
+                    .get(err_idx)
+                    .cloned()
+                    .unwrap_or_else(|| "invalid node id".into());
+                err_idx += 1;
+                set(i, Err(CollectorError::InvalidFrame(msg)));
+                continue;
+            }
+
+            if i >= data_values.len() {
+                set(i, Err(CollectorError::InvalidFrame(
+                    "OPC UA batch read returned fewer results than expected".into(),
+                )));
+                continue;
+            }
+
+            let dv = &data_values[i];
+            let value = match extract_value(dv) {
+                Ok(v) => v,
+                Err(e) => {
+                    set(i, Err(e));
+                    continue;
+                }
+            };
+
+            let quality = match &dv.status {
+                Some(code) if code.is_good() => Quality::Good,
+                Some(code) if code.is_uncertain() => Quality::Uncertain,
+                _ => Quality::Bad,
+            };
+
+            let source_ts = dv
+                .source_timestamp
+                .as_ref()
+                .map(|t| t.as_chrono().timestamp_millis())
+                .unwrap_or(0);
+
+            set(i, Ok(DataPoint {
+                point_id: p.id.clone(),
+                device_id: p.device_id.clone().unwrap_or_default(),
+                value,
+                raw_value: value,
+                raw_type: "opcua".into(),
+                quality,
+                quality_reason: String::new(),
+                timestamp: now,
+                source_ts,
+                stale_count: 0,
+                value_text: None,
+            }));
+        }
+
+        let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .iter_mut()
+            .map(|r| r.take().unwrap_or(Err(CollectorError::NoReply)))
+            .collect()
     }
 }
 
@@ -736,139 +878,16 @@ impl Collector for OpcUaCollector {
         Box<dyn std::future::Future<Output = Vec<CollectorResult<DataPoint>>> + Send + 'a>,
     > {
         Box::pin(async move {
-            let mut results: Vec<CollectorResult<DataPoint>> = Vec::with_capacity(points.len());
-            if points.is_empty() {
-                return results;
-            }
-
-            // C-11: 惰性建链（同 read 入口说明）。read_batch 返回 Vec 而非 Result，
-            // 建链失败时逐个点位返回同因错误。
-            if !self.is_connected() {
-                if let Err(e) = self.connect().await {
-                    let msg = e.to_string();
-                    return (0..points.len())
-                        .map(|_| Err(CollectorError::IoError(msg.clone())))
-                        .collect();
-                }
-            }
-
-            let session_guard = self.session.lock().await;
-            let session = match session_guard.as_ref() {
-                Some(s) => s,
-                None => {
-                    // C-11: 整批失败计数 +1（而不是 N 次）
-                    self.record_read_failure().await;
-                    return (0..points.len())
-                        .map(|_| {
-                            Err(CollectorError::IoError(
-                                "OPC UA session not connected".into(),
-                            ))
-                        })
-                        .collect();
-                }
-            };
-
-            let mut read_value_ids = Vec::with_capacity(points.len());
-            let mut parse_ok = vec![true; points.len()];
-            let mut parse_errors: Vec<String> = Vec::with_capacity(points.len());
-            for (i, p) in points.iter().enumerate() {
-                match parse_node_id(&p.address) {
-                    Ok(nid) => {
-                        read_value_ids.push(ReadValueId {
-                            node_id: nid,
-                            attribute_id: AttributeId::Value as u32,
-                            index_range: NumericRange::default(),
-                            data_encoding: QualifiedName::null(),
-                        });
-                    }
-                    Err(e) => {
-                        parse_ok[i] = false;
-                        parse_errors.push(e.to_string());
-                        read_value_ids.push(ReadValueId {
-                            node_id: NodeId::null(),
-                            attribute_id: AttributeId::Value as u32,
-                            index_range: NumericRange::default(),
-                            data_encoding: QualifiedName::null(),
-                        });
-                    }
-                }
-            }
-
-            let data_values = match session
-                .read(&read_value_ids, TimestampsToReturn::Both, 0.0)
-                .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    let msg = format!("OPC UA batch read failed: {}", e);
-                    // C-11: 整批失败一次计数
-                    self.record_read_failure().await;
-                    return (0..points.len())
-                        .map(|_| Err(CollectorError::IoError(msg.clone())))
-                        .collect();
-                }
-            };
-
-            // C-11: 整批 read 成功（server 端响应了）→ 清零失败计数
-            self.record_read_ok();
-
-            let now = chrono::Utc::now().timestamp_millis();
-            let mut err_idx = 0;
-            for (i, p) in points.iter().enumerate() {
-                if !parse_ok[i] {
-                    let msg = parse_errors
-                        .get(err_idx)
-                        .cloned()
-                        .unwrap_or_else(|| "invalid node id".into());
-                    err_idx += 1;
-                    results.push(Err(CollectorError::InvalidFrame(msg)));
-                    continue;
-                }
-
-                if i >= data_values.len() {
-                    results.push(Err(CollectorError::InvalidFrame(
-                        "OPC UA batch read returned fewer results than expected".into(),
-                    )));
-                    continue;
-                }
-
-                let dv = &data_values[i];
-                let value = match extract_value(dv) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        results.push(Err(e));
-                        continue;
-                    }
-                };
-
-                let quality = match &dv.status {
-                    Some(code) if code.is_good() => Quality::Good,
-                    Some(code) if code.is_uncertain() => Quality::Uncertain,
-                    _ => Quality::Bad,
-                };
-
-                let source_ts = dv
-                    .source_timestamp
-                    .as_ref()
-                    .map(|t| t.as_chrono().timestamp_millis())
-                    .unwrap_or(0);
-
-                results.push(Ok(DataPoint {
-                    point_id: p.id.clone(),
-                    device_id: p.device_id.clone().unwrap_or_default(),
-                    value,
-                    raw_value: value,
-                    raw_type: "opcua".into(),
-                    quality,
-                    quality_reason: String::new(),
-                    timestamp: now,
-                    source_ts,
-                    stale_count: 0,
-                    value_text: None,
-                }));
-            }
-
-            results
+            let slots: ResultSlots = Arc::new(std::sync::Mutex::new(
+                (0..points.len()).map(|_| None).collect(),
+            ));
+            self.read_batch_points_with_slots(points, slots).await
         })
+    }
+
+    /// 缺陷 #7：沿用 read_batch 批量语义，逐点结果即写共享槽，组超时 drop 不丢。
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(&'a self, points: &'a [PointConfig], slots: ResultSlots) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move { let _ = self.read_batch_points_with_slots(points, slots).await; })
     }
 }

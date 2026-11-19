@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 /// MQTT 默认表：默认序列必须精确复刻现状 2,4,8,16,32,60,60……
 #[test]
@@ -161,4 +162,55 @@ fn validate_allows_equal_neighbors() {
         jitter_ratio: 0.0,
     };
     assert!(cfg.validate().is_ok());
+}
+
+/// 串口后台重连纯函数：默认 20% 抖动下 rand01=0/0.5/1 落在 base±10% 边界与中值。
+#[test]
+fn next_reconnect_backoff_default_jitter_bounds() {
+    let cfg = ReconnectBackoffConfig {
+        seconds: vec![1, 2, 5, 10, 30],
+        jitter_ratio: 0.2,
+    };
+    for (attempt, base) in (1..=5).zip([1.0, 2.0, 5.0, 10.0, 30.0]) {
+        let lo = next_reconnect_backoff(&cfg, attempt, 0.0);
+        let mid = next_reconnect_backoff(&cfg, attempt, 0.5);
+        let hi = next_reconnect_backoff(&cfg, attempt, 1.0);
+        // delay_secs 有 .max(1.0) 下界：base=1 的负抖动被钳到 1.0 而非 0.9。
+        assert!((lo.as_secs_f64() - (base * 0.9f64).max(1.0)).abs() < 1e-9);
+        assert!((mid.as_secs_f64() - base).abs() < 1e-9);
+        assert!((hi.as_secs_f64() - base * 1.1).abs() < 1e-9);
+    }
+}
+
+/// 同一 rand01 下延迟随失败次数单调不减；用尽档位后保持在上限档位。
+#[test]
+fn next_reconnect_backoff_monotonic_and_capped() {
+    let cfg = ReconnectBackoffConfig {
+        seconds: vec![1, 2, 5, 10, 30],
+        jitter_ratio: 0.2,
+    };
+    let mut prev = Duration::ZERO;
+    for attempt in 1..=20 {
+        let cur = next_reconnect_backoff(&cfg, attempt, 0.5);
+        assert!(cur >= prev, "延迟必须单调不减: {:?} -> {:?}", prev, cur);
+        assert!(cur <= Duration::from_secs_f64(33.0), "不得超过上限档位+抖动");
+        prev = cur;
+    }
+    assert_eq!(
+        next_reconnect_backoff(&cfg, 100, 0.5),
+        Duration::from_secs(30)
+    );
+}
+
+/// jitter=0 时纯函数结果与档位精确相等（TCP 侧统一走 delay_secs 后行为不变）。
+#[test]
+fn next_reconnect_backoff_zero_jitter_matches_base() {
+    let cfg = ReconnectBackoffConfig {
+        seconds: vec![1, 2, 5, 10, 30],
+        jitter_ratio: 0.0,
+    };
+    for attempt in 1..=8 {
+        let d = next_reconnect_backoff(&cfg, attempt, 0.13);
+        assert_eq!(d, Duration::from_secs_f64(cfg.base_delay_secs(attempt)));
+    }
 }

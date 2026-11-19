@@ -15,6 +15,7 @@ pub use frames::Dlt645Version;
 
 use super::{
     convert_value, parse_bcd_address, reverse_convert, Collector, CollectorError, CollectorResult,
+    ResultSlots,
 };
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
@@ -201,9 +202,13 @@ impl Collector for Dlt645Collector {
     /// 估算，钳制在 [5s, 120s]。
     fn batch_timeout_budget(&self, n_points: usize) -> Duration {
         let per_point = self.bus.io_timeout().saturating_mul(3);
+        // 缺陷 #6：下限不能写死 5s——组超时必须 ≥ 单笔应答截止，否则
+        // T>1666.67ms 时 group_timeout(3T) 比 reply_deadline(3T+500ms) 短 500ms，
+        // 重试成功的应答在回传途中就被上层判超时丢弃（静默丢数）。取两者较大值。
+        let min_ms = (self.bus.reply_deadline().as_millis() as u64).max(5_000);
         let ms = (per_point.as_millis() as u64)
             .saturating_mul(n_points.max(1) as u64)
-            .clamp(5_000, 120_000);
+            .clamp(min_ms, 120_000);
         Duration::from_millis(ms)
     }
 
@@ -214,21 +219,24 @@ impl Collector for Dlt645Collector {
         Box::pin(async move { self.read_data_id(point).await })
     }
 
-    fn read_batch<'a>(
+    #[allow(private_interfaces)]
+    fn read_batch_with_slots<'a>(
         &'a self,
         points: &'a [PointConfig],
-    ) -> Pin<Box<dyn Future<Output = Vec<CollectorResult<DataPoint>>> + Send + 'a>> {
+        slots: ResultSlots,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             // Bug 223: 原实现把多个 DI 拼进一个 0x01 读帧——DLT645-2007 标准读命令
             // 仅支持单 DI，多 DI 拼接属非标扩展，不支持的表会报错或只应答首个 DI；
             // 且响应切分依赖在数据区搜索下一 DI 字节模式（find_subsequence），
             // 数据值恰好包含该模式时会误切分、读错值。稳定性优先：
             // 改为逐点标准单 DI 读取（每点一个事务），各点位地址天然独立。
-            let mut results: Vec<CollectorResult<DataPoint>> = Vec::with_capacity(points.len());
-            for p in points {
-                results.push(self.read(p).await);
+            // 缺陷 #7：每读完一点立即写共享槽（await 在锁外，锁内不跨 await），
+            // 组超时 drop future 时已完成点位的结果不会丢失。
+            for (i, p) in points.iter().enumerate() {
+                let r = self.read(p).await;
+                slots.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
             }
-            results
         })
     }
 

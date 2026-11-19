@@ -19,4 +19,11 @@ base_register: number,
 /**
  * 映射模式：auto（自动按顺序分配）或 manual（使用 point.register_addr）
  */
-mode: string, };
+mode: string, 
+/**
+ * 是否允许北向 Modbus 写回（FC06/FC16）。
+ *
+ * 默认拒绝写，与 OPC UA 侧 write_enabled 对齐：存量依赖写操作的 SCADA
+ * 必须在配置中显式启用本项，且点位需 writable=true 才可被写。
+ */
+write_enabled: boolean, };

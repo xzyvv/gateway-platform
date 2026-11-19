@@ -6,6 +6,7 @@
 //! - POST /api/webhook/test -> test_webhook
 
 use super::*;
+use gateway_core::shared::url_safety as core_url_safety;
 use std::time::Instant;
 
 /// Webhook 测试请求
@@ -30,9 +31,6 @@ fn default_method() -> String {
 /// 再整体塞进 JSON 返回。目标只要回一个大文件或流式响应，就能把网关内存打满。
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
-/// 最多跟随的重定向跳数（原实现用 reqwest 默认值 10）。
-const MAX_REDIRECTS: usize = 3;
-
 /// 统一的「请求未发出」响应（URL 非法 / 目标被拒）
 fn rejected(status_text: &str, error: &str) -> WebhookTestResponse {
     WebhookTestResponse {
@@ -50,150 +48,41 @@ fn rejected(status_text: &str, error: &str) -> WebhookTestResponse {
 ///
 /// 设计取舍：该接口的正当用途就是打厂区内网的 http 服务（含同机自测 webhook），
 /// 因此「是否封私网」做成可配置项而不是硬编码——默认保持既有行为（不封私网），
-/// 生产环境可置 `webhook_test_block_private=true` 收紧。无论开关如何，
-/// 链路本地（169.254.0.0/16、fe80::/10，含云元数据地址）、未指定、组播、广播地址
-/// 一律拒绝；白名单非空时只放行清单内的主机。
-#[derive(Clone, Default)]
-struct SsrfPolicy {
-    /// 允许的目标主机白名单（`host` 或 `host:port`，大小写不敏感）；空 = 不限制
-    allow_hosts: Vec<String>,
-    /// 是否禁止私网 / 回环 / CGNAT / IPv6 ULA 目标
-    block_private: bool,
-}
+/// 生产环境可置 `webhook_test_block_private=true` 收紧。
+///
+/// 缺陷 #2：具体判定逻辑已下沉至 `gateway_core::shared::url_safety`，本类型仅
+/// 负责从配置构造策略并委托给 core 的纯函数，保证 API 测试接口与 webhook 上报
+/// 客户端共用同一套 SSRF 口径（含逐跳重定向复检与域名黑名单）。
+#[derive(Clone)]
+struct SsrfPolicy(core_url_safety::SsrfPolicy);
 
 impl SsrfPolicy {
     fn from_state(state: &Arc<AppState>) -> Self {
         let cfg = state.config.load_full();
         let web = cfg.web.as_ref();
-        Self {
+        Self(core_url_safety::SsrfPolicy {
             allow_hosts: web
                 .map(|w| w.webhook_test_allow_hosts.clone())
                 .unwrap_or_default(),
             block_private: web.map(|w| w.webhook_test_block_private).unwrap_or(false),
-        }
-    }
-
-    /// 目标主机是否在白名单内（白名单为空视为不限制）
-    fn host_allowed(&self, url: &reqwest::Url) -> bool {
-        if self.allow_hosts.is_empty() {
-            return true;
-        }
-        let Some(host) = url.host_str() else {
-            return false;
-        };
-        let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
-        let host_port = match url.port_or_known_default() {
-            Some(port) => format!("{}:{}", host, port),
-            None => host.clone(),
-        };
-        self.allow_hosts.iter().any(|entry| {
-            let entry = entry.trim().to_ascii_lowercase();
-            !entry.is_empty() && (entry == host || entry == host_port)
         })
     }
 
-    /// IP 是否受限；返回拒绝原因（`None` 表示放行）
-    fn ip_blocked_reason(&self, ip: std::net::IpAddr) -> Option<String> {
-        use std::net::IpAddr;
-        // IPv4 映射的 IPv6（::ffff:169.254.169.254）按 IPv4 判定，避免绕过字面量检查
-        let ip = match ip {
-            IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
-            other => other,
-        };
-        match ip {
-            IpAddr::V4(v4) => {
-                // 恒拒绝：链路本地 / 未指定 / 组播 / 广播 / 0.0.0.0/8
-                let always = v4.is_link_local()
-                    || v4.is_unspecified()
-                    || v4.is_multicast()
-                    || v4.is_broadcast()
-                    || v4.octets()[0] == 0;
-                if always {
-                    return Some(format!("不允许访问受限地址 {}", ip));
-                }
-                if self.block_private && (v4.is_loopback() || v4.is_private() || is_cgnat(v4)) {
-                    return Some(format!(
-                        "web.webhook_test_block_private=true：不允许访问私网/回环地址 {}",
-                        ip
-                    ));
-                }
-            }
-            IpAddr::V6(v6) => {
-                let always = v6.is_unicast_link_local() || v6.is_unspecified() || v6.is_multicast();
-                if always {
-                    return Some(format!("不允许访问受限地址 {}", ip));
-                }
-                if self.block_private && (v6.is_loopback() || v6.is_unique_local()) {
-                    return Some(format!(
-                        "web.webhook_test_block_private=true：不允许访问私网/回环地址 {}",
-                        ip
-                    ));
-                }
-            }
-        }
-        None
-    }
-
-    /// 同步字面量校验：scheme / 主机白名单 / IP 字面量。
-    ///
-    /// 重定向逐跳也调用本方法（见 `test_webhook` 的 redirect policy）。
     fn check_literal(&self, url: &reqwest::Url) -> Result<(), String> {
-        match url.scheme() {
-            "http" | "https" => {}
-            other => return Err(format!("仅支持 http/https，当前为 {}", other)),
-        }
-        let Some(host) = url.host_str() else {
-            return Err("URL 缺少主机名".to_string());
-        };
-        if !self.host_allowed(url) {
-            return Err(format!(
-                "目标主机 {} 不在 web.webhook_test_allow_hosts 白名单内",
-                host
-            ));
-        }
-        if let Ok(ip) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
-            if let Some(reason) = self.ip_blocked_reason(ip) {
-                return Err(reason);
-            }
-        }
-        Ok(())
+        self.0.check_literal(url)
     }
 
-    /// DNS 解析后复检（仅 `block_private=true` 时调用）：
-    /// 防「域名解析到私网/链路本地」绕过字面量检查。
-    ///
-    /// 注：DNS 解析与 reqwest 实际连接之间存在 TOCTOU 窗口（DNS rebinding），
-    /// 严格模式下另有「不跟随重定向」兜底，避免逐跳绕过。
     async fn check_resolved(&self, url: &reqwest::Url) -> Result<(), String> {
-        let Some(host) = url.host_str() else {
-            return Err("URL 缺少主机名".to_string());
-        };
-        let host = host.trim_matches(['[', ']']);
-        if host.parse::<std::net::IpAddr>().is_ok() {
-            return Ok(()); // 字面量已在 check_literal 校验
-        }
-        let port = url.port_or_known_default().unwrap_or(80);
-        let addrs = tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|e| format!("目标域名解析失败: {}", e))?;
-        let mut any = false;
-        for addr in addrs {
-            any = true;
-            if let Some(reason) = self.ip_blocked_reason(addr.ip()) {
-                return Err(format!("{}（解析结果 {}）", reason, addr.ip()));
-            }
-        }
-        if !any {
-            return Err(format!("目标域名 {} 未解析到任何地址", host));
-        }
-        Ok(())
+        self.0.check_resolved(url).await
     }
-}
 
-/// CGNAT 段 100.64.0.0/10（`Ipv4Addr::is_private` 不含此段）
-fn is_cgnat(ip: std::net::Ipv4Addr) -> bool {
-    let o = ip.octets();
-    o[0] == 100 && (o[1] & 0xC0) == 64
+    fn redirect_policy(&self) -> reqwest::redirect::Policy {
+        core_url_safety::redirect_policy(&self.0)
+    }
+
+    fn block_private(&self) -> bool {
+        self.0.block_private
+    }
 }
 
 /// 分片读取响应体，最多 [`MAX_RESPONSE_BYTES`]；超限立即中断读取（断开连接）
@@ -263,7 +152,7 @@ pub(crate) async fn test_webhook(
     }
     // 严格模式（block_private=true）额外做 DNS 解析复检，并关闭重定向跟随，
     // 避免通过「域名解析到内网」或「302 逐跳跳转」绕过策略。
-    if policy.block_private {
+    if policy.block_private() {
         if let Err(reason) = policy.check_resolved(&url).await {
             state
                 .platform
@@ -273,22 +162,10 @@ pub(crate) async fn test_webhook(
         }
     }
 
-    let redirect_policy = if policy.block_private {
-        reqwest::redirect::Policy::none()
-    } else {
-        // 逐跳复检跳转目标：否则 http://<公网地址>/302 → http://<链路本地> 会绕过上面的检查
-        let hop_policy = policy.clone();
-        reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= MAX_REDIRECTS {
-                attempt.stop()
-            } else {
-                match hop_policy.check_literal(attempt.url()) {
-                    Ok(()) => attempt.follow(),
-                    Err(reason) => attempt.error(reason),
-                }
-            }
-        })
-    };
+    // 重定向策略复用 core 的统一实现：默认逐跳复检跳转目标（否则
+    // http://<公网地址>/302 → http://<链路本地> 会绕过上面的检查），
+    // 严格模式（block_private=true）完全不跟随。
+    let redirect_policy = policy.redirect_policy();
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -373,7 +250,9 @@ pub(crate) async fn test_webhook(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // 缺陷 #2：策略实现已下沉到 core；这里直接测 core 的策略，确保 API 侧
+    // 原有的 allow_hosts / block_private 配置语义不丢失。
+    use gateway_core::shared::url_safety::SsrfPolicy;
 
     fn url(s: &str) -> reqwest::Url {
         reqwest::Url::parse(s).expect("test url")

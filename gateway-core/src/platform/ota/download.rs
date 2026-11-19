@@ -258,3 +258,31 @@ fn apply_delta(old: &[u8], patch: &[u8]) -> GatewayResult<Vec<u8>> {
         .map_err(|e| GatewayError::Protocol(format!("apply bsdiff patch failed: {}", e)))?;
     Ok(out)
 }
+
+/// 缺陷#1：块设备定长、无法 `ftruncate`，用写零覆盖尾部残留（emulated truncate）。
+///
+/// 从 `keep_len`（新固件结尾）写零直到 `scrub_end`，清除「新头 + 旧尾」混合体。
+/// 设备长度须由调用方用 `seek(SeekFrom::End(0))` 取得——块设备 fstat st_size=0，
+/// 不能用 `metadata().len()`；`scrub_end` 上界由调用方限到 MAX_FIRMWARE_SIZE。
+/// 返回实际擦除（写零）的字节数。
+pub(super) fn scrub_stale_tail(
+    f: &mut std::fs::File,
+    keep_len: u64,
+    scrub_end: u64,
+) -> std::io::Result<u64> {
+    use std::io::{Seek, SeekFrom, Write};
+    if scrub_end <= keep_len {
+        return Ok(0);
+    }
+    f.seek(SeekFrom::Start(keep_len))?;
+    let zeros = [0u8; 64 * 1024];
+    let total = scrub_end - keep_len;
+    let mut remaining = total;
+    while remaining > 0 {
+        let chunk = remaining.min(zeros.len() as u64) as usize;
+        f.write_all(&zeros[..chunk])?;
+        remaining -= chunk as u64;
+    }
+    f.sync_all()?;
+    Ok(total)
+}

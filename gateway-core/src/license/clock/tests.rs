@@ -90,6 +90,61 @@ fn test_ntp_resync_resets_baseline() {
     );
 }
 
+/// 时钟回拨单调性：resync 的外部 ntp_now 不可信，不得把已见基准拉低。
+#[test]
+fn resync_never_moves_baseline_backward() {
+    let dir = tempfile::tempdir().unwrap();
+    let lic = make_license(dir.path());
+    let mtime = file_mtime_secs(&lic).unwrap();
+    let g = guard(dir.path());
+    // 建立基准（远晚于 mtime，排除 mtime 交叉校验干扰）
+    let base = mtime + 2_000_000;
+    g.check_and_update(base, Some(&lic)).unwrap();
+    let writes_before = g.read_db().unwrap().unwrap().writes;
+    assert_eq!(db_last_seen(dir.path()), Some(base));
+
+    // 污染/错配 NTP 源给出更早的时间 → 主库基准不得被拉低。
+    // 旁路副本是否可写取决于平台文件锁能力（部分沙箱下不可用，见既有 replica 测试），
+    // 故这里只断言主库单调性与写入计数，聚焦本测试要验证的 resync 单调性语义。
+    g.resync(base - 1000).unwrap();
+    assert_eq!(db_last_seen(dir.path()), Some(base), "主库基准不得回拨");
+    assert!(
+        g.read_db().unwrap().unwrap().writes > writes_before,
+        "resync 也须推进写入计数"
+    );
+
+    // 回拨 49h 仍判 Tampered：基准未被污染
+    assert_eq!(
+        g.check_and_update(base - 49 * 3600, Some(&lic)).unwrap(),
+        ClockVerdict::Tampered
+    );
+}
+
+/// resync 回拨到 license mtime 之前时，基准必须保持在 mtime 之后，
+/// 否则"伪造 NTP 时间 + 回到该时间点重校验"即可绕过 Tampered。
+#[test]
+fn resync_rollback_before_license_mtime_cannot_bypass_tampered() {
+    let dir = tempfile::tempdir().unwrap();
+    let lic = make_license(dir.path());
+    let mtime = file_mtime_secs(&lic).unwrap();
+    let g = guard(dir.path());
+    // 正常授时：基准推进到 mtime 之后 10 天
+    let base = mtime + 10 * 24 * 3600;
+    g.check_and_update(base, Some(&lic)).unwrap();
+
+    // 恶意 NTP 源给出早于 license mtime 的时间
+    g.resync(mtime - 1000).unwrap();
+    let kept = db_last_seen(dir.path()).unwrap();
+    assert_eq!(kept, base, "基准不得被拉到伪造 NTP 时间");
+    assert!(kept > mtime, "基准必须仍在 license mtime 之后");
+
+    // 回到伪造 NTP 时间附近重校验：相对真实基准回拨 10 天 → 仍 Tampered
+    assert_eq!(
+        g.check_and_update(mtime + 1000, Some(&lic)).unwrap(),
+        ClockVerdict::Tampered
+    );
+}
+
 #[test]
 fn test_table_persists_across_instances() {
     let dir = tempfile::tempdir().unwrap();

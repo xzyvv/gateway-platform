@@ -4,9 +4,11 @@
 //! - [`cron`]：5 段 cron 求值与时区解析；
 //! - 路径解析：`default_xxx()`（env var 优先 + 平台默认，见 [`paths`]）；
 //! - [`sqlite_maintenance`]：队列主库与配置库共用的增量 vacuum / 空闲页采样。
+//! - [`url_safety`]：出站 URL 的 SSRF 策略（同步字面量校验 + 可选 DNS 复检）。
 
 pub mod clock;
 pub mod cron;
 mod paths;
 pub mod sqlite_maintenance;
+pub mod url_safety;
 pub use paths::*;

@@ -41,6 +41,7 @@ mod virtual_point;
 mod compat;
 
 pub use backoff::ReconnectBackoffConfig;
+pub(crate) use backoff::next_reconnect_backoff;
 pub use bus::{BusConfig, OpcUaClientConfig};
 pub use cellular::CellularConfig;
 pub use convert::{ConvertEnumItemConfig, ConvertRuleConfig};

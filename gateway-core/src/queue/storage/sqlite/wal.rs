@@ -1,6 +1,7 @@
 //! WAL checkpoint 与大小监控。
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::engine::metrics::Metrics;
 
@@ -18,31 +19,22 @@ pub(super) fn wal_path_for(db_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// r42-Q3: 一致性热备份——先把 WAL 刷回主库，再复制主库文件。
+/// 启动期一致性热备份（保留原 bool 契约，供 `db_init` 忽略结果）。
 ///
-/// 单独 `fs::copy(db_path, backup_path)` 只复制**主库文件**，不含 `-wal` 中已
-/// commit 但未 checkpoint 的行。上一生命周期若异常退出（未触发关闭时的自动
-/// checkpoint），`-wal` 会残留已提交数据；此时启动备份会漏掉这些行，**覆盖
-/// 上一轮维护备份**（维护路径走的是 checkpoint + copy 的正确顺序，见
-/// `sqlite_storage::maintenance` 的 5 步）。之后若主库损坏，从备份恢复会丢失
-/// 最近一次运行的数据。此处与维护路径保持同一顺序。
-///
-/// 返回是否复制成功（checkpoint 失败不阻断备份：WAL 缺失 / 非 WAL 库时的 PRAGMA 为 no-op）。
+/// 旧实现是 `wal_checkpoint(TRUNCATE)` + `fs::copy`：checkpoint 后释放锁再复制，
+/// 期间主循环可继续写 WAL、autocheckpoint 可改写主库页导致备份撕裂；`fs::copy`
+/// 还直接覆盖 .bak（非原子），中途崩溃会留下半截文件，恢复时用它覆盖主库会全损。
+/// 现在统一委托 [`backup_db_online`]：在线备份 API 保证跨 WAL 一致快照，临时文件
+/// + 原子 rename 保证 .bak 永远是完整的一份。
 pub(super) fn backup_db_consistent(
     conn: &mut Connection,
     db_path: &Path,
     backup_path: &Path,
+    key_hex: &str,
 ) -> bool {
-    if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
-        tracing::warn!("pre-backup wal checkpoint failed: {}", e);
-    }
-    match std::fs::copy(db_path, backup_path) {
-        Ok(n) => {
-            tracing::info!(
-                "SQLite backup completed: {} bytes -> {}",
-                n,
-                backup_path.display()
-            );
+    match backup_db_online(conn, db_path, backup_path, key_hex) {
+        Ok(()) => {
+            tracing::info!("SQLite backup completed: {}", backup_path.display());
             true
         }
         Err(e) => {
@@ -50,6 +42,58 @@ pub(super) fn backup_db_consistent(
             false
         }
     }
+}
+
+/// 缺陷 #8：SQLite 在线一致性热备份（在线备份 API + 临时文件原子 rename）。
+///
+/// 相比 `checkpoint + fs::copy` 的两个致命缺陷：
+/// - **撕裂**：旧实现 checkpoint 在锁内、`fs::copy` 在锁外；释放锁后 queue_task
+///   主循环继续写 WAL，autocheckpoint（每 1000 页）会改写主库页，复制可能取到
+///   事务中间态。在线备份 API 全程持源连接读锁，由 SQLite 保证快照一致，
+///   且自动纳入 `-wal` 中已提交但未 checkpoint 的行——无需手动 checkpoint，
+///   也无需读 `-wal`/`-shm`。
+/// - **半截 .bak**：旧实现直接覆盖目标，复制到一半崩溃就留下不可用文件，而
+///   恢复路径（db_init）用它覆盖主库 → 数据全损。现在先写同目录
+///   `<db>.db.bak.tmp`，关闭目标连接后 `fs::rename` 原子替换 .bak，任何时刻
+///   .bak 都是「上一份完整备份」或「这一份完整备份」。
+///
+/// 调用方须持有源连接的锁（生产路径为 `SqliteStorage.conn` 的 Mutex guard），
+/// 保证备份期间没有其他写事务在源连接上推进。所有错误用 `?` 上抛。
+pub(super) fn backup_db_online(
+    src: &Connection,
+    db_path: &Path,
+    backup_path: &Path,
+    key_hex: &str,
+) -> rusqlite::Result<()> {
+    // 临时文件与目标同目录，rename 才是同一文件系统内的原子操作。
+    let tmp = db_path.with_extension("db.bak.tmp");
+    // 备份目标必须不存在：先清掉上次崩溃残留的临时文件。忽略删除失败——若确实
+    // 无法删除且文件有内容，下面的 open/Backup 会返回 SQLite 错误并上抛。
+    let _ = std::fs::remove_file(&tmp);
+
+    // 目标连接必须在 rename 之前彻底 drop：Windows 不允许 rename 一个仍被
+    // 打开的文件（ERROR_SHARING_VIOLATION=32），Linux 虽容忍但同样应显式关闭。
+    // 用内层作用域同时约束 dst 与其 Backup 借用，退出后临时库句柄必定释放。
+    {
+        let mut dst = Connection::open(&tmp)?;
+        // SQLCipher：目标库必须用与源库相同的 key，否则备份库无法读取。
+        #[cfg(feature = "encryption")]
+        if !key_hex.is_empty() {
+            dst.pragma_update(None, "key", key_hex)?;
+        }
+        #[cfg(not(feature = "encryption"))]
+        let _ = key_hex;
+
+        let bk = rusqlite::backup::Backup::new(src, &mut dst)?;
+        bk.run_to_completion(100, Duration::from_millis(10), None)?;
+    } // bk + dst 在此 drop，临时库句柄关闭后才能原子 rename
+
+    // 目标 .bak 若被其它连接占用，rename 同样会 SHARING_VIOLATION；先清残留。
+    let _ = std::fs::remove_file(backup_path);
+    // rusqlite 没有 From<std::io::Error>：显式把 IO 错误包进 Error 上抛。
+    std::fs::rename(&tmp, backup_path)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    Ok(())
 }
 
 /// WAL checkpoint 触发大小告警的阈值（100MB）。
@@ -246,7 +290,10 @@ mod tests {
         conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES (7);")
             .expect("setup wal table");
 
-        assert!(backup_db_consistent(&mut conn, &db, &bak), "备份应成功");
+        assert!(
+            backup_db_consistent(&mut conn, &db, &bak, ""),
+            "备份应成功"
+        );
 
         // 备份文件必须包含 checkpoint 后的已提交行
         let check = Connection::open(&bak).expect("open backup");

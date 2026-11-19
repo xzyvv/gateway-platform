@@ -324,7 +324,7 @@ impl BusManager {
     /// 必须 ≥ [`bus_retry_budget`]，否则重试成功的应答还没回传就被判超时丢弃
     /// （原 #107 静默丢数）。`spawn_with` 时已把重试参数快照进 `reply_budget`，
     /// 这里只做纯加法，便于测试以纯函数断言数值关系。
-    fn reply_deadline(&self) -> Duration {
+    pub(crate) fn reply_deadline(&self) -> Duration {
         self.reply_budget.saturating_add(REPLY_MARGIN)
     }
 

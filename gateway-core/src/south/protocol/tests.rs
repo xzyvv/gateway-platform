@@ -103,6 +103,45 @@ async fn per_point_serial_protocols_budget_follows_bus_timeout() {
     );
 }
 
+/// 缺陷 #6：大 T 单点组——组超时（batch_timeout_budget）必须 ≥ 单笔应答截止
+/// （reply_deadline = 重试预算 + 100ms 余量）。旧实现下限写死 5s，T=2000ms 时
+/// group_timeout=3×2000=6000ms 比 reply_deadline=6500ms 短 500ms，重试刚成功的
+/// 应答在回传途中就被上层判超时丢弃（静默丢数）。修动态下限后应钉住 6500ms。
+#[cfg(all(feature = "dlt645", feature = "cjt188"))]
+#[tokio::test]
+async fn large_t_single_point_budget_covers_reply_deadline() {
+    let bus = test_bus("b2_dlt_large_t", 2000);
+    let deadline = bus.reply_deadline();
+    let dlt = Dlt645Collector::new("b2_dlt_large_t", bus);
+    let budget = dlt.batch_timeout_budget(1);
+    assert!(
+        budget >= deadline,
+        "组超时 {budget:?} 不得短于应答截止 {deadline:?}"
+    );
+    assert_eq!(
+        budget,
+        Duration::from_millis(6500),
+        "T=2000ms 单点下限应被抬到 reply_deadline=6500ms"
+    );
+}
+
+/// 缺陷 #6 纯数值不变量：批量预算（单点）对所有典型 T 都不得短于应答截止。
+/// 与 tokio 时序无关，只校验公式的数值关系（下限取 reply_deadline.max(5s)）。
+#[cfg(all(feature = "dlt645", feature = "cjt188"))]
+#[tokio::test]
+async fn batch_budget_never_shorter_than_reply_deadline() {
+    for t in [500u64, 1000, 1667, 2000, 3000] {
+        let bus = test_bus("b2_dlt_invariant", t);
+        let deadline = bus.reply_deadline();
+        let dlt = Dlt645Collector::new("b2_dlt_invariant", bus);
+        assert!(
+            dlt.batch_timeout_budget(1) >= deadline,
+            "T={t}ms：组超时 {:?} 不得短于应答截止 {deadline:?}",
+            dlt.batch_timeout_budget(1)
+        );
+    }
+}
+
 /// 采集错误 → 统计层稳定错误码的映射（每总线「最近错误码 / 超时率」的数据来源）。
 ///
 /// 映射口径一旦漂移，前端展示的错误码与告警规则就全部对不上，故在此逐变体锁定。

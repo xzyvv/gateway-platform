@@ -156,7 +156,7 @@ export function useConfigActions() {
       tcp_addr: null,
       tcp_concurrent: null,
       channel_capacity: 128,
-      reconnect_backoff: { seconds: [1, 2, 5, 10, 30], jitter_ratio: 0 },
+      reconnect_backoff: { seconds: [1, 2, 5, 10, 30], jitter_ratio: 0.2 },
     })
   }
 

@@ -138,10 +138,10 @@ impl OtaManager {
     /// 上层 `verify_partition` 的 CRC 读回校验是最后一道防线，超时场景下
     /// 由它来判定分区是否可用。
     ///
-    /// r15-OTA2 (fix) —— 目标是**普通文件**时，写完截断到 payload 长度。
-    /// 新固件比旧固件短时，旧固件的尾部残留会被误当作新固件的一部分
-    /// （「新头 + 旧尾」混合体）。块设备（`/dev/mmcblk0p*`）不支持 `ftruncate`，
-    /// 该场景由 `verify_partition` + 真机验收覆盖，不在此处处理。
+    /// r15-OTA2 / 缺陷#1 (fix) —— 写完清除旧固件尾部残留（「新头 + 旧尾」混合体）。
+    /// 普通文件：`set_len` 截断到 payload 长度。
+    /// 块设备（`/dev/mmcblk0p*`）定长、不支持 `ftruncate`：改为写零覆盖尾部
+    /// （emulated truncate），上界 MAX_FIRMWARE_SIZE，避免触碰 120s 写超时。
     pub(super) async fn write_partition(
         &self,
         device: &Path,
@@ -169,6 +169,12 @@ impl OtaManager {
                             f.set_len(payload_len as u64)?;
                             f.sync_all()?;
                         }
+                    } else {
+                        // 缺陷#1：块设备定长无法 truncate —— 写零覆盖尾部残留。
+                        // seek(End(0)) 取设备长度（块设备 fstat st_size=0，不可用 metadata().len()）。
+                        let dev_len = std::io::Seek::seek(&mut f, std::io::SeekFrom::End(0))?;
+                        let scrub_end = dev_len.min(super::MAX_FIRMWARE_SIZE as u64);
+                        super::download::scrub_stale_tail(&mut f, payload_len as u64, scrub_end)?;
                     }
                     Ok::<(), std::io::Error>(())
                 }),

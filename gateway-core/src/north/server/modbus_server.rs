@@ -12,7 +12,7 @@
 //! PDU:
 //!   function_code(1) + data(...)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,7 +24,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
-use super::{wait_shutdown_notify, ModbusServerConfig, NorthServer, RegisterMapping};
+use super::{wait_shutdown_notify, ActivePointSet, ModbusServerConfig, NorthServer, RegisterMapping};
 use crate::engine::error::{GatewayError, GatewayResult};
 
 /// Modbus function codes
@@ -44,6 +44,7 @@ const MAX_CONNECTIONS: usize = 64;
 
 /// Modbus exception codes
 pub(crate) const EX_ILLEGAL_FUNCTION: u8 = 0x01;
+pub(crate) const EX_ILLEGAL_DATA_ADDRESS: u8 = 0x02; // 写目标不在白名单（FC06/FC16）
 pub(crate) const EX_ILLEGAL_DATA_VALUE: u8 = 0x03;
 
 /// MBAP header 大小
@@ -60,6 +61,9 @@ pub struct ModbusServer {
     stopping: Arc<AtomicBool>,
     /// 当前寄存器值（按地址索引）
     pub(crate) registers: Arc<RwLock<HashMap<u16, u16>>>,
+    /// 可写地址白名单；cached_mappings 用于 on_points_changed 热更重算
+    pub(crate) writable_addrs: Arc<RwLock<HashSet<u16>>>,
+    cached_mappings: Arc<RwLock<Vec<RegisterMapping>>>,
 }
 
 impl ModbusServer {
@@ -72,6 +76,8 @@ impl ModbusServer {
             // 不再依赖 hot accept 循环轮询 `running` 标志（100ms 抖动）。
             stopping: Arc::new(AtomicBool::new(false)),
             registers: Arc::new(RwLock::new(HashMap::new())),
+            writable_addrs: Arc::new(RwLock::new(HashSet::new())),
+            cached_mappings: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -103,6 +109,19 @@ impl ModbusServer {
         }
     }
 
+    /// 注入写白名单：映射中 source_point_id ∈ writable_ids 的 register_addr 集合（幂等）。
+    pub fn set_writable_addrs(&self, mappings: &[RegisterMapping], writable_ids: &HashSet<String>) {
+        *self.cached_mappings.write() = mappings.to_vec();
+        self.rebuild_writable_addrs(writable_ids);
+    }
+
+    fn rebuild_writable_addrs(&self, writable_ids: &HashSet<String>) {
+        let addrs: HashSet<u16> = self.cached_mappings.read().iter()
+            .filter(|m| writable_ids.contains(&m.source_point_id))
+            .map(|m| m.register_addr).collect();
+        *self.writable_addrs.write() = addrs;
+    }
+
     /// 解析 endpoint (tcp://0.0.0.0:502 -> "0.0.0.0:502")
     pub(crate) fn bind_addr(endpoint: &str) -> &str {
         endpoint.strip_prefix("tcp://").unwrap_or(endpoint)
@@ -113,6 +132,8 @@ impl ModbusServer {
         mut sock: tokio::net::TcpStream,
         registers: Arc<RwLock<HashMap<u16, u16>>>,
         running: Arc<AtomicBool>,
+        write_enabled: bool,
+        writable_addrs: Arc<RwLock<HashSet<u16>>>,
     ) {
         let mut header_buf = [0u8; MBAP_HEADER_SIZE];
 
@@ -171,8 +192,11 @@ impl ModbusServer {
 
             let function_code = pdu[0];
 
-            // 3. 处理请求，生成响应 PDU
-            let resp_pdu = Self::handle_request(function_code, &pdu[1..], &registers);
+            // 3. 处理请求（白名单 guard 限定在内层作用域，写响应前必定释放，不跨 await）
+            let resp_pdu = {
+                let writable = writable_addrs.read();
+                Self::handle_request(function_code, &pdu[1..], &registers, write_enabled, &writable)
+            };
 
             // 4. 构建 MBAP + PDU 响应
             let resp_pdu_len = resp_pdu.len() as u16;
@@ -191,17 +215,35 @@ impl ModbusServer {
         }
     }
 
-    /// 根据 function_code 分发请求
+    /// 根据 function_code 分发请求（写操作在分发层做白名单校验）
     pub(crate) fn handle_request(
         fc: u8,
         data: &[u8],
         registers: &Arc<RwLock<HashMap<u16, u16>>>,
+        write_enabled: bool,
+        writable_addrs: &HashSet<u16>,
     ) -> Vec<u8> {
         match fc {
             FC_READ_COILS | FC_READ_DISCRETE => Self::handle_read_bits(fc, data, registers),
             FC_READ_HOLDING | FC_READ_INPUT => Self::handle_read(fc, data, registers),
-            FC_WRITE_SINGLE => Self::handle_write_single(fc, data, registers),
-            FC_WRITE_MULTIPLE => Self::handle_write_multiple(fc, data, registers),
+            FC_WRITE_SINGLE => {
+                // 过短报文放行给下游报格式错误；默认 write_enabled=false 一律拒绝
+                let allowed = write_enabled && (data.len() < 2
+                    || writable_addrs.contains(&u16::from_be_bytes([data[0], data[1]])));
+                if !allowed { return Self::exception(fc, EX_ILLEGAL_DATA_ADDRESS); }
+                Self::handle_write_single(fc, data, registers)
+            }
+            FC_WRITE_MULTIPLE => {
+                // 整批原子校验：任一地址不可写即整批拒绝，绝不部分写入
+                let allowed = write_enabled && (data.len() < 4 || {
+                    let start = u16::from_be_bytes([data[0], data[1]]);
+                    let qty = u16::from_be_bytes([data[2], data[3]]);
+                    qty == 0 || qty > 123
+                        || (0..qty).all(|i| writable_addrs.contains(&start.wrapping_add(i)))
+                });
+                if !allowed { return Self::exception(fc, EX_ILLEGAL_DATA_ADDRESS); }
+                Self::handle_write_multiple(fc, data, registers)
+            }
             _ => Self::exception(fc, EX_ILLEGAL_FUNCTION),
         }
     }
@@ -379,6 +421,8 @@ impl NorthServer for ModbusServer {
             // r60-SD2：把 stopping 标志也 clone 进 accept loop 闭包。
             let stopping = self.stopping.clone();
             let registers = self.registers.clone();
+            let writable_addrs = self.writable_addrs.clone();
+            let write_enabled = self.config.write_enabled;
             // 并发连接上限（permit 随连接任务结束释放）
             let conn_sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
 
@@ -396,10 +440,11 @@ impl NorthServer for ModbusServer {
                                             tracing::debug!("modbus server accepted {}", peer);
                                             let regs = registers.clone();
                                             let run = running.clone();
+                                            let addrs = writable_addrs.clone();
                                             crate::engine::supervision::spawn_catch_unwind("modbus_server_conn", async move {
                                                 // permit 随连接任务结束释放，连接数回落
                                                 let _permit = permit;
-                                                Self::handle_connection(sock, regs, run).await;
+                                                Self::handle_connection(sock, regs, run, write_enabled, addrs).await;
                                             });
                                         }
                                         Err(_) => {
@@ -445,5 +490,9 @@ impl NorthServer for ModbusServer {
 
     fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
+    }
+
+    fn on_points_changed(&self, active: &ActivePointSet) {
+        self.rebuild_writable_addrs(&active.writable_ids);
     }
 }

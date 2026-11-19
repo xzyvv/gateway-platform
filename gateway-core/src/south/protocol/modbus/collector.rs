@@ -15,6 +15,7 @@ use super::{
     build_read_request, convert_value, merge_batches, parse_coils_response, parse_point_value,
     parse_read_response, CollectorError, CollectorResult, ModbusCollector, ModbusExceptionCode,
 };
+use crate::south::protocol::ResultSlots;
 
 impl ModbusCollector {
     // Bug 186 (N16): single-point read uses _with_retry variant.
@@ -196,7 +197,37 @@ impl ModbusCollector {
     }
 
     /// 批量读取（§9.1 分组合并算法）
+    ///
+    /// 直接调用路径（测试等）保留原返回类型；内部经共享进度槽收集结果，
+    /// 槽在此路径上仅作中转，返回值仍为入参顺序的 `Vec<DataPoint>`。
     pub async fn read_batch_points(&self, points: &[PointConfig]) -> Vec<DataPoint> {
+        let slots: ResultSlots = Arc::new(std::sync::Mutex::new(
+            (0..points.len()).map(|_| None).collect(),
+        ));
+        self.read_batch_points_with_slots(points, slots).await
+    }
+
+    /// 缺陷 #7：与 [`Self::read_batch_points`] 相同的分组合并算法，但每产生一个
+    /// 点位结果就立即写入共享槽 `slots`（await 在锁外、锁内立即写）。
+    ///
+    /// 调度层在 `tokio::time::timeout` 下使用：超时 drop future 时，已完成合并的
+    /// 点位结果仍在槽中，不会被整批判 Timeout。merge / join_all 分批语义完全不变。
+    pub(crate) async fn read_batch_points_with_slots(
+        &self,
+        points: &[PointConfig],
+        slots: ResultSlots,
+    ) -> Vec<DataPoint> {
+        // 点位 id → 槽下标：results 按 id 汇总，槽按入参下标对齐。
+        let point_index: HashMap<String, usize> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id.clone(), i))
+            .collect();
+        let write_slot = |id: &str, dp: &DataPoint| {
+            if let Some(&i) = point_index.get(id) {
+                slots.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(Ok(dp.clone()));
+            }
+        };
         // 决策表 #3：按观测自适应 gap
         // （保守：仅调 gap，不调 max_count；max_count 为 Modbus 协议上限）
         let adaptive_gap = self.merge_stats.lock().next_gap();
@@ -244,41 +275,39 @@ impl ModbusCollector {
                                 let bit = bits.get(idx).copied().unwrap_or(false);
                                 let raw = if bit { 1.0 } else { 0.0 };
                                 let value = convert_value(p, raw);
-                                results.insert(
-                                    p.id.clone(),
-                                    DataPoint {
-                                        point_id: p.id.clone(),
-                                        device_id: p
-                                            .device_id
-                                            .clone()
-                                            .unwrap_or_else(|| p.bus.clone()),
-                                        value,
-                                        raw_value: raw,
-                                        raw_type: "bool".to_string(),
-                                        quality: Quality::Good,
-                                        quality_reason: String::new(),
-                                        timestamp: DataPoint::now(),
-                                        source_ts: DataPoint::now(),
-                                        stale_count: 0,
-                                        value_text: None,
-                                    },
-                                );
+                                let dp = DataPoint {
+                                    point_id: p.id.clone(),
+                                    device_id: p
+                                        .device_id
+                                        .clone()
+                                        .unwrap_or_else(|| p.bus.clone()),
+                                    value,
+                                    raw_value: raw,
+                                    raw_type: "bool".to_string(),
+                                    quality: Quality::Good,
+                                    quality_reason: String::new(),
+                                    timestamp: DataPoint::now(),
+                                    source_ts: DataPoint::now(),
+                                    stale_count: 0,
+                                    value_text: None,
+                                };
+                                write_slot(&p.id, &dp);
+                                results.insert(p.id.clone(), dp);
                             }
                         }
                         Err(e) => {
                             for p in &batch.points {
-                                results.insert(
-                                    p.id.clone(),
-                                    DataPoint::failed(
-                                        &p.id,
-                                        &p.device_id.clone().unwrap_or_else(|| p.bus.clone()),
-                                        None,
-                                        0,
-                                        e.to_quality(),
-                                        "modbus_batch_failed",
-                                        0,
-                                    ),
+                                let dp = DataPoint::failed(
+                                    &p.id,
+                                    &p.device_id.clone().unwrap_or_else(|| p.bus.clone()),
+                                    None,
+                                    0,
+                                    e.to_quality(),
+                                    "modbus_batch_failed",
+                                    0,
                                 );
+                                write_slot(&p.id, &dp);
+                                results.insert(p.id.clone(), dp);
                             }
                         }
                     }
@@ -318,23 +347,23 @@ impl ModbusCollector {
                         Ok(regs) => {
                             for p in &batch.points {
                                 let dp = parse_point_value(p, regs, batch.start_addr);
+                                write_slot(&p.id, &dp);
                                 results.insert(p.id.clone(), dp);
                             }
                         }
                         Err(e) => {
                             for p in &batch.points {
-                                results.insert(
-                                    p.id.clone(),
-                                    DataPoint::failed(
-                                        &p.id,
-                                        &p.device_id.clone().unwrap_or_else(|| p.bus.clone()),
-                                        None,
-                                        0,
-                                        e.to_quality(),
-                                        "modbus_read_failed",
-                                        0,
-                                    ),
+                                let dp = DataPoint::failed(
+                                    &p.id,
+                                    &p.device_id.clone().unwrap_or_else(|| p.bus.clone()),
+                                    None,
+                                    0,
+                                    e.to_quality(),
+                                    "modbus_read_failed",
+                                    0,
                                 );
+                                write_slot(&p.id, &dp);
+                                results.insert(p.id.clone(), dp);
                             }
                         }
                     }

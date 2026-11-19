@@ -72,7 +72,7 @@ pub(crate) async fn bus_task_tcp(
     // 而恒返回 Busy，该 TCP 总线会静默全线失效。
     let max_concurrent = bus_config.tcp_concurrent.unwrap_or(8).max(1);
 
-    // S3: 重连退避序列由 bus_config.reconnect_backoff 参数化（默认 1/2/5/10/30 秒、无抖动）
+    // S3: 重连退避序列由 bus_config.reconnect_backoff 参数化（默认 1/2/5/10/30 秒、±10% 抖动）
     let mut reconnect_failures: u32 = 0;
     // r15-SD4：由事务 task 在 `pool.submit` 成功时置位，主循环重连前消费。
     // 与「TCP 建连成功」区分——后者不足以证明设备真的可用。
@@ -113,17 +113,10 @@ pub(crate) async fn bus_task_tcp(
             );
             // S3: 重连前先 sleep 退避（不持锁）
             if reconnect_failures > 0 {
-                // 默认 jitter_ratio=0.0 时无抖动，与历史硬编码序列等价；
-                // 仅在配置了正抖动比例时才叠加随机抖动。
-                let delay_secs = if bus_config.reconnect_backoff.jitter_ratio > 0.0 {
-                    bus_config
-                        .reconnect_backoff
-                        .delay_secs(reconnect_failures, ReconnectBackoffConfig::time_rand01())
-                } else {
-                    bus_config
-                        .reconnect_backoff
-                        .base_delay_secs(reconnect_failures)
-                };
+                // 统一走 delay_secs：jitter_ratio=0 时抖动项为 0，结果与 base 完全一致。
+                let delay_secs = bus_config
+                    .reconnect_backoff
+                    .delay_secs(reconnect_failures, ReconnectBackoffConfig::time_rand01());
                 let backoff = Duration::from_secs_f64(delay_secs);
                 tracing::warn!(
                     "modbus tcp {} reconnect attempt {} (backoff {:?})",
