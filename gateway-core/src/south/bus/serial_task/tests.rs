@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::{do_transaction, write_timeout_for, TransactionParams, ASCII_BUF_LIMIT};
+use super::{
+    do_transaction, shrink_ascii_buf, write_timeout_for, TransactionParams, ASCII_BUF_LIMIT,
+};
 #[cfg(feature = "modbus")]
 use crate::engine::codec::crc::crc16;
 use crate::engine::error::GatewayResult;
@@ -609,10 +611,10 @@ fn ascii_buffer_limit_covers_max_legal_frame_without_being_unbounded() {
 }
 
 /// 现场复盘：异常设备持续发送无 CRLF 的数据时，原实现用裸 `Vec<u8>` 无限累积，
-/// 最终撑爆内存。修复后超限整段丢弃，仍能在同一事务里解析随后到达的合法帧。
+/// 最终撑爆内存。修复后超限收缩，仍能在同一事务里解析随后到达的合法帧。
 ///
 /// 桩响应 = 1280 字节垃圾（无 CRLF）+ 合法 ASCII 帧。读缓冲 256 字节/次，
-/// 第 5 次读后累计 1280 > 1024 触发超限清空；第 6 次读恰好从合法帧起始，
+/// 第 5 次读后累计 1280 > 1024 触发超限收缩；第 6 次读恰好从合法帧起始，
 /// 应被正常解析并回传。
 #[cfg(feature = "modbus")]
 #[tokio::test]
@@ -645,7 +647,7 @@ async fn ascii_overflow_drops_partial_frame_and_accepts_next_valid_frame() {
     .await;
 
     assert_eq!(
-        res.expect("超限清空后应能解析随后到达的合法 ASCII 帧"),
+        res.expect("超限收缩后应能解析随后到达的合法 ASCII 帧"),
         rtu_response,
         "合法帧不应被前序垃圾数据污染"
     );
@@ -657,4 +659,91 @@ async fn ascii_overflow_drops_partial_frame_and_accepts_next_valid_frame() {
             >= 1,
         "缓冲超限必须递增丢弃计数，供运维识别异常设备灌噪声"
     );
+}
+
+/// 超限点落在「垃圾前缀 + 已开始的半帧」上时，必须保留半帧。
+///
+/// 原实现整段 `clear()` 会把刚收到的帧头一起丢掉，后续读到的续帧缺起始符，
+/// LRC 永远对不上——现场表现为「设备在回数据却一直 CRC 错」。
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn ascii_overflow_keeps_started_frame_and_completes_after_next_read() {
+    let rtu_response = modbus_fc03_response(0x002A);
+    let ascii_frame = rtu_to_ascii(&rtu_response);
+
+    // 1270 字节垃圾后紧跟完整帧：第 5 次读（累计 1280）触发超限时，
+    // 帧只收到前 10 字节（17 字节帧里的 10 字节），必须保留到下一次读补齐。
+    let mut wire = vec![b'A'; 1270];
+    wire.extend_from_slice(&ascii_frame);
+    let port = MockPort::responding(wire, 0);
+
+    let mut handle = SerialHandle::from_stream(port.clone());
+    let gpio = RecordingGpio::new();
+    let metrics = crate::engine::metrics::Metrics::new();
+
+    let res = do_transaction(
+        &mut handle,
+        TransactionParams {
+            request: &[0x01, 0x03, 0x00, 0x00, 0x00, 0x01],
+            timeout: Duration::from_millis(500),
+            protocol: "modbus",
+            expected_count: Some(1),
+            de_pin: None,
+            modbus_mode: "ascii",
+            baud: 9600,
+        },
+        &gpio,
+        Some(&metrics),
+    )
+    .await;
+
+    assert_eq!(
+        res.expect("超限时保留下来的半帧，应在下一次读补齐后正常解析"),
+        rtu_response
+    );
+    assert!(
+        metrics
+            .bus
+            .ascii_frame_dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 1
+    );
+}
+
+/// 超限收缩：保留最后一个帧起始符及其后内容。
+#[test]
+fn shrink_ascii_buf_keeps_last_frame_start() {
+    let mut buf = vec![b'A'; ASCII_BUF_LIMIT + 100];
+    buf.extend_from_slice(b":01030002");
+
+    let dropped = shrink_ascii_buf(&mut buf);
+
+    assert_eq!(buf, b":01030002", "必须从最后一个 ':' 起保留");
+    assert_eq!(dropped, ASCII_BUF_LIMIT + 100, "丢弃的应是 ':' 之前的前缀");
+}
+
+/// 超限收缩：整段无帧起始符时只能全丢（否则会无限保留垃圾）。
+#[test]
+fn shrink_ascii_buf_clears_garbage_without_frame_start() {
+    let mut buf = vec![b'7'; ASCII_BUF_LIMIT * 2];
+
+    let dropped = shrink_ascii_buf(&mut buf);
+
+    assert!(buf.is_empty(), "没有 ':' 时不存在可接续的半帧");
+    assert_eq!(dropped, ASCII_BUF_LIMIT * 2);
+}
+
+/// 超限收缩：起始符太靠前、保留段自身仍超上限时，视作非法长帧整段丢弃。
+#[test]
+fn shrink_ascii_buf_drops_frame_start_too_far_back() {
+    let mut buf = vec![b':'];
+    buf.extend(std::iter::repeat(b'A').take(ASCII_BUF_LIMIT * 2));
+
+    let dropped = shrink_ascii_buf(&mut buf);
+
+    assert!(
+        buf.is_empty(),
+        "合法 ASCII 帧最长约 515 字节，超上限的只能是垃圾"
+    );
+    assert_eq!(dropped, ASCII_BUF_LIMIT * 2 + 1);
 }

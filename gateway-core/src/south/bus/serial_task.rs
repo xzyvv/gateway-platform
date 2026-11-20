@@ -45,6 +45,29 @@ const MIN_REOPEN_INTERVAL: Duration = Duration::from_secs(60);
 /// 但 ASCII 分支的 `ascii_buf` 是独立缓冲，此前没有任何上限（原 #112）。
 const ASCII_BUF_LIMIT: usize = 1024;
 
+/// ASCII 缓冲超限后的收缩：保留最后一个 `:` 及其后的字节，返回丢弃的字节数。
+///
+/// 溢出点通常落在「垃圾前缀 + 一个刚开始接收的半帧」上。整段 `clear()` 会把这段
+/// 半帧一并丢掉，随后到达的续帧缺头，LRC 永远对不上，表现为「设备明明在回，却
+/// 一直 CRC 错」。保留最后一个起始符即可让续帧接上。
+///
+/// 约束：保留段若仍超 `ASCII_BUF_LIMIT`，说明这个「帧」本身长到不可能合法
+/// （合法 ASCII 帧最多约 515 字节），此时按垃圾处理，整段丢弃。
+fn shrink_ascii_buf(buf: &mut Vec<u8>) -> usize {
+    let keep_from = buf
+        .iter()
+        .rposition(|&b| b == b':')
+        .filter(|&pos| buf.len() - pos <= ASCII_BUF_LIMIT);
+    let dropped = keep_from.unwrap_or(buf.len());
+    match keep_from {
+        Some(pos) => {
+            buf.drain(..pos);
+        }
+        None => buf.clear(),
+    }
+    dropped
+}
+
 /// 构造端口自检帧：Modbus RTU FC03 最小读（addr=0, count=1）。
 ///
 /// 帧格式与协议实现共用同一份定义（`protocol::modbus::build_read_request`），
@@ -516,18 +539,22 @@ async fn do_transaction(
                 if protocol == "modbus" && modbus_mode == "ascii" {
                     ascii_buf.extend_from_slice(&buf[..n]);
                     // 原 #112：硬上限保护。异常设备持续发无 CRLF 数据时，
-                    // ascii_buf 会无限增长直到 OOM。超限即整段丢弃，继续等下一个完整帧。
+                    // ascii_buf 会无限增长直到 OOM。
+                    // 超限时不再整段 clear：溢出点通常落在「垃圾前缀 + 一个刚开始的半帧」
+                    // 上，全丢会让下一个 read 到的数据缺帧头，LRC 永远对不上。改为保留最后
+                    // 一个 ':' 及其后的字节（该半帧最长也超不过 ASCII_BUF_LIMIT，超了说明它
+                    // 本身就不可能合法），找不到 ':' 才全丢。
                     // 计数与 warn 让现场能区分「设备灌噪声」与「正常的偶发 CRC 错帧」。
                     if ascii_buf.len() > ASCII_BUF_LIMIT {
+                        let overflowed = ascii_buf.len();
+                        let dropped = shrink_ascii_buf(&mut ascii_buf);
                         tracing::warn!(
-                            "bus serial: ASCII buffer overflow ({} bytes > {}), dropping partial frame",
-                            ascii_buf.len(),
-                            ASCII_BUF_LIMIT
+                            "bus serial: ASCII buffer overflow ({overflowed} bytes > {ASCII_BUF_LIMIT}), dropped {dropped} bytes, kept {} bytes",
+                            ascii_buf.len()
                         );
                         if let Some(m) = metrics {
                             m.inc_ascii_frame_dropped();
                         }
-                        ascii_buf.clear();
                     }
                     while let Some(crlf_pos) = ascii_buf.windows(2).position(|w| w == b"\r\n") {
                         let frame_end = crlf_pos + 2;

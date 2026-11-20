@@ -46,10 +46,13 @@ pub(crate) fn build_mbap_frame(
 const MAX_MBAP_LENGTH: u16 = 255;
 
 /// 解析 Modbus TCP 响应：读 MBAP 头 + PDU。
-/// 返回 (tx_id, pdu)，其中 pdu = function_code + data（即 unit_id 之后的所有字节）。
+/// 返回 (tx_id, unit_id, pdu)，其中 pdu = function_code + data（即 unit_id 之后的所有字节）。
+///
+/// `unit_id` 必须回传：路由时要用它与请求的从站地址比对，否则多从站串帧
+/// 会把 A 的读数记到 B 名下（见 `TransactionPool::deliver`）。
 async fn read_mbap_response<R: AsyncReadExt + Unpin>(
     reader: &mut R,
-) -> Result<(u16, Vec<u8>), TransactionError> {
+) -> Result<(u16, u8, Vec<u8>), TransactionError> {
     let mut header = [0u8; 7];
     reader
         .read_exact(&mut header)
@@ -79,7 +82,7 @@ async fn read_mbap_response<R: AsyncReadExt + Unpin>(
             length, MAX_MBAP_LENGTH
         )));
     }
-    let _unit_id = header[6];
+    let unit_id = header[6];
     let pdu_len = (length as usize).saturating_sub(1);
     let mut pdu = vec![0u8; pdu_len];
     if pdu_len > 0 {
@@ -88,14 +91,15 @@ async fn read_mbap_response<R: AsyncReadExt + Unpin>(
             .await
             .map_err(TransactionError::Io)?;
     }
-    Ok((tx_id, pdu))
+    Ok((tx_id, unit_id, pdu))
 }
 
 /// Reader loop read timeout: prevents partial-header server hang from blocking forever
 const READER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// #8: reader loop——独立任务循环读响应并路由。
-/// - 正常：读 MBAP 头 + PDU → pool.deliver(tx_id, pdu)
+/// - 正常：读 MBAP 头 + PDU → pool.deliver(tx_id, unit_id, pdu)
+///   （unit_id 与请求从站不一致时按串帧拒绝，只失败该事务）
 /// - 读到 EOF/错误：pool.abort_all(Disconnected) 并退出
 /// - shutdown notify：退出
 /// - Bug 40: read timeout prevents server sending partial header from hanging reader
@@ -112,9 +116,10 @@ pub(super) async fn reader_loop(
             }
             res = tokio::time::timeout(READER_READ_TIMEOUT, read_mbap_response(&mut reader)) => {
                 match res {
-                    Ok(Ok((tx_id, pdu))) => {
-                        // 路由到 waiter；若 tx_id 不在 active（超时已移除/晚到），静默丢弃
-                        pool.deliver(tx_id, pdu).await;
+                    Ok(Ok((tx_id, unit_id, pdu))) => {
+                        // 路由到 waiter；若 tx_id 不在 active（超时已移除/晚到），静默丢弃。
+                        // unit_id 由 deliver 与请求的从站地址比对，串帧按 Malformed 拒绝。
+                        pool.deliver(tx_id, unit_id, pdu).await;
                     }
                     Ok(Err(e)) => {
                         // 读失败通常是连接断开；Malformed 则连接可疑，统一中断。
@@ -202,13 +207,27 @@ mod tests {
         bytes.resize(7 + body_len, 0xAB);
         let mut reader: &[u8] = &bytes;
 
-        let (got_tx_id, pdu) = match read_mbap_response(&mut reader).await {
+        let (got_tx_id, got_unit_id, pdu) = match read_mbap_response(&mut reader).await {
             Ok(v) => v,
             Err(e) => panic!("maximum legal frame must parse, got {e:?}"),
         };
         assert_eq!(got_tx_id, tx_id);
+        assert_eq!(got_unit_id, 1);
         assert_eq!(pdu.len(), body_len);
         assert_eq!(pdu[0], 3);
         assert_eq!(pdu[body_len - 1], 0xAB);
+    }
+
+    /// unit_id 必须随响应回传给路由层：多从站共享 TCP 网关时，
+    /// tx_id 只保证「回的是我们发起的」，串帧只能靠 unit_id 发现。
+    #[tokio::test]
+    async fn unit_id_is_returned_to_router() {
+        let mut bytes = header_with_length(7, 2);
+        bytes.push(0x03); // function code
+        let mut reader: &[u8] = &bytes;
+
+        let (_, unit_id, pdu) = read_mbap_response(&mut reader).await.unwrap();
+        assert_eq!(unit_id, 1);
+        assert_eq!(pdu, vec![0x03]);
     }
 }

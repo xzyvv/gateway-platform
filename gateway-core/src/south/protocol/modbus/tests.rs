@@ -212,7 +212,11 @@ fn extract_modbus_frame_fc21_uses_byte_count() {
     let mut fb = FrameBuffer::new();
     fb.push(&frame);
     let got = super::extract_modbus_frame(&mut fb, None);
-    assert_eq!(got.as_deref(), Some(frame.as_slice()), "FC21 应按 byte_count 定帧");
+    assert_eq!(
+        got.as_deref(),
+        Some(frame.as_slice()),
+        "FC21 应按 byte_count 定帧"
+    );
 
     // 后面紧跟一帧正常 FC03，验证没有被 FC21 的重同步逻辑吞掉
     let next = modbus_response(0x01, 0x03, &[0x00, 0x2A]);
@@ -305,10 +309,10 @@ fn test_encode_register_values_roundtrip_with_read_path() {
 use crate::config::BusConfig;
 use crate::engine::metrics::Metrics;
 use crate::south::bus::{BusDeps, BusManager};
-use crate::south::protocol::Collector;
 use crate::south::protocol::modbus::transaction::TransactionPool;
-use std::sync::Arc;
+use crate::south::protocol::Collector;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -321,11 +325,14 @@ use tokio::net::TcpListener;
 async fn pool_waits_for_slot_instead_of_failing_immediately() {
     let pool = TransactionPool::new(1);
     // 1 槽池：先占满
-    let (tx_id, _rx) = pool.acquire_slot(false, Duration::from_millis(50)).await.unwrap();
+    let (tx_id, _rx) = pool
+        .acquire_slot(false, Duration::from_millis(50), 1)
+        .await
+        .unwrap();
 
     // 池满 + 等待预算耗尽 → 仍应返回 Busy（语义不变，只是多等了一会儿）
     let t0 = std::time::Instant::now();
-    let r = pool.acquire_slot(false, Duration::from_millis(20)).await;
+    let r = pool.acquire_slot(false, Duration::from_millis(20), 1).await;
     assert!(r.is_err(), "池满且等待预算耗尽必须返回 Busy");
     assert!(
         t0.elapsed() >= Duration::from_millis(20),
@@ -337,11 +344,11 @@ async fn pool_waits_for_slot_instead_of_failing_immediately() {
     let pool2 = pool.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
-        pool2.deliver(tx_id, vec![]).await;
+        pool2.deliver(tx_id, 1, vec![]).await;
     });
     let t1 = std::time::Instant::now();
     let (tx2, _rx2) = pool
-        .acquire_slot(false, Duration::from_millis(500))
+        .acquire_slot(false, Duration::from_millis(500), 1)
         .await
         .expect("槽位释放后应能拿到槽位");
     assert!(
@@ -358,18 +365,65 @@ async fn pool_control_transaction_reserves_slots_under_pressure() {
     let pool = TransactionPool::new(8);
     let mut held = Vec::new();
     for _ in 0..6 {
-        held.push(pool.acquire_slot(false, Duration::from_millis(10)).await.unwrap());
+        held.push(
+            pool.acquire_slot(false, Duration::from_millis(10), 1)
+                .await
+                .unwrap(),
+        );
     }
     // 普通事务再来一个：必须等不到（上限 6 已满）
     assert!(pool
-        .acquire_slot(false, Duration::from_millis(20))
+        .acquire_slot(false, Duration::from_millis(20), 1)
         .await
         .is_err());
     // 控制事务仍有保留槽可用
     assert!(pool
-        .acquire_slot(true, Duration::from_millis(20))
+        .acquire_slot(true, Duration::from_millis(20), 1)
         .await
         .is_ok());
+}
+
+/// 响应 unit_id 与请求的从站地址不一致 → 该事务按 Malformed 失败。
+///
+/// 多从站共享一个 TCP 网关时，tx_id 只能证明「回的是我们发起的」，证明不了
+/// 「回的是我们要的那个从站」。串帧若被放行，A 的寄存器值会落到 B 的点位上，
+/// 形成静默错读数——比超时难发现得多。
+#[tokio::test]
+async fn pool_rejects_response_with_mismatched_unit_id() {
+    use crate::south::protocol::modbus::transaction::TransactionError;
+
+    let pool = TransactionPool::new(2);
+    let (tx_id, rx) = pool
+        .acquire_slot(false, Duration::from_millis(50), 7)
+        .await
+        .unwrap();
+
+    pool.deliver(tx_id, 9, vec![0x03, 0x02, 0x00, 0x01]).await;
+
+    match rx.await.unwrap() {
+        Err(TransactionError::Malformed(msg)) => {
+            assert!(msg.contains("unit_id"), "错误文案要指明 unit_id：{msg}");
+        }
+        other => panic!("串帧必须拒绝，实际返回: {other:?}"),
+    }
+}
+
+/// unit_id 一致时正常投递：不能把正常响应误判成串帧。
+#[tokio::test]
+async fn pool_accepts_response_with_matching_unit_id() {
+    let pool = TransactionPool::new(2);
+    let (tx_id, rx) = pool
+        .acquire_slot(false, Duration::from_millis(50), 7)
+        .await
+        .unwrap();
+
+    pool.deliver(tx_id, 7, vec![0x03, 0x02, 0x00, 0x2A]).await;
+
+    assert_eq!(
+        rx.await.unwrap().unwrap(),
+        vec![0x03, 0x02, 0x00, 0x2A],
+        "unit_id 匹配的响应必须原样交给调用方"
+    );
 }
 
 /// 假 Modbus TCP 服务端：accept 一次，读走 MBAP 请求，按 `pdu` 回一帧 MBAP 响应。
@@ -602,7 +656,10 @@ async fn write_echo_mismatch_is_write_uncertain() {
     let c = super::ModbusCollector::new("modbus_write_echo", modbus_tcp_bus(addr, 1000));
     let point = mk_typed_point("U16"); // fc=6 → FC06 写单寄存器
 
-    let err = c.write(&point, 1.0).await.expect_err("回显不匹配必须返回错误");
+    let err = c
+        .write(&point, 1.0)
+        .await
+        .expect_err("回显不匹配必须返回错误");
     assert!(
         matches!(err, CollectorError::WriteUncertain(_)),
         "回显不匹配属结果未知，必须用 WriteUncertain 上报，实际 {err:?}"
@@ -619,7 +676,10 @@ async fn write_unsupported_function_code_is_not_uncertain() {
     let mut point = mk_typed_point("U16");
     point.function_code = Some(4); // FC04 只读
 
-    let err = c.write(&point, 1.0).await.expect_err("只读功能码必须返回错误");
+    let err = c
+        .write(&point, 1.0)
+        .await
+        .expect_err("只读功能码必须返回错误");
     assert!(
         matches!(err, CollectorError::Unsupported(_)),
         "未下发的失败不得算结果未知，实际 {err:?}"

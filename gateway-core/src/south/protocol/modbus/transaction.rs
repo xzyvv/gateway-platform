@@ -70,6 +70,18 @@ pub struct MbapHeader {
 /// 单个事务的等待者：发出请求时创建，收到响应时通知
 type Waiter = oneshot::Sender<Result<Vec<u8>, TransactionError>>;
 
+/// 在途事务：等待者 + 该事务的期望从站地址。
+///
+/// `slave_id` 用来校验响应 MBAP 的 unit_id。Modbus TCP 里 tx_id 决定归属，
+/// 但多从站共用一个 TCP 网关时，网关串帧（把 A 的响应回了 B 的 tx_id）只能
+/// 靠 unit_id 发现；不校验就会把 A 的数据当成 B 的读数写进快照。
+#[derive(Debug)]
+struct PendingTx {
+    reply: Waiter,
+    /// 请求里的从站地址，响应的 unit_id 必须与之一致
+    slave_id: u8,
+}
+
 /// 池满时等待槽位释放的上限。
 ///
 /// 取 50ms：足够消化「上一批响应刚好到达」这类瞬时拥塞（一次往返量级），
@@ -121,7 +133,7 @@ pub struct TransactionPool {
     /// 只做「保证有位置」，不改变 socket 上真正的并发上限。
     reserved_control: usize,
     next_tx_id: AtomicU16,
-    active: Arc<Mutex<HashMap<u16, Waiter>>>,
+    active: Arc<Mutex<HashMap<u16, PendingTx>>>,
     /// 写半边。None 表示未绑定 socket（new 构造）。
     /// 所有 submit 共用此 writer，Mutex 保证一次写一整帧 MBAP，避免半帧交错。
     writer: Option<Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>>,
@@ -160,7 +172,7 @@ impl TransactionPool {
     /// 绑定 TCP 流构造事务池：split 读写半边，spawn reader_loop。
     pub fn with_stream(max_concurrent: usize, stream: TcpStream) -> Arc<Self> {
         let (read_half, write_half) = stream.into_split();
-        let active: Arc<Mutex<HashMap<u16, Waiter>>> = Arc::new(Mutex::new(HashMap::new()));
+        let active: Arc<Mutex<HashMap<u16, PendingTx>>> = Arc::new(Mutex::new(HashMap::new()));
         let shutdown = Arc::new(Notify::new());
 
         let pool = Arc::new(Self {
@@ -222,7 +234,9 @@ impl TransactionPool {
         //    池满时最多等待 SLOT_WAIT_MAX，且不超过本次事务截止时间的 1/4，
         //    避免等待把后续「写 + 等响应」的预算吃光。
         let wait_budget = SLOT_WAIT_MAX.min(request.deadline / 4);
-        let (tx_id, reply_rx) = self.acquire_slot(control, wait_budget).await?;
+        let (tx_id, reply_rx) = self
+            .acquire_slot(control, wait_budget, request.slave_id)
+            .await?;
 
         // 2. 构造 MBAP 帧
         // C20: 帧构造可能失败（PDU > 253 字节），原实现用 `?` 直接返回，但此时
@@ -325,6 +339,7 @@ impl TransactionPool {
         &self,
         control: bool,
         wait_budget: Duration,
+        slave_id: u8,
     ) -> Result<(u16, oneshot::Receiver<Result<Vec<u8>, TransactionError>>), TransactionError> {
         let limit = if control {
             self.max_concurrent
@@ -341,7 +356,13 @@ impl TransactionPool {
                 if active.len() < limit {
                     let tx_id = self.next_tx_id(); // 跳过 0
                     let (reply_tx, reply_rx) = oneshot::channel();
-                    active.insert(tx_id, reply_tx);
+                    active.insert(
+                        tx_id,
+                        PendingTx {
+                            reply: reply_tx,
+                            slave_id,
+                        },
+                    );
                     return Ok((tx_id, reply_rx));
                 }
             }
@@ -366,10 +387,29 @@ impl TransactionPool {
     }
 
     /// 把收到的响应路由到对应的 waiter。reader_loop 调用。
-    pub async fn deliver(&self, tx_id: u16, payload: Vec<u8>) {
-        if let Some(reply) = self.active.lock().await.remove(&tx_id) {
+    ///
+    /// 附带校验 MBAP 的 `unit_id` 是否等于该事务请求的从站地址：tx_id 只保证
+    /// 「回的是我们发起的」，不能保证「回的是我们要的那个从站」。多从站共享
+    /// TCP 网关时，网关串帧会让 A 的寄存器值落到 B 的点位上——一次错误读数
+    /// 比一次超时更难发现。不匹配只让**本条**事务失败（连接本身仍可用），
+    /// 因为 tx_id 命中了，说明链路和协议序都正常，问题在被控端/网关实现。
+    pub async fn deliver(&self, tx_id: u16, unit_id: u8, payload: Vec<u8>) {
+        if let Some(pending) = self.active.lock().await.remove(&tx_id) {
             self.release_slot();
-            let _ = reply.send(Ok(payload));
+            if pending.slave_id != unit_id {
+                tracing::warn!(
+                    "modbus tcp: unit_id mismatch on tx_id {}: expected {}, got {}",
+                    tx_id,
+                    pending.slave_id,
+                    unit_id
+                );
+                let _ = pending.reply.send(Err(TransactionError::Malformed(format!(
+                    "unit_id mismatch: expected {}, got {}",
+                    pending.slave_id, unit_id
+                ))));
+                return;
+            }
+            let _ = pending.reply.send(Ok(payload));
         }
     }
 
@@ -379,8 +419,8 @@ impl TransactionPool {
         let waiters: Vec<_> = active.drain().collect();
         drop(active);
         let count = waiters.len();
-        for (_, reply) in waiters {
-            let _ = reply.send(Err(TransactionError::Disconnected));
+        for (_, pending) in waiters {
+            let _ = pending.reply.send(Err(TransactionError::Disconnected));
         }
         if count > 0 {
             self.release_slot();
