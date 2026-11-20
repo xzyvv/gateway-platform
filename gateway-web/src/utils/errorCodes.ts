@@ -34,6 +34,8 @@ export const ERR = {
   USER_NOT_FOUND: 4006,
   /** 用户域：角色不合法 */
   ROLE_INVALID: 4007,
+  /** 公式求值失败（用户配置的公式非法，可纠正） */
+  FORMULA_INVALID: 4008,
   /** id 冲突（回收站恢复点位时目标 id 已存在） */
   DUPLICATE_ID: 4009,
   /** 授权配额不足（v2.0 档位限制，授权有效但档位不够） */
@@ -50,6 +52,8 @@ export const ERR = {
   BUS_OFFLINE: 4503,
   /** 上传的证书无法解析 */
   CERT_PARSE_FAILED: 5001,
+  /** 本地队列 / 存储故障（SQLite 读写失败、库被锁等） */
+  QUEUE_ERROR: 5002,
   /** 依赖能力暂不可用 */
   SERVICE_UNAVAILABLE: 5003,
   /** 点位写入失败（明确失败：能证明写没有生效，可安全重试） */
@@ -60,8 +64,6 @@ export const ERR = {
   GROUP_INVALID: 6001,
   /** 设备分组不存在 */
   GROUP_NOT_FOUND: 6002,
-  /** 公式求值失败 */
-  FORMULA: 7000,
   /** License 未导入（网关按兜底配额运行，超限需导入授权） */
   LICENSE_REQUIRED: 7001,
   /** License 失效（过期/设备码不匹配/篡改/验签失败） */
@@ -156,6 +158,10 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
     message: '证书解析失败',
     hint: '请确认上传的是有效的 PEM 证书与私钥',
   },
+  [ERR.QUEUE_ERROR]: {
+    message: '本地队列或存储故障',
+    hint: '请查看系统日志确认磁盘空间与数据库状态后重试',
+  },
   [ERR.SERVICE_UNAVAILABLE]: {
     message: '依赖能力暂不可用',
     hint: '请稍后重试；反复出现请查看系统日志',
@@ -176,7 +182,7 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
     message: '设备分组不存在',
     hint: '可能已被删除，请刷新后重试',
   },
-  [ERR.FORMULA]: {
+  [ERR.FORMULA_INVALID]: {
     message: '公式求值失败',
     hint: '请检查点位公式的语法、变量名与量程，修正后再保存',
   },

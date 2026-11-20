@@ -14,16 +14,17 @@
 //! | 段 | 语义 | HTTP |
 //! |---|---|---|
 //! | `0` | 成功 | 200 |
-//! | `1xxx` | 配置 / 序列化 | 500 |
+//! | `1xxx` | 配置 / 序列化 | 400（1000 由客户端提交触发） |
 //! | `2xxx` | 本地 IO | 500 |
 //! | `3xxx` | 协议 / 对端无应答 | 500；3001 → 504 |
-//! | `4xxx` | 客户端可纠正 | 400；4290 → 429 |
+//! | `4xxx` | 客户端可纠正 | 400；4004 → 404；4290 → 429 |
 //! | `5xxx` | 服务端执行失败 | 500；5003 → 503 |
 //! | `6xxx` | 业务校验（设备分组） | 400 |
 //! | `7xxx` | 授权 | 403 |
 //! | `8xxx` | 鉴权 | 8000-8002 → 401；8003-8099 → 403 |
-//! | `9xxx` | 历史遗留「不存在」 | 500（仅兼容，新代码用 4004） |
 //! | `9999` | 内部错误 | 500 |
+//!
+//! `9xxx` 段已废弃（原「资源不存在」9000 与 4004 重复），统一用 4004。
 
 use axum::http::StatusCode;
 
@@ -58,6 +59,8 @@ pub const USER_INVALID: i32 = 4005;
 pub const USER_NOT_FOUND: i32 = 4006;
 /// 用户域：角色不合法（保留，新代码用 4000）
 pub const ROLE_INVALID: i32 = 4007;
+/// 公式求值失败（用户配置的公式非法，客户端可纠正）
+pub const FORMULA_INVALID: i32 = 4008;
 /// id 冲突（恢复点位时目标 id 已存在）
 pub const DUPLICATE_ID: i32 = 4009;
 /// 授权有效但档位配额不足
@@ -79,6 +82,8 @@ pub const BUS_OFFLINE: i32 = 4503;
 pub const MQTT: i32 = 5000;
 /// 上传的证书无法解析
 pub const CERT_PARSE_FAILED: i32 = 5001;
+/// 本地队列 / 存储故障（SQLite 读写失败、数据库被锁等）
+pub const QUEUE_ERROR: i32 = 5002;
 /// 依赖能力暂不可用（HTTP 503）
 pub const SERVICE_UNAVAILABLE: i32 = 5003;
 /// 点位写入**明确失败**（能证明写没有生效，可安全重试）
@@ -86,14 +91,12 @@ pub const WRITE_FAILED: i32 = 5101;
 /// 点位写入**结果未知**（设备可能已执行，禁止自动重试，先读回核实）
 pub const WRITE_UNCERTAIN: i32 = 5102;
 
-// ===== 6xxx / 7xxx / 8xxx / 9xxx =====
+// ===== 6xxx / 7xxx / 8xxx =====
 
 /// 设备分组名称非法或重复
 pub const GROUP_INVALID: i32 = 6001;
 /// 设备分组不存在
 pub const GROUP_NOT_FOUND: i32 = 6002;
-/// 公式求值失败
-pub const FORMULA: i32 = 7000;
 /// License 未导入
 pub const LICENSE_REQUIRED: i32 = 7001;
 /// License 失效（过期 / 设备码不符 / 篡改 / 验签失败）
@@ -108,8 +111,6 @@ pub const API_KEY_SCOPE: i32 = 8004;
 pub const SENSITIVE_FIELD_DENIED: i32 = 8005;
 /// 实时 WebSocket 连接数超限（HTTP 503）
 pub const REALTIME_LIMIT: i32 = 8101;
-/// 历史遗留的「不存在」码（仅兼容，新代码用 4004）
-pub const NOT_FOUND_LEGACY: i32 = 9000;
 /// 网关内部错误
 pub const INTERNAL: i32 = 9999;
 
@@ -130,6 +131,7 @@ pub const ALL_CODES: &[(i32, &str)] = &[
     (USER_INVALID, "用户名或显示名不合法"),
     (USER_NOT_FOUND, "用户不存在"),
     (ROLE_INVALID, "角色不合法"),
+    (FORMULA_INVALID, "公式求值失败"),
     (DUPLICATE_ID, "id 已存在"),
     (QUOTA_EXCEEDED, "授权配额不足"),
     (BUS_BUSY, "总线忙"),
@@ -139,12 +141,12 @@ pub const ALL_CODES: &[(i32, &str)] = &[
     (BUS_OFFLINE, "总线离线"),
     (MQTT, "MQTT 发布失败"),
     (CERT_PARSE_FAILED, "证书解析失败"),
+    (QUEUE_ERROR, "本地队列或存储故障"),
     (SERVICE_UNAVAILABLE, "依赖能力暂不可用"),
     (WRITE_FAILED, "点位写入失败（可安全重试）"),
     (WRITE_UNCERTAIN, "点位写入结果未知（先读回核实）"),
     (GROUP_INVALID, "设备分组名称不合法"),
     (GROUP_NOT_FOUND, "设备分组不存在"),
-    (FORMULA, "公式求值失败"),
     (LICENSE_REQUIRED, "尚未导入授权"),
     (LICENSE_INVALID, "授权已失效"),
     (UNAUTHORIZED, "未认证或登录已失效"),
@@ -152,7 +154,6 @@ pub const ALL_CODES: &[(i32, &str)] = &[
     (API_KEY_SCOPE, "API 密钥权限范围不足"),
     (SENSITIVE_FIELD_DENIED, "敏感字段拒绝修改"),
     (REALTIME_LIMIT, "实时连接数超限"),
-    (NOT_FOUND_LEGACY, "资源不存在（历史码）"),
     (INTERNAL, "网关内部错误"),
 ];
 
@@ -176,6 +177,10 @@ pub fn http_status(code: i32) -> StatusCode {
         RATE_LIMITED => StatusCode::TOO_MANY_REQUESTS,
         // 依赖能力/连接数上限：503 表达「稍后可能恢复」，与 500 区分
         SERVICE_UNAVAILABLE | REALTIME_LIMIT => StatusCode::SERVICE_UNAVAILABLE,
+        // 资源不存在：语义是 404，不能落进 4xxx 的 400 兜底
+        NOT_FOUND => StatusCode::NOT_FOUND,
+        // 配置或请求体解析失败：由客户端提交触发，与 ApiError 的 400 对齐
+        CONFIG_OR_JSON => StatusCode::BAD_REQUEST,
         4000..=4999 => StatusCode::BAD_REQUEST,
         6000..=6999 => StatusCode::BAD_REQUEST,
         7000..=7999 => StatusCode::FORBIDDEN,
@@ -202,17 +207,21 @@ mod tests {
         // 客户端可纠正
         for code in [
             BAD_REQUEST,
-            NOT_FOUND,
             BUS_BUSY,
             UNSUPPORTED_MEDIA_TYPE,
             GROUP_NOT_FOUND,
+            FORMULA_INVALID,
         ] {
             assert_eq!(http_status(code), StatusCode::BAD_REQUEST, "code={code}");
         }
+        // 资源不存在：4004 必须是 404（与 ApiError::not_found 一致）
+        assert_eq!(http_status(NOT_FOUND), StatusCode::NOT_FOUND);
+        // 配置/JSON：与 ApiError 的 400 对齐
+        assert_eq!(http_status(CONFIG_OR_JSON), StatusCode::BAD_REQUEST);
         // 限流必须是 429
         assert_eq!(http_status(RATE_LIMITED), StatusCode::TOO_MANY_REQUESTS);
         // 授权：统一 403，避免走 ApiResponse 时被误映射成 500
-        for code in [LICENSE_REQUIRED, LICENSE_INVALID, FORMULA] {
+        for code in [LICENSE_REQUIRED, LICENSE_INVALID] {
             assert_eq!(http_status(code), StatusCode::FORBIDDEN, "code={code}");
         }
         // 鉴权：未认证 401，权限不足 403
@@ -230,9 +239,9 @@ mod tests {
         assert_eq!(http_status(NO_REPLY), StatusCode::GATEWAY_TIMEOUT);
         // 服务端
         for code in [
-            CONFIG_OR_JSON,
             IO,
             PROTOCOL,
+            QUEUE_ERROR,
             WRITE_FAILED,
             WRITE_UNCERTAIN,
             INTERNAL,

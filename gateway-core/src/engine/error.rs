@@ -159,17 +159,20 @@ impl GatewayError {
     /// 返回统一错误码，便于监控告警分类
     ///
     /// 编码规则：
-    /// - 1xxx: 配置错误
+    /// - 1xxx: 配置/序列化错误
     /// - 2xxx: IO 错误
     /// - 3xxx: 协议错误
-    /// - 4xxx: 队列错误
-    /// - 5xxx: MQTT 错误
+    /// - 4xxx: 客户端可纠正（参数/配置/公式/资源不存在）
+    /// - 5xxx: 服务端执行失败（队列/存储、MQTT）
     /// - 6xxx: 保留（原 Lua 错误，Lua 引擎已下线，编码不复用）
-    /// - 7xxx: 公式错误
+    /// - 7xxx: 授权/许可错误
     /// - 8xxx: 鉴权错误
-    /// - 9xxx: 资源不存在
     /// - 3001: 设备无响应（协议类下的独立码）
     /// - 9999: 未分类
+    ///
+    /// 码值必须与 `gateway-api/src/web/error_codes.rs` 的码表一致，由 api 侧
+    /// 测试 `gateway_error_codes_match_error_code_table` 兜底。
+    /// 9xxx 段已废弃：`NotFound` 统一用 4004，不再下发 9000。
     ///
     /// 注意：**0 不是错误码**——API 信封（`web::envelope`）与前端都把 `code == 0`
     /// 当作「成功」。`NoReply` 早期返回 0，一旦经 `ApiError` 回传就会被前端静默
@@ -180,11 +183,15 @@ impl GatewayError {
             GatewayError::Io(_) => 2000,
             GatewayError::Protocol(_) => 3000,
             GatewayError::NoReply => 3001,
-            GatewayError::Queue(_) => 4000,
+            // 队列/存储故障是服务端问题：4xxx 段表示「客户端可纠正」，
+            // 旧值 4000 会与「参数非法」撞码，误导客户端改配置。
+            GatewayError::Queue(_) => 5002,
             GatewayError::Mqtt(_) => 5000,
-            GatewayError::Formula(_) => 7000,
+            // 公式来自用户配置：属客户端可纠正，旧值 7000 落在授权段（→403）。
+            GatewayError::Formula(_) => 4008,
             GatewayError::Auth(_) => 8000,
-            GatewayError::NotFound(_) => 9000,
+            // 与码表 NOT_FOUND(4004) 统一；旧值 9000 造成同一语义两个码。
+            GatewayError::NotFound(_) => 4004,
             GatewayError::Message(_) => 9999,
         }
     }
@@ -222,11 +229,11 @@ fn classify_message(s: &str) -> u32 {
         ("config error", 1000),
         ("io error", 2000),
         ("protocol error", 3000),
-        ("queue error", 4000),
+        ("queue error", 5002),
         ("mqtt error", 5000),
-        ("formula error", 7000),
+        ("formula error", 4008),
         ("auth error", 8000),
-        ("not found", 9000),
+        ("not found", 4004),
     ];
     for (prefix, code) in PREFIXES {
         if s.starts_with(prefix) {

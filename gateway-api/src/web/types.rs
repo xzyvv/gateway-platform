@@ -376,11 +376,15 @@ mod status_mapping_tests {
     #[test]
     fn client_correctable_codes_map_to_400() {
         assert_eq!(err_status(4000), StatusCode::BAD_REQUEST);
-        assert_eq!(err_status(4004), StatusCode::BAD_REQUEST);
+        // R3：4004 是「资源不存在」，必须是 404（与 ApiError::not_found 一致），
+        // 不能落进 4xxx 的 400 兜底。
+        assert_eq!(err_status(4004), StatusCode::NOT_FOUND);
         // 用户域校验码（原 5001/5002/5003，方案 B 后归入 4xxx 以得到 400）
         assert_eq!(err_status(4005), StatusCode::BAD_REQUEST);
         assert_eq!(err_status(4006), StatusCode::BAD_REQUEST);
         assert_eq!(err_status(4007), StatusCode::BAD_REQUEST);
+        // 公式错误：由用户配置触发，属客户端可纠正（R3 从 7000→403 移出）
+        assert_eq!(err_status(4008), StatusCode::BAD_REQUEST);
         // 设备分组业务码：此前被误映射成 500
         assert_eq!(err_status(6001), StatusCode::BAD_REQUEST);
         assert_eq!(err_status(6002), StatusCode::BAD_REQUEST);

@@ -157,11 +157,13 @@ impl From<gateway_core::engine::error::GatewayError> for ApiError {
             // 与 OPC UA 侧的 `NoReply → BadTimeout` 保持同一口径。旧实现归 500，
             // 现场据此以为是网关崩了，去重启网关而不是查设备/接线。
             gateway_core::engine::error::GatewayError::NoReply => StatusCode::GATEWAY_TIMEOUT,
+            // 公式来自用户配置（4008 属 4xxx 段），非法公式是客户端可纠正错误：
+            // 给 400 并保留原文，便于用户直接看到「第几列/哪个变量」。
+            gateway_core::engine::error::GatewayError::Formula(_) => StatusCode::BAD_REQUEST,
             gateway_core::engine::error::GatewayError::Protocol(_)
             | gateway_core::engine::error::GatewayError::Io(_)
             | gateway_core::engine::error::GatewayError::Queue(_)
             | gateway_core::engine::error::GatewayError::Mqtt(_)
-            | gateway_core::engine::error::GatewayError::Formula(_)
             | gateway_core::engine::error::GatewayError::Message(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -272,6 +274,10 @@ mod tests {
                 StatusCode::NOT_FOUND,
             ),
             (GatewayError::NoReply, StatusCode::GATEWAY_TIMEOUT),
+            (
+                GatewayError::Formula("未知变量: setpoint_1".into()),
+                StatusCode::BAD_REQUEST,
+            ),
         ];
         for (e, status) in client_facing {
             let err: ApiError = e.into();
@@ -279,6 +285,39 @@ mod tests {
             assert_ne!(
                 err.message, "internal server error",
                 "用户可纠正错误应保留原文"
+            );
+        }
+    }
+
+    /// R3：`GatewayError::code()` 与码表必须同码同状态。
+    ///
+    /// 核心层（gateway-core）不能依赖 api 层，`code()` 里的字面量是手工维护的；
+    /// 这里逐变体核对码值与 `http_status`，任何一侧改动未同步都会红。
+    #[test]
+    fn gateway_error_codes_match_error_code_table() {
+        let cases = [
+            (GatewayError::Config("x".into()), codes::CONFIG_OR_JSON),
+            (GatewayError::Io("x".into()), codes::IO),
+            (GatewayError::Protocol("x".into()), codes::PROTOCOL),
+            (GatewayError::NoReply, codes::NO_REPLY),
+            (GatewayError::Queue("x".into()), codes::QUEUE_ERROR),
+            (GatewayError::Mqtt("x".into()), codes::MQTT),
+            (GatewayError::Formula("x".into()), codes::FORMULA_INVALID),
+            (GatewayError::Auth("x".into()), codes::UNAUTHORIZED),
+            (GatewayError::NotFound("x".into()), codes::NOT_FOUND),
+            (GatewayError::Message("x".into()), codes::INTERNAL),
+        ];
+        for (e, expected) in cases {
+            let err: ApiError = e.into();
+            assert_eq!(
+                err.code as i32, expected,
+                "码值漂移：expected={expected}, got={}",
+                err.code
+            );
+            assert_eq!(
+                err.status,
+                codes::http_status(expected),
+                "HTTP 状态漂移：code={expected}"
             );
         }
     }
