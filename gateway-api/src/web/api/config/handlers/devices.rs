@@ -21,12 +21,14 @@ pub async fn list_devices(
     Ok(Json(ApiResponse::ok(devices)))
 }
 
-// Bug 106: 错误码体系（统一取自 `web::error_codes`，不要再写裸数字）——
-//   BUS_MISSING(4001): 设备相关校验失败（payload 字段缺失/格式错误）
-//   INVALID_PARAM(4002): 测点相关校验失败
+// Bug 106 / C2: 错误码体系（统一取自 `web::error_codes`，不要再写裸数字）——
+//   BUS_MISSING(4001): 未指定总线 / 总线不存在
+//   INVALID_PARAM(4002): 必填字段为空、协议不在白名单、模板协议不一致
 //   CONFIG_APPLY_FAILED(4003): 配置导入校验失败
-//   NOT_FOUND(4004): 资源不存在（device not found / point not found）
-// 客户端可根据错误码区分处理策略（重试/弹窗/重定向）。
+//   NOT_FOUND(4004): 资源不存在（device not found / 模板不存在）
+//   DUPLICATE_ID(4009): device id 已存在
+// 客户端据此区分处置：改参数 / 换名字 / 去建总线 / 去建模板，四类动作完全不同。
+// 早期这五种情况全报 4001，前端一律提示「总线不存在」，把排查方向带偏。
 
 /// POST /api/devices — 新增设备
 pub async fn create_device(
@@ -38,7 +40,7 @@ pub async fn create_device(
     let old = state.config.load_full();
     let mut cfg = old.as_ref().clone();
     if let Err(e) = validate_device(&payload, &cfg) {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, e.message()));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, e.message()));
     }
     // S2: 设备 ID 唯一性校验。原实现直接 `devices.push(device)`，同 ID 可并存；
     // 而 delete_device 按 id 全量 retain，删一台会连带删掉同 ID 的另一台及其全部点位。
@@ -48,13 +50,13 @@ pub async fn create_device(
         .is_some_and(|ds| ds.iter().any(|d| d.id == payload.id))
     {
         return Ok(ApiResponse::err(
-            codes::BUS_MISSING,
+            codes::DUPLICATE_ID,
             format!("device id '{}' 已存在，请换一个设备名重试", payload.id),
         ));
     }
     // S1: 模板存在性校验。此前填任意字符串都能创建成功，直到展开阶段静默失效成 0 点位。
     if let Err(msg) = validate_template_exists(&state, &payload.template) {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, msg));
     }
     // N1: 总线存在性校验。此前总线填错也能创建成功，采集器按 bus 建不起来
     // （仅日志 warn "no collector for bus"），设备永远采不到数据且界面无任何提示。
@@ -64,7 +66,7 @@ pub async fn create_device(
     // N2: 设备协议必须与模板协议一致。模板展开点位时用的是 device.protocol，
     // 选 DLT645 模板却填 modbus 会按 modbus 去读 DLT645 地址，必然全部失败。
     if let Err(msg) = validate_template_protocol(&state, &payload.template, &payload.protocol) {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, msg));
     }
     let device = DeviceConfig {
         id: payload.id,
@@ -104,27 +106,30 @@ pub async fn update_device(
     let mut cfg = old.as_ref().clone();
     // Bug 38: validate payload fields (skip uniqueness check, ID unchanged)
     if payload.name.is_empty() {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, "device name 不能为空"));
+        return Ok(ApiResponse::err(
+            codes::INVALID_PARAM,
+            "device name 不能为空",
+        ));
     }
     if payload.protocol.is_empty() {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, "protocol 不能为空"));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, "protocol 不能为空"));
     }
     if payload.bus.is_empty() {
         return Ok(ApiResponse::err(codes::BUS_MISSING, "bus 不能为空"));
     }
     if payload.template.is_empty() {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, "template 不能为空"));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, "template 不能为空"));
     }
     // Bug 109: 复用 VALID_PROTOCOLS 常量，与 update_point 保持一致。
     if !VALID_PROTOCOLS.contains(&payload.protocol.as_str()) {
         return Ok(ApiResponse::err(
-            codes::BUS_MISSING,
+            codes::INVALID_PARAM,
             format!("不支持的协议: {}", payload.protocol),
         ));
     }
     // S1: 编辑时同样校验模板存在性（模板名可在弹窗里被改错）。
     if let Err(msg) = validate_template_exists(&state, &payload.template) {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, msg));
     }
     // N1/N2: 编辑时同样校验总线存在性与模板协议一致性，否则改一次设备就把
     // 原本合法的配置改坏，且同样是静默失效。
@@ -132,7 +137,7 @@ pub async fn update_device(
         return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
     }
     if let Err(msg) = validate_template_protocol(&state, &payload.template, &payload.protocol) {
-        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, msg));
     }
     let found = with_devices_mut(&mut cfg, |devices| {
         devices.iter_mut().find(|d| d.id == id).map(|d| {
@@ -211,7 +216,7 @@ pub async fn delete_device(
 
 /// S1: 模板存在性校验。
 ///
-/// 返回 `Err(可读文案)` 时直接作为 4001 响应体；模板库为空时给出「模板目录可能未加载」
+/// 返回 `Err(可读文案)` 时作为 NOT_FOUND(4004) 响应体；模板库为空时给出「模板目录可能未加载」
 /// 的引导，而不是让用户对着「template not found」反复试错。
 fn validate_template_exists(state: &Arc<AppState>, template: &str) -> Result<(), String> {
     if state.config.templates.get(template).is_some() {

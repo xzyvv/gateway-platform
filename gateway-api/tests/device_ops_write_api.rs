@@ -218,14 +218,14 @@ async fn update_device_validates_bus_protocol_template() {
     assert_eq!(d.name, "dev1-renamed");
     assert_eq!(d.interval, Some(30));
 
-    // 不支持的协议 → 4001（不能把配置改坏）
+    // 不支持的协议 → 4002 INVALID_PARAM（不能把配置改坏）
     let mut bad = valid.clone();
     bad["protocol"] = json!("bogus-protocol");
     let body = call(&app, "PUT", "/api/devices/dev1", Some(bad)).await;
-    assert_eq!(body["code"], 4001);
+    assert_eq!(body["code"], 4002);
     assert!(body["message"].as_str().unwrap().contains("不支持"));
 
-    // 总线不存在 → 4001
+    // 总线不存在 → 4001 BUS_MISSING（C2：与「协议不支持」分开，处置动作不同）
     let mut bad = valid.clone();
     bad["bus"] = json!("ghost-bus");
     let body = call(&app, "PUT", "/api/devices/dev1", Some(bad)).await;
