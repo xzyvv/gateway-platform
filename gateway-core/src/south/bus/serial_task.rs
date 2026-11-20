@@ -467,7 +467,16 @@ async fn do_transaction(
     // 否则本次响应解析会先读到旧帧，导致 CRC / 长度错位、恒定解析失败。
     let stale = serial.clear_input().await;
     if stale > 0 {
-        tracing::debug!("serial: drained {} stale byte(s) before transaction", stale);
+        // 陈旧字节非 0 = 上一事务没把帧收完整（超时/被中断）。这是「CRC 错」类
+        // 现象最直接的证据：只看错误码无法区分「设备回帧不完整」和「总线噪声
+        // 导致 CRC 算错」，所以既要计数上报（供 Prometheus 抓趋势），也要打日志。
+        if let Some(m) = metrics {
+            m.inc_bus_stale_bytes(stale as u64);
+        }
+        tracing::warn!(
+            "serial: drained {} stale byte(s) before transaction (previous frame was incomplete)",
+            stale
+        );
     }
 
     // 写请求（含 DE 方向控制与自适应写超时）
@@ -571,6 +580,13 @@ async fn do_transaction(
 /// 不会让「设备已回完」的调试请求白等一整个超时。
 const RAW_IDLE_GAP: Duration = Duration::from_millis(50);
 
+/// DE（方向控制）建立时间：DE 拉高到收发器真正驱动总线所需的时间。
+///
+/// 典型 RS485 收发器为 0.1~1ms，少数老转换器要求更长。建立时间不足时首字节
+/// 会被吃掉，表现为「写成功但从站只收到半帧 / 报 CRC 错」这类偶发问题。
+/// 取 1ms 保守值；仅在外部 DE 控制时生效（自动方向收发适配器无需等待）。
+const DE_SETUP_TIME: Duration = Duration::from_millis(1);
+
 /// 写一帧（含 DE/RE 方向控制与按帧长/波特率自适应的写超时）。
 ///
 /// 采集事务与调试直发共用，确保两条路径的物理层时序完全一致——
@@ -589,6 +605,11 @@ async fn write_frame(
         if let Err(e) = gpio.set(pin, true) {
             tracing::warn!("set DE pin {} high failed: {}", pin, e);
         }
+        // DE 建立时间：收发器从「接收」切到「发送」到总线真正可驱动需要一小段时间
+        // （典型 0.1~1ms，少数老转换器要求更长）。建立时间不够时，头几个字节会被
+        // 吃掉，表现为「写成功但从站只收到半帧 / 报 CRC 错」。
+        // 只在外部 DE 控制时等待：自动方向收发的适配器无需此延时。
+        tokio::time::sleep(DE_SETUP_TIME).await;
     }
 
     // 使用按帧长/波特率自适应的短写超时（Bug 225），

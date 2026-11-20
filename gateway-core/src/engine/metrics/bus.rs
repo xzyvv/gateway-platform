@@ -33,6 +33,12 @@ pub struct BusMetrics {
     /// Modbus ASCII 接收缓冲触及硬上限、整段丢弃的次数（异常设备持续发无
     /// CRLF 数据时的内存保护信号；持续增长说明有设备/线路在灌噪声）。
     pub ascii_frame_dropped: AtomicU64,
+    /// 事务开始前丢弃的陈旧字节总数（上一事务超时/被中断后残留在接收缓冲里的字节）。
+    ///
+    /// 非 0 说明上一帧没有收完整，是「CRC 错 / 丢帧」最直接的证据：
+    /// 现场看到 CRC 错频发时，这个计数能区分「设备回帧不完整」
+    /// 与「总线电气噪声导致 CRC 算错」——两者在错误码上完全一样。
+    pub stale_bytes_dropped: AtomicU64,
     /// 当前排队等待上总线的在途事务数（全部总线合计，进程级 gauge）。
     ///
     /// 与 [`Self::queue_wait`] 配合区分「设备慢」与「排队拥堵」：深度长期 > 0
@@ -66,6 +72,9 @@ impl BusMetrics {
              # HELP gateway_bus_ascii_frame_dropped_total Modbus ASCII receive buffer overflow: partial frame dropped\n\
              # TYPE gateway_bus_ascii_frame_dropped_total counter\n\
              gateway_bus_ascii_frame_dropped_total {}\n\
+             # HELP gateway_bus_stale_bytes_dropped_total Stale bytes discarded before a transaction (previous frame was incomplete)\n\
+             # TYPE gateway_bus_stale_bytes_dropped_total counter\n\
+             gateway_bus_stale_bytes_dropped_total {}\n\
              # HELP gateway_bus_queue_depth Bus transactions queued but not yet executed (all buses)\n\
              # TYPE gateway_bus_queue_depth gauge\n\
              gateway_bus_queue_depth {}",
@@ -74,6 +83,7 @@ impl BusMetrics {
             self.self_check_skipped.load(Ordering::Relaxed),
             self.port_reopen_by_self_check.load(Ordering::Relaxed),
             self.ascii_frame_dropped.load(Ordering::Relaxed),
+            self.stale_bytes_dropped.load(Ordering::Relaxed),
             self.queue_depth.load(Ordering::Relaxed),
         );
         let _ = writeln!(
@@ -101,6 +111,7 @@ mod tests {
         m.self_check_skipped.fetch_add(1, Ordering::Relaxed);
         m.port_reopen_by_self_check.fetch_add(1, Ordering::Relaxed);
         m.ascii_frame_dropped.fetch_add(4, Ordering::Relaxed);
+        m.stale_bytes_dropped.fetch_add(7, Ordering::Relaxed);
         m.queue_depth.fetch_add(2, Ordering::Relaxed);
         m.queue_wait
             .record(1_500, &super::super::TRANSACTION_DURATION_BUCKETS);
@@ -129,6 +140,10 @@ mod tests {
             out.contains("gateway_bus_ascii_frame_dropped_total 4"),
             "{out}"
         );
+        assert!(
+            out.contains("gateway_bus_stale_bytes_dropped_total 7"),
+            "{out}"
+        );
         // 每个指标都必须带 HELP / TYPE，否则 Prometheus 抓取端告警
         for name in [
             "gateway_bus_self_check_ok_total",
@@ -136,6 +151,7 @@ mod tests {
             "gateway_bus_self_check_skipped_total",
             "gateway_bus_port_reopen_by_self_check_total",
             "gateway_bus_ascii_frame_dropped_total",
+            "gateway_bus_stale_bytes_dropped_total",
         ] {
             assert!(out.contains(&format!("# HELP {name}")), "缺少 HELP: {name}");
             assert!(
