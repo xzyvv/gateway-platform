@@ -113,6 +113,20 @@ describe('与后端码表对齐', () => {
       .filter((code) => !backendCodes.includes(code))
     expect(extra, `前端多出这些后端未登记的码: ${extra.join(', ')}`).toEqual([])
   })
+
+  it('前端常量名与后端常量名一致', () => {
+    // 码值一致但名字分叉同样有害：前端 POINT_WRITE_UNCERTAIN / 后端 WRITE_UNCERTAIN
+    // 都是 5102，读代码时会被当成两个语义。名字以 `ALL_CODES` 登记名为准。
+    const backendNameByCode = new Map<number, string>()
+    for (const [name, code] of declared) backendNameByCode.set(code, name)
+
+    const mismatches = Object.entries(ERR)
+      .map(([name, code]) => ({ name, code, backend: backendNameByCode.get(code) }))
+      .filter((it) => it.backend !== it.name)
+      .map((it) => `${it.name}(${it.code}) 应为 ${it.backend ?? '<后端未登记>'}`)
+
+    expect(mismatches, `前端常量名与后端不一致：\n${mismatches.join('\n')}`).toEqual([])
+  })
 })
 
 /**

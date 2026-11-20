@@ -100,7 +100,7 @@ export function usePointWrite() {
     } catch (e) {
       // 单写失败走业务码 reject（5101 明确失败 / 5102 结果未知）；
       // 批量请求级失败也走这里
-      const uncertain = readBizCode(e) === ERR.POINT_WRITE_UNCERTAIN
+      const uncertain = readBizCode(e) === ERR.WRITE_UNCERTAIN
       return {
         ok: false,
         status: uncertain ? 'uncertain' : 'error',

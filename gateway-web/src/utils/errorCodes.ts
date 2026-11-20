@@ -69,9 +69,9 @@ export const ERR = {
   /** 依赖能力暂不可用 */
   SERVICE_UNAVAILABLE: 5003,
   /** 点位写入失败（明确失败：能证明写没有生效，可安全重试） */
-  POINT_WRITE_FAILED: 5101,
+  WRITE_FAILED: 5101,
   /** 点位写入结果未知（设备可能已执行，禁止自动重试） */
-  POINT_WRITE_UNCERTAIN: 5102,
+  WRITE_UNCERTAIN: 5102,
   /** 设备分组：名称非法/重复 */
   GROUP_INVALID: 6001,
   /** 设备分组不存在 */
@@ -202,11 +202,11 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
     message: '依赖能力暂不可用',
     hint: '请稍后重试；反复出现请查看系统日志',
   },
-  [ERR.POINT_WRITE_FAILED]: {
+  [ERR.WRITE_FAILED]: {
     message: '点位写入失败',
     hint: '请确认设备在线、点位允许写入、地址与数据类型正确',
   },
-  [ERR.POINT_WRITE_UNCERTAIN]: {
+  [ERR.WRITE_UNCERTAIN]: {
     message: '点位写入结果未知',
     hint: '设备可能已执行，请先读回核实，不要自动重试',
   },
