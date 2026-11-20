@@ -116,9 +116,17 @@ pub(super) async fn reader_loop(
                         // 路由到 waiter；若 tx_id 不在 active（超时已移除/晚到），静默丢弃
                         pool.deliver(tx_id, pdu).await;
                     }
-                    Ok(Err(_)) => {
-                        // 读失败通常是连接断开；Malformed 则连接可疑，统一中断
-                        pool.abort_all().await;
+                    Ok(Err(e)) => {
+                        // 读失败通常是连接断开；Malformed 则连接可疑，统一中断。
+                        // P2-2：记录被连带作废的在途事务数与具体原因，便于现场区分
+                        // 「设备主动断开」与「畸形 MBAP 头导致我们主动断链」。
+                        let aborted = pool.abort_all().await;
+                        tracing::warn!(
+                            "modbus reader_loop: connection closed/error ({:?}), \
+                             aborted {} in-flight transaction(s)",
+                            e,
+                            aborted
+                        );
                         break;
                     }
                     Err(_) => {
@@ -127,7 +135,11 @@ pub(super) async fn reader_loop(
                             "modbus reader_loop: read timeout after {}s, aborting connection",
                             READER_READ_TIMEOUT.as_secs()
                         );
-                        pool.abort_all().await;
+                        let aborted = pool.abort_all().await;
+                        tracing::warn!(
+                            "modbus reader_loop: aborted {} in-flight transaction(s) after read timeout",
+                            aborted
+                        );
                         break;
                     }
                 }

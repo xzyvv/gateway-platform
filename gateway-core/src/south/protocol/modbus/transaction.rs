@@ -260,7 +260,17 @@ impl TransactionPool {
                 }
                 Err(_) => {
                     self.active.lock().await.remove(&tx_id);
-                    self.abort_all().await;
+                    // P2-2：写卡住说明对端不再读（掉电但连接未断 / 中间设备半开 /
+                    // 内核发送缓冲被填满），只能作废全部在途事务并重连。
+                    // 这条日志是现场解释「为什么整条总线闪断一轮采集」的唯一依据，
+                    // 必须写明触发原因、超时值与被连带作废的事务数。
+                    let aborted = self.abort_all().await;
+                    tracing::warn!(
+                        "modbus tcp: write stalled > {:?} (peer not draining socket), \
+                         aborting {} in-flight transaction(s) and forcing reconnect",
+                        total,
+                        aborted
+                    );
                     return Err(TransactionError::Disconnected);
                 }
             }
@@ -299,14 +309,16 @@ impl TransactionPool {
         }
     }
 
-    /// 把错误广播给所有 waiter（连接断开时调用）。
-    pub async fn abort_all(&self) {
+    /// 把错误广播给所有 waiter（连接断开时调用），返回被作废的事务数。
+    pub async fn abort_all(&self) -> usize {
         let mut active = self.active.lock().await;
         let waiters: Vec<_> = active.drain().collect();
         drop(active);
+        let count = waiters.len();
         for (_, reply) in waiters {
             let _ = reply.send(Err(TransactionError::Disconnected));
         }
+        count
     }
 
     /// 当前在途事务数
