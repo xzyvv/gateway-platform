@@ -185,6 +185,8 @@ export interface BatchItemResult {
   /** 单点读取耗时；批量写入无法按点计时，取整批请求的总耗时 */
   latency: number
   error?: string
+  /** 写结果未知：设备可能已执行，禁止自动重试（需先读回核实） */
+  uncertain?: boolean
   deviceName: string
   pointName: string
 }
@@ -344,6 +346,8 @@ async function runWrite(): Promise<BatchItemResult[]> {
   return targets.value.map((t, i) => {
     const item = outcome.results[i]
     const ok = item?.status === 'ok'
+    // 结果未知不是「明确失败」：文案里带上核实提示，避免被直接重试
+    const uncertain = !ok && item?.outcome === 'uncertain'
     return {
       deviceName: t.deviceName,
       pointName: t.pointName,
@@ -351,6 +355,7 @@ async function runWrite(): Promise<BatchItemResult[]> {
       value: ok ? (item?.value ?? value) : undefined,
       latency: elapsed,
       error: ok ? undefined : (item?.error || '写入失败'),
+      uncertain,
     }
   })
 }

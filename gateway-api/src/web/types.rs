@@ -399,6 +399,9 @@ mod status_mapping_tests {
     #[test]
     fn server_side_codes_stay_500_and_ok_is_200() {
         assert_eq!(err_status(5101), StatusCode::INTERNAL_SERVER_ERROR);
+        // G-02：写结果未知（5102）同样归 5xx——服务端无法确认写是否生效，
+        // 不能当成客户端可纠正的 400。
+        assert_eq!(err_status(5102), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(err_status(5001), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(ApiResponse::ok(()).into_response().status(), StatusCode::OK);
     }

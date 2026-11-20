@@ -77,24 +77,45 @@ impl SchedulerTrait for MockSchedulerWithDevices {
 
 // ===== 可注入 collector 的 mock（点位读/写集成测试用）=====
 
+/// 假 collector 的写结果口径（覆盖 G-02 的写结果三态）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MockWriteOutcome {
+    /// 写成功
+    Ok,
+    /// 明确失败：能证明写没有生效，可安全重试
+    Failed,
+    /// 结果未知：写帧已下发但没有可确认的应答，禁止自动重试
+    Uncertain,
+}
+
 /// 假 collector：read 恒返回 Good 数据点，write 结果可控（默认成功）。
 /// 供点位写集成测试验证 write 成功/失败两条路径（默认 mock 的 collectors 为空表）。
 pub struct MockCollector {
     bus: String,
-    write_ok: bool,
+    write_outcome: MockWriteOutcome,
 }
 
 impl MockCollector {
     pub fn new(bus: &str) -> Self {
         Self {
             bus: bus.to_string(),
-            write_ok: true,
+            write_outcome: MockWriteOutcome::Ok,
         }
     }
 
     /// 设置 write 返回结果（false → 返回 Unsupported 错误，模拟写入失败）
     pub fn with_write_result(mut self, ok: bool) -> Self {
-        self.write_ok = ok;
+        self.write_outcome = if ok {
+            MockWriteOutcome::Ok
+        } else {
+            MockWriteOutcome::Failed
+        };
+        self
+    }
+
+    /// 设置写结果三态（G-02：区分「明确失败」与「结果未知」）
+    pub fn with_write_outcome(mut self, outcome: MockWriteOutcome) -> Self {
+        self.write_outcome = outcome;
         self
     }
 }
@@ -120,12 +141,16 @@ impl Collector for MockCollector {
         _point: &'a PointConfig,
         _value: f64,
     ) -> Pin<Box<dyn Future<Output = CollectorResult<()>> + Send + 'a>> {
-        let ok = self.write_ok;
+        let outcome = self.write_outcome;
         Box::pin(async move {
-            if ok {
-                Ok(())
-            } else {
-                Err(CollectorError::Unsupported("mock write failure".into()))
+            match outcome {
+                MockWriteOutcome::Ok => Ok(()),
+                MockWriteOutcome::Failed => {
+                    Err(CollectorError::Unsupported("mock write failure".into()))
+                }
+                MockWriteOutcome::Uncertain => Err(CollectorError::WriteUncertain(
+                    "mock write result uncertain".into(),
+                )),
             }
         })
     }

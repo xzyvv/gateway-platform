@@ -201,12 +201,14 @@ pub async fn points_write_unified(
     };
     let items = write_points_core(&state, &req.writes, mode).await?;
 
-    // 单写：写失败沿用 send_command 的业务码 5101，让前端统一走错误提示路径
+    // 单写：写失败沿用 send_command 的业务码，让前端统一走错误提示路径。
+    // G-02：按写结果三态区分——5101 明确失败（可安全重试），
+    // 5102 结果未知（设备可能已执行，禁止自动重试）。
     if mode == WriteMode::Single {
         if let Some(err) = &items[0].error {
             return Ok(Json(ApiResponse::<serde_json::Value>::err(
-                5101,
-                format!("写入失败：{}", err.message),
+                write_failure_code(err.outcome),
+                write_failure_message(err),
             ))
             .into_response());
         }
@@ -258,11 +260,13 @@ pub(crate) async fn write_points_core(
                 None
             }
             Err(e) => {
-                let message = e.to_string();
+                let outcome = e.write_outcome();
+                let message = write_error_message(&e.to_string(), outcome);
                 audit_point_write(state, &point, w.value, Some(&message));
                 Some(WriteItemError {
                     message,
                     quality: Some(e.to_quality()),
+                    outcome,
                 })
             }
         };
@@ -288,6 +292,8 @@ pub(crate) async fn write_points_core(
                     Some(WriteItemError {
                         message,
                         quality: None,
+                        // 白名单拒绝属于「未下发」→ 明确失败，可安全重试
+                        outcome: WriteOutcome::Failed,
                     }),
                 ));
             }
@@ -300,6 +306,8 @@ pub(crate) async fn write_points_core(
                     error: Some(WriteItemError {
                         message: format!("point {} not found", w.id),
                         quality: None,
+                        // 点位不存在属于「未下发」→ 明确失败，可安全重试
+                        outcome: WriteOutcome::Failed,
                     }),
                 });
             }
@@ -317,6 +325,8 @@ pub(crate) async fn write_points_core(
                         Some(WriteItemError {
                             message: format!("collector for bus {} not found", bus_name),
                             quality: None,
+                            // collector 缺失属于「未下发」→ 明确失败，可安全重试
+                            outcome: WriteOutcome::Failed,
                         }),
                     ));
                 }
@@ -336,11 +346,13 @@ pub(crate) async fn write_points_core(
                     None
                 }
                 Err(e) => {
-                    let message = e.to_string();
+                    let outcome = e.write_outcome();
+                    let message = write_error_message(&e.to_string(), outcome);
                     audit_point_write(state, p, value, Some(&message));
                     Some(WriteItemError {
                         message,
                         quality: Some(e.to_quality()),
+                        outcome,
                     })
                 }
             };
@@ -413,22 +425,41 @@ fn write_item(point: &PointConfig, value: f64, error: Option<WriteItemError>) ->
 }
 
 /// 统一写响应（单写 / 批写同形）
+///
+/// 顶层 `status` 是粗粒度结果（ok / partial / error），逐条 `outcome` 是
+/// 写结果三态（ok / failed / uncertain）：
+/// - `outcome == "failed"`：能证明写没有生效，**可安全重试**；
+/// - `outcome == "uncertain"`：写帧已下发但没有可确认的应答，设备可能已执行，
+///   **禁止自动重试**，必须先读回核实。
+///
+/// 顶层 `failed` 沿用既有语义 = 未确认成功条数（含 uncertain），
+/// `uncertain` 是其中「结果未知」的子集计数，供上游一眼判断该不该重试。
 fn write_summary_json(items: &[WriteItemResult]) -> serde_json::Value {
     let mut results = Vec::with_capacity(items.len());
     let mut succeeded = 0usize;
+    let mut uncertain = 0usize;
     for item in items {
         match &item.error {
-            Some(e) => results.push(serde_json::json!({
-                "point_id": item.point_id,
-                "status": "error",
-                "error": e.message,
-                "quality": e.quality,
-            })),
+            Some(e) => {
+                if e.outcome.is_uncertain() {
+                    uncertain += 1;
+                }
+                results.push(serde_json::json!({
+                    "point_id": item.point_id,
+                    // 粗粒度状态（既有契约，兼容旧客户端）
+                    "status": "error",
+                    // 写结果三态（G-02：新增，供上游判断该不该重试）
+                    "outcome": e.outcome.as_str(),
+                    "error": e.message,
+                    "quality": e.quality,
+                }));
+            }
             None => {
                 succeeded += 1;
                 results.push(serde_json::json!({
                     "point_id": item.point_id,
                     "status": "ok",
+                    "outcome": WriteOutcome::Ok.as_str(),
                     "value": item.value,
                 }));
             }
@@ -447,6 +478,7 @@ fn write_summary_json(items: &[WriteItemResult]) -> serde_json::Value {
         "total": items.len(),
         "succeeded": succeeded,
         "failed": failed,
+        "uncertain": uncertain,
         "results": results,
     })
 }

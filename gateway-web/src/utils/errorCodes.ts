@@ -35,8 +35,10 @@ export const ERR = {
   DUPLICATE_ID: 4009,
   /** 授权配额不足（v2.0 档位限制，授权有效但档位不够） */
   QUOTA_EXCEEDED: 4021,
-  /** 点位写入失败（设备未返回成功） */
+  /** 点位写入失败（明确失败：能证明写没有生效，可安全重试） */
   POINT_WRITE_FAILED: 5101,
+  /** 点位写入结果未知（设备可能已执行，禁止自动重试） */
+  POINT_WRITE_UNCERTAIN: 5102,
   /** 设备分组：名称非法/重复 */
   GROUP_INVALID: 6001,
   /** 设备分组不存在 */
@@ -104,6 +106,10 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
   [ERR.POINT_WRITE_FAILED]: {
     message: '点位写入失败',
     hint: '请确认设备在线、点位允许写入、地址与数据类型正确',
+  },
+  [ERR.POINT_WRITE_UNCERTAIN]: {
+    message: '点位写入结果未知',
+    hint: '设备可能已执行，请先读回核实，不要自动重试',
   },
   [ERR.GROUP_INVALID]: {
     message: '设备分组名称不合法',

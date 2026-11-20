@@ -190,3 +190,77 @@ fn write_uncertain_is_not_counted_as_timeout() {
         CollectErrorCode::Timeout
     );
 }
+
+/// 三态映射：结果未知类错误一律 → `Uncertain`（禁止自动重试）。
+#[test]
+fn write_outcome_maps_uncertain_errors() {
+    use crate::engine::write::WriteOutcome;
+    for e in [
+        CollectorError::WriteUncertain("x".into()),
+        CollectorError::NoReply,
+        CollectorError::Timeout(Duration::from_millis(500)),
+        CollectorError::IoError("link down".into()),
+        CollectorError::ChecksumError,
+        CollectorError::InvalidFrame("garbage".into()),
+    ] {
+        let label = format!("{e:?}");
+        assert_eq!(
+            e.write_outcome(),
+            WriteOutcome::Uncertain,
+            "{label} 必须判为结果未知"
+        );
+    }
+}
+
+/// 三态映射：能证明写没有生效的错误 → `Failed`（可安全重试）。
+#[test]
+fn write_outcome_maps_definite_failures() {
+    use crate::engine::write::WriteOutcome;
+    for e in [
+        CollectorError::DeviceRejected("device said no".into()),
+        CollectorError::BusClosed,
+        CollectorError::InvalidBcd("bad".into()),
+        CollectorError::BusBusy(Duration::from_millis(50)),
+        CollectorError::InvalidConfig("bad address".into()),
+        CollectorError::Unsupported("no write".into()),
+    ] {
+        let label = format!("{e:?}");
+        assert_eq!(e.write_outcome(), WriteOutcome::Failed, "{label} 必须判为明确失败");
+    }
+    #[cfg(feature = "modbus")]
+    {
+        assert_eq!(
+            CollectorError::ModbusException(2).write_outcome(),
+            WriteOutcome::Failed
+        );
+    }
+}
+
+/// 三态映射与 `mark_write_uncertain` 必须一致：
+/// 被标为 `WriteUncertain` 的错误，三态上一定是 `Uncertain`。
+#[cfg(any(
+    feature = "s7comm",
+    feature = "fins",
+    feature = "mc",
+    feature = "iec104",
+    feature = "bacnet"
+))]
+#[test]
+fn write_outcome_agrees_with_mark_write_uncertain() {
+    use crate::engine::write::WriteOutcome;
+    use super::mark_write_uncertain;
+    for e in [
+        CollectorError::NoReply,
+        CollectorError::ChecksumError,
+        CollectorError::Timeout(Duration::from_millis(500)),
+        CollectorError::IoError("link down".into()),
+        CollectorError::InvalidFrame("garbage".into()),
+    ] {
+        let mapped = mark_write_uncertain(e);
+        assert_eq!(
+            mapped.write_outcome(),
+            WriteOutcome::Uncertain,
+            "标为 WriteUncertain 后三态必须仍是 Uncertain"
+        );
+    }
+}

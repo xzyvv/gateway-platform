@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::mock_state::{mock_app_state, mock_app_state_with_collectors, MockCollector};
+use common::mock_state::{
+    mock_app_state, mock_app_state_with_collectors, MockCollector, MockWriteOutcome,
+};
 use gateway_api::web::{build_router, AppState};
 use gateway_core::config::PointConfig;
 use gateway_core::south::protocol::Collector;
@@ -66,6 +68,16 @@ fn collectors_bus0(ok: bool) -> HashMap<String, Arc<dyn Collector>> {
     collectors.insert(
         "bus0".to_string(),
         Arc::new(MockCollector::new("bus0").with_write_result(ok)),
+    );
+    collectors
+}
+
+/// 按写结果三态装配 bus0 的 collector（G-02）
+fn collectors_bus0_outcome(outcome: MockWriteOutcome) -> HashMap<String, Arc<dyn Collector>> {
+    let mut collectors: HashMap<String, Arc<dyn Collector>> = HashMap::new();
+    collectors.insert(
+        "bus0".to_string(),
+        Arc::new(MockCollector::new("bus0").with_write_outcome(outcome)),
     );
     collectors
 }
@@ -193,6 +205,135 @@ async fn unified_write_single_entry_write_failure_returns_5101() {
     let v = body_json(res).await;
     assert_eq!(v["code"], 5101, "单写失败应返回 5101: {v}");
     assert!(v["data"].is_null(), "写失败时不应带 data: {v}");
+}
+
+/// 单写且写结果未知 → 业务码 5102（结果未知，禁止自动重试）
+///
+/// G-02：5101 与 5102 的区别就是「能不能证明写没有生效」。
+/// 结果未知时上游必须先读回核实，不能当普通失败重试。
+#[tokio::test]
+async fn unified_write_single_entry_uncertain_returns_5102() {
+    let state = mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Uncertain));
+    store(&state, point("p1", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["code"], 5102, "写结果未知应返回 5102: {v}");
+    let msg = v["message"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("设备可能已执行"),
+        "5102 提示应包含「设备可能已执行」: {msg}"
+    );
+    assert!(
+        msg.contains("不要自动重试"),
+        "5102 提示应包含「不要自动重试」: {msg}"
+    );
+}
+
+/// 单写且明确失败 → 仍是 5101（可安全重试），不得被结果未知口径污染
+#[tokio::test]
+async fn unified_write_single_entry_definite_failure_stays_5101() {
+    let state = mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Failed));
+    store(&state, point("p1", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["code"], 5101, "明确失败应返回 5101: {v}");
+    let msg = v["message"].as_str().unwrap_or_default();
+    assert!(
+        !msg.contains("不要自动重试"),
+        "明确失败不应带「不要自动重试」提示: {msg}"
+    );
+}
+
+/// 批写逐条 outcome 三态：ok / failed / uncertain，且顶层给出 uncertain 计数
+#[tokio::test]
+async fn unified_write_multi_entry_reports_per_item_outcome() {
+    let state = mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Uncertain));
+    store(&state, point("p1", "bus0"));
+    store(&state, point("p2", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":2.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    let v = &v["data"];
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["succeeded"], 0);
+    assert_eq!(v["failed"], 2);
+    assert_eq!(v["uncertain"], 2, "顶层 uncertain 计数应反映结果未知条数: {v}");
+    assert_eq!(v["results"][0]["outcome"], "uncertain");
+    assert_eq!(v["results"][1]["outcome"], "uncertain");
+    assert!(v["results"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("设备可能已执行"));
+}
+
+/// 批写成功项的 outcome 为 ok
+#[tokio::test]
+async fn unified_write_multi_entry_success_outcome_is_ok() {
+    let state = mock_app_state_with_collectors(collectors_bus0(true));
+    store(&state, point("p1", "bus0"));
+    store(&state, point("p2", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":2.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    let v = &v["data"];
+    assert_eq!(v["uncertain"], 0);
+    assert_eq!(v["results"][0]["outcome"], "ok");
+    assert_eq!(v["results"][1]["outcome"], "ok");
+}
+
+/// 批写里「白名单外 / 点位不存在」属于未下发 → outcome=failed，不是 uncertain
+#[tokio::test]
+async fn unified_write_multi_entry_preflight_failures_are_failed_outcome() {
+    let state = mock_app_state_with_collectors(collectors_bus0(true));
+    store(&state, point("p1", "bus0"));
+    let mut p2 = point("p2", "bus0");
+    p2.writable = false;
+    store(&state, p2);
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":2.0},{"id":"ghost","value":3.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    let v = &v["data"];
+    assert_eq!(v["uncertain"], 0, "未下发类失败不应计入 uncertain: {v}");
+    assert_eq!(v["results"][0]["outcome"], "ok");
+    assert_eq!(v["results"][1]["outcome"], "failed");
+    assert_eq!(v["results"][2]["outcome"], "failed");
 }
 
 /// ≥2 条走批写：白名单外 / 不存在点位作为**该项失败**独立返回，成功项不受影响

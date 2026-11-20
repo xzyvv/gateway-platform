@@ -13,6 +13,7 @@
  */
 import { confirmAction } from '@/utils/confirm'
 import { extractErrorMessage } from '@/utils/errorHandler'
+import { ERR } from '@/utils/errorCodes'
 import { writePoints, type BatchWriteResultItem, type PointWriteEntry } from '@/api/points'
 
 /** 批量写结果；始终与入参等长（传输失败时逐条补 null） */
@@ -22,6 +23,11 @@ export interface PointWriteOutcome {
   total: number
   succeeded: number
   failed: number
+  /**
+   * 结果未知条数（`failed` 的子集）：设备可能已执行，**禁止自动重试**，
+   * 必须先读回核实。
+   */
+  uncertain: number
   results: (BatchWriteResultItem | null)[]
   /** 请求级失败原因（传输错误 / 业务码 reject）；单条失败看 results */
   error: string
@@ -32,6 +38,17 @@ export interface PointWriteOnceOutcome {
   status: string
   value: number | null
   error: string
+  /** 写结果未知（设备可能已执行，禁止自动重试） */
+  uncertain: boolean
+}
+
+/** 写结果未知时的统一提示：提示但不阻断重试按钮 */
+export const WRITE_UNCERTAIN_HINT = '设备可能已执行，请先读回核实，不要自动重试'
+
+/** 从错误对象上取业务码（axios 占用 error.code，业务码挂在 error.bizCode） */
+function readBizCode(e: unknown): number | undefined {
+  const code = (e as { bizCode?: unknown } | null)?.bizCode
+  return typeof code === 'number' ? code : undefined
 }
 
 /**
@@ -66,23 +83,31 @@ export function usePointWrite() {
     const total = entries.length
     try {
       const resp = await writePoints(entries)
+      // uncertain 优先取后端顶层计数，缺失时按逐条 outcome 兜底
+      const uncertain =
+        resp.uncertain ??
+        resp.results.filter((r) => r?.outcome === 'uncertain').length
       return {
         ok: resp.failed === 0,
         status: resp.status,
         total: resp.total,
         succeeded: resp.succeeded,
         failed: resp.failed,
+        uncertain,
         results: resp.results,
         error: '',
       }
     } catch (e) {
-      // 单写失败走业务码 5101（reject）；批量请求级失败也走这里
+      // 单写失败走业务码 reject（5101 明确失败 / 5102 结果未知）；
+      // 批量请求级失败也走这里
+      const uncertain = readBizCode(e) === ERR.POINT_WRITE_UNCERTAIN
       return {
         ok: false,
-        status: 'error',
+        status: uncertain ? 'uncertain' : 'error',
         total,
         succeeded: 0,
         failed: total,
+        uncertain: uncertain ? total : 0,
         results: entries.map(() => null),
         error: extractErrorMessage(e, '写入失败'),
       }
@@ -94,11 +119,13 @@ export function usePointWrite() {
     const outcome = await writeBatch([{ id, value }])
     const item = outcome.results[0]
     const ok = item?.status === 'ok'
+    const uncertain = !ok && (item?.outcome === 'uncertain' || outcome.uncertain > 0)
     return {
       ok,
-      status: item?.status ?? outcome.status,
+      status: uncertain ? 'uncertain' : (item?.status ?? outcome.status),
       value: ok ? (item?.value ?? value) : null,
       error: ok ? '' : item?.error || outcome.error || '写入失败',
+      uncertain,
     }
   }
 

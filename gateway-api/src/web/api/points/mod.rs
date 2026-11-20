@@ -8,6 +8,7 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::web::types::{ApiError, ApiResponse, AppState};
+use gateway_core::engine::write::WriteOutcome;
 
 /// 点位批量请求体（统一入口 `POST /api/point-tools/batch`）
 ///
@@ -96,6 +97,55 @@ pub(crate) struct WriteItemResult {
 pub(crate) struct WriteItemError {
     pub message: String,
     pub quality: Option<gateway_core::engine::model::Quality>,
+    /// 写结果三态：`Failed` 明确失败（可安全重试），`Uncertain` 结果未知
+    /// （设备可能已执行，**禁止**自动重试）。
+    ///
+    /// 判据只有一条：能否证明写没有生效。见
+    /// [`gateway_core::engine::write::WriteOutcome`]。
+    pub outcome: WriteOutcome,
+}
+
+/// 单条写失败的业务码：**明确失败**（可安全重试）。
+pub(crate) const CODE_WRITE_FAILED: i32 = 5101;
+
+/// 单条写失败的业务码：**结果未知**（设备可能已执行，禁止自动重试）。
+pub(crate) const CODE_WRITE_UNCERTAIN: i32 = 5102;
+
+/// 写结果未知时的统一处置提示。
+///
+/// 提示文本同时用于逐条 `error` 与顶层业务码 message，让上游（前端 / MES /
+/// 集成方）无论从哪个字段读到这次失败，都能得到同一个结论：
+/// **先读回核实，不要自动重试**。
+pub(crate) const WRITE_UNCERTAIN_HINT: &str = "设备可能已执行，请先读回核实，不要自动重试";
+
+/// 按写结果三态生成面向用户的失败文案。
+///
+/// - `Uncertain`：追加 [`WRITE_UNCERTAIN_HINT`]，让调用方不会把它当成普通失败去重试；
+/// - `Failed` / `Ok`：原样透传后端原因（明确失败可安全重试，无需额外说明）。
+pub(crate) fn write_error_message(reason: &str, outcome: WriteOutcome) -> String {
+    match outcome {
+        WriteOutcome::Uncertain => format!("{reason}（{WRITE_UNCERTAIN_HINT}）"),
+        WriteOutcome::Failed | WriteOutcome::Ok => reason.to_string(),
+    }
+}
+
+/// 按写结果三态给出单条写失败的**业务码**。
+///
+/// - `Uncertain` → 5102（结果未知，禁止自动重试）；
+/// - 其余 → 5101（明确失败，可安全重试）。
+pub(crate) fn write_failure_code(outcome: WriteOutcome) -> i32 {
+    match outcome {
+        WriteOutcome::Uncertain => CODE_WRITE_UNCERTAIN,
+        WriteOutcome::Failed | WriteOutcome::Ok => CODE_WRITE_FAILED,
+    }
+}
+
+/// 按写结果三态给出单条写失败的**顶层提示文案**。
+pub(crate) fn write_failure_message(err: &WriteItemError) -> String {
+    match err.outcome {
+        WriteOutcome::Uncertain => format!("写入结果未知：{}", err.message),
+        WriteOutcome::Failed | WriteOutcome::Ok => format!("写入失败：{}", err.message),
+    }
 }
 
 mod handlers;

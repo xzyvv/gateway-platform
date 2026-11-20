@@ -58,8 +58,8 @@
 | W-03c | 设备明确回了错误码（拒绝 / 异常码 / 否定确认）必须用 `DeviceRejected`，不得混进 `InvalidFrame` | ✅ | `DeviceRejected` 变体 + 各协议错误点改造；测试 `device_rejected_is_distinct_from_invalid_frame` |
 | W-04 | 写结果未知必须计数 | 🟡 | `gateway_write_uncertain_total`；**缺口 G-08**：自研协议（无 `BusManager`）不计数 |
 | W-05 | 写路径必须走控制通道（优先级） | ✅ | Modbus / DLT645 / CJT188 全部 `BusPriority::Control` |
-| W-06 | 写不确定的错误必须传到 API 层可见 | 🟡 | 目前靠 `Display` 文案冒泡，无独立错误码 |
-| W-07 | 上游（前端 / MES）不得对 `WriteUncertain` 自动重试 | ❌ | **缺口 G-02**：API 契约未区分 |
+| W-06 | 写不确定的错误必须传到 API 层可见 | ✅ | `CollectorError::write_outcome()` → `engine::write::WriteOutcome`（中立层）；API 层 `results[].outcome` + 业务码 5102 |
+| W-07 | 上游（前端 / MES）不得对 `WriteUncertain` 自动重试 | ✅ | 业务码 **5102**（结果未知）+ `outcome: "uncertain"` + 统一提示「设备可能已执行，请先读回核实，不要自动重试」；前端仅提示不阻断重试 |
 | W-08 | 写超时后应能读回核实（消除「未知」） | ❌ | **缺口 G-03**：读回消歧未实现 |
 | W-09 | 点位应标记「写值 / 增量 / 脉冲」，以决定能否读回消歧 | ❌ | **缺口 G-04**：点位模型无写入属性 |
 | W-10 | Modbus 写异常响应必须保留 `ModbusException` 语义 | ✅ | `trait_impl.rs` 先判 5 字节异常帧；测试 `write_exception_frame_maps_to_modbus_exception` |
@@ -118,7 +118,7 @@
 | # | 缺口 | 工作量 | 价值 | 备注 |
 |---|---|---|---|---|
 | G-01 | TCP 响应 `unit_id` 不校验 | S | 低 | 异常网关下会误认应答 |
-| G-02 | API 契约未区分 `WriteUncertain`（错误码 / `outcome` 字段 / 前端文案） | M | 高 | 上游无法判断该不该重试，重复写风险仍在 |
+| G-02 | API 契约未区分 `WriteUncertain`（错误码 / `outcome` 字段 / 前端文案） | — | — | **已关闭**：双轨契约（`results[].outcome` 三态 + 业务码 5102）+ 前端仅提示不阻断 |
 | G-03 | 写超时读回消歧 | M~L | 高 | 需先有 G-02 的语义定义 |
 | G-04 | 点位写入属性（写值 / 增量 / 脉冲）未建模 | M | 中高 | 决定 G-03 能否落地，也是增量点位的正确性前提 |
 | G-05 | TCP 单设备拖垮总线（无 per-slave 观测/熔断） | M~L | 中高 | 建议先加 per-slave NoReply 观测再定方案 |
@@ -138,3 +138,11 @@
    （能证明未生效 → `DeviceRejected` 等；证明不了 → `mark_write_uncertain`）
 6. 是否只改了**写**路径却顺手改动了**读**路径的错误口径？→ 违反 **W-14** 必须回退
 7. 是否新增了需要守住的语义？→ 补进本表 + 补测试
+
+改动 `gateway-api/**` 或 `gateway-web/**` 的写路径时：
+
+8. 新增的写失败分支是否已按三态区分业务码（5101 明确失败 / 5102 结果未知）？
+   → 违反 **W-07** 必须回退
+9. 新增的响应字段是否带了 `outcome` 三态与 `uncertain` 计数？
+   → 违反 **W-06** 必须回退
+10. 前端遇到 `uncertain` 是否走了**提示**而不是**阻断**？（重试按钮保留，读回核实交操作员）

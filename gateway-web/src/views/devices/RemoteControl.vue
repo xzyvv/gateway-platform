@@ -95,7 +95,7 @@ const selPoint = ref('')
 const writeValue = ref('')
 const operator = ref('admin')
 const lastResult = ref('')
-const lastType = ref<'success' | 'error' | 'info'>('info')
+const lastType = ref<'success' | 'error' | 'info' | 'warning'>('info')
 const sending = ref(false)
 const loadingPoints = ref(false)
 /** el-form 实例引用，供写入值校验高亮 */
@@ -136,6 +136,13 @@ async function send() {
       ElMessage.success('已下发')
       lastResult.value = `写入成功：${outcome.value ?? val}`
       lastType.value = 'success'
+    } else if (outcome.uncertain) {
+      // 结果未知：设备可能已执行，只是没收到应答。
+      // 只提示不阻断——重试按钮保留，由操作员读回核实后自行决定。
+      const msg = composeFailure('下发结果未知', outcome.error)
+      ElMessage.warning(msg)
+      lastResult.value = msg
+      lastType.value = 'warning'
     } else {
       // outcome.error 是后端/传输层给出的具体原因（不可写、超时、CRC…），
       // 只弹「下发失败」会让现场无从判断是配置问题还是通信问题

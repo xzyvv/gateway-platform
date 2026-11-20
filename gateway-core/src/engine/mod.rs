@@ -16,6 +16,7 @@ pub mod ports;
 pub mod priority;
 pub mod shutdown;
 pub mod supervision;
+pub mod write;
 
 /// 重新导出 Diagnostics 便于外部使用
 pub use monitor::remote_diag::Diagnostics;

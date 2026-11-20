@@ -83,8 +83,12 @@ instance.interceptors.response.use(
           wrapped.code === ERR.LICENSE_INVALID
         notify.error(message, { code: wrapped.code, traceId, silent: isMutation && !isGlobalAlert })
         // traceId 挂到 Error 上：页面/组合式函数在上下文提示里也能带上它
-        const bizError = new Error(message) as Error & { traceId?: string }
+        // bizCode 挂业务码（不用 code：axios 的 error.code 已被占用）：
+        // 写结果未知（5102）与明确失败（5101）要能被调用方区分开——
+        // 前者禁止自动重试，后者可安全重试。
+        const bizError = new Error(message) as Error & { traceId?: string; bizCode?: number }
         bizError.traceId = traceId
+        bizError.bizCode = wrapped.code
         // 全局已弹过才标记，页面 catch 里就不会再叠一条
         if (!isMutation || isGlobalAlert) markUserNotified(bizError)
         return Promise.reject(bizError)
@@ -131,6 +135,16 @@ instance.interceptors.response.use(
       const body = error.response.data
       const traceId = readTraceId(error.response.headers)
       const msg = withDiagHint(body?.error || body?.message || error.message)
+      // 业务码挂到 error 上（不用 code：axios 已占用）：
+      // 写结果未知（5102）与明确失败（5101）必须能被调用方区分——
+      // 前者设备可能已执行，禁止自动重试；后者可安全重试。
+      if (typeof body?.code === 'number') {
+        try {
+          ;(error as Error & { bizCode?: number }).bizCode = body.code
+        } catch {
+          /* 少数被冻结的 Error 对象忽略即可 */
+        }
+      }
       // 后端用 ApiResponse{code,message} 返回 4xx/5xx（如配置/用户/点位校验失败）时，
       // 页面级 catch 常直接展示 `e.message`；axios 原始 message 是英文
       // 「Request failed with status code 400」，会把后端的中文原因吃掉。

@@ -156,8 +156,23 @@ const batchColumns: ColumnDef<BatchRow>[] = [
         row.result
           ? h(
               ElTag,
-              { type: row.result.status === 'ok' ? 'success' : 'danger', size: 'small', effect: 'dark' },
-              () => (row.result!.status === 'ok' ? `成功 ${row.result!.value}` : '失败'),
+              {
+                // 结果未知用 warning：设备可能已执行，既不是成功也不是明确失败
+                type:
+                  row.result.status === 'ok'
+                    ? 'success'
+                    : row.result.outcome === 'uncertain'
+                      ? 'warning'
+                      : 'danger',
+                size: 'small',
+                effect: 'dark',
+              },
+              () =>
+                row.result!.status === 'ok'
+                  ? `成功 ${row.result!.value}`
+                  : row.result!.outcome === 'uncertain'
+                    ? '结果未知'
+                    : '失败',
             )
           : h('span', { class: 'batch-pending' }, '未提交'),
         row.result?.error ? h('span', { class: 'batch-error' }, row.result.error) : null,
@@ -231,7 +246,13 @@ async function doBatchWrite() {
     // results 与入参等长且逐位对应，按下标回填各行结果
     rows.forEach((r, i) => { r.result = outcome.results[i] ?? null })
     const summaryType =
-      outcome.failed === 0 ? 'success' : outcome.succeeded === 0 ? 'danger' : 'warning'
+      outcome.failed === 0
+        ? 'success'
+        : outcome.uncertain > 0
+          ? 'warning'
+          : outcome.succeeded === 0
+            ? 'danger'
+            : 'warning'
     if (outcome.error) {
       // 请求级失败（网络/权限）：没有逐条结果，只回填汇总与操作记录
       const msg = withDiagHint(outcome.error)
@@ -241,7 +262,12 @@ async function doBatchWrite() {
       ElMessage.error(batchSummary.value)
       return
     }
-    batchSummary.value = `成功 ${outcome.succeeded} / 失败 ${outcome.failed}（共 ${outcome.total}，${latency.toFixed(0)}ms）`
+    // 结果未知单独计数：这些条目设备可能已执行，不能按普通失败看待
+    const uncertainNote =
+      outcome.uncertain > 0
+        ? `，其中 ${outcome.uncertain} 条结果未知（设备可能已执行，请先读回核实，不要自动重试）`
+        : ''
+    batchSummary.value = `成功 ${outcome.succeeded} / 失败 ${outcome.failed}（共 ${outcome.total}，${latency.toFixed(0)}ms${uncertainNote}）`
     batchSummaryType.value = summaryType
     emit('log', summaryType, '批量写入', batchSummary.value)
   } catch (e) {

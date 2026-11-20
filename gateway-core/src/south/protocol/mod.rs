@@ -88,6 +88,7 @@ pub use registry::{ProtocolRegistry, VALID_PROTOCOLS};
 use crate::config::PointConfig;
 use crate::engine::metrics::CollectErrorCode;
 use crate::engine::model::{AddressReadResult, DataPoint, Quality};
+use crate::engine::write::WriteOutcome;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -209,6 +210,39 @@ impl CollectorError {
             // gateway_write_uncertain_total，不靠 by_reason 观察。
             CollectorError::WriteUncertain(_) => CollectErrorCode::Other,
             CollectorError::Unsupported(_) => CollectErrorCode::Other,
+        }
+    }
+
+    /// 映射为跨协议统一的写结果三态（见 [`crate::engine::write::WriteOutcome`]）。
+    ///
+    /// 判据只有一个：**能否证明写没有生效**。
+    ///
+    /// - `Uncertain`（结果未知，禁止自动重试）：写帧已下发但没有可确认的应答。
+    ///   典型是超时、无应答、IO 错、校验错、响应无法解析——设备有没有执行
+    ///   **无法判断**，重复下发可能让累加类点位翻倍、脉冲类点位多触发。
+    /// - `Failed`（明确失败，可安全重试）：能证明写没有生效。设备回了错误码、
+    ///   总线没排上队、参数非法、根本不支持写——写**确定未生效**。
+    ///
+    /// 注意：本方法只描述**写**语义。读路径上的 `InvalidFrame` / `ChecksumError`
+    /// 依然表示「这一帧读坏了」，与写路径的「结果未知」互不干扰。
+    pub fn write_outcome(&self) -> WriteOutcome {
+        match self {
+            // 结果未知：写帧已下发，无法确认是否生效。
+            CollectorError::WriteUncertain(_)
+            | CollectorError::NoReply
+            | CollectorError::Timeout(_)
+            | CollectorError::IoError(_)
+            | CollectorError::ChecksumError
+            | CollectorError::InvalidFrame(_) => WriteOutcome::Uncertain,
+            // 明确失败：能证明写没有生效，调用方可安全重试。
+            CollectorError::DeviceRejected(_)
+            | CollectorError::BusClosed
+            | CollectorError::InvalidBcd(_)
+            | CollectorError::BusBusy(_)
+            | CollectorError::InvalidConfig(_)
+            | CollectorError::Unsupported(_) => WriteOutcome::Failed,
+            #[cfg(feature = "modbus")]
+            CollectorError::ModbusException(_) => WriteOutcome::Failed,
         }
     }
 }

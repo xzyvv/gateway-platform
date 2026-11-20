@@ -10,7 +10,9 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::Json;
 
-use crate::web::api::points::{write_points_core, PointWriteEntry, WriteMode};
+use crate::web::api::points::{
+    write_failure_code, write_failure_message, write_points_core, PointWriteEntry, WriteMode,
+};
 use crate::web::types::{ApiError, ApiResponse, AppState};
 
 use super::super::model::{ControlCommand, SendCommandRequest, WritablePoint};
@@ -120,7 +122,12 @@ pub(crate) async fn send_command(
 
     if let Some(err) = &item.error {
         // Bug 221: 写失败必须返回非 0 业务码，前端统一走错误提示路径。
-        return Ok(ApiResponse::err(5101, format!("写入失败：{}", err.message)));
+        // G-02: 按写结果三态区分业务码——5101 明确失败（可安全重试），
+        // 5102 结果未知（设备可能已执行，禁止自动重试）。
+        return Ok(ApiResponse::err(
+            write_failure_code(err.outcome),
+            write_failure_message(err),
+        ));
     }
 
     let ts = chrono::Utc::now().timestamp_millis();

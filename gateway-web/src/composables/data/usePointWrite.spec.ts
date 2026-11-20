@@ -25,11 +25,18 @@ describe('usePointWrite', () => {
       total: 1,
       succeeded: 1,
       failed: 0,
-      results: [{ point_id: 'p1', status: 'ok', value: 42 }],
+      uncertain: 0,
+      results: [{ point_id: 'p1', status: 'ok', outcome: 'ok', value: 42 }],
     })
     const { writeOnce } = usePointWrite()
     const outcome = await writeOnce('p1', 41)
-    expect(outcome).toEqual({ ok: true, status: 'ok', value: 42, error: '' })
+    expect(outcome).toEqual({
+      ok: true,
+      status: 'ok',
+      value: 42,
+      error: '',
+      uncertain: false,
+    })
   })
 
   it('单写 5101 reject 被折算为失败结果，不抛异常', async () => {
@@ -90,5 +97,68 @@ describe('usePointWrite', () => {
     expect(outcome.failed).toBe(2)
     expect(outcome.results).toEqual([null, null])
     expect(outcome.error).toContain('network down')
+  })
+
+  it('批量结果未知条目计入 uncertain 计数', async () => {
+    m.writePoints.mockResolvedValue({
+      status: 'partial',
+      total: 2,
+      succeeded: 1,
+      failed: 1,
+      uncertain: 1,
+      results: [
+        { point_id: 'a', status: 'ok', outcome: 'ok', value: 1 },
+        {
+          point_id: 'b',
+          status: 'error',
+          outcome: 'uncertain',
+          error: 'no reply（设备可能已执行，请先读回核实，不要自动重试）',
+        },
+      ],
+    })
+    const { writeBatch } = usePointWrite()
+    const outcome = await writeBatch([
+      { id: 'a', value: 1 },
+      { id: 'b', value: 2 },
+    ])
+    expect(outcome.uncertain).toBe(1)
+    expect(outcome.results[1]?.outcome).toBe('uncertain')
+  })
+
+  it('后端缺 uncertain 字段时按逐条 outcome 兜底统计', async () => {
+    m.writePoints.mockResolvedValue({
+      status: 'error',
+      total: 1,
+      succeeded: 0,
+      failed: 1,
+      results: [
+        { point_id: 'b', status: 'error', outcome: 'uncertain', error: 'timeout' },
+      ],
+    })
+    const { writeBatch } = usePointWrite()
+    const outcome = await writeBatch([{ id: 'b', value: 2 }])
+    expect(outcome.uncertain).toBe(1)
+  })
+
+  it('单写 5102 结果未知：标 uncertain 并保留后端提示文案', async () => {
+    const err = new Error('写入结果未知：no reply（设备可能已执行，请先读回核实，不要自动重试）')
+    ;(err as Error & { bizCode?: number }).bizCode = 5102
+    m.writePoints.mockRejectedValue(err)
+    const { writeOnce } = usePointWrite()
+    const outcome = await writeOnce('p1', 1)
+    expect(outcome.ok).toBe(false)
+    expect(outcome.uncertain).toBe(true)
+    expect(outcome.status).toBe('uncertain')
+    expect(outcome.error).toContain('不要自动重试')
+  })
+
+  it('单写 5101 明确失败不算 uncertain', async () => {
+    const err = new Error('写入失败：点位不可写')
+    ;(err as Error & { bizCode?: number }).bizCode = 5101
+    m.writePoints.mockRejectedValue(err)
+    const { writeOnce } = usePointWrite()
+    const outcome = await writeOnce('p1', 1)
+    expect(outcome.uncertain).toBe(false)
+    expect(outcome.status).toBe('error')
   })
 })

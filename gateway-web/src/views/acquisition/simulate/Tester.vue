@@ -307,6 +307,14 @@ async function doWrite() {
     if (isUnmounted()) return
     if (!outcome.ok) {
       const msg = withDiagHint(outcome.error)
+      if (outcome.uncertain) {
+        // 结果未知：设备可能已执行，只是没收到应答——提示但不阻断，
+        // 由操作员读回核实后自行决定是否重试
+        const entry = addLog('warning', '写入', `${ptName} 写入结果未知: ${msg}`)
+        void attachFrames(entry, startedAtMs, bus)
+        ElMessage.warning(`写入结果未知：${msg}`)
+        return
+      }
       // 失败同样附报文：请求帧可能已发出（超时/异常码场景只有请求没有响应）
       const entry = addLog('danger', '写入', `${ptName} 写入失败: ${msg}`)
       void attachFrames(entry, startedAtMs, bus)

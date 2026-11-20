@@ -145,10 +145,21 @@ export interface PointWriteEntry {
 export interface BatchWriteResultItem {
   point_id: string
   status: string
+  /** 写结果三态 */
+  outcome?: WriteOutcome
   value?: number
   error?: string
   quality?: unknown
 }
+
+/**
+ * 写结果三态（后端契约，与 `docs/architecture/read-write-invariants.md` 一致）：
+ * - `ok`：写成功
+ * - `failed`：能证明写没有生效（设备拒绝 / 总线忙 / 参数非法…）→ 可安全重试
+ * - `uncertain`：写帧已下发但没有可确认的应答 → 设备可能已执行，
+ *   **禁止自动重试**，必须先读回核实
+ */
+export type WriteOutcome = 'ok' | 'failed' | 'uncertain'
 
 /** 统一写响应：status 为 ok | partial | error */
 export interface WritePointsResponse {
@@ -156,6 +167,8 @@ export interface WritePointsResponse {
   total: number
   succeeded: number
   failed: number
+  /** 结果未知条数（failed 的子集）：设备可能已执行，禁止自动重试 */
+  uncertain?: number
   results: (BatchWriteResultItem | null)[]
 }
 
@@ -165,7 +178,8 @@ export interface WritePointsResponse {
  * `POST /api/point-tools/write`，请求体 `{ writes: [{ id, value }] }`。
  * 前端只传数组，单/批分发由后端决定：
  * - 1 条走单写业务（查点 / writable 白名单 / 审计与远程控制完全一致；
- *   写失败返回业务码 5101，由 axios 拦截器 reject，调用方走错误分支）；
+ *   写失败返回业务码 5101（明确失败，可安全重试）或 5102（结果未知，
+ *   设备可能已执行，禁止自动重试），由 axios 拦截器 reject，调用方走错误分支）；
  * - ≥2 条走批写业务（按总线分组 `write_multi`，单条失败在 `results` 对应位置返回）。
  *
  * 三个写入口页（点位读写测试、远程控制、批量命令）统一调用本函数。
