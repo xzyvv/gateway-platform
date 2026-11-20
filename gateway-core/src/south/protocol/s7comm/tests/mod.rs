@@ -30,6 +30,9 @@ enum S7StubAction {
     Serve,
     /// 完成握手后立即关闭连接（模拟掉线）
     CloseAfterHandshake,
+    /// 完成握手后对写请求回**错误 PDU**（Error class/code 非 0），
+    /// 读请求正常应答——用于验证「设备明确拒绝 → DeviceRejected」。
+    ServeWriteError,
 }
 
 /// 读取一个 TPKT 帧的 body（不含 4 字节头）；EOF/错误返回 None
@@ -114,6 +117,24 @@ fn s7_write_ack_body_multi(item_count: usize) -> Vec<u8> {
 /// 手工构造 S7 Write Var Ack（成功：单 Item，data 段 1 字节 return code = 0xFF）
 fn s7_write_ack_body() -> Vec<u8> {
     s7_write_ack_body_multi(1)
+}
+
+/// 手工构造 S7 写错误响应（PDU type 带 0x80 位 + Error class/code 非 0）。
+///
+/// 设备明确回了错误码 → 写**确定未生效** → 上层应判 `DeviceRejected`（可安全重试）。
+fn s7_write_error_body() -> Vec<u8> {
+    // COTP DT(3) + S7 Ack-Data 头(12 = 10 基础 + Error class/code) + parameter(2)
+    let mut b = vec![0x02, 0xF0, 0x80];
+    b.push(0x32);
+    b.push(PDU_ACK | 0x80); // 错误 PDU：类型字节最高位置 1
+    b.extend_from_slice(&[0x00, 0x00]); // Reserved
+    b.extend_from_slice(&[0x00, 0x01]); // PDU reference
+    b.extend_from_slice(&2u16.to_be_bytes()); // Parameter length
+    b.extend_from_slice(&0u16.to_be_bytes()); // Data length
+    b.extend_from_slice(&[0x81, 0x04]); // Error class = 0x81，Error code = 0x04
+    b.push(FUNC_WRITE); // parameter: function
+    b.push(1); // parameter: item count
+    b
 }
 
 /// 手工构造 S7 Read SZL Ack（Userdata，单条 34 字节组件标识记录）
@@ -221,6 +242,22 @@ async fn spawn_s7_stub_counted(
                             // 多 item Read Var：按请求 item_count 重复回应同一 value（决策表 #13 桩）
                             let item_count = body.get(14).copied().unwrap_or(1) as usize;
                             s7_read_ack_body_multi(&value, transport_size, item_count)
+                        };
+                        if !write_tpkt(&mut sock, &ack).await {
+                            return;
+                        }
+                    },
+                    S7StubAction::ServeWriteError => loop {
+                        let body = match read_tpkt_body(&mut sock).await {
+                            Some(b) => b,
+                            None => return,
+                        };
+                        let function = body.get(13).copied().unwrap_or(FUNC_READ);
+                        let ack = if function == FUNC_WRITE {
+                            write_hits.fetch_add(1, Ordering::SeqCst);
+                            s7_write_error_body()
+                        } else {
+                            s7_read_ack_body_multi(&value, transport_size, 1)
                         };
                         if !write_tpkt(&mut sock, &ack).await {
                             return;

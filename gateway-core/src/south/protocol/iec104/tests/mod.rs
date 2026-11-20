@@ -28,6 +28,7 @@ mod golden;
 mod keepalive;
 mod regression;
 mod time_tag;
+mod write_semantics;
 
 /// 从 I/S-frame 控制域还原 N(S) / N(R)
 /// IEC 104：值 = (cf[低] >> 1) | (cf[高] << 7)

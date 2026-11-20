@@ -7,7 +7,8 @@ use std::sync::atomic::Ordering;
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
-    convert_value, reverse_convert, Collector, CollectorError, CollectorResult, ResultSlots,
+    convert_value, mark_write_uncertain, reverse_convert, Collector, CollectorError, CollectorResult,
+    ResultSlots,
 };
 
 use super::frames;
@@ -167,12 +168,13 @@ impl Collector for FinsCollector {
             ));
             self.read_batch_points_with_slots(points, slots.clone())
                 .await;
-            slots
+            let out = slots
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .iter_mut()
                 .map(|s| s.take().unwrap_or_else(|| Err(CollectorError::NoReply)))
-                .collect()
+                .collect();
+            out
         })
     }
 
@@ -200,9 +202,10 @@ impl Collector for FinsCollector {
                 self.ensure_connected().await?;
                 let server_node = self.server_node.load(Ordering::Relaxed);
                 let frame = build_cpu_control_frame(server_node, CLIENT_NODE, ctrl);
-                let payload = self.transact(&frame).await?;
+                // 请求已下发：传输失败无法证明写未生效 → 结果未知
+                let payload = self.transact(&frame).await.map_err(mark_write_uncertain)?;
                 let (mrc, src) = ctrl.command_code();
-                return parse_write_response(&payload, mrc, src);
+                return parse_write_response(&payload, mrc, src).map_err(mark_write_uncertain);
             }
             let area = parse_address(&point.address)?;
             // 先建链完成节点地址握手，server_node 才有效
@@ -232,8 +235,9 @@ impl Collector for FinsCollector {
                     &data,
                 )
             };
-            let payload = self.transact(&frame).await?;
+            let payload = self.transact(&frame).await.map_err(mark_write_uncertain)?;
             parse_write_response(&payload, MRC_MEMORY_WRITE, SRC_MEMORY_WRITE)
+                .map_err(mark_write_uncertain)
         })
     }
 }

@@ -82,7 +82,9 @@ pub(crate) fn parse_write_response(frame: &[u8]) -> CollectorResult<()> {
         if (pdu_type & 0x80) != 0 {
             let err_class = if s7.len() > 10 { s7[10] } else { 0 };
             let err_code = if s7.len() > 11 { s7[11] } else { 0 };
-            return Err(CollectorError::InvalidFrame(format!(
+            // 设备明确回了错误码 → 写确定未生效（明确失败，可安全重试），
+            // 与「响应无法解析」（结果未知）区分开。
+            return Err(CollectorError::DeviceRejected(format!(
                 "S7 write error response: class=0x{:02X} code=0x{:02X}",
                 err_class, err_code
             )));
@@ -118,7 +120,8 @@ pub(crate) fn parse_write_response(frame: &[u8]) -> CollectorResult<()> {
     }
     let return_code = s7[data_start];
     if return_code != RET_OK {
-        return Err(CollectorError::InvalidFrame(format!(
+        // 设备回了非 OK 的 return code → 写确定未生效（明确失败）
+        return Err(CollectorError::DeviceRejected(format!(
             "S7 write failed (return code 0x{:02X})",
             return_code
         )));
@@ -200,7 +203,7 @@ pub(crate) fn parse_write_response_multi(
         if (pdu_type & 0x80) != 0 {
             let err_class = if s7.len() > 10 { s7[10] } else { 0 };
             let err_code = if s7.len() > 11 { s7[11] } else { 0 };
-            return Err(CollectorError::InvalidFrame(format!(
+            return Err(CollectorError::DeviceRejected(format!(
                 "S7 multi-write error response: class=0x{:02X} code=0x{:02X}",
                 err_class, err_code
             )));
@@ -250,7 +253,8 @@ pub(crate) fn parse_write_response_multi(
     for i in 0..expected_count {
         let rc = s7[data_start + i];
         if rc != RET_OK {
-            return Err(CollectorError::InvalidFrame(format!(
+            // 设备逐 item 回了非 OK 的 return code → 该 item 写确定未生效
+            return Err(CollectorError::DeviceRejected(format!(
                 "S7 multi-write item {i} failed (return code 0x{rc:02X})"
             )));
         }

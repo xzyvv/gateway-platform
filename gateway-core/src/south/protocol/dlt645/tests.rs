@@ -413,6 +413,45 @@ fn write_password_fields_respect_variant_cipher() {
 }
 
 // =========================================================================
+// 写语义定级（跨协议统一口径）
+// =========================================================================
+
+/// 写响应状态字非 0 → 设备明确拒绝 → 写**确定未生效** → `DeviceRejected`
+/// （明确失败，可安全重试；不得与「应答没看懂」的结果未知混淆）。
+#[tokio::test]
+async fn write_status_nonzero_is_device_rejected() {
+    let c = Dlt645Collector::new("dlt645_write_status", dead_serial_bus("COM9997"));
+    let addr = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+
+    // 写数据应答：CTRL=0x84，DATA = DI(4) + STATUS(1)，数据区 +0x33
+    let mut data = vec![0x33, 0x33, 0x33, 0x33];
+    data.push(0x01u8.wrapping_add(0x33)); // STATUS = 0x01（拒绝）
+    let resp = dlt_response(&addr, 0x84, &data);
+
+    match c.parse_write_status_response(&resp, &addr, 0x84, true) {
+        Err(crate::south::protocol::CollectorError::DeviceRejected(m)) => {
+            assert!(m.contains("rejected"), "错误信息应说明被拒绝: {m}");
+        }
+        other => panic!("状态字非 0 应报 DeviceRejected，实际 {other:?}"),
+    }
+}
+
+/// 写响应状态字为 0 → 设备确认写成功。
+#[tokio::test]
+async fn write_status_zero_is_ok() {
+    let c = Dlt645Collector::new("dlt645_write_ok", dead_serial_bus("COM9996"));
+    let addr = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+
+    let mut data = vec![0x33, 0x33, 0x33, 0x33];
+    data.push(0x00u8.wrapping_add(0x33)); // STATUS = 0x00（成功）
+    let resp = dlt_response(&addr, 0x84, &data);
+
+    assert!(c
+        .parse_write_status_response(&resp, &addr, 0x84, true)
+        .is_ok());
+}
+
+// =========================================================================
 // Golden 报文回归（决策清单 P0-3）
 //
 // 样本在 `gateway-core/tests/fixtures/golden/dlt645/*.hex`，逐字节锁定：

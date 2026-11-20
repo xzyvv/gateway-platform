@@ -638,6 +638,8 @@ pub(crate) fn is_retryable(e: &CollectorError) -> bool {
     // 写结果未知 = 写帧可能已被从站执行，重试会造成重复写。
     // `BusBusy` 同理不可重试：它是「根本没发出去」，但重试在写路径上
     // 仍可能与另一笔已下发的写交错，语义上应交由调用方决定。
+    // `DeviceRejected` 同样不自动重试：设备明确说了「不行」，
+    // 是否重试要由调用方按业务语义决定（可能换参数、可能改人工介入）。
 }
 
 pub(crate) mod frame_extract;

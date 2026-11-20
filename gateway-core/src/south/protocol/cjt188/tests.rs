@@ -478,6 +478,51 @@ async fn diag_reports_unreachable_endpoint_instead_of_fake_success() {
 }
 
 // =========================================================================
+// 写语义定级（跨协议统一口径）
+// =========================================================================
+
+/// 写响应状态字非 0 → 设备明确拒绝 → 写**确定未生效** → `DeviceRejected`
+/// （明确失败，可安全重试；不得与「应答没看懂」的结果未知混淆）。
+#[tokio::test]
+async fn write_status_nonzero_is_device_rejected() {
+    let c = Cjt188Collector::new(
+        "cjt188_write_status",
+        dead_serial_bus("COM9995"),
+        std::sync::Arc::new(crate::engine::metrics::Metrics::new()),
+    );
+    let addr = [0u8; 7];
+
+    // 写数据应答：CTRL = 0x04|0x80 = 0x84，DATA = DI(7) + STATUS(1)
+    let mut data = vec![0x33u8; 7];
+    data.push(0x01u8.wrapping_add(0x33)); // STATUS = 0x01（拒绝）
+    let resp = cjt_response(&addr, 0x84, &data);
+
+    match c.parse_write_response(&resp, &addr, 0x04) {
+        Err(crate::south::protocol::CollectorError::DeviceRejected(m)) => {
+            assert!(m.contains("rejected"), "错误信息应说明被拒绝: {m}");
+        }
+        other => panic!("状态字非 0 应报 DeviceRejected，实际 {other:?}"),
+    }
+}
+
+/// 写响应状态字为 0 → 设备确认写成功。
+#[tokio::test]
+async fn write_status_zero_is_ok() {
+    let c = Cjt188Collector::new(
+        "cjt188_write_ok",
+        dead_serial_bus("COM9994"),
+        std::sync::Arc::new(crate::engine::metrics::Metrics::new()),
+    );
+    let addr = [0u8; 7];
+
+    let mut data = vec![0x33u8; 7];
+    data.push(0x00u8.wrapping_add(0x33)); // STATUS = 0x00（成功）
+    let resp = cjt_response(&addr, 0x84, &data);
+
+    assert!(c.parse_write_response(&resp, &addr, 0x04).is_ok());
+}
+
+// =========================================================================
 // P2-1：补 CJT188 缺失的正向性质（原有的 hostile 测试只证明「不 panic」，
 // 没证明「脏数据之后还能把合法帧找回来」）。
 // =========================================================================

@@ -340,9 +340,12 @@ impl Dlt645Collector {
             .bus
             .transaction_no_retry(request, None, BusPriority::Control)
             .await
-            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
 
-        self.parse_write_status_response(&response, addr_bytes, 0x84, true)
+        // 应答已收到：解析失败 → 结果未知；状态字非 0 → DeviceRejected（明确失败）
+        self.parse_write_status_response(&response, addr_bytes, 0x84, true).map_err(|e| {
+            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
+        })
     }
 
     /// 写通信地址（控制码 0x0C）
@@ -386,9 +389,11 @@ impl Dlt645Collector {
             .bus
             .transaction_no_retry(request, None, BusPriority::Control)
             .await
-            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
         // 0x0C 响应只有 1 字节 STATUS（无 DI）
-        self.parse_write_status_response(&response, addr_bytes, 0x8C, false)
+        self.parse_write_status_response(&response, addr_bytes, 0x8C, false).map_err(|e| {
+            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
+        })
     }
 
     /// 写密码（控制码 0x0F）
@@ -420,9 +425,11 @@ impl Dlt645Collector {
             .bus
             .transaction_no_retry(request, None, BusPriority::Control)
             .await
-            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
         // 0x0F 响应只有 1 字节 STATUS（无密码回显）
-        self.parse_write_status_response(&response, addr_bytes, 0x8F, false)
+        self.parse_write_status_response(&response, addr_bytes, 0x8F, false).map_err(|e| {
+            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
+        })
     }
 
     /// 通用写响应解析：验证响应 ctrl 与 STATUS 字节。
@@ -430,7 +437,7 @@ impl Dlt645Collector {
     /// `expect_ctrl_high` = 0x80 | ctrl
     /// `has_di_echo` = true: 响应前 4 字节为 DI 回显（写数据 0x84），
     ///                  false: 响应只有 1 字节 STATUS（写通信地址 0x8C、写密码 0x8F）
-    fn parse_write_status_response(
+    pub(crate) fn parse_write_status_response(
         &self,
         response: &[u8],
         addr_bytes: &[u8],
@@ -473,7 +480,8 @@ impl Dlt645Collector {
         };
         let _ = min_len; // 已通过 min_len 校验
         if status != 0x00 {
-            return Err(CollectorError::InvalidFrame(format!(
+            // 设备回了非 0 状态字 → 写确定未生效（明确失败，可安全重试）
+            return Err(CollectorError::DeviceRejected(format!(
                 "dlt645 write rejected: status=0x{:02X}",
                 status
             )));

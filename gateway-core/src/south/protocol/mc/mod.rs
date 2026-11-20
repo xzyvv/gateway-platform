@@ -30,15 +30,16 @@ use tokio::sync::Mutex;
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
-    convert_value, reverse_convert, Collector, CollectorError, CollectorResult, ResultSlots,
+    convert_value, mark_write_uncertain, reverse_convert, Collector, CollectorError, CollectorResult,
+    ResultSlots,
 };
 
 pub(crate) mod frames;
 use frames::{
     build_read_request_at_station, build_request_1e, build_write_bit_request,
-    build_write_words_request, check_end_code, decode_bit, decode_words, encode_words,
-    parse_address, read_response_1e, read_response_3e, read_response_4e, McDevice, McFrameFormat,
-    FC_BATCH_BIT_READ, FC_BATCH_BIT_WRITE, FC_BATCH_WORD_READ, FC_BATCH_WORD_WRITE,
+    build_write_words_request, check_end_code, check_write_end_code, decode_bit, decode_words,
+    encode_words, parse_address, read_response_1e, read_response_3e, read_response_4e, McDevice,
+    McFrameFormat, FC_BATCH_BIT_READ, FC_BATCH_BIT_WRITE, FC_BATCH_WORD_READ, FC_BATCH_WORD_WRITE,
 };
 
 mod batch;
@@ -519,8 +520,8 @@ impl Collector for McCollector {
                 let words = encode_words(reverse_convert(point, value), dt);
                 self.write_words_txn(&device, &words)?
             };
-            let (end_code, _) = self.transact(&txn).await?;
-            check_end_code(end_code)
+            let (end_code, _) = self.transact(&txn).await.map_err(mark_write_uncertain)?;
+            check_write_end_code(end_code)
         })
     }
 }

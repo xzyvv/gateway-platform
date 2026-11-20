@@ -2,7 +2,9 @@
 use super::*;
 
 use crate::config::PointConfig;
-use crate::south::protocol::{clone_collector_error, reverse_convert, Collector};
+use crate::south::protocol::{
+    clone_collector_error, mark_write_uncertain, reverse_convert, Collector,
+};
 
 impl S7CommCollector {
     /// 写入单个点位（决策表 #11：S7 Write Var，功能码 0x05）
@@ -51,12 +53,16 @@ impl S7CommCollector {
             Ok(Err(e)) => {
                 *guard = None;
                 self.connected.store(false, Ordering::Relaxed);
-                return Err(CollectorError::IoError(format!("S7 send write: {}", e)));
+                // 发送阶段失败：字节可能已部分上线，无法证明写未生效 → 结果未知
+                return Err(mark_write_uncertain(CollectorError::IoError(format!(
+                    "S7 send write: {}",
+                    e
+                ))));
             }
             Err(_) => {
                 *guard = None;
                 self.connected.store(false, Ordering::Relaxed);
-                return Err(CollectorError::NoReply);
+                return Err(mark_write_uncertain(CollectorError::NoReply));
             }
         }
 
@@ -66,16 +72,17 @@ impl S7CommCollector {
                 Ok(Err(e)) => {
                     *guard = None;
                     self.connected.store(false, Ordering::Relaxed);
-                    return Err(e);
+                    return Err(mark_write_uncertain(e));
                 }
                 Err(_) => {
                     *guard = None;
                     self.connected.store(false, Ordering::Relaxed);
-                    return Err(CollectorError::NoReply);
+                    return Err(mark_write_uncertain(CollectorError::NoReply));
                 }
             };
 
-        frames::parse_write_response(&resp)
+        // 响应已收到：解析失败→结果未知；设备明确拒绝→DeviceRejected（明确失败）
+        frames::parse_write_response(&resp).map_err(mark_write_uncertain)
     }
 
     /// 批量写入多个点位（决策表 #13：多 item Write Var，一批一次事务）
@@ -190,8 +197,10 @@ impl S7CommCollector {
             let pdu_ref = self.next_pdu_ref().await;
             let req = frames::build_write_var_multi(&items, pdu_ref);
             let outcome = match self.transact(&req).await {
-                Ok(resp) => frames::parse_write_response_multi(&resp, chunk.len()),
-                Err(e) => Err(e),
+                Ok(resp) => frames::parse_write_response_multi(&resp, chunk.len())
+                    .map_err(mark_write_uncertain),
+                // 请求已下发，失败原因无法证明写未生效 → 结果未知
+                Err(e) => Err(mark_write_uncertain(e)),
             };
             match outcome {
                 Ok(()) => {

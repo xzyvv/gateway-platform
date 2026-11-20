@@ -136,7 +136,8 @@ pub(crate) fn parse_write_property_ack(apdu: &[u8], expected_invoke_id: u8) -> C
                 APDU_REJECT => "Reject",
                 _ => "Abort",
             };
-            Err(CollectorError::InvalidFrame(format!(
+            // 设备明确回了 Error/Reject/Abort → 写确定未生效（明确失败，可安全重试）
+            Err(CollectorError::DeviceRejected(format!(
                 "BACnet WriteProperty rejected: APDU type 0x{:02X} ({})",
                 first, kind
             )))

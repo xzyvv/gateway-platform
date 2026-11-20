@@ -24,9 +24,9 @@ use super::{
 impl ModbusCollector {
     /// 写失败映射：把「可能已下发」类错误转成 [`CollectorError::WriteUncertain`]。
     ///
-    /// 判定规则见 [`crate::south::protocol::mark_write_uncertain`]（协议无关实现）。
+    /// 判定规则见 [`crate::south::protocol::mark_write_uncertain_counted`]（协议无关实现）。
     fn mark_write_uncertain(&self, e: CollectorError) -> CollectorError {
-        crate::south::protocol::mark_write_uncertain(&self.bus, e)
+        crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
     }
 }
 
@@ -196,7 +196,8 @@ impl Collector for ModbusCollector {
                 15 => 0x0F,
                 16 => 0x10,
                 other => {
-                    return Err(CollectorError::InvalidFrame(format!(
+                    // 未下发（帧都没构造出来）→ 写确定未生效 → 明确失败，可安全重试。
+                    return Err(CollectorError::Unsupported(format!(
                         "unsupported write function code {} (only fc 1/5/3/6/15/16 are writable)",
                         other
                     )));
@@ -294,7 +295,8 @@ impl Collector for ModbusCollector {
             }
             // 第三批#8：写成功响应按**语义字段**校验（前 6 字节），不再整帧比对。
             // 详见 verify_write_echo 的说明。
-            verify_write_echo(&resp, &expect_echo)?;
+            // 回显不匹配 → 应答无法解析，写很可能已执行 → 结果未知（禁止自动重试）。
+            verify_write_echo(&resp, &expect_echo).map_err(|e| self.mark_write_uncertain(e))?;
             Ok(())
         })
     }
@@ -413,14 +415,15 @@ impl Collector for ModbusCollector {
                         continue;
                     }
                     // 第三批#8：与单点写共用同一套语义校验。
+                    // 回显不匹配 → 应答无法解析，写很可能已执行 → 结果未知。
                     if let Err(e) = verify_write_echo(&resp, &expect) {
                         let msg = format!(
                             "write_multi response mismatch (slave {}, addr {}): {}",
                             slave, batch.start_addr, e
                         );
+                        let e = self.mark_write_uncertain(CollectorError::InvalidFrame(msg));
                         for i in range.clone() {
-                            slots[items[i].2] =
-                                Some(Err(CollectorError::InvalidFrame(msg.clone())));
+                            slots[items[i].2] = Some(Err(clone_collector_error(&e)));
                         }
                         continue;
                     }

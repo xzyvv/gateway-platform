@@ -386,7 +386,9 @@ pub(crate) fn parse_write_response(
         )));
     }
     if mres != 0 || sres != 0 {
-        return Err(CollectorError::InvalidFrame(format!(
+        // 设备明确回了结束码 → 写确定未生效（明确失败，可安全重试），
+        // 与「响应无法解析」（结果未知）区分开。
+        return Err(CollectorError::DeviceRejected(format!(
             "fins write end code MRES={mres:02X} SRES={sres:02X}"
         )));
     }

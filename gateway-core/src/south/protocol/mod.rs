@@ -74,6 +74,8 @@ pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_semantics_tests;
 
 pub use common::decode::{
     convert_value, decode_binary_value, parse_bcd_address, reorder_bytes, reverse_convert,
@@ -119,6 +121,19 @@ pub enum CollectorError {
     ModbusException(u8),
     #[error("io error: {0}")]
     IoError(String),
+    /// 设备明确拒绝：设备返回了错误码 / 状态字（不是通信失败）。
+    ///
+    /// 与 [`CollectorError::InvalidFrame`] 的区别：后者是「响应无法解析」
+    /// （可能是噪声、错帧、截断），设备有没有执行**无法判断**；
+    /// 本变体是「设备回话了，而且明确说不成功」——写**确定未生效**。
+    ///
+    /// 举例：S7Comm 的 Error class/code、FINS 的 MRES/SRES、
+    /// 三菱 MC 的 end code、BACnet 的 BVLC-Result 错误码。
+    ///
+    /// 写语义价值：设备拒绝属于「明确失败」，调用方可以安全重试；
+    /// 而响应解析失败属于「结果未知」，重试可能造成重复写。
+    #[error("device rejected the request: {0}")]
+    DeviceRejected(String),
     /// 采集超时：scheduler 对 `read_batch` 加超时保护，超时后所有点位返回此错误。
     /// 与 `IoError` 区分，便于监控按"链路 IO 故障"与"协议栈卡死/无响应"分类告警。
     #[error("collector read timeout after {0:?}")]
@@ -182,6 +197,10 @@ impl CollectorError {
             #[cfg(feature = "modbus")]
             CollectorError::ModbusException(code) => CollectErrorCode::ModbusException(*code),
             CollectorError::IoError(_) => CollectErrorCode::Io,
+            // 设备明确拒绝：不是通信故障，而是设备回了错误码。
+            // 与 Decode（响应解析失败）分开，便于现场区分「设备说不行」
+            // 与「根本没听懂设备说的话」。
+            CollectorError::DeviceRejected(_) => CollectErrorCode::Other,
             CollectorError::Timeout(_) => CollectErrorCode::Timeout,
             CollectorError::BusBusy(_) => CollectErrorCode::Busy,
             CollectorError::InvalidConfig(_) => CollectErrorCode::Config,
@@ -219,6 +238,7 @@ pub(crate) fn clone_collector_error(e: &CollectorError) -> CollectorError {
         #[cfg(feature = "modbus")]
         CollectorError::ModbusException(c) => CollectorError::ModbusException(*c),
         CollectorError::IoError(s) => CollectorError::IoError(s.clone()),
+        CollectorError::DeviceRejected(s) => CollectorError::DeviceRejected(s.clone()),
         CollectorError::Timeout(d) => CollectorError::Timeout(*d),
         CollectorError::BusBusy(d) => CollectorError::BusBusy(*d),
         CollectorError::InvalidConfig(s) => CollectorError::InvalidConfig(s.clone()),
@@ -226,34 +246,74 @@ pub(crate) fn clone_collector_error(e: &CollectorError) -> CollectorError {
         CollectorError::Unsupported(s) => CollectorError::Unsupported(s.clone()),
     }
 }
-/// 写失败映射（协议无关）：把「可能已下发」类错误转成 [`CollectorError::WriteUncertain`]
-/// 并计数，供各协议的写路径统一调用，保证语义一致。
+/// 写失败定级（协议无关）：把「可能已下发」类错误转成 [`CollectorError::WriteUncertain`]。
 ///
-/// 判定依据是「能否证明写没有生效」：
-/// - `NoReply`：写帧已发出，等不到应答——从站可能已执行（应答丢失）。
-/// - `ChecksumError`：收到了响应但校验错——从站很可能已执行，只是响应损坏。
-/// - `Timeout`：调用方等到截止时间——同 `NoReply`。
-/// - `IoError`：链路 IO 故障，帧可能只发了一半；半帧会被从站丢弃，
-///   但无法在协议层证明，因此按「不确定」处理（宁可多报一次人工确认，
-///   也不要漏报一次重复写）。
+/// 全网关统一的定级规则——**判据只有一个：能否证明写没有生效**。
 ///
-/// `BusBusy`（根本没发出去）、`ModbusException`（设备明确拒绝）、
-/// `InvalidFrame`（响应格式不对）不转换——它们能证明写未生效，转换会
-/// 把「明确失败」误报成「不确定」，反而让上游不敢重试。
-pub(crate) fn mark_write_uncertain(
-    bus: &crate::south::bus::BusManager,
-    e: CollectorError,
-) -> CollectorError {
+/// **明确失败**（原样返回，调用方可安全重试）：
+/// - [`CollectorError::DeviceRejected`]：设备回了错误码 / 状态字，明确说不成功。
+/// - [`CollectorError::ModbusException`]：Modbus 异常码。
+/// - [`CollectorError::BusBusy`]：事务根本没入队 / 根本没下发。
+/// - [`CollectorError::Unsupported`] / [`CollectorError::InvalidConfig`]：请求本身不合法。
+///
+/// **结果未知**（转 [`CollectorError::WriteUncertain`]，禁止自动重试）：
+/// - [`CollectorError::NoReply`] / [`CollectorError::Timeout`]：请求已发出，设备没回。
+/// - [`CollectorError::IoError`]：链路故障，无法证明帧未送达。
+/// - [`CollectorError::ChecksumError`]：响应校验错，设备多半已执行，只是响应损坏。
+/// - [`CollectorError::InvalidFrame`]：响应无法解析——设备回过东西，
+///   写很可能已执行（噪声、错帧、截断都无法排除）。
+///
+/// 刻意**不做**的事：不按「错误出现在哪个阶段」来定级，只看「能否证明」。
+/// 能证明没生效的才是明确失败；证明不了的都算未知——宁可多报一次人工确认，
+/// 也不要漏报一次重复写（累加 / 脉冲类点位一次重复写就是数据错）。
+///
+/// 仅自研客户端协议（s7comm / fins / mc / iec104 / bacnet）使用；
+/// 这些协议全部关闭时本函数无人调用，在 `-D dead_code` 下会报错（F1 协议裁剪矩阵）。
+#[cfg(any(
+    feature = "s7comm",
+    feature = "fins",
+    feature = "mc",
+    feature = "iec104",
+    feature = "bacnet"
+))]
+pub(crate) fn mark_write_uncertain(e: CollectorError) -> CollectorError {
     match e {
         CollectorError::NoReply
         | CollectorError::ChecksumError
         | CollectorError::Timeout(_)
-        | CollectorError::IoError(_) => {
-            bus.metrics().inc_write_uncertain();
-            CollectorError::WriteUncertain(e.to_string())
-        }
+        | CollectorError::IoError(_)
+        | CollectorError::InvalidFrame(_) => CollectorError::WriteUncertain(e.to_string()),
         other => other,
     }
+}
+
+/// [`mark_write_uncertain`] 的带计数版本（走总线总线的协议用）。
+///
+/// 自研 TCP / UDP 客户端的协议（s7comm / fins / mc / iec104 / bacnet）没有
+/// `BusManager`，用不带计数的 [`mark_write_uncertain`]；
+/// 因此 `gateway_write_uncertain_total` 目前只覆盖走总线总线的协议
+/// （modbus / dlt645 / cjt188），缺口登记为 G-08。
+#[cfg(any(
+    feature = "modbus",
+    feature = "dlt645",
+    feature = "cjt188"
+))]
+pub(crate) fn mark_write_uncertain_counted(
+    bus: &crate::south::bus::BusManager,
+    e: CollectorError,
+) -> CollectorError {
+    if matches!(
+        e,
+        CollectorError::NoReply
+            | CollectorError::ChecksumError
+            | CollectorError::Timeout(_)
+            | CollectorError::IoError(_)
+            | CollectorError::InvalidFrame(_)
+    ) {
+        bus.metrics().inc_write_uncertain();
+        return CollectorError::WriteUncertain(e.to_string());
+    }
+    e
 }
 
 /// Collector trait 接口（§3.10 核心契约）

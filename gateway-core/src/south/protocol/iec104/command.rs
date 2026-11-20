@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use tokio::io::AsyncWriteExt;
 
-use crate::south::protocol::{CollectorError, CollectorResult};
+use crate::south::protocol::{mark_write_uncertain, CollectorError, CollectorResult};
 
 use super::frames::{
     build_command_asdu, build_iframe, build_uframe, parse_command_confirmation, read_frame,
@@ -85,13 +85,15 @@ impl Iec104Collector {
                                         COT_UNKNOWN_IOA => Err(CollectorError::InvalidConfig(
                                             format!("IOA {} not known by device", ioa),
                                         )),
-                                        COT_UNKNOWN_COT => Err(CollectorError::InvalidFrame(
+                                        // 设备明确回了否定原因 → 命令确定未执行
+                                        // （明确失败，可安全重试）。
+                                        COT_UNKNOWN_COT => Err(CollectorError::DeviceRejected(
                                             "device reports unknown cause of transmission".into(),
                                         )),
                                         COT_UNKNOWN_CA => Err(CollectorError::InvalidConfig(
                                             "device reports unknown common address".into(),
                                         )),
-                                        other => Err(CollectorError::InvalidFrame(format!(
+                                        other => Err(CollectorError::DeviceRejected(format!(
                                             "command rejected by device, COT={}",
                                             other
                                         ))),
@@ -119,6 +121,9 @@ impl Iec104Collector {
             self.connected.store(false, Ordering::Relaxed);
         }
         drop(guard);
-        outcome
+        // 命令帧已下发（发送失败也意味着字节可能已部分上线），此后所有传输层
+        // 失败都无法证明命令未执行 → 结果未知，禁止自动重试。
+        // 设备明确否定（COT）→ DeviceRejected，保持「明确失败」不变。
+        outcome.map_err(mark_write_uncertain)
     }
 }

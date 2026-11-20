@@ -588,6 +588,44 @@ async fn write_timeout_is_not_resent_and_reports_uncertain() {
     );
 }
 
+/// 写响应回显不匹配 → 应答无法解析 → 写很可能已执行 → `WriteUncertain`。
+///
+/// 回归点：旧实现直接返回 `InvalidFrame("write response mismatch")`，
+/// 调用方无法区分「设备明确拒绝」（可安全重试）与「应答没看懂」
+/// （重试可能造成重复写）。
+#[tokio::test]
+async fn write_echo_mismatch_is_write_uncertain() {
+    use crate::south::protocol::CollectorError;
+
+    // 从站回一帧 FC06 响应，但寄存器地址与请求不符（错配/串帧）
+    let addr = spawn_modbus_tcp_stub(vec![0x06, 0x00, 0x99, 0x99, 0x00, 0x01]).await;
+    let c = super::ModbusCollector::new("modbus_write_echo", modbus_tcp_bus(addr, 1000));
+    let point = mk_typed_point("U16"); // fc=6 → FC06 写单寄存器
+
+    let err = c.write(&point, 1.0).await.expect_err("回显不匹配必须返回错误");
+    assert!(
+        matches!(err, CollectorError::WriteUncertain(_)),
+        "回显不匹配属结果未知，必须用 WriteUncertain 上报，实际 {err:?}"
+    );
+}
+
+/// 不可写功能码 → 帧都没构造出来（未下发）→ 明确失败 `Unsupported`（可安全重试）。
+#[tokio::test]
+async fn write_unsupported_function_code_is_not_uncertain() {
+    use crate::south::protocol::CollectorError;
+
+    let addr = spawn_modbus_tcp_stub(vec![0x06, 0x00, 0x00, 0x00, 0x00, 0x01]).await;
+    let c = super::ModbusCollector::new("modbus_write_fc", modbus_tcp_bus(addr, 1000));
+    let mut point = mk_typed_point("U16");
+    point.function_code = Some(4); // FC04 只读
+
+    let err = c.write(&point, 1.0).await.expect_err("只读功能码必须返回错误");
+    assert!(
+        matches!(err, CollectorError::Unsupported(_)),
+        "未下发的失败不得算结果未知，实际 {err:?}"
+    );
+}
+
 // =========================================================================
 // 畸形帧负例：任意截断 / 长度字段撒谎 / CRC 错误都不得 panic，必须返回 Err
 // =========================================================================

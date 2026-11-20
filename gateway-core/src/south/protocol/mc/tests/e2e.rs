@@ -106,6 +106,37 @@ async fn test_write_word_over_tcp() {
     c.write(&p, 1234.0).await.expect("write ok");
 }
 
+/// 写语义：设备回了非零结束码 → 写**确定未生效** → `DeviceRejected`（明确失败，可安全重试）。
+///
+/// 与读路径的 `InvalidFrame` 区分开：读的失败只影响本次读；写的失败必须能判断
+/// 「设备到底执行了没」，否则调用方会盲目重试造成重复写。
+#[tokio::test]
+async fn test_write_end_code_nonzero_is_device_rejected() {
+    let addr = spawn_mc_stub(vec![StubAction::Reply(mc_response(0xC059, &[]))]).await;
+    let c = McCollector::new(addr, "mc-bus".into(), Duration::from_secs(5), None);
+    let mut p = point("p1", "D100", "u16");
+    p.address = "D100".to_string();
+    let err = c.write(&p, 1234.0).await.expect_err("结束码非零应失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        "unexpected: {err:?}"
+    );
+}
+
+/// 写语义：设备不回（连接被关）→ 结果未知 → `WriteUncertain`（禁止自动重试）。
+#[tokio::test]
+async fn test_write_no_reply_is_uncertain() {
+    let addr = spawn_mc_stub(vec![StubAction::Close]).await;
+    let c = McCollector::new(addr, "mc-bus".into(), Duration::from_secs(5), None);
+    let mut p = point("p1", "D100", "u16");
+    p.address = "D100".to_string();
+    let err = c.write(&p, 1234.0).await.expect_err("无应答应失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
+        "unexpected: {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_no_response_times_out() {
     let addr = spawn_mc_stub(vec![StubAction::Close]).await;

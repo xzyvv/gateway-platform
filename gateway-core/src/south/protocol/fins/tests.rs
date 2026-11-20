@@ -118,6 +118,8 @@ enum FinsReply {
     Write,
     /// 结束码非零的读应答
     EndCode(u8, u8),
+    /// 结束码非零的**写**应答（mrc=0x01 / src=0x02，存储区写）
+    WriteEndCode(u8, u8),
     /// CPU 单元运行控制应答（src, mres, sres）
     CpuControl(u8, u8, u8),
     /// 不回复直接断开
@@ -214,6 +216,9 @@ async fn spawn_fins_stub_counted(replies: Vec<FinsReply>) -> (String, Arc<Atomic
                         FinsReply::EndCode(m, s) => {
                             tcp_wrap(0x0000_0002, &fins_frame_resp(0x01, 0x01, m, s, &[]))
                         }
+                        FinsReply::WriteEndCode(m, s) => {
+                            tcp_wrap(0x0000_0002, &fins_frame_resp(0x01, 0x02, m, s, &[]))
+                        }
                         FinsReply::CpuControl(src, mres, sres) => tcp_wrap(
                             0x0000_0002,
                             &fins_frame_resp(MRC_CPU_CONTROL, src, mres, sres, &[]),
@@ -300,6 +305,33 @@ async fn test_error_end_code_is_rejected() {
     let err = c.read(&p).await.expect_err("should fail");
     assert!(
         matches!(err, crate::south::protocol::CollectorError::InvalidFrame(_)),
+        "unexpected: {err:?}"
+    );
+}
+
+/// 写语义：存储区写应答结束码非零 → 写**确定未生效** → `DeviceRejected`
+/// （明确失败，可安全重试；与读路径的 `InvalidFrame` 区分开）。
+#[tokio::test]
+async fn test_write_end_code_nonzero_is_device_rejected() {
+    let addr = spawn_fins_stub(vec![FinsReply::WriteEndCode(0x00, 0x11)]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let p = point("p1", "D100", "u16");
+    let err = c.write(&p, 1234.0).await.expect_err("结束码非零应失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        "unexpected: {err:?}"
+    );
+}
+
+/// 写语义：设备不回（连接被关）→ 结果未知 → `WriteUncertain`（禁止自动重试）。
+#[tokio::test]
+async fn test_write_no_reply_is_uncertain() {
+    let addr = spawn_fins_stub(vec![FinsReply::Drop]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let p = point("p1", "D100", "u16");
+    let err = c.write(&p, 1234.0).await.expect_err("无应答应失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
         "unexpected: {err:?}"
     );
 }
@@ -427,8 +459,9 @@ async fn test_e2e_cpu_control_end_code_rejected() {
     let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
     let p = point("cpu", "CPU:RUN", "u16");
     let err = c.write(&p, 1.0).await.expect_err("结束码非零应失败");
+    // 设备明确回了结束码 → DeviceRejected（明确失败，写确定未生效，可安全重试）
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::InvalidFrame(_)),
+        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
         "unexpected: {err:?}"
     );
 }
@@ -494,6 +527,7 @@ async fn spawn_fins_udp_stub(replies: Vec<FinsReply>) -> String {
                 FinsReply::Read(data) => fins_frame_resp(0x01, 0x01, 0x00, 0x00, &data),
                 FinsReply::Write => fins_frame_resp(0x01, 0x02, 0x00, 0x00, &[]),
                 FinsReply::EndCode(m, s) => fins_frame_resp(0x01, 0x01, m, s, &[]),
+                FinsReply::WriteEndCode(m, s) => fins_frame_resp(0x01, 0x02, m, s, &[]),
                 FinsReply::CpuControl(src, mres, sres) => {
                     fins_frame_resp(MRC_CPU_CONTROL, src, mres, sres, &[])
                 }

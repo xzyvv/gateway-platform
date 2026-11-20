@@ -36,14 +36,27 @@
 | B-13 | 串口故障分级：设备级失败不得重开端口 | ✅ | `serial_task` 自检帧 + `MIN_REOPEN_INTERVAL` |
 | B-14 | 广播地址（slave=0）不得记为「成功通信过的从站」 | ✅ | `last_good_slave` 过滤 `slave == 0` |
 
-## 2. 写语义（跨协议：Modbus / DLT645 / CJT188）
+## 2. 写语义（跨协议统一口径）
+
+**定级判据只有一个：能否证明写没有生效。**
+
+- 能证明 → **明确失败**（可安全重试）：`DeviceRejected`（设备回了错误码）/ `ModbusException` /
+  `BusBusy` / `Unsupported` / `InvalidConfig`
+- 证明不了 → **结果未知**（`WriteUncertain`，**禁止**自动重试）：`NoReply` / `Timeout` /
+  `IoError` / `ChecksumError` / `InvalidFrame`
+
+刻意**不**按「错误出现在哪个阶段」定级（发送阶段 / 应答阶段 / 解析阶段），
+只按「能否证明」——阶段信息在协议层拿不到（Modbus 总线层两者混合），
+按阶段定级会得出「发送失败 = 安全可重试」这种错误结论。
 
 | # | 不变量 | 状态 | 守点 |
 |---|---|---|---|
-| W-01 | 写结果「可能已生效」必须用 `WriteUncertain` 上报，不得报成普通失败 | ✅ | `mark_write_uncertain`（协议无关实现） |
+| W-01 | 写结果「可能已生效」必须用 `WriteUncertain` 上报，不得报成普通失败 | ✅ | `mark_write_uncertain` / `mark_write_uncertain_counted`（协议无关） |
 | W-02 | `WriteUncertain` **不可重试** | ✅ | `is_retryable` 刻意排除 |
-| W-03 | 能证明写未生效的错误不得转成 `WriteUncertain`（`BusBusy` / `ModbusException` / `InvalidFrame`） | ✅ | `mark_write_uncertain` 白名单 |
-| W-04 | 写结果未知必须计数 | ✅ | `gateway_write_uncertain_total` |
+| W-03 | 能证明写未生效的错误不得转成 `WriteUncertain`（`DeviceRejected` / `ModbusException` / `BusBusy` / `Unsupported` / `InvalidConfig`） | ✅ | `mark_write_uncertain` 白名单；测试 `definite_failures_keep_their_variant` |
+| W-03b | `InvalidFrame`（应答无法解析）**属于结果未知**，不是明确失败 | ✅ | `mark_write_uncertain` 黑名单；测试 `uncertain_errors_become_write_uncertain` |
+| W-03c | 设备明确回了错误码（拒绝 / 异常码 / 否定确认）必须用 `DeviceRejected`，不得混进 `InvalidFrame` | ✅ | `DeviceRejected` 变体 + 各协议错误点改造；测试 `device_rejected_is_distinct_from_invalid_frame` |
+| W-04 | 写结果未知必须计数 | 🟡 | `gateway_write_uncertain_total`；**缺口 G-08**：自研协议（无 `BusManager`）不计数 |
 | W-05 | 写路径必须走控制通道（优先级） | ✅ | Modbus / DLT645 / CJT188 全部 `BusPriority::Control` |
 | W-06 | 写不确定的错误必须传到 API 层可见 | 🟡 | 目前靠 `Display` 文案冒泡，无独立错误码 |
 | W-07 | 上游（前端 / MES）不得对 `WriteUncertain` 自动重试 | ❌ | **缺口 G-02**：API 契约未区分 |
@@ -51,6 +64,12 @@
 | W-09 | 点位应标记「写值 / 增量 / 脉冲」，以决定能否读回消歧 | ❌ | **缺口 G-04**：点位模型无写入属性 |
 | W-10 | Modbus 写异常响应必须保留 `ModbusException` 语义 | ✅ | `trait_impl.rs` 先判 5 字节异常帧；测试 `write_exception_frame_maps_to_modbus_exception` |
 | W-11 | 写响应按**语义字段**校验（slave/fc/addr/值），不得整帧比对 | ✅ | `verify_write_echo`（CRC 由定帧层负责） |
+| W-11b | 写回显**不匹配** → 应答无法解析 → 结果未知（写很可能已执行），不得报成普通失败 | ✅ | Modbus `verify_write_echo` 失败 → `mark_write_uncertain`；测试 `write_echo_mismatch_is_write_uncertain` |
+| W-12 | 自研客户端协议（s7comm / fins / mc / iec104 / bacnet）的写路径必须套用同一套定级 | ✅ | 各协议写路径 `mark_write_uncertain`；测试 `s7comm/mc/fins/iec104/bacnet` 写语义用例 |
+| W-13 | **未下发**的失败（地址解析失败、参数非法、建链失败、`BusBusy`、不可写功能码）不得算「结果未知」 | ✅ | 这些路径不套 `mark_write_uncertain`；不可写 FC → `Unsupported`；测试 `write_unsupported_function_code_is_not_uncertain` |
+| W-14 | 同一协议的**读**路径不得因写语义改造而改变错误口径 | ✅ | mc 读路径保留 `check_end_code`（`InvalidFrame`），写路径另用 `check_write_end_code` |
+| W-15 | 本地 IO 写（GPIO）不参与本分级（写生效与否确定） | ✅ | `gpio/mod.rs` 保持 `IoError`；仅文档说明 |
+| W-16 | 总线协议（modbus / dlt645 / cjt188）的写响应状态字非 0 → `DeviceRejected` | ✅ | dlt645 / cjt188 `parse_write_*_response`；测试 `write_status_nonzero_is_device_rejected` |
 
 ## 3. 读语义（跨协议）
 
@@ -104,6 +123,8 @@
 | G-04 | 点位写入属性（写值 / 增量 / 脉冲）未建模 | M | 中高 | 决定 G-03 能否落地，也是增量点位的正确性前提 |
 | G-05 | TCP 单设备拖垮总线（无 per-slave 观测/熔断） | M~L | 中高 | 建议先加 per-slave NoReply 观测再定方案 |
 | G-06 | RTU ASCII 缓冲溢出整段丢弃 | S | 低 | 仅 ASCII 模式且跨帧边界时触发 |
+| G-07 | 写路径错误分级分散在各协议（无统一入口） | — | — | **已关闭**：统一走 `mark_write_uncertain` / `mark_write_uncertain_counted` |
+| G-08 | 自研协议（s7comm / fins / mc / iec104 / bacnet）写结果未知**不计数** | S | 中 | 这些协议不走 `BusManager`，拿不到总线 metrics；需下沉一个协议无关的全局计数器 |
 
 ## 7. 变更检查清单
 
@@ -113,4 +134,7 @@
 2. 是否改变了 **B-06 / B-07**（保留槽位与采集并发的一致性）？
 3. 新增的错误变体是否已从 **`is_retryable`** 中排除？
 4. 新增的失败路径是否可观测（计数 / 日志）？
-5. 是否新增了需要守住的语义？→ 补进本表 + 补测试
+5. 新增 / 修改的写失败路径是否已按 **W-03 / W-03b / W-03c** 定级？
+   （能证明未生效 → `DeviceRejected` 等；证明不了 → `mark_write_uncertain`）
+6. 是否只改了**写**路径却顺手改动了**读**路径的错误口径？→ 违反 **W-14** 必须回退
+7. 是否新增了需要守住的语义？→ 补进本表 + 补测试

@@ -231,6 +231,85 @@ async fn write_property_end_to_end_rejects_error() {
         .await
         .expect_err("Error 响应须判失败");
     assert!(format!("{err}").contains("Error"), "实际: {err}");
+    // 设备明确回了 Error → 写确定未生效 → DeviceRejected（明确失败，可安全重试）
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        "unexpected: {err:?}"
+    );
+    server_task.await.unwrap();
+}
+
+/// 端到端：BVLC-Result 非 0 → 设备明确回错误码 → `DeviceRejected`
+#[tokio::test]
+async fn write_property_bvlc_result_error_is_device_rejected() {
+    let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = server.local_addr().unwrap();
+
+    let collector = BacnetCollector::new(
+        server_addr.to_string(),
+        "bacnet-bvlc-err".to_string(),
+        Duration::from_millis(500),
+    );
+    collector.connect().await.unwrap();
+
+    let server_task = tokio::spawn(async move {
+        let mut buf = [0u8; 1500];
+        let (_, from) = server.recv_from(&mut buf).await.unwrap();
+        // BVLC-Result：function=0x00，原始 BVLC header + Result code
+        let mut resp = vec![0x81u8, 0x00, 0x00, 0x06, 0x00, 0x01];
+        let total = resp.len() as u16;
+        resp[2..4].copy_from_slice(&total.to_be_bytes());
+        server.send_to(&resp, from).await.unwrap();
+    });
+
+    let point = PointConfig {
+        id: "wp3".to_string(),
+        address: "analog-output:5".to_string(),
+        ..Default::default()
+    };
+    let err = collector
+        .write(&point, 1.0)
+        .await
+        .expect_err("BVLC-Result 错误须判失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        "unexpected: {err:?}"
+    );
+    server_task.await.unwrap();
+}
+
+/// 端到端：设备不回 → 结果未知 → `WriteUncertain`（禁止自动重试）
+#[tokio::test]
+async fn write_property_no_reply_is_uncertain() {
+    let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = server.local_addr().unwrap();
+
+    let collector = BacnetCollector::new(
+        server_addr.to_string(),
+        "bacnet-no-reply".to_string(),
+        Duration::from_millis(200),
+    );
+    collector.connect().await.unwrap();
+
+    // 服务器收包后不回
+    let server_task = tokio::spawn(async move {
+        let mut buf = [0u8; 1500];
+        let _ = server.recv_from(&mut buf).await.unwrap();
+    });
+
+    let point = PointConfig {
+        id: "wp4".to_string(),
+        address: "analog-output:5".to_string(),
+        ..Default::default()
+    };
+    let err = collector
+        .write(&point, 1.0)
+        .await
+        .expect_err("无应答应失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
+        "unexpected: {err:?}"
+    );
     server_task.await.unwrap();
 }
 

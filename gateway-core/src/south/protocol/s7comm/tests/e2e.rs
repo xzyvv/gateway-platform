@@ -181,3 +181,34 @@ async fn write_multi_merges_into_single_transaction() {
         "两个合法点位应合并成一次 Write Var 事务（默认扇出会是 2 次）"
     );
 }
+
+/// 写语义：设备回了错误 PDU（Error class/code 非 0）→ 写**确定未生效**
+/// → `DeviceRejected`（明确失败，可安全重试）。
+#[tokio::test]
+async fn write_error_response_is_device_rejected() {
+    let value = 42.5f32.to_be_bytes().to_vec();
+    let addr = spawn_s7_stub(vec![S7StubAction::ServeWriteError], value, TS_BYTE).await;
+    let c = S7CommCollector::new(addr, "s7-bus".into(), Duration::from_secs(5));
+    let p = s7_point("p1", "DB1.DBD0", "real");
+
+    let err = c.write(&p, 123.5).await.expect_err("设备拒绝应失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        "unexpected: {err:?}"
+    );
+}
+
+/// 写语义：设备不回（握手后直接断链）→ 结果未知 → `WriteUncertain`（禁止自动重试）。
+#[tokio::test]
+async fn write_no_reply_is_uncertain() {
+    let value = 42.5f32.to_be_bytes().to_vec();
+    let addr = spawn_s7_stub(vec![S7StubAction::CloseAfterHandshake], value, TS_BYTE).await;
+    let c = S7CommCollector::new(addr, "s7-bus".into(), Duration::from_secs(5));
+    let p = s7_point("p1", "DB1.DBD0", "real");
+
+    let err = c.write(&p, 123.5).await.expect_err("无应答应失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
+        "unexpected: {err:?}"
+    );
+}

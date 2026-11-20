@@ -554,11 +554,28 @@ pub(crate) async fn read_response_1e(
 }
 
 /// 将结束代码/状态码的非零值转为协议错误。
+///
+/// 读路径专用：读失败只影响本次读，不涉及「写是否生效」，
+/// 沿用 [`CollectorError::InvalidFrame`] 的既有口径（错误码分类不变）。
 pub(crate) fn check_end_code(end_code: u16) -> CollectorResult<()> {
     if end_code == 0 {
         Ok(())
     } else {
         Err(CollectorError::InvalidFrame(format!(
+            "mc end code 0x{end_code:04X}"
+        )))
+    }
+}
+
+/// 写路径专用：结束码非零 → 设备明确拒绝（写**确定未生效**，属明确失败）。
+///
+/// 与读路径的 [`check_end_code`] 分开：写语义要求区分「设备说不成功」
+/// （可安全重试）与「应答没看懂」（结果未知，禁止自动重试）。
+pub(crate) fn check_write_end_code(end_code: u16) -> CollectorResult<()> {
+    if end_code == 0 {
+        Ok(())
+    } else {
+        Err(CollectorError::DeviceRejected(format!(
             "mc end code 0x{end_code:04X}"
         )))
     }
