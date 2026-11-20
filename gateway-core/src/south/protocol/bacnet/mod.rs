@@ -55,6 +55,8 @@ pub struct BacnetCollector {
     cov: Arc<Mutex<CovState>>,
     /// COV 监听任务（惰性随 connect 启动，disconnect 时拆除）
     cov_link: Mutex<Option<CovLink>>,
+    /// G-08: 指标句柄（工厂注入；None 时写不确定只映射不计数）
+    metrics: Option<Arc<crate::engine::metrics::Metrics>>,
 }
 
 impl BacnetCollector {
@@ -68,7 +70,14 @@ impl BacnetCollector {
             io_timeout,
             cov: Arc::new(Mutex::new(CovState::default())),
             cov_link: Mutex::new(None),
+            metrics: None,
         }
+    }
+
+    /// 注入指标句柄（生产路径：`registry::factories::create_bacnet`）。
+    pub fn with_metrics(mut self, metrics: Arc<crate::engine::metrics::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// 解析对象类型字符串

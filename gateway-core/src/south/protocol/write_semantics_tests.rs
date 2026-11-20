@@ -136,6 +136,42 @@ async fn counted_variant_increments_metric_only_on_uncertain() {
     assert_eq!(after2, after, "明确失败不得计入写结果未知");
 }
 
+/// G-08: 自研协议（s7comm/fins/mc/iec104/bacnet）注入 metrics 后必须计数。
+///
+/// 此前这五种协议走 `mark_write_uncertain`（不计数），`gateway_bus_write_uncertain_total`
+/// 只覆盖走 BusManager 的三种协议，运维看到的写不确定远小于实际发生量。
+#[cfg(any(
+    feature = "s7comm",
+    feature = "fins",
+    feature = "mc",
+    feature = "iec104",
+    feature = "bacnet"
+))]
+#[test]
+fn injected_metrics_counts_write_uncertain() {
+    use super::mark_write_uncertain_with;
+    use crate::engine::metrics::Metrics;
+    use std::sync::atomic::Ordering;
+
+    let metrics = Metrics::new();
+    let read = || metrics.bus.write_uncertain_total.load(Ordering::Relaxed);
+
+    assert_eq!(read(), 0);
+    let mapped = mark_write_uncertain_with(Some(&metrics), CollectorError::NoReply);
+    assert!(matches!(mapped, CollectorError::WriteUncertain(_)));
+    assert_eq!(read(), 1, "注入 metrics 后必须计数");
+
+    // 明确失败不计数
+    let mapped =
+        mark_write_uncertain_with(Some(&metrics), CollectorError::DeviceRejected("x".into()));
+    assert!(matches!(mapped, CollectorError::DeviceRejected(_)));
+    assert_eq!(read(), 1, "明确失败不得计入写结果未知");
+
+    // 未注入（单元测试 / 独立构造）：保持只映射不计数
+    let mapped = mark_write_uncertain_with(None, CollectorError::NoReply);
+    assert!(matches!(mapped, CollectorError::WriteUncertain(_)));
+}
+
 /// `DeviceRejected` 的稳定错误码映射：走 Other（不与 Decode/Io 混淆）。
 #[test]
 fn device_rejected_maps_to_other_error_code() {

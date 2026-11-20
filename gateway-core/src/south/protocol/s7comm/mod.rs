@@ -25,6 +25,7 @@
 //!     未指定时按地址后缀推断（D→REAL, W→INT, B→BYTE, X→BIT）
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
@@ -115,6 +116,8 @@ pub struct S7CommCollector {
     connected: AtomicBool,
     /// 单次请求 IO 超时（源自 bus.timeout_ms，统一南向超时来源）
     io_timeout: Duration,
+    /// G-08: 指标句柄（工厂注入；None 时写不确定只映射不计数）
+    metrics: Option<Arc<crate::engine::metrics::Metrics>>,
 }
 
 impl S7CommCollector {
@@ -130,7 +133,16 @@ impl S7CommCollector {
             pdu_size: Mutex::new(480),
             connected: AtomicBool::new(false),
             io_timeout,
+            metrics: None,
         }
+    }
+
+    /// 注入指标句柄（生产路径：`registry::factories::create_s7comm`）。
+    ///
+    /// 不用构造参数是为了不动既有测试的构造调用；未注入时行为与旧版一致。
+    pub fn with_metrics(mut self, metrics: Arc<crate::engine::metrics::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// 读取 SZL 系统状态列表（决策表 #12：S7 诊断入口）

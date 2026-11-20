@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use tokio::io::AsyncWriteExt;
 
-use crate::south::protocol::{mark_write_uncertain, CollectorError, CollectorResult};
+use crate::south::protocol::{mark_write_uncertain_with, CollectorError, CollectorResult};
 
 use super::frames::{
     build_command_asdu, build_iframe, build_uframe, parse_command_confirmation, read_frame,
@@ -124,6 +124,6 @@ impl Iec104Collector {
         // 命令帧已下发（发送失败也意味着字节可能已部分上线），此后所有传输层
         // 失败都无法证明命令未执行 → 结果未知，禁止自动重试。
         // 设备明确否定（COT）→ DeviceRejected，保持「明确失败」不变。
-        outcome.map_err(mark_write_uncertain)
+        outcome.map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))
     }
 }

@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
-    convert_value, mark_write_uncertain, reverse_convert, Collector, CollectorError,
+    convert_value, mark_write_uncertain_with, reverse_convert, Collector, CollectorError,
     CollectorResult, ResultSlots,
 };
 
@@ -203,9 +203,13 @@ impl Collector for FinsCollector {
                 let server_node = self.server_node.load(Ordering::Relaxed);
                 let frame = build_cpu_control_frame(server_node, CLIENT_NODE, ctrl);
                 // 请求已下发：传输失败无法证明写未生效 → 结果未知
-                let payload = self.transact(&frame).await.map_err(mark_write_uncertain)?;
+                let payload = self
+                    .transact(&frame)
+                    .await
+                    .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))?;
                 let (mrc, src) = ctrl.command_code();
-                return parse_write_response(&payload, mrc, src).map_err(mark_write_uncertain);
+                return parse_write_response(&payload, mrc, src)
+                    .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e));
             }
             let area = parse_address(&point.address)?;
             // 先建链完成节点地址握手，server_node 才有效
@@ -235,9 +239,12 @@ impl Collector for FinsCollector {
                     &data,
                 )
             };
-            let payload = self.transact(&frame).await.map_err(mark_write_uncertain)?;
+            let payload = self
+                .transact(&frame)
+                .await
+                .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))?;
             parse_write_response(&payload, MRC_MEMORY_WRITE, SRC_MEMORY_WRITE)
-                .map_err(mark_write_uncertain)
+                .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))
         })
     }
 }

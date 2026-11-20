@@ -4,7 +4,9 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 
-use crate::south::protocol::{convert_value, mark_write_uncertain, reverse_convert, ResultSlots};
+use crate::south::protocol::{
+    convert_value, mark_write_uncertain_with, reverse_convert, ResultSlots,
+};
 
 mod batch;
 
@@ -231,7 +233,10 @@ impl Collector for BacnetCollector {
             drain_socket(&socket);
             // 请求已发出：UDP 发送失败也无法证明设备未收到 → 结果未知
             socket.send(&packet).await.map_err(|e| {
-                mark_write_uncertain(CollectorError::IoError(format!("BACnet write send: {}", e)))
+                mark_write_uncertain_with(
+                    self.metrics.as_deref(),
+                    CollectorError::IoError(format!("BACnet write send: {}", e)),
+                )
             })?;
 
             let deadline = tokio::time::Instant::now() + self.io_timeout;
@@ -239,27 +244,33 @@ impl Collector for BacnetCollector {
             loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
-                    return Err(mark_write_uncertain(CollectorError::NoReply));
+                    return Err(mark_write_uncertain_with(
+                        self.metrics.as_deref(),
+                        CollectorError::NoReply,
+                    ));
                 }
                 let recv = tokio::time::timeout(remaining, socket.recv(&mut buf))
                     .await
-                    .map_err(|_| mark_write_uncertain(CollectorError::NoReply))?
+                    .map_err(|_| {
+                        mark_write_uncertain_with(self.metrics.as_deref(), CollectorError::NoReply)
+                    })?
                     .map_err(|e| {
-                        mark_write_uncertain(CollectorError::IoError(format!(
-                            "BACnet write recv: {}",
-                            e
-                        )))
+                        mark_write_uncertain_with(
+                            self.metrics.as_deref(),
+                            CollectorError::IoError(format!("BACnet write recv: {}", e)),
+                        )
                     })?;
                 if recv < 6 {
-                    return Err(mark_write_uncertain(CollectorError::InvalidFrame(
-                        "BACnet write response too short".into(),
-                    )));
+                    return Err(mark_write_uncertain_with(
+                        self.metrics.as_deref(),
+                        CollectorError::InvalidFrame("BACnet write response too short".into()),
+                    ));
                 }
                 if buf[0] != 0x81 {
-                    return Err(mark_write_uncertain(CollectorError::InvalidFrame(format!(
-                        "invalid BVLC type 0x{:02X}",
-                        buf[0]
-                    ))));
+                    return Err(mark_write_uncertain_with(
+                        self.metrics.as_deref(),
+                        CollectorError::InvalidFrame(format!("invalid BVLC type 0x{:02X}", buf[0])),
+                    ));
                 }
                 if buf[1] == 0x00 {
                     // BVLC-Result 非 0：设备明确回了错误码 → 写确定未生效
@@ -270,13 +281,14 @@ impl Collector for BacnetCollector {
                     )));
                 }
                 let npdu = &buf[4..recv];
-                let resp_apdu = Self::skip_npdu(npdu).map_err(mark_write_uncertain)?;
+                let resp_apdu = Self::skip_npdu(npdu)
+                    .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))?;
                 if frames::apdu_invoke_id(resp_apdu) != Some(invoke_id) {
                     continue; // 迟到/错配响应：丢弃后继续等待
                 }
                 // Error/Reject/Abort → DeviceRejected（明确失败）；其余解析失败 → 结果未知
                 frames::parse_write_property_ack(resp_apdu, invoke_id)
-                    .map_err(mark_write_uncertain)?;
+                    .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))?;
                 return Ok(());
             }
         })

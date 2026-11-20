@@ -93,19 +93,17 @@ pub(super) fn create_opcua(
 pub(super) fn create_iec104(
     port_name: &str,
     bus: Arc<BusManager>,
-    _metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
 ) -> Arc<dyn Collector> {
     let addr = bus
         .tcp_addr
         .clone()
         .unwrap_or_else(|| "localhost:2404".into());
     let io_timeout = bus.io_timeout();
-    Arc::new(Iec104Collector::new(
-        addr,
-        port_name.to_string(),
-        io_timeout,
-        bus.asdu_addr_len(),
-    ))
+    Arc::new(
+        Iec104Collector::new(addr, port_name.to_string(), io_timeout, bus.asdu_addr_len())
+            .with_metrics(metrics),
+    )
 }
 
 /// IEC 60870-5-101 主站采集器（串行 FT1.2，注册帧提取器）
@@ -123,7 +121,7 @@ pub(super) fn create_iec101(
 pub(super) fn create_mc(
     port_name: &str,
     bus: Arc<BusManager>,
-    _metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
 ) -> Arc<dyn Collector> {
     let addr = bus
         .tcp_addr
@@ -131,12 +129,15 @@ pub(super) fn create_mc(
         .unwrap_or_else(|| "localhost:6000".into());
     let io_timeout = bus.io_timeout();
     // 帧格式经统一变体解析点（决策表 #16 / #24）传入采集器
-    Arc::new(McCollector::new(
-        addr,
-        port_name.to_string(),
-        io_timeout,
-        bus.variant().map(str::to_string),
-    ))
+    Arc::new(
+        McCollector::new(
+            addr,
+            port_name.to_string(),
+            io_timeout,
+            bus.variant().map(str::to_string),
+        )
+        .with_metrics(metrics),
+    )
 }
 
 /// 欧姆龙 FINS 采集器（FINS/TCP 默认；`variant=udp` 时走 FINS/UDP，默认端口 9600）
@@ -144,7 +145,7 @@ pub(super) fn create_mc(
 pub(super) fn create_fins(
     port_name: &str,
     bus: Arc<BusManager>,
-    _metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
 ) -> Arc<dyn Collector> {
     let addr = bus
         .tcp_addr
@@ -152,12 +153,15 @@ pub(super) fn create_fins(
         .unwrap_or_else(|| "localhost:9600".into());
     let io_timeout = bus.io_timeout();
     // 传输模式经统一变体解析点（决策表 #24）传入采集器
-    Arc::new(FinsCollector::new(
-        addr,
-        port_name.to_string(),
-        io_timeout,
-        bus.variant().map(str::to_string),
-    ))
+    Arc::new(
+        FinsCollector::new(
+            addr,
+            port_name.to_string(),
+            io_timeout,
+            bus.variant().map(str::to_string),
+        )
+        .with_metrics(metrics),
+    )
 }
 
 /// BACnet/IP 采集器（UDP，默认端口 47808）
@@ -165,18 +169,14 @@ pub(super) fn create_fins(
 pub(super) fn create_bacnet(
     port_name: &str,
     bus: Arc<BusManager>,
-    _metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
 ) -> Arc<dyn Collector> {
     let addr = bus
         .tcp_addr
         .clone()
         .unwrap_or_else(|| "localhost:47808".into());
     let io_timeout = bus.io_timeout();
-    Arc::new(BacnetCollector::new(
-        addr,
-        port_name.to_string(),
-        io_timeout,
-    ))
+    Arc::new(BacnetCollector::new(addr, port_name.to_string(), io_timeout).with_metrics(metrics))
 }
 
 /// S7comm 西门子 PLC 采集器（TCP，默认 rack=0 slot=2）
@@ -184,18 +184,14 @@ pub(super) fn create_bacnet(
 pub(super) fn create_s7comm(
     port_name: &str,
     bus: Arc<BusManager>,
-    _metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
 ) -> Arc<dyn Collector> {
     let addr = bus
         .tcp_addr
         .clone()
         .unwrap_or_else(|| "localhost:102?rack=0&slot=2".into());
     let io_timeout = bus.io_timeout();
-    Arc::new(S7CommCollector::new(
-        addr,
-        port_name.to_string(),
-        io_timeout,
-    ))
+    Arc::new(S7CommCollector::new(addr, port_name.to_string(), io_timeout).with_metrics(metrics))
 }
 
 /// BACnet MS/TP 主站采集器（RS485，注册帧提取器）

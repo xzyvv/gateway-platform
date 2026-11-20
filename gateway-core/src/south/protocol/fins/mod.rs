@@ -80,6 +80,8 @@ pub struct FinsCollector {
     server_node: AtomicU8,
     /// 单次请求 IO 超时（源自 bus.timeout_ms，统一南向超时来源）
     io_timeout: Duration,
+    /// G-08: 指标句柄（工厂注入；None 时写不确定只映射不计数）
+    metrics: Option<std::sync::Arc<crate::engine::metrics::Metrics>>,
 }
 
 impl FinsCollector {
@@ -106,7 +108,17 @@ impl FinsCollector {
             connected: AtomicBool::new(false),
             server_node: AtomicU8::new(0),
             io_timeout,
+            metrics: None,
         }
+    }
+
+    /// 注入指标句柄（生产路径：`registry::factories::create_fins`）。
+    pub fn with_metrics(
+        mut self,
+        metrics: std::sync::Arc<crate::engine::metrics::Metrics>,
+    ) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// 惰性建链：按传输模式分派。

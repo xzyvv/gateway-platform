@@ -311,25 +311,31 @@ pub(crate) fn clone_collector_error(e: &CollectorError) -> CollectorError {
     feature = "bacnet"
 ))]
 pub(crate) fn mark_write_uncertain(e: CollectorError) -> CollectorError {
-    match e {
-        CollectorError::NoReply
-        | CollectorError::ChecksumError
-        | CollectorError::Timeout(_)
-        | CollectorError::IoError(_)
-        | CollectorError::InvalidFrame(_) => CollectorError::WriteUncertain(e.to_string()),
-        other => other,
-    }
+    classify_write_uncertain(None, e)
 }
 
-/// [`mark_write_uncertain`] 的带计数版本（走总线总线的协议用）。
+/// [`mark_write_uncertain`] 的带计数版本（自研 TCP/UDP 协议用）。
 ///
-/// 自研 TCP / UDP 客户端的协议（s7comm / fins / mc / iec104 / bacnet）没有
-/// `BusManager`，用不带计数的 [`mark_write_uncertain`]；
-/// 因此 `gateway_write_uncertain_total` 目前只覆盖走总线总线的协议
-/// （modbus / dlt645 / cjt188），缺口登记为 G-08。
-#[cfg(any(feature = "modbus", feature = "dlt645", feature = "cjt188"))]
-pub(crate) fn mark_write_uncertain_counted(
-    bus: &crate::south::bus::BusManager,
+/// G-08: 这些协议没有 `BusManager`，metrics 由采集器在构造时注入
+/// （`with_metrics`，生产路径见 `protocol/registry/factories.rs`）。
+/// `None` 表示未注入（单元测试 / 独立构造），只做映射不计数。
+#[cfg(any(
+    feature = "s7comm",
+    feature = "fins",
+    feature = "mc",
+    feature = "iec104",
+    feature = "bacnet"
+))]
+pub(crate) fn mark_write_uncertain_with(
+    metrics: Option<&crate::engine::metrics::Metrics>,
+    e: CollectorError,
+) -> CollectorError {
+    classify_write_uncertain(metrics, e)
+}
+
+/// 判据只有一条：写已发出但无法证明其未生效 → WriteUncertain。
+fn classify_write_uncertain(
+    metrics: Option<&crate::engine::metrics::Metrics>,
     e: CollectorError,
 ) -> CollectorError {
     if matches!(
@@ -340,10 +346,21 @@ pub(crate) fn mark_write_uncertain_counted(
             | CollectorError::IoError(_)
             | CollectorError::InvalidFrame(_)
     ) {
-        bus.metrics().inc_write_uncertain();
+        if let Some(m) = metrics {
+            m.inc_write_uncertain();
+        }
         return CollectorError::WriteUncertain(e.to_string());
     }
     e
+}
+
+/// 走总线总线的协议（modbus / dlt645 / cjt188）：metrics 从 `BusManager` 取。
+#[cfg(any(feature = "modbus", feature = "dlt645", feature = "cjt188"))]
+pub(crate) fn mark_write_uncertain_counted(
+    bus: &crate::south::bus::BusManager,
+    e: CollectorError,
+) -> CollectorError {
+    classify_write_uncertain(Some(bus.metrics()), e)
 }
 
 /// Collector trait 接口（§3.10 核心契约）

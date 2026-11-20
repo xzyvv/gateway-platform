@@ -117,6 +117,8 @@ pub struct Iec104Collector {
     io_timeout: Duration,
     /// 决策表 #28：公共地址（CA）字节数（1 或 2），源自 `bus.asdu_addr_len()`。
     asdu_addr_len: u8,
+    /// G-08: 指标句柄（工厂注入；None 时写不确定只映射不计数）
+    metrics: Option<Arc<crate::engine::metrics::Metrics>>,
 }
 
 impl Iec104Collector {
@@ -132,7 +134,14 @@ impl Iec104Collector {
             seq_recv: Arc::new(AtomicU16::new(0)),
             io_timeout,
             asdu_addr_len,
+            metrics: None,
         }
+    }
+
+    /// 注入指标句柄（生产路径：`registry::factories::create_iec104`）。
+    pub fn with_metrics(mut self, metrics: Arc<crate::engine::metrics::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 

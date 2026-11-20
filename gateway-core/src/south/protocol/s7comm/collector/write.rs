@@ -3,7 +3,7 @@ use super::*;
 
 use crate::config::PointConfig;
 use crate::south::protocol::{
-    clone_collector_error, mark_write_uncertain, reverse_convert, Collector,
+    clone_collector_error, mark_write_uncertain_with, reverse_convert, Collector,
 };
 
 impl S7CommCollector {
@@ -54,15 +54,18 @@ impl S7CommCollector {
                 *guard = None;
                 self.connected.store(false, Ordering::Relaxed);
                 // 发送阶段失败：字节可能已部分上线，无法证明写未生效 → 结果未知
-                return Err(mark_write_uncertain(CollectorError::IoError(format!(
-                    "S7 send write: {}",
-                    e
-                ))));
+                return Err(mark_write_uncertain_with(
+                    self.metrics.as_deref(),
+                    CollectorError::IoError(format!("S7 send write: {}", e)),
+                ));
             }
             Err(_) => {
                 *guard = None;
                 self.connected.store(false, Ordering::Relaxed);
-                return Err(mark_write_uncertain(CollectorError::NoReply));
+                return Err(mark_write_uncertain_with(
+                    self.metrics.as_deref(),
+                    CollectorError::NoReply,
+                ));
             }
         }
 
@@ -72,17 +75,21 @@ impl S7CommCollector {
                 Ok(Err(e)) => {
                     *guard = None;
                     self.connected.store(false, Ordering::Relaxed);
-                    return Err(mark_write_uncertain(e));
+                    return Err(mark_write_uncertain_with(self.metrics.as_deref(), e));
                 }
                 Err(_) => {
                     *guard = None;
                     self.connected.store(false, Ordering::Relaxed);
-                    return Err(mark_write_uncertain(CollectorError::NoReply));
+                    return Err(mark_write_uncertain_with(
+                        self.metrics.as_deref(),
+                        CollectorError::NoReply,
+                    ));
                 }
             };
 
         // 响应已收到：解析失败→结果未知；设备明确拒绝→DeviceRejected（明确失败）
-        frames::parse_write_response(&resp).map_err(mark_write_uncertain)
+        frames::parse_write_response(&resp)
+            .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))
     }
 
     /// 批量写入多个点位（决策表 #13：多 item Write Var，一批一次事务）
@@ -198,9 +205,9 @@ impl S7CommCollector {
             let req = frames::build_write_var_multi(&items, pdu_ref);
             let outcome = match self.transact(&req).await {
                 Ok(resp) => frames::parse_write_response_multi(&resp, chunk.len())
-                    .map_err(mark_write_uncertain),
+                    .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e)),
                 // 请求已下发，失败原因无法证明写未生效 → 结果未知
-                Err(e) => Err(mark_write_uncertain(e)),
+                Err(e) => Err(mark_write_uncertain_with(self.metrics.as_deref(), e)),
             };
             match outcome {
                 Ok(()) => {

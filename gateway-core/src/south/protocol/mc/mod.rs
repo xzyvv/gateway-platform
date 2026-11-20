@@ -30,7 +30,7 @@ use tokio::sync::Mutex;
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
-    convert_value, mark_write_uncertain, reverse_convert, Collector, CollectorError,
+    convert_value, mark_write_uncertain_with, reverse_convert, Collector, CollectorError,
     CollectorResult, ResultSlots,
 };
 
@@ -100,6 +100,8 @@ pub struct McCollector {
     format: McFrameFormat,
     /// 4E 序列号自增计数器（用于请求-响应配对，防串包）
     serial: AtomicU16,
+    /// G-08: 指标句柄（工厂注入；None 时写不确定只映射不计数）
+    metrics: Option<std::sync::Arc<crate::engine::metrics::Metrics>>,
 }
 
 impl McCollector {
@@ -117,7 +119,17 @@ impl McCollector {
             io_timeout,
             format: McFrameFormat::from_variant(variant.as_deref()),
             serial: AtomicU16::new(0),
+            metrics: None,
         }
+    }
+
+    /// 注入指标句柄（生产路径：`registry::factories::create_mc`）。
+    pub fn with_metrics(
+        mut self,
+        metrics: std::sync::Arc<crate::engine::metrics::Metrics>,
+    ) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// 分配下一个 4E 序列号。
@@ -520,7 +532,10 @@ impl Collector for McCollector {
                 let words = encode_words(reverse_convert(point, value), dt);
                 self.write_words_txn(&device, &words)?
             };
-            let (end_code, _) = self.transact(&txn).await.map_err(mark_write_uncertain)?;
+            let (end_code, _) = self
+                .transact(&txn)
+                .await
+                .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))?;
             check_write_end_code(end_code)
         })
     }
