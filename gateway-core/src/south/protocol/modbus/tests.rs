@@ -404,6 +404,50 @@ async fn diag_reports_unreachable_endpoint() {
 }
 
 // =========================================================================
+// R-1 / R-3 端到端：真实 TCP 池 + RTU↔MBAP 转换，验证写异常语义与线圈定帧
+// =========================================================================
+
+/// R-1：从站拒绝写（FC06 回 0x86/0x02 异常帧）时必须保留 ModbusException。
+///
+/// 回归点：旧实现在 trait_impl 里用 `resp.len() < 8` 判回显，5 字节异常帧
+/// 会被误判成 `InvalidFrame("write response mismatch")`，异常码彻底丢失，
+/// 现场无法区分「设备拒绝写」与「总线噪声」。
+#[tokio::test]
+async fn write_exception_frame_maps_to_modbus_exception() {
+    use crate::south::protocol::CollectorError;
+
+    let addr = spawn_modbus_tcp_stub(vec![0x86, 0x02]).await;
+    let c = super::ModbusCollector::new("modbus_write_exc", modbus_tcp_bus(addr, 1000));
+    let point = mk_typed_point("U16"); // fc=6 → FC06 写单寄存器
+
+    let err = c.write(&point, 1.0).await.expect_err("异常帧必须返回错误");
+    assert!(
+        matches!(err, CollectorError::ModbusException(0x02)),
+        "异常码必须原样返回，实际 {err:?}"
+    );
+}
+
+/// R-3：线圈读传入 expected_count 后，合法的 16 点 FC01 响应必须能正常解析。
+///
+/// 回归点：FC01/FC02 的期望字节数是 ceil(n/8)；若定帧沿用 n*2 公式，
+/// 合法响应会被判非法并逐字节丢弃 → 批量线圈恒 NoReply、单点线圈正常，
+/// 现场极难定位。
+#[tokio::test]
+async fn coil_read_with_expected_count_parses_valid_response() {
+    // FC01 响应：byte_count=2，0xFF 0x00 → 前 8 点 ON、后 8 点 OFF
+    let addr = spawn_modbus_tcp_stub(vec![0x01, 0x02, 0xFF, 0x00]).await;
+    let c = super::ModbusCollector::new("modbus_coil_read", modbus_tcp_bus(addr, 1000));
+
+    let coils = c
+        .read_coils_with_retry(1, 0x01, 0, 16)
+        .await
+        .expect("合法 FC01 响应应解析成功");
+    assert_eq!(coils.len(), 16);
+    assert!(coils[..8].iter().all(|b| *b), "前 8 点应为 ON");
+    assert!(coils[8..].iter().all(|b| !*b), "后 8 点应为 OFF");
+}
+
+// =========================================================================
 // 畸形帧负例：任意截断 / 长度字段撒谎 / CRC 错误都不得 panic，必须返回 Err
 // =========================================================================
 

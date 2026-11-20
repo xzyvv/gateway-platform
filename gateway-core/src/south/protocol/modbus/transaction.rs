@@ -106,6 +106,13 @@ pub enum TransactionError {
 ///   writer 用 Mutex 串行化整帧写，reader 单独 spawn 循环读。
 pub struct TransactionPool {
     max_concurrent: usize,
+    /// 为控制（写）事务保留的槽位数。
+    ///
+    /// 修复(第二批#5)：普通事务的准入上限是 `max_concurrent - reserved_control`，
+    /// 控制事务仍可用满 `max_concurrent`。这样即使 8 个采集事务把普通额度占满，
+    /// 写指令也始终有槽位可用，不会因为「池满」被立即拒绝。
+    /// 只做「保证有位置」，不改变 socket 上真正的并发上限。
+    reserved_control: usize,
     next_tx_id: AtomicU16,
     active: Arc<Mutex<HashMap<u16, Waiter>>>,
     /// 写半边。None 表示未绑定 socket（new 构造）。
@@ -117,12 +124,24 @@ pub struct TransactionPool {
     shutdown: Arc<Notify>,
 }
 
+/// 控制事务的默认保留槽位：池容量越大留得越多，但至少保证普通事务还能跑。
+///
+/// 8 槽（默认）→ 留 2；2~3 槽 → 留 1；1 槽 → 不留（否则普通事务永远无法准入）。
+fn default_reserved_control(max_concurrent: usize) -> usize {
+    match max_concurrent {
+        0 | 1 => 0,
+        2 | 3 => 1,
+        _ => 2,
+    }
+}
+
 impl TransactionPool {
     /// 仅创建 waiter 注册表，不绑定 socket。
     /// 适用于初始化/测试；submit 会立即返回 NotBound。
     pub fn new(max_concurrent: usize) -> Arc<Self> {
         Arc::new(Self {
             max_concurrent,
+            reserved_control: default_reserved_control(max_concurrent),
             next_tx_id: AtomicU16::new(1),
             active: Arc::new(Mutex::new(HashMap::new())),
             writer: None,
@@ -139,6 +158,7 @@ impl TransactionPool {
 
         let pool = Arc::new(Self {
             max_concurrent,
+            reserved_control: default_reserved_control(max_concurrent),
             next_tx_id: AtomicU16::new(1),
             active: active.clone(),
             writer: Some(Arc::new(Mutex::new(write_half))),
@@ -168,6 +188,18 @@ impl TransactionPool {
     /// - 写 socket 由 pool 持有的 writer 完成（原实现无人写 socket）
     /// - 响应由独立 reader_loop 经 deliver 路由回来
     pub async fn submit(&self, request: ModbusRequest) -> Result<Vec<u8>, TransactionError> {
+        self.submit_with_priority(request, false).await
+    }
+
+    /// 带优先级提交：`control=true` 时可使用包含保留槽在内的全部容量。
+    ///
+    /// 修复(第二批#5)：普通事务的准入上限收紧到 `max_concurrent - reserved_control`，
+    /// 使写指令永远有位置可用（此前 8 个采集在途时写会直接拿到 Busy）。
+    pub async fn submit_with_priority(
+        &self,
+        request: ModbusRequest,
+        control: bool,
+    ) -> Result<Vec<u8>, TransactionError> {
         let writer = self
             .writer
             .as_ref()
@@ -177,7 +209,12 @@ impl TransactionPool {
         // 1. 容量检查 + 分配 tx_id + 注册 waiter（持锁内完成，避免超卖）
         let (tx_id, reply_rx) = {
             let mut active = self.active.lock().await;
-            if active.len() >= self.max_concurrent {
+            let limit = if control {
+                self.max_concurrent
+            } else {
+                self.max_concurrent.saturating_sub(self.reserved_control)
+            };
+            if active.len() >= limit.max(1) {
                 return Err(TransactionError::Busy);
             }
             let tx_id = self.next_tx_id(); // 跳过 0

@@ -246,9 +246,11 @@ pub(crate) async fn bus_task_tcp(
             };
 
             // retry 循环（仅对 Timeout/Busy 重试；Disconnected/Io 触发重连）
+            // 修复(第二批#5)：控制事务提交时使用保留槽位，避免被整批采集挤到 Busy。
+            let is_control = tx.priority == super::BusPriority::Control;
             let mut attempt: u32 = 0;
             loop {
-                match pool.submit(req.clone()).await {
+                match pool.submit_with_priority(req.clone(), is_control).await {
                     Ok(pdu_resp) => {
                         // r15-SD4：一次真实事务成功才证明连接有效。
                         had_successful_comm.store(true, Ordering::Relaxed);
