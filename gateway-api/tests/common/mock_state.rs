@@ -88,11 +88,15 @@ pub enum MockWriteOutcome {
     Uncertain,
 }
 
-/// 假 collector：read 恒返回 Good 数据点，write 结果可控（默认成功）。
-/// 供点位写集成测试验证 write 成功/失败两条路径（默认 mock 的 collectors 为空表）。
+/// 假 collector：read 返回可控值，write 结果可控（默认成功）。
+/// 供点位写集成测试验证 write 成功/失败，以及 G-03 的「写后读回消歧」路径。
 pub struct MockCollector {
     bus: String,
     write_outcome: MockWriteOutcome,
+    /// read 返回的工程量（默认 1.0）。G-03 用例用它模拟「写后读回」的现场值。
+    read_value: f64,
+    /// read 是否恒失败（默认 false）。模拟写超时后链路仍未恢复、读回也失败。
+    read_fails: bool,
 }
 
 impl MockCollector {
@@ -100,6 +104,8 @@ impl MockCollector {
         Self {
             bus: bus.to_string(),
             write_outcome: MockWriteOutcome::Ok,
+            read_value: 1.0,
+            read_fails: false,
         }
     }
 
@@ -118,6 +124,18 @@ impl MockCollector {
         self.write_outcome = outcome;
         self
     }
+
+    /// 设置读回值（G-03：写结果未知时，读回消歧用）
+    pub fn with_read_value(mut self, value: f64) -> Self {
+        self.read_value = value;
+        self
+    }
+
+    /// 让 read 恒失败（G-03：模拟写超时后链路未恢复，读回也拿不到数据）
+    pub fn with_read_failure(mut self) -> Self {
+        self.read_fails = true;
+        self
+    }
 }
 
 impl Collector for MockCollector {
@@ -133,7 +151,14 @@ impl Collector for MockCollector {
         &'a self,
         point: &'a PointConfig,
     ) -> Pin<Box<dyn Future<Output = CollectorResult<DataPoint>> + Send + 'a>> {
-        Box::pin(async move { Ok(DataPoint::good(&point.id, "", 1.0, 1.0, "u16")) })
+        let value = self.read_value;
+        let fails = self.read_fails;
+        Box::pin(async move {
+            if fails {
+                return Err(CollectorError::NoReply);
+            }
+            Ok(DataPoint::good(&point.id, "", value, value, "u16"))
+        })
     }
 
     fn write<'a>(

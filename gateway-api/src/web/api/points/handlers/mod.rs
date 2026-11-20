@@ -4,9 +4,18 @@ use std::collections::BTreeMap;
 
 use gateway_core::config::PointConfig;
 use gateway_core::config::PointTrashEntry;
+use gateway_core::engine::model::Quality;
+use gateway_core::engine::write::write_readback_matches;
 
 use super::*;
 use crate::web::api::config::{now_ms, push_trash};
+
+/// 写结果未知时，**单点**读回核实的超时预算（G-03）。
+///
+/// 默认总线超时 500ms，留出「写超时后的链路恢复 + 一次完整读事务」的余量。
+/// 读回本身就是为了把「未知」收敛成确定结论，预算再短会频繁落到「读也超时」，
+/// 等于白跑一次总线；再长则会拖慢运维操作的响应。
+const SINGLE_READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// 点位批量操作（统一入口）
 ///
@@ -261,13 +270,46 @@ pub(crate) async fn write_points_core(
             }
             Err(e) => {
                 let outcome = e.write_outcome();
-                let message = write_error_message(&e.to_string(), outcome);
-                audit_point_write(state, &point, w.value, Some(&message));
-                Some(WriteItemError {
-                    message,
-                    quality: Some(e.to_quality()),
-                    outcome,
-                })
+                let mut message = write_error_message(&e.to_string(), outcome);
+                let quality = Some(e.to_quality());
+
+                // G-03：写结果未知时读回核实。只有读到**同样的值**才判定写已生效；
+                // 读到不同值或读不到，都保持「结果未知」——设备可能限幅、联锁复位、
+                // 或被其他主站改写，读回不等**证明不了**写没生效（W-03 / W-13）。
+                let mut confirmed = false;
+                if outcome.is_uncertain() {
+                    if let Ok(Ok(dp)) =
+                        tokio::time::timeout(SINGLE_READBACK_TIMEOUT, collector.read(&point)).await
+                    {
+                        if matches!(dp.quality, Quality::Good) {
+                            if write_readback_matches(w.value, dp.value, point.scale) {
+                                confirmed = true;
+                            } else {
+                                message = format!(
+                                    "{message}；读回值 {} 与写入值 {} 不一致，仍无法确认写入是否生效",
+                                    dp.value, w.value
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if confirmed {
+                    tracing::info!(
+                        point = %point.id,
+                        value = w.value,
+                        "写结果未知，读回值与写入值一致，判定写入已生效"
+                    );
+                    audit_point_write(state, &point, w.value, None);
+                    None
+                } else {
+                    audit_point_write(state, &point, w.value, Some(&message));
+                    Some(WriteItemError {
+                        message,
+                        quality,
+                        outcome,
+                    })
+                }
             }
         };
         return Ok(vec![write_item(&point, w.value, error)]);
@@ -338,25 +380,81 @@ pub(crate) async fn write_points_core(
             group.iter().map(|(i, p)| (p, writes[*i].value)).collect();
         let outcomes = collector.write_multi(&pairs).await;
 
+        // 结果未知的条目先挂起，等本轮写完再统一读回一次（批量读，少占总线时隙）。
+        let mut pending_uncertain: Vec<(usize, PointConfig, f64, WriteItemError)> = Vec::new();
+
         for ((i, p), outcome) in group.iter().zip(outcomes) {
             let value = writes[*i].value;
-            let error = match outcome {
+            match outcome {
                 Ok(()) => {
                     audit_point_write(state, p, value, None);
-                    None
+                    results[*i] = Some(write_item(p, value, None));
                 }
                 Err(e) => {
-                    let outcome = e.write_outcome();
-                    let message = write_error_message(&e.to_string(), outcome);
-                    audit_point_write(state, p, value, Some(&message));
-                    Some(WriteItemError {
+                    let write_outcome = e.write_outcome();
+                    let message = write_error_message(&e.to_string(), write_outcome);
+                    let err = WriteItemError {
                         message,
                         quality: Some(e.to_quality()),
-                        outcome,
-                    })
+                        outcome: write_outcome,
+                    };
+                    if write_outcome.is_uncertain() {
+                        pending_uncertain.push((*i, p.clone(), value, err));
+                    } else {
+                        audit_point_write(state, p, value, Some(&err.message));
+                        results[*i] = Some(write_item(p, value, Some(err)));
+                    }
                 }
-            };
-            results[*i] = Some(write_item(p, value, error));
+            }
+        }
+
+        // G-03：写结果未知的条目读回核实。只有读回值与写入值一致才判定写已生效；
+        // 不一致或读不到都保持「结果未知」，把读回值附到错误信息里交操作员判断。
+        if !pending_uncertain.is_empty() {
+            let probe_points: Vec<PointConfig> = pending_uncertain
+                .iter()
+                .map(|(_, p, _, _)| p.clone())
+                .collect();
+            let budget = collector.batch_timeout_budget(probe_points.len());
+            let readbacks = tokio::time::timeout(budget, collector.read_batch(&probe_points)).await;
+
+            let mut values: Vec<Option<f64>> = vec![None; pending_uncertain.len()];
+            if let Ok(list) = readbacks {
+                for (idx, r) in list.into_iter().enumerate() {
+                    if let Ok(dp) = r {
+                        if matches!(dp.quality, Quality::Good) && idx < values.len() {
+                            values[idx] = Some(dp.value);
+                        }
+                    }
+                }
+            }
+
+            for (idx, (i, p, value, mut err)) in pending_uncertain.into_iter().enumerate() {
+                match values[idx] {
+                    Some(rb) if write_readback_matches(value, rb, p.scale) => {
+                        tracing::info!(
+                            point = %p.id,
+                            value,
+                            readback = rb,
+                            "写结果未知，读回值与写入值一致，判定写入已生效"
+                        );
+                        audit_point_write(state, &p, value, None);
+                        results[i] = Some(write_item(&p, value, None));
+                    }
+                    Some(rb) => {
+                        err.message = format!(
+                            "{}；读回值 {} 与写入值 {} 不一致，仍无法确认写入是否生效",
+                            err.message, rb, value
+                        );
+                        audit_point_write(state, &p, value, Some(&err.message));
+                        results[i] = Some(write_item(&p, value, Some(err)));
+                    }
+                    None => {
+                        audit_point_write(state, &p, value, Some(&err.message));
+                        results[i] = Some(write_item(&p, value, Some(err)));
+                    }
+                }
+            }
         }
     }
 

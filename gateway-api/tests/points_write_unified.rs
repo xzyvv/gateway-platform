@@ -73,11 +73,34 @@ fn collectors_bus0(ok: bool) -> HashMap<String, Arc<dyn Collector>> {
 }
 
 /// 按写结果三态装配 bus0 的 collector（G-02）
+///
+/// 读回一律失败：这些用例验证的是「写结果未知时保持 5102」，而 G-03 的读回
+/// 消歧会尝试读回核实。若读回恰好拿到与写入值相同的数据，就会被判定为成功，
+/// 与「结果未知」的前提矛盾。写超时后链路通常尚未恢复，读回失败是最贴近现场
+/// 的建模；「读回成功」的正向收敛由专门用例覆盖。
 fn collectors_bus0_outcome(outcome: MockWriteOutcome) -> HashMap<String, Arc<dyn Collector>> {
     let mut collectors: HashMap<String, Arc<dyn Collector>> = HashMap::new();
     collectors.insert(
         "bus0".to_string(),
-        Arc::new(MockCollector::new("bus0").with_write_outcome(outcome)),
+        Arc::new(
+            MockCollector::new("bus0")
+                .with_write_outcome(outcome)
+                .with_read_failure(),
+        ),
+    );
+    collectors
+}
+
+/// 写结果未知、但读回成功（G-03 读回消歧用）
+fn collectors_bus0_uncertain_with_readback(value: f64) -> HashMap<String, Arc<dyn Collector>> {
+    let mut collectors: HashMap<String, Arc<dyn Collector>> = HashMap::new();
+    collectors.insert(
+        "bus0".to_string(),
+        Arc::new(
+            MockCollector::new("bus0")
+                .with_write_outcome(MockWriteOutcome::Uncertain)
+                .with_read_value(value),
+        ),
     );
     collectors
 }
@@ -213,7 +236,8 @@ async fn unified_write_single_entry_write_failure_returns_5101() {
 /// 结果未知时上游必须先读回核实，不能当普通失败重试。
 #[tokio::test]
 async fn unified_write_single_entry_uncertain_returns_5102() {
-    let state = mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Uncertain));
+    let state =
+        mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Uncertain));
     store(&state, point("p1", "bus0"));
     let app = build_router(state);
     let res = app
@@ -263,7 +287,8 @@ async fn unified_write_single_entry_definite_failure_stays_5101() {
 /// 批写逐条 outcome 三态：ok / failed / uncertain，且顶层给出 uncertain 计数
 #[tokio::test]
 async fn unified_write_multi_entry_reports_per_item_outcome() {
-    let state = mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Uncertain));
+    let state =
+        mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Uncertain));
     store(&state, point("p1", "bus0"));
     store(&state, point("p2", "bus0"));
     let app = build_router(state);
@@ -280,7 +305,10 @@ async fn unified_write_multi_entry_reports_per_item_outcome() {
     assert_eq!(v["status"], "error");
     assert_eq!(v["succeeded"], 0);
     assert_eq!(v["failed"], 2);
-    assert_eq!(v["uncertain"], 2, "顶层 uncertain 计数应反映结果未知条数: {v}");
+    assert_eq!(
+        v["uncertain"], 2,
+        "顶层 uncertain 计数应反映结果未知条数: {v}"
+    );
     assert_eq!(v["results"][0]["outcome"], "uncertain");
     assert_eq!(v["results"][1]["outcome"], "uncertain");
     assert!(v["results"][0]["error"]
@@ -443,4 +471,117 @@ async fn unified_write_multi_entry_logs_audit_per_item() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(found >= 2, "批写应逐条落审计 point.write，实际 {found} 条");
+}
+
+// === G-03：写结果未知时的读回消歧 ===
+
+/// 单写：写结果未知，但读回值与写入值一致 → 判定写已生效，按成功返回
+#[tokio::test]
+async fn unified_write_single_entry_uncertain_readback_confirms_success() {
+    let state = mock_app_state_with_collectors(collectors_bus0_uncertain_with_readback(42.5));
+    store(&state, point("p1", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":42.5}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK, "读回一致应判定写已生效");
+    let v = body_json(res).await;
+    assert_eq!(v["code"], 0);
+    let v = &v["data"];
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["succeeded"], 1);
+    assert_eq!(v["failed"], 0);
+    assert_eq!(v["uncertain"], 0, "读回确认后不应再计入 uncertain");
+    assert_eq!(v["results"][0]["outcome"], "ok");
+}
+
+/// 单写：写结果未知且读回值不一致 → 仍为「结果未知」，错误信息带读回值
+#[tokio::test]
+async fn unified_write_single_entry_uncertain_readback_mismatch_stays_5102() {
+    let state = mock_app_state_with_collectors(collectors_bus0_uncertain_with_readback(40.0));
+    store(&state, point("p1", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":42.5}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    // 读回不等**证明不了**写没生效（设备可能限幅/联锁复位），因此保持 5102。
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["code"], 5102);
+    let msg = v["message"].as_str().unwrap();
+    assert!(msg.contains("读回值 40"), "应把读回值带给操作员: {msg}");
+    assert!(msg.contains("42.5"), "应同时给出写入值: {msg}");
+    assert!(
+        msg.contains("不要自动重试"),
+        "未知态仍须保留处置提示: {msg}"
+    );
+}
+
+/// 批写：读回值与写入值一致的那条收敛为成功，不一致的那条仍是「结果未知」
+#[tokio::test]
+async fn unified_write_multi_entry_readback_confirms_only_matching_items() {
+    // 读回固定 1.0：p1 写 1.0 → 一致；p2 写 2.0 → 不一致（差 1.0 > 半量化单位 0.5）
+    let state = mock_app_state_with_collectors(collectors_bus0_uncertain_with_readback(1.0));
+    store(&state, point("p1", "bus0"));
+    store(&state, point("p2", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":2.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    let v = &v["data"];
+    assert_eq!(v["status"], "partial");
+    assert_eq!(v["succeeded"], 1);
+    assert_eq!(v["failed"], 1);
+    assert_eq!(v["uncertain"], 1, "只有读回不一致的那条保持结果未知");
+    assert_eq!(v["results"][0]["outcome"], "ok");
+    assert_eq!(v["results"][1]["outcome"], "uncertain");
+    assert!(
+        v["results"][1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("读回值 1"),
+        "不一致条目应附读回值"
+    );
+}
+
+/// 批写：读回全部一致 → 全部收敛为成功，uncertain 归零
+#[tokio::test]
+async fn unified_write_multi_entry_readback_confirms_all_when_values_match() {
+    let state = mock_app_state_with_collectors(collectors_bus0_uncertain_with_readback(1.0));
+    store(&state, point("p1", "bus0"));
+    store(&state, point("p2", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":1.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    let v = &v["data"];
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["succeeded"], 2);
+    assert_eq!(v["uncertain"], 0);
+    assert_eq!(v["results"][0]["outcome"], "ok");
+    assert_eq!(v["results"][1]["outcome"], "ok");
 }
