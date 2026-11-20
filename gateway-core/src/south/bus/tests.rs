@@ -19,6 +19,11 @@ async fn transaction_fails_fast_bus_closed_when_task_dead() {
         // 该用例走 BusClosed 快速失败路径，等应答预算取任意有限值即可
         reply_budget: std::time::Duration::from_millis(1100),
         max_inflight: 1,
+        retry_count: DEFAULT_RETRY_COUNT,
+        retry_delay: std::time::Duration::from_millis(DEFAULT_RETRY_DELAY_MS),
+        // 该用例不涉及串口帧耗时估算，baud=None 即退回配置超时
+        baud: None,
+        ascii_frame: false,
         variant: None,
         asdu_addr_len: 2,
         opcua: None,
@@ -515,6 +520,106 @@ async fn max_concurrency_serial_is_one_and_tcp_follows_config() {
     let bm_tcp_def = BusManager::spawn_with(&tcp_def, None, metrics(), BusDeps::production());
     assert_eq!(bm_tcp_def.max_concurrency(), 8, "未配置时应默认 8");
     drop(bm_tcp_def);
+}
+
+// ===== P0-1: 采集并发上限必须扣掉写保留槽 =====
+
+#[tokio::test]
+async fn read_concurrency_reserves_slots_for_control() {
+    let metrics = || Arc::new(crate::engine::metrics::Metrics::new());
+
+    let tcp = BusConfig {
+        port_name: "bus_tcp_reserve".into(),
+        tcp_addr: Some("127.0.0.1:1".into()),
+        tcp_concurrent: Some(8),
+        ..Default::default()
+    };
+    let bm = BusManager::spawn_with(&tcp, None, metrics(), BusDeps::production());
+    assert_eq!(bm.max_concurrency(), 8);
+    // 8 槽留 2 给写：采集只能用 6，否则多出的 2 个并发提交即 Busy
+    assert_eq!(bm.read_concurrency(), 6, "采集并发必须等于池对普通事务的准入上限");
+    drop(bm);
+
+    // 小容量不能被保留槽饿死
+    for (total, expect) in [(1usize, 1usize), (2, 1), (4, 2), (16, 14)] {
+        let cfg = BusConfig {
+            port_name: format!("bus_tcp_reserve_{total}"),
+            tcp_addr: Some("127.0.0.1:1".into()),
+            tcp_concurrent: Some(total),
+            ..Default::default()
+        };
+        let bm = BusManager::spawn_with(&cfg, None, metrics(), BusDeps::production());
+        assert_eq!(bm.read_concurrency(), expect, "total={total}");
+        drop(bm);
+    }
+
+    // 串口半双工：无论 tcp_concurrent 配多少都是 1
+    let serial = BusConfig {
+        port_name: "bus_serial_reserve".into(),
+        tcp_addr: None,
+        tcp_concurrent: Some(8),
+        ..Default::default()
+    };
+    let bm = BusManager::spawn_with(&serial, None, metrics(), BusDeps::production());
+    assert_eq!(bm.read_concurrency(), 1);
+    drop(bm);
+}
+
+// ===== P1-2: 自适应读超时 =====
+
+#[test]
+fn estimated_response_bytes_covers_read_function_codes() {
+    // FC03 读 125 个寄存器：1+1+1+250+2 = 255 字节
+    let regs = vec![1u8, 0x03, 0, 0, 0, 125, 0, 0];
+    assert_eq!(super::estimated_response_bytes(&regs, Some(125)), Some(255));
+    // FC01 读 16 个线圈：1+1+1+2+2 = 7 字节
+    let coils = vec![1u8, 0x01, 0, 0, 0, 16, 0, 0];
+    assert_eq!(super::estimated_response_bytes(&coils, Some(16)), Some(7));
+    // 写功能码响应定长 8 字节，不按帧长放大
+    let write = vec![1u8, 0x10, 0, 0, 0, 1, 0, 0];
+    assert_eq!(super::estimated_response_bytes(&write, Some(1)), None);
+    // 没有 expected_count（写路径）同样不放大
+    assert_eq!(super::estimated_response_bytes(&regs, None), None);
+}
+
+#[tokio::test]
+async fn adaptive_timeout_covers_frame_time_at_low_baud() {
+    let cfg = BusConfig {
+        port_name: "bus_adaptive".into(),
+        tcp_addr: None,
+        baud_rate: 9600,
+        timeout_ms: 200,
+        ..Default::default()
+    };
+    let bm = BusManager::spawn_with(
+        &cfg,
+        None,
+        Arc::new(crate::engine::metrics::Metrics::new()),
+        BusDeps::production(),
+    );
+
+    // 9600bps 下 255 字节 ≈ 265ms 线上时间，200ms 配置值必须被放大
+    let read125 = vec![1u8, 0x03, 0, 0, 0, 125, 0, 0];
+    let adapted = bm.effective_attempt_timeout(&read125, Some(125));
+    assert!(
+        adapted >= std::time::Duration::from_millis(285),
+        "9600bps 读 125 寄存器需要 ≥285ms 的收帧时间，实际 {adapted:?}"
+    );
+
+    // 小请求不受影响，仍用配置值
+    let read2 = vec![1u8, 0x03, 0, 0, 0, 2, 0, 0];
+    assert_eq!(
+        bm.effective_attempt_timeout(&read2, Some(2)),
+        std::time::Duration::from_millis(200)
+    );
+
+    // 写请求（无 expected_count）不放大
+    let write = vec![1u8, 0x06, 0, 0, 0, 1, 0, 0];
+    assert_eq!(
+        bm.effective_attempt_timeout(&write, None),
+        std::time::Duration::from_millis(200)
+    );
+    drop(bm);
 }
 
 // ===== C-2: 串口总线自检帧（bus 级集成回归）=====

@@ -260,8 +260,10 @@ impl ModbusCollector {
                 // 改为按总线并发上限受控并发提交：Modbus TCP 单 socket 可多事务在途；
                 // 串口总线 max_concurrency()==1，信号量退化为 1 个在途，等价于原顺序读取。
                 // 保持 RS485 半双工的物理串行化。
+                // P0-1：用 read_concurrency（总容量 − 写保留槽）而不是 max_concurrency，
+                // 与 TransactionPool 的普通事务准入上限保持一致；否则多开的并发必然拿到 Busy。
                 let sem = Arc::new(tokio::sync::Semaphore::new(
-                    self.bus.max_concurrency().max(1),
+                    self.bus.read_concurrency().max(1),
                 ));
                 let outcomes = join_all(batches.iter().map(|batch| {
                     let sem = Arc::clone(&sem);
@@ -332,8 +334,10 @@ impl ModbusCollector {
                 // max_count 保持 125（Modbus 协议寄存器读上限）
                 let batches = merge_batches(&group, adaptive_gap, 125);
                 // Bug 217: 同线圈分支——受控并发提交，让 tcp_concurrent 真正生效。
+                // P0-1：用 read_concurrency（总容量 − 写保留槽）而不是 max_concurrency，
+                // 与 TransactionPool 的普通事务准入上限保持一致；否则多开的并发必然拿到 Busy。
                 let sem = Arc::new(tokio::sync::Semaphore::new(
-                    self.bus.max_concurrency().max(1),
+                    self.bus.read_concurrency().max(1),
                 ));
                 let outcomes = join_all(batches.iter().map(|batch| {
                     let sem = Arc::clone(&sem);

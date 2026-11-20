@@ -199,12 +199,15 @@ pub(crate) async fn run_serial_bus_task(
             *lock_slot(&serial_state) = Some(handle);
             continue;
         }
+        // P1-2：本次事务的单次超时由 BusManager 按帧长/波特率算好后随事务下发
+        // （大块读在低波特率下需要更长时间收帧）。拿不到时才退回总线配置值。
+        let attempt_timeout = tx.timeout_ms.map(Duration::from_millis).unwrap_or(timeout);
         loop {
             result = do_transaction(
                 &mut handle,
                 TransactionParams {
                     request: &tx.request,
-                    timeout,
+                    timeout: attempt_timeout,
                     protocol: &protocol,
                     expected_count: tx.expected_count,
                     de_pin,

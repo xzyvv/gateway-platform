@@ -59,6 +59,34 @@ pub(crate) fn bus_retry_budget(
         .saturating_add(retry_delay.saturating_mul(retry_count))
 }
 
+/// 控制（写）事务在并发池中保留的槽位数。
+///
+/// 8 槽（默认）→ 留 2；2~3 槽 → 留 1；1 槽 → 不留（否则普通事务永远无法准入）。
+/// 唯一来源：`TransactionPool` 用它算普通事务准入上限，
+/// `BusManager::read_concurrency` 用它算采集侧并发信号量，
+/// 两处必须一致，否则采集会按「总容量」开并发，多出来的那部分必然拿到 Busy。
+pub(crate) fn reserved_control_slots(max_concurrent: usize) -> usize {
+    match max_concurrent {
+        0 | 1 => 0,
+        2 | 3 => 1,
+        _ => 2,
+    }
+}
+
+/// 估算一次 Modbus 读请求的响应帧字节数（含 slave/fc/byte_count/CRC）。
+///
+/// 只处理读功能码（01/02 位、03/04 寄存器）；写响应固定 8 字节、异常帧 5 字节，
+/// 都由调用方的固定超时覆盖，不需要按帧长放大。
+fn estimated_response_bytes(request: &[u8], expected_count: Option<u16>) -> Option<usize> {
+    let fc = *request.get(1)?;
+    let count = usize::from(expected_count?);
+    match fc {
+        0x01 | 0x02 => Some(5 + count.div_ceil(8)),
+        0x03 | 0x04 => Some(5 + count * 2),
+        _ => None,
+    }
+}
+
 /// 一次总线事务：写请求 + 读响应
 pub struct BusTransaction {
     pub request: Vec<u8>,
@@ -105,6 +133,15 @@ pub struct BusManager {
     /// 读路径可用的最大并发在途事务数（见 [`BusManager::max_concurrency`]）。
     /// Modbus TCP 取自 `BusConfig.tcp_concurrent`（默认 8）；串口总线恒为 1。
     max_inflight: usize,
+    /// 重试参数快照：`transaction_with_priority` 用它按「本次有效超时」重新推导
+    /// 应答预算（P1-2 自适应读超时后，单次超时可能大于配置值）。
+    retry_count: u32,
+    retry_delay: Duration,
+    /// 串口波特率；TCP 总线为 `None`（无「线上字节耗时」概念）。
+    baud: Option<u32>,
+    /// 是否 Modbus ASCII 变体：每个 RTU 字节会展开成 2 个十六进制字符，
+    /// 线上耗时约为 RTU 的 2.2 倍，估算帧时间时按 22 bit/byte 计。
+    ascii_frame: bool,
     /// 协议变体（决策表 #24）：由 [`BusConfig::effective_variant`] 解析后的统一取值。
     /// 采集器按此分派帧构建逻辑（如 dlt645 版本、cjt188 方言、modbus ascii）。
     variant: Option<String>,
@@ -152,10 +189,13 @@ impl BusManager {
         let timeout_ms = bus.timeout_ms;
         // 与串口/TCP 总线 task 的 retry 循环共用同一套参数与推导函数，
         // 快照应答预算：重试成功的应答不会在回传途中被上层误判超时（原 #107）。
+        let retry_count = bus.retry_count.unwrap_or(DEFAULT_RETRY_COUNT);
+        let retry_delay =
+            Duration::from_millis(bus.retry_delay_ms.unwrap_or(DEFAULT_RETRY_DELAY_MS));
         let reply_budget = bus_retry_budget(
             Duration::from_millis(bus.timeout_ms),
-            bus.retry_count.unwrap_or(DEFAULT_RETRY_COUNT),
-            Duration::from_millis(bus.retry_delay_ms.unwrap_or(DEFAULT_RETRY_DELAY_MS)),
+            retry_count,
+            retry_delay,
         );
         // Bug 217: 记录读路径并发上限——TCP 支持单 socket 多事务并发（MBAP 事务号路由），
         // 串口为半双工物理上只能串行。采集器据此决定并发提交帧的上限，
@@ -166,6 +206,16 @@ impl BusManager {
             1
         };
         let bus_config = bus.clone();
+        // 只有串口总线才有「波特率 × 帧长」的线上耗时；ASCII 变体按 22bit/byte 估算。
+        let baud = if tcp_addr.is_some() {
+            None
+        } else {
+            Some(bus.baud_rate)
+        };
+        let ascii_frame = bus
+            .effective_variant()
+            .as_deref()
+            .is_some_and(|v| v.eq_ignore_ascii_case("ascii"));
 
         let handle = crate::engine::supervision::spawn_catch_unwind(
             "bus_task",
@@ -178,6 +228,10 @@ impl BusManager {
             timeout_ms,
             reply_budget,
             max_inflight,
+            retry_count,
+            retry_delay,
+            baud,
+            ascii_frame,
             variant: bus.effective_variant(),
             asdu_addr_len: bus.asdu_addr_len.unwrap_or(2),
             opcua: bus.opcua.clone(),
@@ -211,13 +265,16 @@ impl BusManager {
         let started = std::time::Instant::now();
         // 抓包 A 档：tx 在入队前记录（request 尚未被 move 进 BusTransaction）
         crate::south::frame_log::record(&self.name, true, &request, None);
+        // P1-2：按帧长/波特率算出本次单次尝试的有效超时（串口读大块时可能大于配置值）。
+        // 该值随事务下发，并用于下面推导应答预算，保证「调用方等待」不会先于「总线 task 收帧」。
+        let attempt_timeout = self.effective_attempt_timeout(&request, expected_count);
         let (resp_tx, resp_rx) = oneshot::channel();
         let msg = BusTransaction {
             request,
             response_tx: resp_tx,
             expected_count,
             raw: false,
-            timeout_ms: None,
+            timeout_ms: Some(attempt_timeout.as_millis().min(u128::from(u64::MAX)) as u64),
             enqueued_at: std::time::Instant::now(),
             priority,
         };
@@ -236,7 +293,10 @@ impl BusManager {
         // 但总线 task 的重试循环最坏要 `3T+400ms`（默认 2 次重试，每次一整个 timeout，
         // 间隔 200ms）。重试成功的应答还在回传途中，上层就判超时丢弃 → 静默丢数（原 #107）。
         // 现按 [`bus_retry_budget`] 同一来源推导，并保留固定调度余量。
-        let reply_deadline = self.reply_deadline();
+        // P1-2：预算按「本次有效超时」重新推导。放宽了单次读超时后，若仍用 spawn 时
+        // 按配置值快照的 budget，调用方会先超时丢弃应答（重试成功也白搭，原 #107）。
+        let reply_deadline = bus_retry_budget(attempt_timeout, self.retry_count, self.retry_delay)
+            .saturating_add(REPLY_MARGIN);
         // 控制（写）走控制通道，采集轮询 / 调试直发走普通通道。
         // 两条通道共用同一套排队指标口径（深度、等待时长）。
         let sender = match priority {
@@ -361,12 +421,72 @@ impl BusManager {
         self.max_inflight
     }
 
+    /// 采集（普通优先级）事务的并发上限 = 池总容量 − 为写保留的槽位。
+    ///
+    /// 修复(P0-1)：采集侧原按 `max_concurrency()`（总容量）开信号量，
+    /// 而 `TransactionPool` 已把普通事务的准入上限收紧到 `总容量 − 保留槽`。
+    /// 两者不一致时，多出来的那部分并发必然提交即 `Busy`，形成「每轮固定
+    /// 几个点白跑一次重试、重试耗尽后报总线忙」的隐性丢点。
+    /// 串口半双工恒为 1（保留槽在 1 槽时也为 0，不会饿死采集）。
+    pub fn read_concurrency(&self) -> usize {
+        if self.tcp_addr.is_some() {
+            self.max_inflight
+                .saturating_sub(reserved_control_slots(self.max_inflight))
+                .max(1)
+        } else {
+            1
+        }
+    }
+
     /// 直连型采集器的 IO 超时：与总线 `timeout_ms` 同源（`BusConfig.timeout_ms`）。
     ///
     /// 用于 fins/mc/s7comm/bacnet/iec104 等**不经总线 task、自建连接**的协议，
     /// 使「单次请求等待应答」的超时与串口/TCP 总线口径统一，现场可在配置中调整。
     pub fn io_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.timeout_ms)
+    }
+
+    /// 本次事务「单次尝试」的有效超时（P1-2 自适应读超时）。
+    ///
+    /// 配置的 `timeout_ms` 是按「小请求」的经验值定的；9600bps 下读 125 个寄存器，
+    /// 响应帧约 255 字节 ≈ 265ms 线上时间，按默认 200ms 必然每帧 NoReply，
+    /// 现场表现为「设备在线但采集全空」，且错误信息指向「设备不应答」误导排查。
+    ///
+    /// 这里按 `帧字节数 × 10bit / 波特率` 估算线上耗时，取 `max(配置值, 估算值 + 20ms)`：
+    /// - 只对读功能码（01~04）生效，写响应固定 8 字节、异常帧 5 字节，无需放大；
+    /// - 只对串口生效，TCP 无波特率概念；
+    /// - 上限 10s，避免配置错误导致单事务永久占用总线。
+    ///
+    /// 放大后的值会同时用于推导弹到 [`BusManager::transaction_with_priority`] 的
+    /// 应答预算，否则调用方会先于总线 task 超时（重试成功的应答被丢弃，原 #107）。
+    pub(crate) fn effective_attempt_timeout(
+        &self,
+        request: &[u8],
+        expected_count: Option<u16>,
+    ) -> Duration {
+        let base = self.io_timeout();
+        let (Some(baud), Some(bytes)) = (self.baud, estimated_response_bytes(request, expected_count))
+        else {
+            return base;
+        };
+        if baud == 0 {
+            return base;
+        }
+        let bits_per_byte = if self.ascii_frame { 22 } else { 10 };
+        let wire_ms = u64::from(bytes as u32) * bits_per_byte * 1000 / u64::from(baud);
+        let need = Duration::from_millis(wire_ms.saturating_add(20));
+        let effective = base.max(need).min(Duration::from_secs(10));
+        if effective > base {
+            tracing::debug!(
+                bus = %self.name,
+                configured_ms = base.as_millis(),
+                effective_ms = effective.as_millis(),
+                response_bytes = bytes,
+                baud,
+                "adaptive read timeout: configured timeout is shorter than frame time"
+            );
+        }
+        effective
     }
 
     /// 应答等待预算：总线重试最坏耗时 + 固定调度余量。

@@ -124,16 +124,10 @@ pub struct TransactionPool {
     shutdown: Arc<Notify>,
 }
 
-/// 控制事务的默认保留槽位：池容量越大留得越多，但至少保证普通事务还能跑。
-///
-/// 8 槽（默认）→ 留 2；2~3 槽 → 留 1；1 槽 → 不留（否则普通事务永远无法准入）。
-fn default_reserved_control(max_concurrent: usize) -> usize {
-    match max_concurrent {
-        0 | 1 => 0,
-        2 | 3 => 1,
-        _ => 2,
-    }
-}
+// 控制事务保留槽位的公式统一放在 `south::bus::reserved_control_slots`：
+// 采集侧的并发信号量（`BusManager::read_concurrency`）必须用同一份公式，
+// 否则两侧上限不一致，多出来的并发会提交即 Busy（P0-1）。
+use crate::south::bus::reserved_control_slots;
 
 impl TransactionPool {
     /// 仅创建 waiter 注册表，不绑定 socket。
@@ -141,7 +135,7 @@ impl TransactionPool {
     pub fn new(max_concurrent: usize) -> Arc<Self> {
         Arc::new(Self {
             max_concurrent,
-            reserved_control: default_reserved_control(max_concurrent),
+            reserved_control: reserved_control_slots(max_concurrent),
             next_tx_id: AtomicU16::new(1),
             active: Arc::new(Mutex::new(HashMap::new())),
             writer: None,
@@ -158,7 +152,7 @@ impl TransactionPool {
 
         let pool = Arc::new(Self {
             max_concurrent,
-            reserved_control: default_reserved_control(max_concurrent),
+            reserved_control: reserved_control_slots(max_concurrent),
             next_tx_id: AtomicU16::new(1),
             active: active.clone(),
             writer: Some(Arc::new(Mutex::new(write_half))),
