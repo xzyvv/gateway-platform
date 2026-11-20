@@ -17,7 +17,7 @@
 //! | `1xxx` | 配置 / 序列化 | 400（1000 由客户端提交触发） |
 //! | `2xxx` | 本地 IO | 500 |
 //! | `3xxx` | 协议 / 对端无应答 | 500；3001 → 504 |
-//! | `4xxx` | 客户端可纠正 | 400；4004 → 404；4290 → 429 |
+//! | `4xxx` | 客户端可纠正 | 400；4004 → 404；4010 → 409；4290 → 429 |
 //! | `5xxx` | 服务端执行失败 | 500；5003 → 503 |
 //! | `6xxx` | 业务校验（设备分组） | 400 |
 //! | `7xxx` | 授权 | 403 |
@@ -63,6 +63,12 @@ pub const ROLE_INVALID: i32 = 4007;
 pub const FORMULA_INVALID: i32 = 4008;
 /// id 冲突（恢复点位时目标 id 已存在）
 pub const DUPLICATE_ID: i32 = 4009;
+/// 资源状态冲突（HTTP 409）：消费者已在运行、MQTT 已启用、死信仍待处理等。
+///
+/// 与 [`DUPLICATE_ID`] 区分：那是「同一个 id 再来一次」，这是「当前状态不允许
+/// 该操作」。此前 `ApiError::conflict` 复用 4009，导致同一码在
+/// `ApiError` 路径是 409、在 `ApiResponse::err` 路径是 400。
+pub const STATE_CONFLICT: i32 = 4010;
 /// 授权有效但档位配额不足
 pub const QUOTA_EXCEEDED: i32 = 4021;
 /// 总线忙（协议工具会话租约冲突；HTTP 200 + 业务码）
@@ -133,6 +139,7 @@ pub const ALL_CODES: &[(i32, &str)] = &[
     (ROLE_INVALID, "角色不合法"),
     (FORMULA_INVALID, "公式求值失败"),
     (DUPLICATE_ID, "id 已存在"),
+    (STATE_CONFLICT, "资源状态冲突"),
     (QUOTA_EXCEEDED, "授权配额不足"),
     (BUS_BUSY, "总线忙"),
     (UNSUPPORTED_MEDIA_TYPE, "Content-Type 不受支持"),
@@ -179,6 +186,8 @@ pub fn http_status(code: i32) -> StatusCode {
         SERVICE_UNAVAILABLE | REALTIME_LIMIT => StatusCode::SERVICE_UNAVAILABLE,
         // 资源不存在：语义是 404，不能落进 4xxx 的 400 兜底
         NOT_FOUND => StatusCode::NOT_FOUND,
+        // 状态冲突：语义是 409，与 ApiError::conflict 保持同一口径
+        STATE_CONFLICT => StatusCode::CONFLICT,
         // 配置或请求体解析失败：由客户端提交触发，与 ApiError 的 400 对齐
         CONFIG_OR_JSON => StatusCode::BAD_REQUEST,
         4000..=4999 => StatusCode::BAD_REQUEST,
@@ -216,6 +225,10 @@ mod tests {
         }
         // 资源不存在：4004 必须是 404（与 ApiError::not_found 一致）
         assert_eq!(http_status(NOT_FOUND), StatusCode::NOT_FOUND);
+        // 状态冲突：4010 必须是 409（与 ApiError::conflict 一致）
+        assert_eq!(http_status(STATE_CONFLICT), StatusCode::CONFLICT);
+        // id 冲突仍是 400：它不是「当前状态不允许」，而是「id 已被占用」
+        assert_eq!(http_status(DUPLICATE_ID), StatusCode::BAD_REQUEST);
         // 配置/JSON：与 ApiError 的 400 对齐
         assert_eq!(http_status(CONFIG_OR_JSON), StatusCode::BAD_REQUEST);
         // 限流必须是 429

@@ -141,7 +141,7 @@ async function replay(row: DeadLetterItem) {
     else ElMessage.warning('重投未生效：该批次已有在途记录')
     await load()
   } catch (e) {
-    // 409（code=4009）等业务错误：把后端 message 原样展示，便于现场判断
+    // 409（code=4010）等业务错误：把后端 message 原样展示，便于现场判断
     ElMessage.error(failureMessage('重投', e))
   }
 }

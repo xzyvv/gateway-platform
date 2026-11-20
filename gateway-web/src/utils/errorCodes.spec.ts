@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync, existsSync } from 'node:fs'
+import path from 'node:path'
 import { ERR, ERROR_CODES, describeErrorCode, isKnownErrorCode, describeErrorDetail, isHttpStatusCode } from './errorCodes'
 
 /**
@@ -56,6 +58,60 @@ describe('describeErrorCode', () => {
     // 前端同步删除，避免残留码表误导读者以为还有档位门控。
     expect(isKnownErrorCode(7002)).toBe(false)
     expect(isKnownErrorCode(7004)).toBe(false)
+  })
+})
+
+/**
+ * 码表对齐守卫。
+ *
+ * 后端 `gateway-api/src/web/error_codes.rs` 的 `ALL_CODES` 是唯一来源，前端
+ * 手工抄一份必然漏（1000/2000/3000/3001/5000 就是这么漏掉的）。这里直接读
+ * 后端源码，双向核对：后端有的前端必须有文案，前端也不能自造后端没有的码。
+ */
+describe('与后端码表对齐', () => {
+  // `import.meta.url` 在 Vite 转译后不是 file: URL，只能按工作目录候选探测：
+  // 从 gateway-web 跑（npm test）命中第一个，从仓库根跑命中第二个。
+  const candidates = [
+    path.resolve(process.cwd(), '../gateway-api/src/web/error_codes.rs'),
+    path.resolve(process.cwd(), 'gateway-api/src/web/error_codes.rs'),
+  ]
+  const rustPath = candidates.find((p) => existsSync(p))
+  if (!rustPath) {
+    throw new Error(`找不到后端码表源码，已尝试：\n${candidates.join('\n')}`)
+  }
+  const rustSrc = readFileSync(rustPath, 'utf8')
+
+  /** 后端常量名 → 码值 */
+  const declared = new Map<string, number>()
+  for (const m of rustSrc.matchAll(/pub const ([A-Z][A-Z0-9_]*): i32 = (\d+);/g)) {
+    declared.set(m[1]!, Number(m[2]!))
+  }
+
+  /** ALL_CODES 数组区段（成功码 0 不在其中）里的码值 */
+  const allCodesStart = rustSrc.indexOf('pub const ALL_CODES')
+  const allCodesBlock = rustSrc.slice(allCodesStart, rustSrc.indexOf('];', allCodesStart))
+  const backendCodes = [...allCodesBlock.matchAll(/\(([A-Z][A-Z0-9_]*),\s*"/g)].map((m) => {
+    const name = m[1]!
+    const code = declared.get(name)
+    if (code === undefined) throw new Error(`后端常量 ${name} 未找到对应码值，正则或格式已变`)
+    return code
+  })
+
+  it('解析结果自检：确实读到了后端码表', () => {
+    expect(allCodesStart).toBeGreaterThan(-1)
+    expect(backendCodes.length).toBeGreaterThan(30)
+  })
+
+  it('后端每个业务码，前端都有兜底文案', () => {
+    const missing = backendCodes.filter((code) => !isKnownErrorCode(code))
+    expect(missing, `前端缺这些码的文案: ${missing.join(', ')}`).toEqual([])
+  })
+
+  it('前端不出现后端码表里没有的码', () => {
+    const extra = Object.keys(ERROR_CODES)
+      .map(Number)
+      .filter((code) => !backendCodes.includes(code))
+    expect(extra, `前端多出这些后端未登记的码: ${extra.join(', ')}`).toEqual([])
   })
 })
 

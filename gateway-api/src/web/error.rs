@@ -37,11 +37,12 @@ impl ApiError {
     ///
     /// 与 `bad_request` 的区别：400 表示「参数本身不对」，409 表示「参数没问题，
     /// 但先要改变系统状态（停掉正在跑的实例 / 关掉冲突的通道）才能做」。
-    /// 业务码沿用客户端可纠正族 4xxx（4009），message 由后端给出明确原因。
+    /// 业务码用专用的 `STATE_CONFLICT(4010)`，不复用「id 已存在」的 4009：
+    /// 否则同一码在 `ApiError` 路径是 409、在 `ApiResponse::err` 路径是 400。
     pub fn conflict(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
-            code: codes::DUPLICATE_ID as u32,
+            code: codes::STATE_CONFLICT as u32,
             message: msg.into(),
         }
     }

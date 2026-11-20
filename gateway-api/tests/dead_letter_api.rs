@@ -192,7 +192,7 @@ async fn replay_unknown_id_is_conflict() {
 
     let (status, body) = call(&app, "POST", "/api/north/dead-letters/9999/replay").await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["code"], 4009);
+    assert_eq!(body["code"], 4010);
     // 冲突也必须计数：否则「一直点重投、一直 409」在监控上是完全静默的
     assert_eq!(
         metrics

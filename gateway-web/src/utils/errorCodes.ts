@@ -18,6 +18,14 @@
 export const ERR = {
   /** 成功 */
   OK: 0,
+  /** 配置错误 或 请求体 JSON 解析失败（由客户端提交触发） */
+  CONFIG_OR_JSON: 1000,
+  /** 本地 IO 失败（磁盘/文件/串口句柄等） */
+  IO: 2000,
+  /** 协议层错误（帧非法 / CRC / 编解码） */
+  PROTOCOL: 3000,
+  /** 设备或总线在超时内没有应答 */
+  NO_REPLY: 3001,
   /** 参数非法（ApiError::bad_request） */
   BAD_REQUEST: 4000,
   /** 未指定总线（协议工具会话） */
@@ -38,6 +46,8 @@ export const ERR = {
   FORMULA_INVALID: 4008,
   /** id 冲突（回收站恢复点位时目标 id 已存在） */
   DUPLICATE_ID: 4009,
+  /** 资源状态冲突（HTTP 409）：如模拟消费者已在运行、MQTT 已启用 */
+  STATE_CONFLICT: 4010,
   /** 授权配额不足（v2.0 档位限制，授权有效但档位不够） */
   QUOTA_EXCEEDED: 4021,
   /** 总线忙（协议工具会话租约冲突；HTTP 200 + 业务码） */
@@ -50,6 +60,8 @@ export const ERR = {
   RATE_LIMITED: 4290,
   /** 总线离线（协议工具会话；HTTP 200 + 业务码） */
   BUS_OFFLINE: 4503,
+  /** MQTT 北向发布失败 */
+  MQTT: 5000,
   /** 上传的证书无法解析 */
   CERT_PARSE_FAILED: 5001,
   /** 本地队列 / 存储故障（SQLite 读写失败、库被锁等） */
@@ -90,6 +102,22 @@ export interface ErrorCodeEntry {
 }
 
 export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
+  [ERR.CONFIG_OR_JSON]: {
+    message: '配置或请求内容解析失败',
+    hint: '请检查提交的配置/JSON 结构是否完整；刚升级过版本可先刷新页面再试',
+  },
+  [ERR.IO]: {
+    message: '本地读写失败',
+    hint: '请检查磁盘空间与文件权限；反复出现请查看系统日志',
+  },
+  [ERR.PROTOCOL]: {
+    message: '协议通讯异常',
+    hint: '设备有应答但报文不符合协议：请核对从站地址、功能码与寄存器/点号配置',
+  },
+  [ERR.NO_REPLY]: {
+    message: '设备未应答',
+    hint: '超时内没有收到回应：请确认设备在线、从站地址与接线/端口正确',
+  },
   [ERR.BAD_REQUEST]: {
     message: '请求参数不合法',
     hint: '请检查表单填写是否完整、格式是否正确',
@@ -126,6 +154,10 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
     message: 'id 已存在',
     hint: '请先删除同名对象，或改用其它 id',
   },
+  [ERR.STATE_CONFLICT]: {
+    message: '当前状态不允许该操作',
+    hint: '请先停止/关闭冲突的功能（如正在运行的模拟消费者或已启用的 MQTT）后重试',
+  },
   [ERR.UNAUTHORIZED]: {
     message: '登录状态已失效',
     hint: '请重新登录',
@@ -153,6 +185,10 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
   [ERR.BUS_OFFLINE]: {
     message: '总线已离线',
     hint: '请检查网关到设备的接线与串口/TCP 连通性',
+  },
+  [ERR.MQTT]: {
+    message: 'MQTT 发布失败',
+    hint: '请检查 MQTT 服务地址、凭据与网络连通性；数据会在本地队列重试',
   },
   [ERR.CERT_PARSE_FAILED]: {
     message: '证书解析失败',
