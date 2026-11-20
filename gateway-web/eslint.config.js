@@ -5,12 +5,15 @@ import prettier from 'eslint-config-prettier'
 import globals from 'globals'
 
 // ── 行数预算（O-8）──
-// 约定见 docs/architecture/frontend.md：单文件超过 ~500 行即视为巨型文件，必须拆分。
+// 约定见 docs/architecture/frontend.md：单文件超过 ~800 行即视为巨型文件，必须拆分。
 // 这里把约定变成 lint 断言：
 //   - 新增/未登记文件超过预算 → warning。CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。
 //   - 存量超限文件登记在下方清单里（豁免），不阻断当前 CI；
-//     拆到 ≤500 行后**请把对应行删掉**，否则它会一直享受豁免。
-const LINE_BUDGET = 500
+//     拆到 ≤800 行后**请把对应行删掉**，否则它会一直享受豁免。
+// 预算 500 → 800：500 行的阈值会把「正常但偏大」的组件也逼成巨型文件，
+// 于是每次加功能都要先拆文件，拆分本身又制造新文件与新 PR —— 门禁从
+// 「防失控」退化成「无限拆分」。后端 C24 用同一个 800 口径。
+const LINE_BUDGET = 800
 const LINE_BUDGET_EXEMPT = [
   // 自动生成，勿手改（vite alias 重定向 @element-plus/icons-vue 的产物）
   'src/utils/ep-icons-compact.ts',

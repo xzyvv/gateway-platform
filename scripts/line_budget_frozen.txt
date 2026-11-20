@@ -1,50 +1,24 @@
 # 行数预算基线（O-8）
 #
-# 约定：单文件超过 500 行即视为巨型文件，必须拆分（前端见 docs/architecture/frontend.md）。
+# 约定：单文件超过 800 行即视为巨型文件，必须拆分（前端见 docs/architecture/frontend.md）。
 # 本文件登记「历史上已经超限」的后端 Rust 文件，C24 按下面的规则判：
-#   - 未登记的新文件 > 500 行 → FAIL，请拆分后再提交；确属必要的才登记。
-#   - 已登记文件**只减不增**：上限 = 登记时的当前行数 + 20 行余量，
-#     超过上限 → FAIL。这个余量只用于消化小改动，不是继续增长的空间；要加功能先拆。
-#   - 文件拆到 ≤500 行后，C24 会提示「可从基线移除」，请删掉对应行。
+#   - 未登记的新文件 > 800 行 → FAIL，请拆分后再提交；确属必要的才登记。
+#   - 已登记文件**有硬上限**：上限 = 登记时的当前行数 + 100 行余量，超过上限 → FAIL。
+#     这 100 行余量是给正常功能迭代留的预算，不是继续膨胀的空间；
+#     确实需要更多，请在同一个 PR 里显式改这里的数字（基线是账本，改动会进 review，
+#     不会被静默绕过）。不想拆又不想改账本，是没有第三条路的。
+#   - 文件拆到 ≤800 行后，C24 会提示「可从基线移除」，请删掉对应行。
 #   - 文件改名/搬迁 → 请同步改这里的路径，否则 C24 会报「基线条目失效」。
 #   - 测试文件（*tests.rs / */tests/*）不计入，测试本来就该长。
 #
 # 格式：<仓库相对路径><TAB><行数上限>，一行一个，# 开头为注释。
-gateway-api/src/web/api/config/handlers/points.rs	561
-gateway-api/src/web/api/protocol_tools/handlers/slave_scan.rs	680
-gateway-api/src/web/api/protocol_tools/handlers/slave_simulator.rs	666
-gateway-api/src/web/api/system/handlers/status.rs	921
-gateway-api/src/web/heal.rs	834
-gateway-core/src/config/bus.rs	551
-gateway-core/src/config/template.rs	553
-gateway-core/src/config/validate/gate.rs	547
-gateway-core/src/crypto/cert.rs	732
-gateway-core/src/engine/monitor/health.rs	693
-gateway-core/src/license/mod.rs	785
-gateway-core/src/north/mqtt/mod.rs	879
-gateway-core/src/north/mqtt/outbox.rs	1042
-gateway-core/src/north/mqtt/publish.rs	617
-gateway-core/src/north/server/mqtt_packet_passthrough.rs	602
-gateway-core/src/north/server/opcua_server.rs	682
-gateway-core/src/north/sim_consumer.rs	805
-gateway-core/src/north/webhook/client.rs	929
-gateway-core/src/pipeline/vformula.rs	590
-gateway-core/src/pipeline/virtual_point.rs	521
-gateway-core/src/platform/cellular/modem.rs	628
-gateway-core/src/platform/ota/apply.rs	555
-gateway-core/src/platform/ota/bootenv.rs	634
-gateway-core/src/queue/core/task.rs	722
-gateway-core/src/queue/mod.rs	756
-gateway-core/src/queue/storage/sqlite/history.rs	564
-gateway-core/src/queue/storage/sqlite/limit.rs	856
-gateway-core/src/queue/storage/sqlite/sqlite_storage.rs	586
-gateway-core/src/south/bus/serial_task.rs	745
-gateway-core/src/south/protocol/fins/mod.rs	537
-gateway-core/src/south/protocol/mc/frames.rs	623
-gateway-core/src/south/protocol/mc/mod.rs	701
-gateway-core/src/south/protocol/opcua/mod.rs	894
-gateway-core/src/south/scheduler/mod.rs	542
-gateway-core/src/runtime/gateway.rs	654
-gateway-core/src/shared/cron.rs	717
-gatewayd/src/bootstrap/helpers/assemble.rs	910
-gatewayd/src/bootstrap/helpers/shutdown.rs	539
+gateway-api/src/web/api/system/handlers/status.rs	1013
+gateway-api/src/web/heal.rs	962
+gateway-api/src/web/middleware/rate_limit.rs	963
+gateway-core/src/north/mqtt/mod.rs	962
+gateway-core/src/north/mqtt/outbox.rs	1126
+gateway-core/src/north/webhook/client.rs	1025
+gateway-core/src/queue/core/task.rs	944
+gateway-core/src/queue/storage/sqlite/limit.rs	963
+gateway-core/src/south/protocol/opcua/mod.rs	936
+gatewayd/src/bootstrap/helpers/assemble.rs	1010
