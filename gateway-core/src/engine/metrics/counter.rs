@@ -213,6 +213,14 @@ impl Metrics {
         self.bus.stale_bytes_dropped.fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// 写结果未知计数（写帧已下发但未收到可确认的应答）。
+    ///
+    /// 这些写**可能已生效**，不应自动重发；该计数用于评估发生比例，
+    /// 以及后续读回消歧方案能消掉多少。
+    pub fn inc_write_uncertain(&self) {
+        self.bus.write_uncertain_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// 总线排队深度 -1（总线 task 取出事务时调用，含调用方已放弃的过期事务）。
     pub fn dec_bus_queue_depth(&self) {
         self.bus.queue_depth.fetch_sub(1, Ordering::Relaxed);

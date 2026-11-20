@@ -308,6 +308,7 @@ use crate::south::bus::{BusDeps, BusManager};
 use crate::south::protocol::Collector;
 use crate::south::protocol::modbus::transaction::TransactionPool;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -505,6 +506,86 @@ async fn coil_read_with_expected_count_parses_valid_response() {
     assert_eq!(coils.len(), 16);
     assert!(coils[..8].iter().all(|b| *b), "前 8 点应为 ON");
     assert!(coils[8..].iter().all(|b| !*b), "后 8 点应为 OFF");
+}
+
+// =========================================================================
+// 写结果未知：写帧已下发但应答丢失
+// =========================================================================
+
+/// 假从站：只收不回，并统计收到的请求帧数（连接可被重开，循环 accept）。
+async fn spawn_silent_modbus_stub() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr").to_string();
+    let frames = Arc::new(AtomicUsize::new(0));
+    let counter = frames.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            let counter = counter.clone();
+            tokio::spawn(async move {
+                loop {
+                    let mut header = [0u8; 7];
+                    if stream.read_exact(&mut header).await.is_err() {
+                        return;
+                    }
+                    let length = u16::from_be_bytes([header[4], header[5]]) as usize;
+                    let body_len = length.saturating_sub(1);
+                    let mut body = vec![0u8; body_len];
+                    if body_len > 0 && stream.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    // 故意不回复：模拟「写帧已下发，但应答丢失」
+                }
+            });
+        }
+    });
+    (addr, frames)
+}
+
+/// 写事务遇到「已下发但无应答」时：
+/// ① **不得自动重发**（同一指令被执行多次 = 累加/脉冲点位数据错）；
+/// ② 必须上报 `WriteUncertain`（可能已生效），而不是含糊的 NoReply。
+#[tokio::test]
+async fn write_timeout_is_not_resent_and_reports_uncertain() {
+    use crate::south::protocol::CollectorError;
+
+    let (addr, frames) = spawn_silent_modbus_stub().await;
+    // retry_count=2：若写仍被自动重发，从站会收到 3 次同一请求
+    let cfg = BusConfig {
+        port_name: "modbus_write_no_retry".into(),
+        protocol: "modbus".into(),
+        tcp_addr: Some(addr),
+        timeout_ms: 200,
+        retry_count: Some(2),
+        retry_delay_ms: Some(0),
+        ..Default::default()
+    };
+    let bus = Arc::new(BusManager::spawn_with(
+        &cfg,
+        None,
+        Arc::new(Metrics::new()),
+        BusDeps::production(),
+    ));
+    let c = super::ModbusCollector::new("modbus_write_no_retry", bus);
+    let point = mk_typed_point("U16"); // fc=6 → FC06 写单寄存器
+
+    let err = c.write(&point, 1.0).await.expect_err("从站不应答必须失败");
+    assert!(
+        matches!(err, CollectorError::WriteUncertain(_)),
+        "写结果未知必须用 WriteUncertain 上报，实际 {err:?}"
+    );
+
+    // 给可能存在的重发留出时间窗
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        frames.load(Ordering::SeqCst),
+        1,
+        "写帧不得被自动重发：从站只应收到 1 次请求"
+    );
 }
 
 // =========================================================================

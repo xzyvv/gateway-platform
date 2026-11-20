@@ -107,6 +107,15 @@ pub struct BusTransaction {
     pub enqueued_at: std::time::Instant,
     /// 事务优先级：控制（写）优先于采集（读）。
     pub priority: BusPriority,
+    /// 是否允许传输层自动重发。
+    ///
+    /// `true`（读/采集）：失败后可按 `retry_count` 重发，重发是安全的。
+    ///
+    /// `false`（写）：**禁止自动重发**。写帧一旦下发，从站可能已经执行；
+    /// 若因应答丢失而重发，同一指令会被执行多次（累加/脉冲类点位直接出错）。
+    /// 写路径失败时改为上报 [`CollectorError::WriteUncertain`]，把「可能已生效」
+    /// 显式交给调用方判断，而不是由系统自作主张重发。
+    pub retry_allowed: bool,
 }
 
 /// 总线事务优先级。
@@ -272,6 +281,39 @@ impl BusManager {
         expected_count: Option<u16>,
         priority: BusPriority,
     ) -> Result<Vec<u8>, CollectorError> {
+        self.transaction_inner(request, expected_count, priority, true)
+            .await
+    }
+
+    /// 禁止自动重发的事务下发（写路径专用）。
+    ///
+    /// 与 [`BusManager::transaction_with_priority`] 的唯一区别：传输层失败后
+    /// **不再重发**该请求。写帧一旦下发，从站可能已经执行；应答丢失时重发
+    /// 会造成重复写（累加/脉冲类点位直接出错）。
+    ///
+    /// 失败原样透传给写路径，由写路径转成 [`CollectorError::WriteUncertain`]，
+    /// 把「可能已生效」显式上报，而不是由总线层自作主张重发。
+    pub async fn transaction_no_retry(
+        &self,
+        request: Vec<u8>,
+        expected_count: Option<u16>,
+        priority: BusPriority,
+    ) -> Result<Vec<u8>, CollectorError> {
+        self.transaction_inner(request, expected_count, priority, false)
+            .await
+    }
+
+    /// 事务下发的公共实现。
+    ///
+    /// `retry_allowed=false` 时：① 不重发（见 [`BusTransaction::retry_allowed`]）；
+    /// ② 应答预算按「不重试」推导，避免调用方白等 `retry_count` 轮重试的时间。
+    async fn transaction_inner(
+        &self,
+        request: Vec<u8>,
+        expected_count: Option<u16>,
+        priority: BusPriority,
+        retry_allowed: bool,
+    ) -> Result<Vec<u8>, CollectorError> {
         let started = std::time::Instant::now();
         // 抓包 A 档：tx 在入队前记录（request 尚未被 move 进 BusTransaction）
         crate::south::frame_log::record(&self.name, true, &request, None);
@@ -287,6 +329,7 @@ impl BusManager {
             timeout_ms: Some(attempt_timeout.as_millis().min(u128::from(u64::MAX)) as u64),
             enqueued_at: std::time::Instant::now(),
             priority,
+            retry_allowed,
         };
         // Bug 148: 若 mpsc send 失败（总线 task 已退出），oneshot sender 立即 drop，
         // resp_rx.await 会收到 RecvError → 转为 BusClosed。当前逻辑正确，但
@@ -305,7 +348,8 @@ impl BusManager {
         // 现按 [`bus_retry_budget`] 同一来源推导，并保留固定调度余量。
         // P1-2：预算按「本次有效超时」重新推导。放宽了单次读超时后，若仍用 spawn 时
         // 按配置值快照的 budget，调用方会先超时丢弃应答（重试成功也白搭，原 #107）。
-        let reply_deadline = bus_retry_budget(attempt_timeout, self.retry_count, self.retry_delay)
+        let effective_retries = if retry_allowed { self.retry_count } else { 0 };
+        let reply_deadline = bus_retry_budget(attempt_timeout, effective_retries, self.retry_delay)
             .saturating_add(REPLY_MARGIN);
         // 控制（写）走控制通道，采集轮询 / 调试直发走普通通道。
         // 两条通道共用同一套排队指标口径（深度、等待时长）。
@@ -359,6 +403,11 @@ impl BusManager {
         &self.name
     }
 
+    /// 指标句柄：供协议层上报协议级事件（如写结果未知计数）。
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
+
     /// 调试直发事务（P0-1 报文编辑器 / 报文回放）：原样写帧、原样收回字节。
     ///
     /// 与 [`BusManager::transaction`] 的差异（均为调试语义必需）：
@@ -394,6 +443,8 @@ impl BusManager {
             // 调试直发刻意走低优先级：它是运维排查手段，不得抢占控制（写）指令，
             // 也不应排到采集轮询前面影响实时性。
             priority: BusPriority::Normal,
+            // 调试直发不重发：报文回放要求逐帧对比，重发会破坏回放序列。
+            retry_allowed: false,
         };
         // 应答预算 = 单帧超时 + 100ms 调度余量（总线任务内部已按同一超时收尾，
         // 这里只需略长于它，避免把「刚好收满」的正常响应误判为超时）
@@ -583,6 +634,10 @@ pub(crate) fn is_retryable(e: &CollectorError) -> bool {
             | CollectorError::ChecksumError
             | CollectorError::Timeout(_)
     )
+    // 注意：`CollectorError::WriteUncertain` 刻意不在其中。
+    // 写结果未知 = 写帧可能已被从站执行，重试会造成重复写。
+    // `BusBusy` 同理不可重试：它是「根本没发出去」，但重试在写路径上
+    // 仍可能与另一笔已下发的写交错，语义上应交由调用方决定。
 }
 
 pub(crate) mod frame_extract;

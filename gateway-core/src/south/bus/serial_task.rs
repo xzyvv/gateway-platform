@@ -220,6 +220,17 @@ pub(crate) async fn run_serial_bus_task(
             .await;
             match &result {
                 Ok(_) => break,
+                // 写事务（retry_allowed=false）失败后**不得重发**：
+                // 写帧可能已被从站执行，重发会造成重复写（累加/脉冲类点位直接出错）。
+                // 失败原样上报，由写路径转成 WriteUncertain 交给调用方判断。
+                Err(e) if !tx.retry_allowed => {
+                    tracing::warn!(
+                        "bus {} write transaction failed ({}), not resending (write outcome may be uncertain)",
+                        name,
+                        e
+                    );
+                    break;
+                }
                 Err(e) if is_retryable(e) && attempt < retry_count => {
                     // 修复(R-2)：控制通道有积压时放弃本次重试，立即回到主循环让写指令先下发。
                     // 重试只用于提升「偶发失败」的成功率，优先级低于现场控制指令的及时性；

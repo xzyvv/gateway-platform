@@ -369,11 +369,13 @@ impl Cjt188Collector {
         }
 
         let request = build_cjt188_frame(addr_bytes, 0x04, &data);
-        // 写指令走控制通道：优先于采集轮询下发，避免现场「下发等太久」
+        // 写指令走控制通道：优先于采集轮询下发，避免现场「下发等太久」。
+        // 同时禁止传输层自动重发——写帧可能已被表计执行，重发会造成重复写。
         let response = self
             .bus
-            .transaction_with_priority(request, None, BusPriority::Control)
-            .await?;
+            .transaction_no_retry(request, None, BusPriority::Control)
+            .await
+            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
         self.parse_write_response(&response, addr_bytes, 0x04)
     }
 
@@ -417,8 +419,9 @@ impl Cjt188Collector {
         let request = build_cjt188_frame(addr_bytes, 0x15, &data);
         let response = self
             .bus
-            .transaction_with_priority(request, None, BusPriority::Control)
-            .await?;
+            .transaction_no_retry(request, None, BusPriority::Control)
+            .await
+            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
         self.parse_write_response(&response, addr_bytes, 0x15)
     }
 

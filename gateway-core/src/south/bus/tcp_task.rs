@@ -258,9 +258,18 @@ pub(crate) async fn bus_task_tcp(
                         let _ = tx.response_tx.send(Ok(rtu));
                         return;
                     }
-                    Err(TransactionError::Timeout(_)) | Err(TransactionError::Busy)
-                        if attempt < retry_count =>
+                    Err(TransactionError::Timeout(_))
+                        if attempt < retry_count && tx.retry_allowed =>
                     {
+                        // 只有读/采集事务才允许因超时重发。
+                        // 写事务（retry_allowed=false）超时后**不得重发**：
+                        // 写帧已经写到 socket，从站可能已执行；重发会造成重复写。
+                        attempt += 1;
+                        tokio::time::sleep(retry_delay).await;
+                    }
+                    Err(TransactionError::Busy) if attempt < retry_count => {
+                        // Busy 表示事务根本没提交（本地并发池已满），未下发，
+                        // 因此重试是安全的——写事务同样可以重试。
                         attempt += 1;
                         tokio::time::sleep(retry_delay).await;
                     }

@@ -39,6 +39,12 @@ pub struct BusMetrics {
     /// 现场看到 CRC 错频发时，这个计数能区分「设备回帧不完整」
     /// 与「总线电气噪声导致 CRC 算错」——两者在错误码上完全一样。
     pub stale_bytes_dropped: AtomicU64,
+    /// 写结果未知的次数：写帧已下发但未收到可确认的应答。
+    ///
+    /// 现场含义：这些写**可能已经生效**（尤其累加 / 脉冲类点位），
+    /// 不应自动重发。该计数用于评估「写结果未知」口径的实际发生比例，
+    /// 也用于验证后续的读回消歧方案能消掉多少比例。
+    pub write_uncertain_total: AtomicU64,
     /// 当前排队等待上总线的在途事务数（全部总线合计，进程级 gauge）。
     ///
     /// 与 [`Self::queue_wait`] 配合区分「设备慢」与「排队拥堵」：深度长期 > 0
@@ -75,6 +81,9 @@ impl BusMetrics {
              # HELP gateway_bus_stale_bytes_dropped_total Stale bytes discarded before a transaction (previous frame was incomplete)\n\
              # TYPE gateway_bus_stale_bytes_dropped_total counter\n\
              gateway_bus_stale_bytes_dropped_total {}\n\
+             # HELP gateway_bus_write_uncertain_total Write outcome uncertain: write frame sent but no confirmable reply\n\
+             # TYPE gateway_bus_write_uncertain_total counter\n\
+             gateway_bus_write_uncertain_total {}\n\
              # HELP gateway_bus_queue_depth Bus transactions queued but not yet executed (all buses)\n\
              # TYPE gateway_bus_queue_depth gauge\n\
              gateway_bus_queue_depth {}",
@@ -84,6 +93,7 @@ impl BusMetrics {
             self.port_reopen_by_self_check.load(Ordering::Relaxed),
             self.ascii_frame_dropped.load(Ordering::Relaxed),
             self.stale_bytes_dropped.load(Ordering::Relaxed),
+            self.write_uncertain_total.load(Ordering::Relaxed),
             self.queue_depth.load(Ordering::Relaxed),
         );
         let _ = writeln!(

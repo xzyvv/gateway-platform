@@ -21,6 +21,15 @@ use super::{
     MAX_WRITE_COILS, MAX_WRITE_REGISTERS,
 };
 
+impl ModbusCollector {
+    /// 写失败映射：把「可能已下发」类错误转成 [`CollectorError::WriteUncertain`]。
+    ///
+    /// 判定规则见 [`crate::south::protocol::mark_write_uncertain`]（协议无关实现）。
+    fn mark_write_uncertain(&self, e: CollectorError) -> CollectorError {
+        crate::south::protocol::mark_write_uncertain(&self.bus, e)
+    }
+}
+
 impl Collector for ModbusCollector {
     fn name(&self) -> &'static str {
         "modbus"
@@ -266,10 +275,14 @@ impl Collector for ModbusCollector {
             // FC05/FC06 保持 8 字节全回显比对；FC15/FC16 只比对前 6 字节
             // （与 write_multi 的多点写校验方式一致）。
             let expect_echo = req.clone();
+            // 写事务**禁止自动重发**（见 `BusTransaction::retry_allowed`）：
+            // 写帧一旦下发，从站可能已经执行；应答丢失时重发会造成重复写
+            // （累加 / 脉冲类点位直接出错）。失败转成 WriteUncertain 上报。
             let resp = self
                 .bus
-                .transaction_with_priority(req, None, BusPriority::Control)
-                .await?;
+                .transaction_no_retry(req, None, BusPriority::Control)
+                .await
+                .map_err(|e| self.mark_write_uncertain(e))?;
             // 修复(R-1)：从站拒绝写入时回的是 5 字节异常帧
             // [slave][fc|0x80][exception_code][crc_lo][crc_hi]。
             // 旧实现直接走下面的 `resp.len() < 8` 判定，把它当成「回显不匹配」，
@@ -377,11 +390,13 @@ impl Collector for ModbusCollector {
                     let expect = req.clone();
                     let resp = match self
                         .bus
-                        .transaction_with_priority(req, None, BusPriority::Control)
+                        .transaction_no_retry(req, None, BusPriority::Control)
                         .await
                     {
                         Ok(r) => r,
                         Err(e) => {
+                            // 与单点写一致：写失败转 WriteUncertain（本批点位可能已生效）。
+                            let e = self.mark_write_uncertain(e);
                             for i in range.clone() {
                                 slots[items[i].2] = Some(Err(clone_collector_error(&e)));
                             }

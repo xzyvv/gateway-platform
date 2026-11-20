@@ -132,6 +132,17 @@ pub enum CollectorError {
     BusBusy(std::time::Duration),
     #[error("invalid config: {0}")]
     InvalidConfig(String),
+    /// 写结果未知：写帧已下发，但未收到可确认的应答。
+    ///
+    /// 与 [`CollectorError::NoReply`] 的区别：对读事务两者等价（设备没回）；
+    /// 对写事务无法区分「没收到」与「收到并执行了、只是应答丢了」——
+    /// 后者已经生效且不可回滚，自动重试会造成重复写。
+    ///
+    /// 语义：**不要自动重试**。调用方应先读回核实（写值类点位）或人工确认。
+    /// 产生条件：写事务在传输层失败（无应答 / 超时 / IO 错 / 校验错），
+    /// 且写路径已关闭自动重发（见 [`crate::south::bus::BusTransaction::retry_allowed`]）。
+    #[error("write outcome uncertain: {0} (the write may already have been applied - do not retry blindly)")]
+    WriteUncertain(String),
     #[error("unsupported: {0}")]
     Unsupported(String),
 }
@@ -174,6 +185,10 @@ impl CollectorError {
             CollectorError::Timeout(_) => CollectErrorCode::Timeout,
             CollectorError::BusBusy(_) => CollectErrorCode::Busy,
             CollectorError::InvalidConfig(_) => CollectErrorCode::Config,
+            // 写结果未知暂归 Other：by_reason 的分桶是固定长度数组，
+            // 单独加一桶会牵动标签表与下标映射。写不确定另有专用计数器
+            // gateway_write_uncertain_total，不靠 by_reason 观察。
+            CollectorError::WriteUncertain(_) => CollectErrorCode::Other,
             CollectorError::Unsupported(_) => CollectErrorCode::Other,
         }
     }
@@ -207,9 +222,40 @@ pub(crate) fn clone_collector_error(e: &CollectorError) -> CollectorError {
         CollectorError::Timeout(d) => CollectorError::Timeout(*d),
         CollectorError::BusBusy(d) => CollectorError::BusBusy(*d),
         CollectorError::InvalidConfig(s) => CollectorError::InvalidConfig(s.clone()),
+        CollectorError::WriteUncertain(s) => CollectorError::WriteUncertain(s.clone()),
         CollectorError::Unsupported(s) => CollectorError::Unsupported(s.clone()),
     }
 }
+/// 写失败映射（协议无关）：把「可能已下发」类错误转成 [`CollectorError::WriteUncertain`]
+/// 并计数，供各协议的写路径统一调用，保证语义一致。
+///
+/// 判定依据是「能否证明写没有生效」：
+/// - `NoReply`：写帧已发出，等不到应答——从站可能已执行（应答丢失）。
+/// - `ChecksumError`：收到了响应但校验错——从站很可能已执行，只是响应损坏。
+/// - `Timeout`：调用方等到截止时间——同 `NoReply`。
+/// - `IoError`：链路 IO 故障，帧可能只发了一半；半帧会被从站丢弃，
+///   但无法在协议层证明，因此按「不确定」处理（宁可多报一次人工确认，
+///   也不要漏报一次重复写）。
+///
+/// `BusBusy`（根本没发出去）、`ModbusException`（设备明确拒绝）、
+/// `InvalidFrame`（响应格式不对）不转换——它们能证明写未生效，转换会
+/// 把「明确失败」误报成「不确定」，反而让上游不敢重试。
+pub(crate) fn mark_write_uncertain(
+    bus: &crate::south::bus::BusManager,
+    e: CollectorError,
+) -> CollectorError {
+    match e {
+        CollectorError::NoReply
+        | CollectorError::ChecksumError
+        | CollectorError::Timeout(_)
+        | CollectorError::IoError(_) => {
+            bus.metrics().inc_write_uncertain();
+            CollectorError::WriteUncertain(e.to_string())
+        }
+        other => other,
+    }
+}
+
 /// Collector trait 接口（§3.10 核心契约）
 ///
 /// A-2: 使用原生 async fn（手写 Pin<Box<dyn Future>>），

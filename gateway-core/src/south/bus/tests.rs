@@ -203,6 +203,7 @@ async fn stale_transaction_is_skipped_and_not_written() {
             timeout_ms: None,
             enqueued_at: std::time::Instant::now(),
             priority: BusPriority::Normal,
+            retry_allowed: true,
         })
         .await
         .expect("enqueue stale tx");
@@ -233,6 +234,7 @@ async fn stale_transaction_is_skipped_and_not_written() {
             timeout_ms: None,
             enqueued_at: std::time::Instant::now(),
             priority: BusPriority::Normal,
+            retry_allowed: true,
         })
         .await
         .expect("enqueue live tx");
@@ -350,6 +352,7 @@ async fn control_transaction_is_served_before_queued_normal_transaction() {
                 timeout_ms: None,
                 enqueued_at: std::time::Instant::now(),
                 priority,
+                retry_allowed: true,
             };
             sender.clone().try_send(msg).expect("enqueue");
         };

@@ -233,15 +233,31 @@ pub(crate) async fn handle_client(
             Some(bus) => {
                 // 按 Modbus 功能码判定优先级：写功能码（05/06/0F/10）走控制通道，
                 // 读功能码保持普通通道，避免外部主站的写被采集轮询压住。
-                let priority = match pdu.first() {
-                    Some(0x05) | Some(0x06) | Some(0x0F) | Some(0x10) => BusPriority::Control,
-                    _ => BusPriority::Normal,
+                let is_write = matches!(
+                    pdu.first(),
+                    Some(0x05) | Some(0x06) | Some(0x0F) | Some(0x10)
+                );
+                let priority = if is_write {
+                    BusPriority::Control
+                } else {
+                    BusPriority::Normal
                 };
-                match tokio::time::timeout(
-                    timeout,
-                    bus.transaction_with_priority(rtu, None, priority),
-                )
-                .await
+                // 写功能码禁止传输层自动重发：写帧可能已被从站执行，
+                // 重发会造成重复写（累加/脉冲类点位直接出错）。
+                let result = if is_write {
+                    tokio::time::timeout(
+                        timeout,
+                        bus.transaction_no_retry(rtu, None, priority),
+                    )
+                    .await
+                } else {
+                    tokio::time::timeout(
+                        timeout,
+                        bus.transaction_with_priority(rtu, None, priority),
+                    )
+                    .await
+                };
+                match result
                 {
                     Ok(Ok(resp)) => resp,
                     Ok(Err(e)) => {

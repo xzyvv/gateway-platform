@@ -334,11 +334,13 @@ impl Dlt645Collector {
 
         // 控制码 0x04 = 写数据
         let request = self.build_frame(addr_bytes, 0x04, &data);
-        // 写指令走控制通道：优先于采集轮询下发，避免现场「下发等太久」
+        // 写指令走控制通道：优先于采集轮询下发，避免现场「下发等太久」。
+        // 同时禁止传输层自动重发——写帧可能已被表计执行，重发会造成重复写。
         let response = self
             .bus
-            .transaction_with_priority(request, None, BusPriority::Control)
-            .await?;
+            .transaction_no_retry(request, None, BusPriority::Control)
+            .await
+            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
 
         self.parse_write_status_response(&response, addr_bytes, 0x84, true)
     }
@@ -382,8 +384,9 @@ impl Dlt645Collector {
         let request = self.build_frame(addr_bytes, 0x0C, &data);
         let response = self
             .bus
-            .transaction_with_priority(request, None, BusPriority::Control)
-            .await?;
+            .transaction_no_retry(request, None, BusPriority::Control)
+            .await
+            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
         // 0x0C 响应只有 1 字节 STATUS（无 DI）
         self.parse_write_status_response(&response, addr_bytes, 0x8C, false)
     }
@@ -415,8 +418,9 @@ impl Dlt645Collector {
         let request = self.build_frame(addr_bytes, 0x0F, &data);
         let response = self
             .bus
-            .transaction_with_priority(request, None, BusPriority::Control)
-            .await?;
+            .transaction_no_retry(request, None, BusPriority::Control)
+            .await
+            .map_err(|e| crate::south::protocol::mark_write_uncertain(&self.bus, e))?;
         // 0x0F 响应只有 1 字节 STATUS（无密码回显）
         self.parse_write_status_response(&response, addr_bytes, 0x8F, false)
     }
