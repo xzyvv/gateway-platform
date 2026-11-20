@@ -200,6 +200,47 @@ pub fn http_status(code: i32) -> StatusCode {
     }
 }
 
+/// 失败分类：告诉客户端「该改什么」，避免只能靠码值硬猜。
+///
+/// - `client`：改请求参数 / 换名字 / 先处理冲突资源
+/// - `device`：查总线与现场设备（接线、从站地址、采集是否在跑）
+/// - `auth`：换凭证、补 scope、导入或更新授权
+/// - `server`：记日志联系维护方
+/// - `ok`：成功
+pub fn category(code: i32) -> &'static str {
+    match code {
+        OK => "ok",
+        // 总线忙/离线是设备侧状态，不是用户填错参数
+        BUS_BUSY | BUS_OFFLINE => "device",
+        1000..=1999 => "client",
+        2000..=2999 => "server",
+        3000..=3999 => "device",
+        4000..=4999 | 6000..=6999 => "client",
+        // 9999 落在 9xxx 段，不能被「授权」兜底吞掉
+        5000..=5999 | INTERNAL => "server",
+        7000..=8999 => "auth",
+        _ => "server",
+    }
+}
+
+/// 同请求原样重发是否可能成功（`Retry-After` 之外，不保证幂等）。
+///
+/// 核心边界：`WRITE_UNCERTAIN(5102)` **必须为 false**——设备可能已执行，
+/// 自动重发会重复动作（重复脉冲、重复累加）。这类错误只能先读回核实。
+pub fn retryable(code: i32) -> bool {
+    match code {
+        // 写不确定：重试可能造成重复动作
+        WRITE_UNCERTAIN => false,
+        // 这些码落在 4xxx 段但语义是设备/服务端瞬时故障，必须先于下面的
+        // 「4xxx 一律不可重试」判断（4090、4503、4290 都是这种情况）
+        NO_REPLY | PROTOCOL | BUS_BUSY | BUS_OFFLINE | IO | MQTT | QUEUE_ERROR
+        | SERVICE_UNAVAILABLE | WRITE_FAILED | REALTIME_LIMIT | INTERNAL | RATE_LIMITED => true,
+        // 客户端可纠正错误、鉴权、授权：重发同样请求结果不会变
+        4000..=4999 | 6000..=6999 | 7000..=8999 => false,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,6 +337,35 @@ mod tests {
             offenders.is_empty(),
             "handler/中间件里出现了字面量错误码，请改用 `codes::XXX`：{offenders:?}"
         );
+    }
+
+    #[test]
+    fn retryable_and_category_cover_all_codes() {
+        for (code, label) in ALL_CODES {
+            let code = *code;
+            assert_ne!(category(code), "ok", "{label}({code}) 必须分类");
+            assert!(
+                matches!(category(code), "client" | "device" | "auth" | "server"),
+                "{label}({code}) 分类非法: {}",
+                category(code)
+            );
+        }
+        assert_eq!(category(0), "ok");
+
+        // 写不确定禁止自动重试：设备可能已执行，重发会造成重复动作
+        assert!(!retryable(WRITE_UNCERTAIN));
+        assert!(retryable(WRITE_FAILED));
+        // 4xxx 段里的设备/限流码不能被「4xxx 一律不可重试」的区间兜底吞掉
+        assert!(retryable(BUS_BUSY), "busy 应可重试");
+        assert!(retryable(BUS_OFFLINE), "offline 应可重试");
+        assert!(retryable(RATE_LIMITED), "限流应可重试");
+        // 客户端可纠正 / 鉴权 / 授权：重发无意义
+        assert!(!retryable(NOT_FOUND));
+        assert!(!retryable(INVALID_PARAM));
+        assert!(!retryable(UNAUTHORIZED));
+        assert!(!retryable(LICENSE_REQUIRED));
+        // 9999 不能因为落在 9xxx 被归到 auth
+        assert_eq!(category(INTERNAL), "server");
     }
 
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

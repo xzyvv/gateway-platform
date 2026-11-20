@@ -328,6 +328,15 @@ pub struct ApiResponse<T: Serialize> {
     pub code: i32,
     pub message: String,
     pub data: Option<T>,
+    /// 失败时：同请求原样重发是否可能成功。
+    ///
+    /// 客户端不用再自己维护「哪些码能重试」的硬编码表；`WRITE_UNCERTAIN(5102)`
+    /// 恒为 false（设备可能已执行，重试会造成重复动作）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    /// 失败分类（client / device / auth / server），告诉调用方「该改什么」。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<&'static str>,
 }
 
 impl<T: Serialize> ApiResponse<T> {
@@ -336,6 +345,8 @@ impl<T: Serialize> ApiResponse<T> {
             code: 0,
             message: "success".into(),
             data: Some(data),
+            retryable: None,
+            category: None,
         }
     }
     pub fn err(code: i32, msg: impl Into<String>) -> Self {
@@ -343,6 +354,8 @@ impl<T: Serialize> ApiResponse<T> {
             code,
             message: msg.into(),
             data: None,
+            retryable: Some(crate::web::error_codes::retryable(code)),
+            category: Some(crate::web::error_codes::category(code)),
         }
     }
 }
@@ -398,6 +411,32 @@ mod status_mapping_tests {
         assert_eq!(err_status(5102), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(err_status(5001), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(ApiResponse::ok(()).into_response().status(), StatusCode::OK);
+    }
+
+    /// O2：失败响应必须自带来 `retryable` / `category`，客户端不再自维护重试表。
+    #[test]
+    fn error_envelope_carries_retryable_and_category() {
+        let body = serde_json::to_value(ApiResponse::<()>::err(
+            crate::web::error_codes::WRITE_UNCERTAIN,
+            "回读不一致",
+        ))
+        .unwrap();
+        assert_eq!(body["code"], 5102);
+        assert_eq!(body["retryable"], false, "写不确定禁止自动重试");
+        assert_eq!(body["category"], "server");
+
+        let busy = serde_json::to_value(ApiResponse::<()>::err(
+            crate::web::error_codes::BUS_BUSY,
+            "采集运行中",
+        ))
+        .unwrap();
+        assert_eq!(busy["retryable"], true);
+        assert_eq!(busy["category"], "device");
+
+        // 成功响应不带这两个字段，避免前端把「有字段」当失败信号
+        let ok = serde_json::to_value(ApiResponse::ok(1)).unwrap();
+        assert!(ok.get("retryable").is_none());
+        assert!(ok.get("category").is_none());
     }
 
     /// R1：业务码走 `ApiResponse` 时，授权/鉴权/限流/依赖不可用必须得到

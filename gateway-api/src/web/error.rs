@@ -139,10 +139,14 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // 与 `ApiResponse::err` 保持同一信封：多带 `retryable` / `category`，
+        // 让两条错误路径的机器可读信息一致（客户端只写一套分派逻辑）。
         let body = serde_json::json!({
             "code": self.code,
             "message": self.message,
             "error": self.message,
+            "retryable": codes::retryable(self.code),
+            "category": codes::category(self.code),
         });
         (self.status, Json(body)).into_response()
     }

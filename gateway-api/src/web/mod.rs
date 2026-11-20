@@ -8,6 +8,7 @@
 //! Q16: 新增设备/测点 CRUD 路由组（api::config_routes），供 Go+Vue 调试软件调用。
 
 pub mod api;
+pub mod collect_error_map;
 pub(crate) mod config_apply;
 pub mod dead_letter;
 pub mod debug_bus;
