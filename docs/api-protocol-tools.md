@@ -29,6 +29,10 @@
 `exception` / `bus_busy` / `bus_offline`）；参数与资源类错误（`invalid_frame` /
 `missing_bus` / `bus_not_found` / `unsupported_protocol`）才用 400/404。
 
+帧级失败的响应体 `code` **必须非 0**（`code == 0` 是唯一成功码，前端拦截器据此
+判定）：`timeout` → 3001、`crc` / `exception` → 3000、`bus_busy` → 4090、
+`bus_offline` → 4503。若给 0，`data: null` 会把现场指引静默吞掉。
+
 ---
 
 ## 2. 端点分组

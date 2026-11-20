@@ -176,31 +176,45 @@ pub fn audit_send(state: &AppState, bus: &str, detail: &str) {
         .log("debug.frame.send", bus, detail, "api");
 }
 
-/// 构造带机器码的调试错误响应（契约 §5 HTTP 层约定）。
+/// 帧级/租约失败的业务码与 HTTP 状态（契约 §5 HTTP 层约定）。
+///
+/// 两条约束在这里同时满足：
+/// - **HTTP 仍为 200**：设备没回 / 帧坏 / 总线被占用都不是「接口调用失败」，
+///   前端不该按 HTTP 状态弹网络错误；
+/// - **业务码必须非 0**：响应信封里 `code == 0` 是唯一成功码，前端拦截器只在
+///   `code != 0` 时透出 message。此前 timeout/crc/exception 落进 `_ => (200, 0)`
+///   兜底，`data: null` + `code: 0` 会让「设备未应答」被当成成功静默吞掉。
+///
+/// 参数/资源错误（invalid_frame/bus_not_found/missing_bus）仍用 400/404。
+/// 分码口径：timeout 是「对端没回」→ 3001（与 `GatewayError::NoReply` 同码）；
+/// crc / exception 是「回了但帧或异常码不对」→ 3000（协议层）。
+fn error_status_and_code(kind: BusErrorKind) -> (axum::http::StatusCode, i32) {
+    use crate::web::error_codes::{
+        BAD_REQUEST, BUS_BUSY, BUS_MISSING, BUS_OFFLINE, INVALID_PARAM, NOT_FOUND, NO_REPLY,
+        PROTOCOL,
+    };
+    use axum::http::StatusCode;
+
+    match kind {
+        BusErrorKind::InvalidFrame => (StatusCode::BAD_REQUEST, BAD_REQUEST),
+        BusErrorKind::MissingBus => (StatusCode::BAD_REQUEST, BUS_MISSING),
+        BusErrorKind::UnsupportedProtocol => (StatusCode::BAD_REQUEST, INVALID_PARAM),
+        BusErrorKind::BusNotFound => (StatusCode::NOT_FOUND, NOT_FOUND),
+        BusErrorKind::BusBusy => (StatusCode::OK, BUS_BUSY),
+        BusErrorKind::BusOffline => (StatusCode::OK, BUS_OFFLINE),
+        BusErrorKind::Timeout => (StatusCode::OK, NO_REPLY),
+        BusErrorKind::Crc | BusErrorKind::Exception => (StatusCode::OK, PROTOCOL),
+    }
+}
+
+/// 构造带机器码的调试错误响应。
 ///
 /// 为什么不用 `ApiError`：`ApiError` 的 `error` 字段直接复用 `message`，
 /// 只能二选一——要么前端拿到 `invalid_frame`（无现场可读信息），
 /// 要么拿到中文详情（前端无法分支）。这里把两者拆开返回，
 /// 既满足契约的 `error` 取值，又保留现场可读的 `message`。
-///
-/// 状态码：帧级失败（timeout/crc/exception/bus_busy/bus_offline）仍 200，
-/// 由响应体字段表达，避免前端把「设备没回」当成接口调用失败；
-/// 参数/资源错误（invalid_frame/bus_not_found/missing_bus）才用 400/404。
 pub fn error_response(kind: BusErrorKind, detail: impl Into<String>) -> axum::response::Response {
-    use axum::http::StatusCode;
-
-    let (status, code) = match kind {
-        BusErrorKind::InvalidFrame => (StatusCode::BAD_REQUEST, 4000),
-        BusErrorKind::MissingBus => (StatusCode::BAD_REQUEST, 4001),
-        BusErrorKind::UnsupportedProtocol => (StatusCode::BAD_REQUEST, 4002),
-        BusErrorKind::BusNotFound => (StatusCode::NOT_FOUND, 4004),
-        // 租约失败（busy/offline）给非零业务码：HTTP 仍为 200（契约 §5 不变），
-        // 但前端响应拦截器只在 code!=0 时透出 message——若为 0，data=null 会把
-        // 「请先暂停该总线的采集后再试」这类现场指引静默吞掉。
-        BusErrorKind::BusBusy => (StatusCode::OK, 4090),
-        BusErrorKind::BusOffline => (StatusCode::OK, 4503),
-        _ => (StatusCode::OK, 0),
-    };
+    let (status, code) = error_status_and_code(kind);
     (
         status,
         axum::Json(serde_json::json!({
@@ -211,4 +225,51 @@ pub fn error_response(kind: BusErrorKind, detail: impl Into<String>) -> axum::re
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::web::error_codes;
+
+    /// 回归守卫：帧级失败的 `code` 不能是 0。
+    ///
+    /// `code: 0` 在响应信封里等于成功，前端拦截器会走 `data` 分支，
+    /// `data: null` 把现场指引静默吞掉——这正是 timeout/crc/exception
+    /// 落进 `_ => (200, 0)` 兜底时的故障形态。
+    #[test]
+    fn frame_level_failures_never_report_success_code() {
+        for kind in [
+            BusErrorKind::Timeout,
+            BusErrorKind::Crc,
+            BusErrorKind::Exception,
+            BusErrorKind::BusBusy,
+            BusErrorKind::BusOffline,
+        ] {
+            let (status, code) = error_status_and_code(kind);
+            assert_eq!(
+                status,
+                axum::http::StatusCode::OK,
+                "{kind:?} 应保持 HTTP 200"
+            );
+            assert_ne!(code, 0, "{kind:?} 的业务码不能是成功码 0");
+            assert!(
+                error_codes::ALL_CODES.iter().any(|(c, _)| *c == code),
+                "{kind:?} 的业务码 {code} 未登记进 ALL_CODES"
+            );
+        }
+    }
+
+    /// 分码口径：没回与回错必须是两个码，前端才能给出不同指引。
+    #[test]
+    fn timeout_and_protocol_errors_use_distinct_codes() {
+        let (_, timeout) = error_status_and_code(BusErrorKind::Timeout);
+        let (_, crc) = error_status_and_code(BusErrorKind::Crc);
+        let (_, exception) = error_status_and_code(BusErrorKind::Exception);
+
+        assert_eq!(timeout, error_codes::NO_REPLY);
+        assert_eq!(crc, error_codes::PROTOCOL);
+        assert_eq!(exception, error_codes::PROTOCOL);
+        assert_ne!(timeout, crc);
+    }
 }
