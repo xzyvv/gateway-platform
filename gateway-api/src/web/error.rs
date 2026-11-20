@@ -9,6 +9,8 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 
+use super::error_codes as codes;
+
 /// API 错误
 pub struct ApiError {
     pub(crate) status: StatusCode,
@@ -20,14 +22,14 @@ impl ApiError {
     pub fn bad_request(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: 4000,
+            code: codes::BAD_REQUEST as u32,
             message: msg.into(),
         }
     }
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
-            code: 4004,
+            code: codes::NOT_FOUND as u32,
             message: msg.into(),
         }
     }
@@ -39,21 +41,21 @@ impl ApiError {
     pub fn conflict(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
-            code: 4009,
+            code: codes::DUPLICATE_ID as u32,
             message: msg.into(),
         }
     }
     pub fn unauthorized(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
-            code: 8000,
+            code: codes::UNAUTHORIZED as u32,
             message: msg.into(),
         }
     }
     pub fn internal(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: 9999,
+            code: codes::INTERNAL as u32,
             message: msg.into(),
         }
     }
@@ -65,7 +67,7 @@ impl ApiError {
     pub fn service_unavailable(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            code: 5003,
+            code: codes::SERVICE_UNAVAILABLE as u32,
             message: msg.into(),
         }
     }
@@ -78,7 +80,7 @@ impl ApiError {
     pub fn license_required() -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
-            code: 7001,
+            code: codes::LICENSE_REQUIRED as u32,
             message: "license required".into(),
         }
     }
@@ -86,7 +88,7 @@ impl ApiError {
     pub fn license_expired() -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
-            code: 7003,
+            code: codes::LICENSE_INVALID as u32,
             message: "license expired or invalid".into(),
         }
     }
@@ -95,7 +97,7 @@ impl ApiError {
     pub fn quota_exceeded(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: 4021,
+            code: codes::QUOTA_EXCEEDED as u32,
             message: msg.into(),
         }
     }
@@ -191,7 +193,7 @@ impl From<serde_json::Error> for ApiError {
     fn from(e: serde_json::Error) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: 1000,
+            code: codes::CONFIG_OR_JSON as u32,
             message: e.to_string(),
         }
     }
@@ -201,7 +203,7 @@ impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: 2000,
+            code: codes::IO as u32,
             message: e.to_string(),
         }
     }

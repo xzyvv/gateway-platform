@@ -105,12 +105,6 @@ pub(crate) struct WriteItemError {
     pub outcome: WriteOutcome,
 }
 
-/// 单条写失败的业务码：**明确失败**（可安全重试）。
-pub(crate) const CODE_WRITE_FAILED: i32 = 5101;
-
-/// 单条写失败的业务码：**结果未知**（设备可能已执行，禁止自动重试）。
-pub(crate) const CODE_WRITE_UNCERTAIN: i32 = 5102;
-
 /// 写结果未知时的统一处置提示。
 ///
 /// 提示文本同时用于逐条 `error` 与顶层业务码 message，让上游（前端 / MES /
@@ -129,14 +123,14 @@ pub(crate) fn write_error_message(reason: &str, outcome: WriteOutcome) -> String
     }
 }
 
-/// 按写结果三态给出单条写失败的**业务码**。
+/// 按写结果三态给出单条写失败的**业务码**（码值定义见 [`crate::web::error_codes`]）。
 ///
 /// - `Uncertain` → 5102（结果未知，禁止自动重试）；
 /// - 其余 → 5101（明确失败，可安全重试）。
 pub(crate) fn write_failure_code(outcome: WriteOutcome) -> i32 {
     match outcome {
-        WriteOutcome::Uncertain => CODE_WRITE_UNCERTAIN,
-        WriteOutcome::Failed | WriteOutcome::Ok => CODE_WRITE_FAILED,
+        WriteOutcome::Uncertain => crate::web::error_codes::WRITE_UNCERTAIN,
+        WriteOutcome::Failed | WriteOutcome::Ok => crate::web::error_codes::WRITE_FAILED,
     }
 }
 

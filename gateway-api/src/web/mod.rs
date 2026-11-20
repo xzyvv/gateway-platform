@@ -12,6 +12,7 @@ pub(crate) mod config_apply;
 pub mod dead_letter;
 pub mod debug_bus;
 pub mod error;
+pub mod error_codes;
 pub mod heal;
 pub mod middleware;
 pub(crate) mod services;

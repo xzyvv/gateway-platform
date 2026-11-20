@@ -349,22 +349,12 @@ impl<T: Serialize> ApiResponse<T> {
 
 impl<T: Serialize> axum::response::IntoResponse for ApiResponse<T> {
     fn into_response(self) -> axum::response::Response {
-        use axum::http::StatusCode;
         use axum::response::Json;
-        let code = self.code;
-        // 业务错误码按区间映射 HTTP 状态：
-        // - 4xxx：参数/资源/校验类错误（4000 参数非法、4004 不存在、4005-4007 用户域、
-        //   4002 测点校验、4009 id 冲突）→ 400
-        // - 6xxx：设备分组等业务校验（6001 名称非法/重复、6002 分组不存在）→ 400
-        // 这两类都是客户端可纠正的错误；此前只认 4xxx，6xxx 被误映射成 500。
-        // 5xxx 保持 500：服务端执行失败（5101 写点位、证书解析失败）。
-        let status = if code == 0 {
-            StatusCode::OK
-        } else if (4000..5000).contains(&code) || (6000..7000).contains(&code) {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
+        // 业务码 → HTTP 状态的唯一映射入口见 `web::error_codes::http_status`：
+        // 4xxx/6xxx → 400、7xxx → 403、8xxx → 401/403、4290 → 429、
+        // 5xxx → 500（5003 → 503）、3001 → 504。
+        // 这样 handler 只需给业务码，不必重复判断 HTTP 状态。
+        let status = crate::web::error_codes::http_status(self.code);
         (
             status,
             Json(serde_json::to_value(&self).unwrap_or_default()),
@@ -404,6 +394,26 @@ mod status_mapping_tests {
         assert_eq!(err_status(5102), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(err_status(5001), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(ApiResponse::ok(()).into_response().status(), StatusCode::OK);
+    }
+
+    /// R1：业务码走 `ApiResponse` 时，授权/鉴权/限流/依赖不可用必须得到
+    /// 与 `ApiError` 路径一致的 HTTP 语义，而不是一律 500。
+    #[test]
+    fn privileged_codes_keep_their_http_semantics() {
+        // 授权
+        assert_eq!(err_status(7001), StatusCode::FORBIDDEN);
+        assert_eq!(err_status(7003), StatusCode::FORBIDDEN);
+        assert_eq!(err_status(7000), StatusCode::FORBIDDEN);
+        // 鉴权：未认证 401，权限不足 403
+        assert_eq!(err_status(8000), StatusCode::UNAUTHORIZED);
+        assert_eq!(err_status(8003), StatusCode::FORBIDDEN);
+        assert_eq!(err_status(8004), StatusCode::FORBIDDEN);
+        assert_eq!(err_status(8005), StatusCode::FORBIDDEN);
+        // 限流 / 依赖不可用 / 上游超时
+        assert_eq!(err_status(4290), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err_status(5003), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err_status(8101), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err_status(3001), StatusCode::GATEWAY_TIMEOUT);
     }
 }
 

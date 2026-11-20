@@ -215,10 +215,13 @@ pub async fn points_write_unified(
     // 5102 结果未知（设备可能已执行，禁止自动重试）。
     if mode == WriteMode::Single {
         if let Some(err) = &items[0].error {
-            return Ok(Json(ApiResponse::<serde_json::Value>::err(
+            // R1：不要用 `Json(..)` 包裹——`Json` 会强制 HTTP 200，
+            // 使 5101/5102 与 send_command 的 500 语义分叉。
+            // 直接用 `ApiResponse` 的 IntoResponse，由 error_codes::http_status 统一映射。
+            return Ok(ApiResponse::<serde_json::Value>::err(
                 write_failure_code(err.outcome),
                 write_failure_message(err),
-            ))
+            )
             .into_response());
         }
     }

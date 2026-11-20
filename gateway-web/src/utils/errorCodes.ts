@@ -6,8 +6,9 @@
  *   - message 有值时**永远优先**（后端更清楚是哪一段配置/哪个点位出的问题）
  *   - message 缺失或为空时，用本字典兜底，避免把 `code: 8000` 这种裸数字丢给用户
  *
- * 码表来源：与 gateway-core 的 ApiResponse 错误码对齐。后端新增码时，先在这里
- * 登记（未知码会退化为「错误码 N」，不会崩，但用户看不懂）。
+ * 码表来源：后端 `gateway-api/src/web/error_codes.rs` 的 `ALL_CODES`（唯一来源）。
+ * 后端新增码时会先登记到那张表，本文件必须同步补文案；反之本文件不应出现
+ * 后端表里没有的码。
  *
  * 注意：这里只做「码 → 文案」映射，不做 HTTP 状态码推断；HTTP 4xx/5xx 的
  * 语义在 http.ts 拦截器里按状态码分支处理（401/4021/429 有专门分支）。
@@ -23,6 +24,8 @@ export const ERR = {
   BUS_MISSING: 4001,
   /** 参数校验未通过：点位字段 / 协议不支持 共用 */
   INVALID_PARAM: 4002,
+  /** 配置应用失败（校验通过但落盘/热重载失败） */
+  CONFIG_APPLY_FAILED: 4003,
   /** 资源不存在（设备/总线/版本等） */
   NOT_FOUND: 4004,
   /** 用户域：用户名/显示名不合法或重复 */
@@ -35,6 +38,20 @@ export const ERR = {
   DUPLICATE_ID: 4009,
   /** 授权配额不足（v2.0 档位限制，授权有效但档位不够） */
   QUOTA_EXCEEDED: 4021,
+  /** 总线忙（协议工具会话租约冲突；HTTP 200 + 业务码） */
+  BUS_BUSY: 4090,
+  /** 请求 Content-Type 不受支持 */
+  UNSUPPORTED_MEDIA_TYPE: 4150,
+  /** 请求体结构不合法 */
+  UNPROCESSABLE: 4220,
+  /** 请求过于频繁（限流） */
+  RATE_LIMITED: 4290,
+  /** 总线离线（协议工具会话；HTTP 200 + 业务码） */
+  BUS_OFFLINE: 4503,
+  /** 上传的证书无法解析 */
+  CERT_PARSE_FAILED: 5001,
+  /** 依赖能力暂不可用 */
+  SERVICE_UNAVAILABLE: 5003,
   /** 点位写入失败（明确失败：能证明写没有生效，可安全重试） */
   POINT_WRITE_FAILED: 5101,
   /** 点位写入结果未知（设备可能已执行，禁止自动重试） */
@@ -43,6 +60,8 @@ export const ERR = {
   GROUP_INVALID: 6001,
   /** 设备分组不存在 */
   GROUP_NOT_FOUND: 6002,
+  /** 公式求值失败 */
+  FORMULA: 7000,
   /** License 未导入（网关按兜底配额运行，超限需导入授权） */
   LICENSE_REQUIRED: 7001,
   /** License 失效（过期/设备码不匹配/篡改/验签失败） */
@@ -51,6 +70,12 @@ export const ERR = {
   UNAUTHORIZED: 8000,
   /** API Key 缺少写权限（只读密钥调用写接口） */
   API_KEY_NO_WRITE: 8003,
+  /** API Key 权限范围不足（如缺 diagnostics:exec） */
+  API_KEY_SCOPE: 8004,
+  /** 拒绝通过普通配置写修改 web 凭据等敏感字段 */
+  SENSITIVE_FIELD_DENIED: 8005,
+  /** 实时 WebSocket 连接数超限 */
+  REALTIME_LIMIT: 8101,
   /** 网关内部错误 */
   INTERNAL: 9999,
 } as const
@@ -74,6 +99,10 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
   [ERR.INVALID_PARAM]: {
     message: '参数校验未通过',
     hint: '请检查协议、地址、从站地址、采集周期等字段',
+  },
+  [ERR.CONFIG_APPLY_FAILED]: {
+    message: '配置保存失败',
+    hint: '配置校验通过但写入/热重载失败，请查看系统日志后重试',
   },
   [ERR.NOT_FOUND]: {
     message: '目标资源不存在',
@@ -103,6 +132,34 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
     message: '当前授权配额不足',
     hint: '请联系供应商升级授权',
   },
+  [ERR.BUS_BUSY]: {
+    message: '总线正被占用',
+    hint: '协议调试会话未释放，请先停止调试或稍后重试',
+  },
+  [ERR.UNSUPPORTED_MEDIA_TYPE]: {
+    message: '请求格式不受支持',
+    hint: '请使用 JSON 提交（Content-Type: application/json）',
+  },
+  [ERR.UNPROCESSABLE]: {
+    message: '请求内容不合法',
+    hint: '请检查提交字段的类型与结构是否与接口要求一致',
+  },
+  [ERR.RATE_LIMITED]: {
+    message: '请求过于频繁',
+    hint: '请稍等几秒再操作，避免连续点击',
+  },
+  [ERR.BUS_OFFLINE]: {
+    message: '总线已离线',
+    hint: '请检查网关到设备的接线与串口/TCP 连通性',
+  },
+  [ERR.CERT_PARSE_FAILED]: {
+    message: '证书解析失败',
+    hint: '请确认上传的是有效的 PEM 证书与私钥',
+  },
+  [ERR.SERVICE_UNAVAILABLE]: {
+    message: '依赖能力暂不可用',
+    hint: '请稍后重试；反复出现请查看系统日志',
+  },
   [ERR.POINT_WRITE_FAILED]: {
     message: '点位写入失败',
     hint: '请确认设备在线、点位允许写入、地址与数据类型正确',
@@ -119,6 +176,10 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
     message: '设备分组不存在',
     hint: '可能已被删除，请刷新后重试',
   },
+  [ERR.FORMULA]: {
+    message: '公式求值失败',
+    hint: '请检查点位公式的语法、变量名与量程，修正后再保存',
+  },
   [ERR.LICENSE_REQUIRED]: {
     message: '尚未导入授权文件',
     hint: '请在「授权管理」中导入 .lic 文件',
@@ -130,6 +191,18 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
   [ERR.API_KEY_NO_WRITE]: {
     message: 'API 密钥没有写权限',
     hint: '请改用带写权限的密钥',
+  },
+  [ERR.API_KEY_SCOPE]: {
+    message: 'API 密钥权限范围不足',
+    hint: '该接口需要更高 scope，请换用具备对应权限的密钥',
+  },
+  [ERR.SENSITIVE_FIELD_DENIED]: {
+    message: '敏感字段不允许这样修改',
+    hint: 'Web 登录凭据等敏感项请到「系统设置 → 安全」中单独修改',
+  },
+  [ERR.REALTIME_LIMIT]: {
+    message: '实时连接数已达上限',
+    hint: '请关闭部分实时页面或稍后再试',
   },
   [ERR.INTERNAL]: {
     message: '网关内部错误',

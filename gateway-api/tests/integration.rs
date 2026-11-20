@@ -1139,9 +1139,11 @@ mod point_write_integration {
         assert_eq!(v["results"][0]["value"], 42.5);
     }
 
-    /// collector 写失败 → HTTP 仍返回 200（业务失败不映射为 HTTP 错误），
-    /// 但统一信封给出 code=5101 + data=null（D-04 起与 `/api/devices/control/send`
-    /// 走同一条链路，失败码由 send_command 统一返回）
+    /// collector 写失败 → HTTP 500 + 统一信封 code=5101 + data=null。
+    ///
+    /// R1：单写此前用 `Json(ApiResponse::err(..))` 包装，被 `Json` 强制成 200，
+    /// 与 `/api/devices/control/send`（500）分叉。现在两条路径都走
+    /// `ApiResponse::IntoResponse`，5xxx 统一映射 500。
     #[tokio::test]
     async fn write_failure_returns_status_error() {
         let mut collectors: HashMap<String, Arc<dyn Collector>> = HashMap::new();
@@ -1156,7 +1158,7 @@ mod point_write_integration {
             .oneshot(write_req("p1", 1.0, Some(TOKEN)))
             .await
             .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let v = body_json(res).await;
         assert_eq!(v["code"], 5101);
         assert!(v["data"].is_null(), "写失败时不应带 data: {v}");

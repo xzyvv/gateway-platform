@@ -450,10 +450,18 @@ fn reject_request(
         path
     );
     log_access_limited(state, method, path, key, started);
-    // RFC 6585 §4：429 附 Retry-After: 1（秒），固定窗口最坏等待一个窗口
+    // RFC 6585 §4：429 附 Retry-After: 1（秒），固定窗口最坏等待一个窗口。
+    // R5：429 也走统一信封，给稳定业务码 4290，避免前端只能靠 HTTP 状态猜。
+    use crate::web::error_codes::RATE_LIMITED;
+    let body = serde_json::json!({
+        "code": RATE_LIMITED,
+        "message": "too many requests",
+        "error": "too many requests",
+    });
     (
         StatusCode::TOO_MANY_REQUESTS,
         [(axum::http::header::RETRY_AFTER, "1")],
+        axum::Json(body),
     )
         .into_response()
 }

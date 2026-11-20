@@ -224,7 +224,8 @@ async fn unified_write_single_entry_write_failure_returns_5101() {
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    // R1：单写失败与 send_command 一致返回 500，不再被 Json 包装成 200
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let v = body_json(res).await;
     assert_eq!(v["code"], 5101, "单写失败应返回 5101: {v}");
     assert!(v["data"].is_null(), "写失败时不应带 data: {v}");
@@ -247,7 +248,8 @@ async fn unified_write_single_entry_uncertain_returns_5102() {
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    // R1：5102 属服务端失败段，HTTP 500；客户端靠 body.code 区分「结果未知」
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let v = body_json(res).await;
     assert_eq!(v["code"], 5102, "写结果未知应返回 5102: {v}");
     let msg = v["message"].as_str().unwrap_or_default();
@@ -274,7 +276,8 @@ async fn unified_write_single_entry_definite_failure_stays_5101() {
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    // R1：明确失败仍是 500（业务码 5101 与 send_command 保持一致）
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let v = body_json(res).await;
     assert_eq!(v["code"], 5101, "明确失败应返回 5101: {v}");
     let msg = v["message"].as_str().unwrap_or_default();
@@ -515,8 +518,10 @@ async fn unified_write_single_entry_uncertain_readback_mismatch_stays_5102() {
         .unwrap();
 
     // 读回不等**证明不了**写没生效（设备可能限幅/联锁复位），因此保持 5102。
-    assert_eq!(res.status(), StatusCode::OK);
+    // R1 起单写失败与 send_command 一致走 ApiResponse::IntoResponse → HTTP 500。
+    let status = res.status();
     let v = body_json(res).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body = {v}");
     assert_eq!(v["code"], 5102);
     let msg = v["message"].as_str().unwrap();
     assert!(msg.contains("读回值 40"), "应把读回值带给操作员: {msg}");
