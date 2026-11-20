@@ -3,6 +3,7 @@
 mod limit;
 
 use super::*;
+use crate::web::error_codes as codes;
 use crate::web::types::BusConsumerKind;
 #[cfg(feature = "remote-shell")]
 use axum::response::IntoResponse;
@@ -244,7 +245,7 @@ pub(crate) async fn realtime_ws(
             );
             return ApiError {
                 status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                code: 8101,
+                code: codes::REALTIME_LIMIT as u32,
                 message: "too many realtime websocket connections".to_string(),
             }
             .into_response();

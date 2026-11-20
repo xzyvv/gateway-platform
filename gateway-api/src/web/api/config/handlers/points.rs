@@ -13,6 +13,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
+use crate::web::error_codes as codes;
 use gateway_core::config::allowed_function_codes;
 use gateway_core::engine::error::{GatewayError, GatewayResult};
 
@@ -115,7 +116,7 @@ pub async fn create_point(
         .map(|ds| ds.iter().any(|d| d.id == device_id))
         .unwrap_or(false);
     if !device_exists {
-        return Ok(ApiResponse::err(4004, "device not found"));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, "device not found"));
     }
     // Bug 108: 校验 ID 唯一性——避免覆盖已有测点（用户常常没意识到 id 已存在）。
     // BUG-H 同源：模板展开出来的点位虽然不在 cfg.points 里，但同样占用 id 空间，
@@ -126,18 +127,18 @@ pub async fn create_point(
             .any(|p| p.id == payload.id)
     {
         return Ok(ApiResponse::err(
-            4002,
+            codes::INVALID_PARAM,
             format!("point id '{}' 已存在", payload.id),
         ));
     }
     if let Err(e) = validate_point(&payload, &cfg) {
-        return Ok(ApiResponse::err(4002, e.message()));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, e.message()));
     }
     // N3: 总线/协议必须继承所属设备
     if let Err(msg) =
         validate_point_inherits_device(&cfg, &device_id, &payload.bus, &payload.protocol)
     {
-        return Ok(ApiResponse::err(4002, msg));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, msg));
     }
     let point = PointConfig {
         id: payload.id,
@@ -198,7 +199,7 @@ pub async fn update_point(
     // 只保留一份实现：此前这里内联复制了 7 条规则，改一边忘另一边就会
     // 出现「新增能过、改成同样值被拒」。
     if let Err(e) = validate_point(&payload, &cfg) {
-        return Ok(ApiResponse::err(4002, e.message()));
+        return Ok(ApiResponse::err(codes::INVALID_PARAM, e.message()));
     }
     // Bug 39: validate device_id existence if specified
     if let Some(did) = &payload.device_id {
@@ -209,7 +210,7 @@ pub async fn update_point(
             .unwrap_or(false);
         if !exists {
             return Ok(ApiResponse::err(
-                4004,
+                codes::NOT_FOUND,
                 format!("device id '{}' 不存在", did),
             ));
         }
@@ -228,7 +229,7 @@ pub async fn update_point(
         if let Err(msg) =
             validate_point_inherits_device(&cfg, &did, &payload.bus, &payload.protocol)
         {
-            return Ok(ApiResponse::err(4002, msg));
+            return Ok(ApiResponse::err(codes::INVALID_PARAM, msg));
         }
     }
     let found = cfg.points.iter_mut().find(|p| p.id == id).map(|p| {
@@ -281,7 +282,7 @@ pub async fn update_point(
         }
     });
     if found.is_none() {
-        return Ok(ApiResponse::err(4004, "point not found"));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, "point not found"));
     }
     apply_reload(&state, &old, cfg).await?;
     state
@@ -301,7 +302,7 @@ pub async fn delete_point(
     let old = state.config.load_full();
     let mut cfg = old.as_ref().clone();
     let Some(pos) = cfg.points.iter().position(|p| p.id == id) else {
-        return Ok(ApiResponse::err(4004, "point not found"));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, "point not found"));
     };
     let point = cfg.points.remove(pos);
     push_trash(
@@ -333,7 +334,7 @@ pub async fn restore_point(
         .as_ref()
         .and_then(|t| t.iter().position(|e| e.point.id == id))
     else {
-        return Ok(ApiResponse::err(4004, "point not found"));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, "point not found"));
     };
     // BUG-H 同源：模板展开出来的点位虽然不在 cfg.points 里，但同样占用 id 空间。
     // 恢复路径原先只查 cfg.points，会把「与模板点位同 id」的手动点位恢复回来，
@@ -344,7 +345,7 @@ pub async fn restore_point(
             .any(|p| p.id == id)
     {
         return Ok(ApiResponse::err(
-            4009,
+            codes::DUPLICATE_ID,
             "点位 id 已存在（含模板展开点位），无法恢复",
         ));
     }
@@ -364,14 +365,14 @@ pub async fn restore_point(
             .is_some_and(|ds| ds.iter().any(|d| d.id == did));
         if !exists {
             return Ok(ApiResponse::err(
-                4004,
+                codes::NOT_FOUND,
                 format!("所属设备 '{}' 已删除，请先重新创建该设备再恢复点位", did),
             ));
         }
     }
     let entry = match cfg.point_trash.as_mut() {
         Some(t) if pos < t.len() => t.remove(pos),
-        _ => return Ok(ApiResponse::err(4004, "point not found")),
+        _ => return Ok(ApiResponse::err(codes::NOT_FOUND, "point not found")),
     };
     if cfg.point_trash.as_ref().is_some_and(|t| t.is_empty()) {
         cfg.point_trash = None;
@@ -414,7 +415,7 @@ pub async fn purge_point(
         None => 0,
     };
     if removed == 0 {
-        return Ok(ApiResponse::err(4004, "point not found"));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, "point not found"));
     }
     if cfg.point_trash.as_ref().is_some_and(|t| t.is_empty()) {
         cfg.point_trash = None;

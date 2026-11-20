@@ -8,6 +8,7 @@
 //! 仅多 `include_secrets` 分支，已合并进 `GET /api/config`（见 system handlers）。
 
 use super::*;
+use crate::web::error_codes as codes;
 use gateway_core::engine::error::{GatewayError, GatewayResult};
 // ===== 配置导入 + 热重载 =====
 
@@ -21,7 +22,7 @@ pub async fn import_config(
     // 与磁盘加载路径保持一致——恢复流程不该被 400 卡死。降级说明随响应返回。
     let downgraded = sanitize_imported_config(&mut payload.config);
     if let Err(e) = validate_config(&payload.config) {
-        return Ok(ApiResponse::err(4003, e.message()));
+        return Ok(ApiResponse::err(codes::CONFIG_APPLY_FAILED, e.message()));
     }
     // D2: 串行化「读→改→写」
     let _guard = state.config.config_reload_lock.lock().await;

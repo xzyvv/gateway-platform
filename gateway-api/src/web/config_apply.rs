@@ -29,6 +29,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::web::error::ApiError;
+use crate::web::error_codes as codes;
 use crate::web::types::AppState;
 use gateway_core::config::{reload_scope, GatewayConfig, PointConfig, ReloadScope};
 use gateway_core::north::server::ActivePointSet;
@@ -483,7 +484,7 @@ pub(crate) fn ensure_system_secrets_allowed(
         );
         return Err(ApiError {
             status: axum::http::StatusCode::FORBIDDEN,
-            code: 8005,
+            code: codes::SENSITIVE_FIELD_DENIED as u32,
             message: "changing system credentials requires the primary api token".to_string(),
         });
     }

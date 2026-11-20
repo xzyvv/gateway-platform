@@ -8,6 +8,7 @@ use axum::{
 };
 
 use crate::web::error::ApiError;
+use crate::web::error_codes as codes;
 use crate::web::types::AppState;
 
 /// 已认证的 API 密钥（鉴权中间件写入 request extensions）。
@@ -192,7 +193,7 @@ pub(crate) async fn require_admin_or_exec_scope(
                 } else {
                     ApiError {
                         status: StatusCode::FORBIDDEN,
-                        code: 8004,
+                        code: codes::API_KEY_SCOPE as u32,
                         message: "api key lacks diagnostics exec scope".to_string(),
                     }
                     .into_response()
@@ -240,7 +241,7 @@ fn authenticate_api_key(
                     );
                     return Err(ApiError {
                         status: StatusCode::FORBIDDEN,
-                        code: 8003,
+                        code: codes::API_KEY_NO_WRITE as u32,
                         message: "api key lacks write scope".to_string(),
                     });
                 }

@@ -8,6 +8,7 @@
 //! - POST /api/certificates/renew  -> renew_certificate
 
 use super::*;
+use crate::web::error_codes as codes;
 use x509_parser::prelude::*;
 
 /// 证书信息（与前端 Certificate 类型对齐）
@@ -69,8 +70,11 @@ pub(crate) async fn list_certificates(
                     (subject, issuer, valid_from, valid_to, serial, fp)
                 }
                 Err(e) => {
-                    // 5001：证书解析失败（服务端错误，区间映射为 HTTP 500）
-                    return Ok(ApiResponse::err(5001, format!("parse cert failed: {}", e)));
+                    // CERT_PARSE_FAILED(5001)：证书解析失败（服务端错误，区间映射为 HTTP 500）
+                    return Ok(ApiResponse::err(
+                        codes::CERT_PARSE_FAILED,
+                        format!("parse cert failed: {}", e),
+                    ));
                 }
             };
 

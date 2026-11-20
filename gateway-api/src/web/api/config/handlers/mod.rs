@@ -10,6 +10,7 @@
 
 // 重新导出父模块（config）的 import，供子 handler 通过 use super::* 引用
 pub(crate) use super::*;
+use crate::web::error_codes as codes;
 
 pub mod bus_control;
 pub mod config;
@@ -73,7 +74,7 @@ pub(crate) fn ensure_primary_token(
     } else {
         Err(ApiError {
             status: axum::http::StatusCode::FORBIDDEN,
-            code: 8005,
+            code: codes::SENSITIVE_FIELD_DENIED as u32,
             message: "plaintext export requires the primary api token".to_string(),
         })
     }

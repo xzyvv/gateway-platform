@@ -1,13 +1,14 @@
 //! 统一错误码表（业务码的唯一来源）
 //!
-//! 此前码值散落在各 handler / 中间件里（`ApiResponse::err(4003, ..)`、
+//! 码值曾在各 handler / 中间件里直接写数字（`ApiResponse::err(4003, ..)`、
 //! `ApiError { code: 8005, .. }`），前端 `errorCodes.ts` 再手工抄一份，
 //! 结果是「后端加码、前端没登记」「同一语义两个码」反复发生。本模块把
 //! **码值 + 含义 + HTTP 映射**收敛到一处：
 //!
-//! - 后端新增错误码：先在这里加常量并登记到 [`ALL_CODES`]
-//! - 前端照 `ALL_CODES` 补文案（有 `all_literal_codes_in_source_are_registered`
-//!   测试兜住「源码里写死但没登记」的漏网之鱼）
+//! - 后端新增错误码：先在这里加常量并登记到 [`ALL_CODES`]，调用处一律
+//!   `use crate::web::error_codes as codes;` 引用常量，不再写字面量
+//! - 前端照 `ALL_CODES` 补文案（有 `no_literal_codes_outside_code_table`
+//!   测试兜住「handler 里又写死裸数字」的回归）
 //!
 //! ## 分段约定（改段前先想清楚 HTTP 语义）
 //!
@@ -268,31 +269,32 @@ mod tests {
         assert_eq!(http_status(OK), StatusCode::OK);
     }
 
-    /// 防漂移：`src/web` 下直接写字面量码的地方（`::err(4003`、`code: 8005`）
-    /// 必须已登记到 [`ALL_CODES`]。新增码忘了登记时这里会失败。
+    /// 防漂移（强）：`src/web` 下（本文件除外）不允许再出现字面量业务码。
+    ///
+    /// 早期只校验「字面量必须已登记」，漏洞是：写字面量永远不会报错，于是
+    /// 码值散落、语义与常量名分叉（同一 4001 在 devices 里表示「设备校验失败」，
+    /// 在码表里是 BUS_MISSING）。O1 把 40 处字面量全部改为常量引用后，这里
+    /// 收紧为「零字面量」——新增 handler 再写裸数字会直接红。
     #[test]
-    fn all_literal_codes_in_source_are_registered() {
+    fn no_literal_codes_outside_code_table() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/web");
         let mut files = Vec::new();
         collect_rs(&root, &mut files);
         assert!(!files.is_empty(), "没找到源码文件，路径不对？");
 
-        let mut unknown = Vec::new();
+        let mut offenders = Vec::new();
         for file in files {
-            // 本文件就是码表定义与示例的所在地，扫描它只会命中常量定义本身。
             if file.file_name().and_then(|n| n.to_str()) == Some("error_codes.rs") {
                 continue;
             }
             let src = std::fs::read_to_string(&file).expect("read source");
             for code in extract_literal_codes(&src) {
-                if !is_known(code) {
-                    unknown.push((file.display().to_string(), code));
-                }
+                offenders.push((file.display().to_string(), code));
             }
         }
         assert!(
-            unknown.is_empty(),
-            "源码中出现了未登记的错误码: {unknown:?}"
+            offenders.is_empty(),
+            "handler/中间件里出现了字面量错误码，请改用 `codes::XXX`：{offenders:?}"
         );
     }
 

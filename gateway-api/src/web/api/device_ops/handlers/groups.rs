@@ -1,7 +1,8 @@
 //! 设备分组 CRUD handler
 //!
 //! 持久化到 GatewayConfig.device_groups
-//! 错误码：6001 名称为空/重复 / 6002 不存在，HTTP 400（见 `ApiResponse::into_response` 的区间映射）
+//! 错误码：GROUP_INVALID(6001) 名称为空/重复 / GROUP_NOT_FOUND(6002) 不存在，
+//! HTTP 400（见 `ApiResponse::into_response` 的区间映射）
 //!
 //! 注意：handler 直接返回 `ApiResponse<T>` 而不是 `Json<ApiResponse<T>>`。
 //! 包一层 `Json` 会走 axum 默认的 200 状态码，`ApiResponse::into_response` 里的
@@ -15,6 +16,7 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::web::error_codes as codes;
 use crate::web::types::{ApiError, ApiResponse, AppState};
 use gateway_core::config::DeviceGroup;
 
@@ -45,7 +47,7 @@ pub(crate) async fn create_group(
     Json(payload): Json<CreateGroupRequest>,
 ) -> Result<ApiResponse<DeviceGroup>, ApiError> {
     if payload.name.trim().is_empty() {
-        return Ok(ApiResponse::err(6001, "组名不能为空"));
+        return Ok(ApiResponse::err(codes::GROUP_INVALID, "组名不能为空"));
     }
     let _guard = state.config.config_reload_lock.lock().await;
     let old = state.config.load_full();
@@ -53,7 +55,7 @@ pub(crate) async fn create_group(
     let groups = new_cfg.device_groups.get_or_insert_with(Vec::new);
     if groups.iter().any(|g| g.name == payload.name) {
         return Ok(ApiResponse::err(
-            6001,
+            codes::GROUP_INVALID,
             format!("组名 '{}' 已存在", payload.name),
         ));
     }
@@ -107,12 +109,12 @@ pub(crate) async fn update_group(
     let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
-        None => return Ok(ApiResponse::err(6002, "group not found")),
+        None => return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found")),
     };
     let found = groups.iter_mut().find(|g| g.id == id);
     let g = match found {
         Some(g) => g,
-        None => return Ok(ApiResponse::err(6002, "group not found")),
+        None => return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found")),
     };
     if let Some(name) = payload.name {
         g.name = name;
@@ -143,12 +145,12 @@ pub(crate) async fn delete_group(
     let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
-        None => return Ok(ApiResponse::err(6002, "group not found")),
+        None => return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found")),
     };
     let before = groups.len();
     groups.retain(|g| g.id != id);
     if groups.len() == before {
-        return Ok(ApiResponse::err(6002, "group not found"));
+        return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found"));
     }
     let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;
     state
@@ -180,11 +182,11 @@ pub(crate) async fn add_device_to_group(
     let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
-        None => return Ok(ApiResponse::err(6002, "group not found")),
+        None => return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found")),
     };
     let g = match groups.iter_mut().find(|g| g.id == group_id) {
         Some(g) => g,
-        None => return Ok(ApiResponse::err(6002, "group not found")),
+        None => return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found")),
     };
     if !g.device_ids.contains(&device_id) {
         g.device_ids.push(device_id.clone());
@@ -206,11 +208,11 @@ pub(crate) async fn remove_device_from_group(
     let mut new_cfg = old.as_ref().clone();
     let groups = match new_cfg.device_groups.as_mut() {
         Some(g) => g,
-        None => return Ok(ApiResponse::err(6002, "group not found")),
+        None => return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found")),
     };
     let g = match groups.iter_mut().find(|g| g.id == group_id) {
         Some(g) => g,
-        None => return Ok(ApiResponse::err(6002, "group not found")),
+        None => return Ok(ApiResponse::err(codes::GROUP_NOT_FOUND, "group not found")),
     };
     g.device_ids.retain(|d| d != &device_id);
     let _ = crate::web::config_apply::persist_then_apply(&state, &old, &new_cfg).await?;

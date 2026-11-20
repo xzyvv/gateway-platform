@@ -8,6 +8,7 @@
 
 use super::points::cascade_points_of_device;
 use super::*;
+use crate::web::error_codes as codes;
 use gateway_core::engine::error::{GatewayError, GatewayResult};
 // ===== 设备 CRUD =====
 
@@ -20,11 +21,11 @@ pub async fn list_devices(
     Ok(Json(ApiResponse::ok(devices)))
 }
 
-// Bug 106: 错误码体系——
-//   4001: 设备相关校验失败（payload 字段缺失/格式错误）
-//   4002: 测点相关校验失败
-//   4003: 配置导入校验失败
-//   4004: 资源不存在（device not found / point not found）
+// Bug 106: 错误码体系（统一取自 `web::error_codes`，不要再写裸数字）——
+//   BUS_MISSING(4001): 设备相关校验失败（payload 字段缺失/格式错误）
+//   INVALID_PARAM(4002): 测点相关校验失败
+//   CONFIG_APPLY_FAILED(4003): 配置导入校验失败
+//   NOT_FOUND(4004): 资源不存在（device not found / point not found）
 // 客户端可根据错误码区分处理策略（重试/弹窗/重定向）。
 
 /// POST /api/devices — 新增设备
@@ -37,7 +38,7 @@ pub async fn create_device(
     let old = state.config.load_full();
     let mut cfg = old.as_ref().clone();
     if let Err(e) = validate_device(&payload, &cfg) {
-        return Ok(ApiResponse::err(4001, e.message()));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, e.message()));
     }
     // S2: 设备 ID 唯一性校验。原实现直接 `devices.push(device)`，同 ID 可并存；
     // 而 delete_device 按 id 全量 retain，删一台会连带删掉同 ID 的另一台及其全部点位。
@@ -47,23 +48,23 @@ pub async fn create_device(
         .is_some_and(|ds| ds.iter().any(|d| d.id == payload.id))
     {
         return Ok(ApiResponse::err(
-            4001,
+            codes::BUS_MISSING,
             format!("device id '{}' 已存在，请换一个设备名重试", payload.id),
         ));
     }
     // S1: 模板存在性校验。此前填任意字符串都能创建成功，直到展开阶段静默失效成 0 点位。
     if let Err(msg) = validate_template_exists(&state, &payload.template) {
-        return Ok(ApiResponse::err(4001, msg));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
     }
     // N1: 总线存在性校验。此前总线填错也能创建成功，采集器按 bus 建不起来
     // （仅日志 warn "no collector for bus"），设备永远采不到数据且界面无任何提示。
     if let Err(msg) = validate_bus_exists(&cfg, &payload.bus) {
-        return Ok(ApiResponse::err(4001, msg));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
     }
     // N2: 设备协议必须与模板协议一致。模板展开点位时用的是 device.protocol，
     // 选 DLT645 模板却填 modbus 会按 modbus 去读 DLT645 地址，必然全部失败。
     if let Err(msg) = validate_template_protocol(&state, &payload.template, &payload.protocol) {
-        return Ok(ApiResponse::err(4001, msg));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
     }
     let device = DeviceConfig {
         id: payload.id,
@@ -103,35 +104,35 @@ pub async fn update_device(
     let mut cfg = old.as_ref().clone();
     // Bug 38: validate payload fields (skip uniqueness check, ID unchanged)
     if payload.name.is_empty() {
-        return Ok(ApiResponse::err(4001, "device name 不能为空"));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, "device name 不能为空"));
     }
     if payload.protocol.is_empty() {
-        return Ok(ApiResponse::err(4001, "protocol 不能为空"));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, "protocol 不能为空"));
     }
     if payload.bus.is_empty() {
-        return Ok(ApiResponse::err(4001, "bus 不能为空"));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, "bus 不能为空"));
     }
     if payload.template.is_empty() {
-        return Ok(ApiResponse::err(4001, "template 不能为空"));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, "template 不能为空"));
     }
     // Bug 109: 复用 VALID_PROTOCOLS 常量，与 update_point 保持一致。
     if !VALID_PROTOCOLS.contains(&payload.protocol.as_str()) {
         return Ok(ApiResponse::err(
-            4001,
+            codes::BUS_MISSING,
             format!("不支持的协议: {}", payload.protocol),
         ));
     }
     // S1: 编辑时同样校验模板存在性（模板名可在弹窗里被改错）。
     if let Err(msg) = validate_template_exists(&state, &payload.template) {
-        return Ok(ApiResponse::err(4001, msg));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
     }
     // N1/N2: 编辑时同样校验总线存在性与模板协议一致性，否则改一次设备就把
     // 原本合法的配置改坏，且同样是静默失效。
     if let Err(msg) = validate_bus_exists(&cfg, &payload.bus) {
-        return Ok(ApiResponse::err(4001, msg));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
     }
     if let Err(msg) = validate_template_protocol(&state, &payload.template, &payload.protocol) {
-        return Ok(ApiResponse::err(4001, msg));
+        return Ok(ApiResponse::err(codes::BUS_MISSING, msg));
     }
     let found = with_devices_mut(&mut cfg, |devices| {
         devices.iter_mut().find(|d| d.id == id).map(|d| {
@@ -145,7 +146,7 @@ pub async fn update_device(
         })
     });
     if found.is_none() {
-        return Ok(ApiResponse::err(4004, "device not found"));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, "device not found"));
     }
     apply_reload(&state, &old, cfg).await?;
     state.platform.audit.log(
@@ -176,7 +177,7 @@ pub async fn delete_device(
         removed = devices.len() != before;
     }
     if !removed {
-        return Ok(ApiResponse::err(4004, "device not found"));
+        return Ok(ApiResponse::err(codes::NOT_FOUND, "device not found"));
     }
     // 级联删除该设备下所有测点（依赖 PointConfig.device_id 字段）。
     // 走 cascade_points_of_device 而非直接 retain：点位先进回收站，
