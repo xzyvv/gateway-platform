@@ -24,6 +24,7 @@ async fn transaction_fails_fast_bus_closed_when_task_dead() {
         // 该用例不涉及串口帧耗时估算，baud=None 即退回配置超时
         baud: None,
         ascii_frame: false,
+        is_modbus: true,
         variant: None,
         asdu_addr_len: 2,
         opcua: None,
@@ -618,6 +619,33 @@ async fn adaptive_timeout_covers_frame_time_at_low_baud() {
     assert_eq!(
         bm.effective_attempt_timeout(&write, None),
         std::time::Duration::from_millis(200)
+    );
+    drop(bm);
+}
+
+#[tokio::test]
+async fn adaptive_timeout_is_disabled_for_non_modbus_protocol() {
+    // DLT645 / CJT188 的请求第 2 字节是地址字段，可能恰好等于 0x01~0x04，
+    // 若不按协议隔离就会被误判成 Modbus 读功能码而错误放大超时。
+    let cfg = BusConfig {
+        port_name: "bus_dlt645_adaptive".into(),
+        protocol: "dlt645".into(),
+        tcp_addr: None,
+        baud_rate: 9600,
+        timeout_ms: 200,
+        ..Default::default()
+    };
+    let bm = BusManager::spawn_with(
+        &cfg,
+        None,
+        Arc::new(crate::engine::metrics::Metrics::new()),
+        BusDeps::production(),
+    );
+    let fake_modbus_read = vec![0x68u8, 0x03, 0, 0, 0, 125, 0, 0];
+    assert_eq!(
+        bm.effective_attempt_timeout(&fake_modbus_read, Some(125)),
+        std::time::Duration::from_millis(200),
+        "非 Modbus 总线不得套用帧长估算"
     );
     drop(bm);
 }

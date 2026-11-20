@@ -142,6 +142,12 @@ pub struct BusManager {
     /// 是否 Modbus ASCII 变体：每个 RTU 字节会展开成 2 个十六进制字符，
     /// 线上耗时约为 RTU 的 2.2 倍，估算帧时间时按 22 bit/byte 计。
     ascii_frame: bool,
+    /// 是否 Modbus 协议族。
+    ///
+    /// 自适应读超时靠「请求第 2 字节是功能码」反推响应帧长，这个前提只在
+    /// Modbus 下成立：DLT645 / CJT188 的第 2 字节是地址字段，可能恰好等于
+    /// 0x01~0x04 而被误判成读功能码，导致按错误的帧长放大超时。
+    is_modbus: bool,
     /// 协议变体（决策表 #24）：由 [`BusConfig::effective_variant`] 解析后的统一取值。
     /// 采集器按此分派帧构建逻辑（如 dlt645 版本、cjt188 方言、modbus ascii）。
     variant: Option<String>,
@@ -216,6 +222,9 @@ impl BusManager {
             .effective_variant()
             .as_deref()
             .is_some_and(|v| v.eq_ignore_ascii_case("ascii"));
+        // 自适应读超时的帧长估算依赖「请求第 2 字节 = Modbus 功能码」这一前提，
+        // 只在 Modbus 协议族下启用（DLT645/CJT188 的该字节是地址字段）。
+        let is_modbus = bus.protocol.to_ascii_lowercase().contains("modbus");
 
         let handle = crate::engine::supervision::spawn_catch_unwind(
             "bus_task",
@@ -232,6 +241,7 @@ impl BusManager {
             retry_delay,
             baud,
             ascii_frame,
+            is_modbus,
             variant: bus.effective_variant(),
             asdu_addr_len: bus.asdu_addr_len.unwrap_or(2),
             opcua: bus.opcua.clone(),
@@ -465,6 +475,10 @@ impl BusManager {
         expected_count: Option<u16>,
     ) -> Duration {
         let base = self.io_timeout();
+        if !self.is_modbus {
+            // 非 Modbus 协议：无法从请求字节反推响应帧长，维持配置超时
+            return base;
+        }
         let (Some(baud), Some(bytes)) = (self.baud, estimated_response_bytes(request, expected_count))
         else {
             return base;
