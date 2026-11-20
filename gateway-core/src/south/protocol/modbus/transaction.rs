@@ -70,6 +70,13 @@ pub struct MbapHeader {
 /// 单个事务的等待者：发出请求时创建，收到响应时通知
 type Waiter = oneshot::Sender<Result<Vec<u8>, TransactionError>>;
 
+/// 池满时等待槽位释放的上限。
+///
+/// 取 50ms：足够消化「上一批响应刚好到达」这类瞬时拥塞（一次往返量级），
+/// 又不会把本次事务「写 socket + 等响应」的预算吃光（实际还会再取
+/// `min(50ms, 本次截止时间/4)`）。
+const SLOT_WAIT_MAX: Duration = Duration::from_millis(50);
+
 /// 事务请求
 #[derive(Clone)]
 pub struct ModbusRequest {
@@ -122,6 +129,11 @@ pub struct TransactionPool {
     reader_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
     /// reader 退出信号
     shutdown: Arc<Notify>,
+    /// 槽位释放信号：事务结束（响应到达 / 超时 / 写失败 / 连接断开）时通知等待者。
+    ///
+    /// 配合 [`TransactionPool::acquire_slot`] 的短等待退避：池满时先等一个槽位，
+    /// 而不是立刻返回 Busy 让调用方整笔失败。
+    slot_freed: Arc<Notify>,
 }
 
 // 控制事务保留槽位的公式统一放在 `south::bus::reserved_control_slots`：
@@ -141,6 +153,7 @@ impl TransactionPool {
             writer: None,
             reader_handle: parking_lot::Mutex::new(None),
             shutdown: Arc::new(Notify::new()),
+            slot_freed: Arc::new(Notify::new()),
         })
     }
 
@@ -158,6 +171,7 @@ impl TransactionPool {
             writer: Some(Arc::new(Mutex::new(write_half))),
             reader_handle: parking_lot::Mutex::new(None),
             shutdown: shutdown.clone(),
+            slot_freed: Arc::new(Notify::new()),
         });
 
         // 启动 reader loop：读到响应按 tx_id 路由，断开则 abort_all
@@ -189,6 +203,10 @@ impl TransactionPool {
     ///
     /// 修复(第二批#5)：普通事务的准入上限收紧到 `max_concurrent - reserved_control`，
     /// 使写指令永远有位置可用（此前 8 个采集在途时写会直接拿到 Busy）。
+    ///
+    /// 修复(第四批#1)：池满时先做**短等待退避**（`acquire_slot`），
+    /// 而不是立刻返回 Busy 让整笔事务失败。瞬时拥塞（上一批响应刚好到达）
+    /// 是常态，直接失败等于把可恢复的瞬时问题变成硬错误。
     pub async fn submit_with_priority(
         &self,
         request: ModbusRequest,
@@ -201,21 +219,10 @@ impl TransactionPool {
             .clone();
 
         // 1. 容量检查 + 分配 tx_id + 注册 waiter（持锁内完成，避免超卖）
-        let (tx_id, reply_rx) = {
-            let mut active = self.active.lock().await;
-            let limit = if control {
-                self.max_concurrent
-            } else {
-                self.max_concurrent.saturating_sub(self.reserved_control)
-            };
-            if active.len() >= limit.max(1) {
-                return Err(TransactionError::Busy);
-            }
-            let tx_id = self.next_tx_id(); // 跳过 0
-            let (reply_tx, reply_rx) = oneshot::channel();
-            active.insert(tx_id, reply_tx);
-            (tx_id, reply_rx)
-        };
+        //    池满时最多等待 SLOT_WAIT_MAX，且不超过本次事务截止时间的 1/4，
+        //    避免等待把后续「写 + 等响应」的预算吃光。
+        let wait_budget = SLOT_WAIT_MAX.min(request.deadline / 4);
+        let (tx_id, reply_rx) = self.acquire_slot(control, wait_budget).await?;
 
         // 2. 构造 MBAP 帧
         // C20: 帧构造可能失败（PDU > 253 字节），原实现用 `?` 直接返回，但此时
@@ -226,6 +233,7 @@ impl TransactionPool {
             Ok(f) => f,
             Err(e) => {
                 self.active.lock().await.remove(&tx_id);
+                self.release_slot();
                 return Err(e);
             }
         };
@@ -256,6 +264,7 @@ impl TransactionPool {
                 Ok(Err(e)) => {
                     // 写失败：移除 waiter 避免泄漏槽位
                     self.active.lock().await.remove(&tx_id);
+                    self.release_slot();
                     return Err(TransactionError::Io(e));
                 }
                 Err(_) => {
@@ -286,6 +295,7 @@ impl TransactionPool {
             Err(_) => {
                 // 超时：移除 waiter 防止后续晚到响应顶替他人
                 self.active.lock().await.remove(&tx_id);
+                self.release_slot();
                 Err(TransactionError::Timeout(request.deadline))
             }
         }
@@ -302,9 +312,63 @@ impl TransactionPool {
         }
     }
 
+    /// 申请一个并发槽位并注册 waiter；池满时做短等待退避。
+    ///
+    /// 修复(第四批#1)：原实现池满即返回 `Busy`，把「瞬时拥塞」变成硬失败。
+    /// 现在最多等待 `wait_budget`：
+    /// - 等到槽位 → 正常提交（绝大多数瞬时拥塞在这一步被消化）；
+    /// - 等不到 → 仍返回 `Busy`，由上层按既有语义重试/报「总线忙」。
+    ///
+    /// 等待登记顺序：先建 `notified` 未来再检查容量，避免「检查到有槽位之后、
+    /// 真正 await 之前」发生的释放被漏掉（Notify 的 permit 语义可兜底）。
+    pub(crate) async fn acquire_slot(
+        &self,
+        control: bool,
+        wait_budget: Duration,
+    ) -> Result<(u16, oneshot::Receiver<Result<Vec<u8>, TransactionError>>), TransactionError> {
+        let limit = if control {
+            self.max_concurrent
+        } else {
+            self.max_concurrent.saturating_sub(self.reserved_control)
+        }
+        .max(1);
+        let deadline = tokio::time::Instant::now() + wait_budget;
+        loop {
+            let notified = self.slot_freed.notified();
+            tokio::pin!(notified);
+            {
+                let mut active = self.active.lock().await;
+                if active.len() < limit {
+                    let tx_id = self.next_tx_id(); // 跳过 0
+                    let (reply_tx, reply_rx) = oneshot::channel();
+                    active.insert(tx_id, reply_tx);
+                    return Ok((tx_id, reply_rx));
+                }
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(TransactionError::Busy);
+            }
+            // 等一个槽位释放通知；超时则放弃等待（上面循环再判一次容量）
+            if timeout(remaining, notified).await.is_err() {
+                return Err(TransactionError::Busy);
+            }
+        }
+    }
+
+    /// 槽位释放通知：唤醒等待中的提交者。
+    ///
+    /// 同时用 `notify_waiters`（唤醒已在等待的）与 `notify_one`（留一个 permit
+    /// 给稍后才进入等待的提交者），避免「释放发生在检查与 await 之间」被漏掉。
+    fn release_slot(&self) {
+        self.slot_freed.notify_waiters();
+        self.slot_freed.notify_one();
+    }
+
     /// 把收到的响应路由到对应的 waiter。reader_loop 调用。
     pub async fn deliver(&self, tx_id: u16, payload: Vec<u8>) {
         if let Some(reply) = self.active.lock().await.remove(&tx_id) {
+            self.release_slot();
             let _ = reply.send(Ok(payload));
         }
     }
@@ -317,6 +381,9 @@ impl TransactionPool {
         let count = waiters.len();
         for (_, reply) in waiters {
             let _ = reply.send(Err(TransactionError::Disconnected));
+        }
+        if count > 0 {
+            self.release_slot();
         }
         count
     }

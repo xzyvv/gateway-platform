@@ -306,10 +306,70 @@ use crate::config::BusConfig;
 use crate::engine::metrics::Metrics;
 use crate::south::bus::{BusDeps, BusManager};
 use crate::south::protocol::Collector;
+use crate::south::protocol::modbus::transaction::TransactionPool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+// =========================================================================
+// 第四批#1: 池满时短等待退避（原先池满即 Busy，瞬时拥塞直接失败）
+// =========================================================================
+
+#[tokio::test]
+async fn pool_waits_for_slot_instead_of_failing_immediately() {
+    let pool = TransactionPool::new(1);
+    // 1 槽池：先占满
+    let (tx_id, _rx) = pool.acquire_slot(false, Duration::from_millis(50)).await.unwrap();
+
+    // 池满 + 等待预算耗尽 → 仍应返回 Busy（语义不变，只是多等了一会儿）
+    let t0 = std::time::Instant::now();
+    let r = pool.acquire_slot(false, Duration::from_millis(20)).await;
+    assert!(r.is_err(), "池满且等待预算耗尽必须返回 Busy");
+    assert!(
+        t0.elapsed() >= Duration::from_millis(20),
+        "必须真的等待了预算时长，而不是立刻失败：{:?}",
+        t0.elapsed()
+    );
+
+    // 槽位释放后，等待者应能立刻拿到（而不是自己失败）
+    let pool2 = pool.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        pool2.deliver(tx_id, vec![]).await;
+    });
+    let t1 = std::time::Instant::now();
+    let (tx2, _rx2) = pool
+        .acquire_slot(false, Duration::from_millis(500))
+        .await
+        .expect("槽位释放后应能拿到槽位");
+    assert!(
+        t1.elapsed() >= Duration::from_millis(20),
+        "应当等到槽位释放才返回：{:?}",
+        t1.elapsed()
+    );
+    assert_ne!(tx2, tx_id, "tx_id 不能复用");
+}
+
+#[tokio::test]
+async fn pool_control_transaction_reserves_slots_under_pressure() {
+    // 8 槽池：普通事务上限 6，控制事务上限 8
+    let pool = TransactionPool::new(8);
+    let mut held = Vec::new();
+    for _ in 0..6 {
+        held.push(pool.acquire_slot(false, Duration::from_millis(10)).await.unwrap());
+    }
+    // 普通事务再来一个：必须等不到（上限 6 已满）
+    assert!(pool
+        .acquire_slot(false, Duration::from_millis(20))
+        .await
+        .is_err());
+    // 控制事务仍有保留槽可用
+    assert!(pool
+        .acquire_slot(true, Duration::from_millis(20))
+        .await
+        .is_ok());
+}
 
 /// 假 Modbus TCP 服务端：accept 一次，读走 MBAP 请求，按 `pdu` 回一帧 MBAP 响应。
 async fn spawn_modbus_tcp_stub(pdu: Vec<u8>) -> String {
