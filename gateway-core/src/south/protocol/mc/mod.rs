@@ -30,8 +30,8 @@ use tokio::sync::Mutex;
 use crate::config::PointConfig;
 use crate::engine::model::{DataPoint, PointDataType, Quality};
 use crate::south::protocol::{
-    convert_value, mark_write_uncertain, reverse_convert, Collector, CollectorError, CollectorResult,
-    ResultSlots,
+    convert_value, mark_write_uncertain, reverse_convert, Collector, CollectorError,
+    CollectorResult, ResultSlots,
 };
 
 pub(crate) mod frames;

@@ -318,7 +318,10 @@ async fn test_write_end_code_nonzero_is_device_rejected() {
     let p = point("p1", "D100", "u16");
     let err = c.write(&p, 1234.0).await.expect_err("结束码非零应失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::DeviceRejected(_)
+        ),
         "unexpected: {err:?}"
     );
 }
@@ -331,7 +334,10 @@ async fn test_write_no_reply_is_uncertain() {
     let p = point("p1", "D100", "u16");
     let err = c.write(&p, 1234.0).await.expect_err("无应答应失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::WriteUncertain(_)
+        ),
         "unexpected: {err:?}"
     );
 }
@@ -461,7 +467,10 @@ async fn test_e2e_cpu_control_end_code_rejected() {
     let err = c.write(&p, 1.0).await.expect_err("结束码非零应失败");
     // 设备明确回了结束码 → DeviceRejected（明确失败，写确定未生效，可安全重试）
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::DeviceRejected(_)
+        ),
         "unexpected: {err:?}"
     );
 }

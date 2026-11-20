@@ -210,7 +210,9 @@ impl Metrics {
     /// 非 0 说明上一帧没收完整：这是区分「设备回帧不完整」与「总线噪声导致
     /// CRC 算错」的唯一直接证据，两者返回给上层的错误码完全一样。
     pub fn inc_bus_stale_bytes(&self, bytes: u64) {
-        self.bus.stale_bytes_dropped.fetch_add(bytes, Ordering::Relaxed);
+        self.bus
+            .stale_bytes_dropped
+            .fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// 写结果未知计数（写帧已下发但未收到可确认的应答）。
@@ -218,7 +220,9 @@ impl Metrics {
     /// 这些写**可能已生效**，不应自动重发；该计数用于评估发生比例，
     /// 以及后续读回消歧方案能消掉多少。
     pub fn inc_write_uncertain(&self) {
-        self.bus.write_uncertain_total.fetch_add(1, Ordering::Relaxed);
+        self.bus
+            .write_uncertain_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// 总线排队深度 -1（总线 task 取出事务时调用，含调用方已放弃的过期事务）。

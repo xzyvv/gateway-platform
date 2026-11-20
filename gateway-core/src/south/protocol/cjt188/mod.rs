@@ -377,9 +377,8 @@ impl Cjt188Collector {
             .await
             .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
         // 应答已收到：解析失败 → 结果未知；状态字非 0 → DeviceRejected（明确失败）
-        self.parse_write_response(&response, addr_bytes, 0x04).map_err(|e| {
-            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
-        })
+        self.parse_write_response(&response, addr_bytes, 0x04)
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))
     }
 
     /// 写通信地址（控制码 0x15，响应控制码 0x95），仅 V2004 标准方言。
@@ -425,9 +424,8 @@ impl Cjt188Collector {
             .transaction_no_retry(request, None, BusPriority::Control)
             .await
             .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
-        self.parse_write_response(&response, addr_bytes, 0x15).map_err(|e| {
-            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
-        })
+        self.parse_write_response(&response, addr_bytes, 0x15)
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))
     }
 
     /// 通用写响应解析：校验响应控制码（0x80 | request_ctrl）与 STATUS 字节。

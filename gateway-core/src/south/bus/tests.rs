@@ -541,7 +541,11 @@ async fn read_concurrency_reserves_slots_for_control() {
     let bm = BusManager::spawn_with(&tcp, None, metrics(), BusDeps::production());
     assert_eq!(bm.max_concurrency(), 8);
     // 8 槽留 2 给写：采集只能用 6，否则多出的 2 个并发提交即 Busy
-    assert_eq!(bm.read_concurrency(), 6, "采集并发必须等于池对普通事务的准入上限");
+    assert_eq!(
+        bm.read_concurrency(),
+        6,
+        "采集并发必须等于池对普通事务的准入上限"
+    );
     drop(bm);
 
     // 小容量不能被保留槽饿死

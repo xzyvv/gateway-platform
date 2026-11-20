@@ -193,7 +193,10 @@ async fn write_error_response_is_device_rejected() {
 
     let err = c.write(&p, 123.5).await.expect_err("设备拒绝应失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::DeviceRejected(_)
+        ),
         "unexpected: {err:?}"
     );
 }
@@ -208,7 +211,10 @@ async fn write_no_reply_is_uncertain() {
 
     let err = c.write(&p, 123.5).await.expect_err("无应答应失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::WriteUncertain(_)
+        ),
         "unexpected: {err:?}"
     );
 }

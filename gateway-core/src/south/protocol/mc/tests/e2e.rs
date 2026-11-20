@@ -118,7 +118,10 @@ async fn test_write_end_code_nonzero_is_device_rejected() {
     p.address = "D100".to_string();
     let err = c.write(&p, 1234.0).await.expect_err("结束码非零应失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::DeviceRejected(_)
+        ),
         "unexpected: {err:?}"
     );
 }
@@ -132,7 +135,10 @@ async fn test_write_no_reply_is_uncertain() {
     p.address = "D100".to_string();
     let err = c.write(&p, 1234.0).await.expect_err("无应答应失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::WriteUncertain(_)
+        ),
         "unexpected: {err:?}"
     );
 }

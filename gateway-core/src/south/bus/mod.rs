@@ -530,7 +530,8 @@ impl BusManager {
             // 非 Modbus 协议：无法从请求字节反推响应帧长，维持配置超时
             return base;
         }
-        let (Some(baud), Some(bytes)) = (self.baud, estimated_response_bytes(request, expected_count))
+        let (Some(baud), Some(bytes)) =
+            (self.baud, estimated_response_bytes(request, expected_count))
         else {
             return base;
         };

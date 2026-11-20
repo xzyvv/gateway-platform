@@ -343,9 +343,8 @@ impl Dlt645Collector {
             .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
 
         // 应答已收到：解析失败 → 结果未知；状态字非 0 → DeviceRejected（明确失败）
-        self.parse_write_status_response(&response, addr_bytes, 0x84, true).map_err(|e| {
-            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
-        })
+        self.parse_write_status_response(&response, addr_bytes, 0x84, true)
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))
     }
 
     /// 写通信地址（控制码 0x0C）
@@ -391,9 +390,8 @@ impl Dlt645Collector {
             .await
             .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
         // 0x0C 响应只有 1 字节 STATUS（无 DI）
-        self.parse_write_status_response(&response, addr_bytes, 0x8C, false).map_err(|e| {
-            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
-        })
+        self.parse_write_status_response(&response, addr_bytes, 0x8C, false)
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))
     }
 
     /// 写密码（控制码 0x0F）
@@ -427,9 +425,8 @@ impl Dlt645Collector {
             .await
             .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))?;
         // 0x0F 响应只有 1 字节 STATUS（无密码回显）
-        self.parse_write_status_response(&response, addr_bytes, 0x8F, false).map_err(|e| {
-            crate::south::protocol::mark_write_uncertain_counted(&self.bus, e)
-        })
+        self.parse_write_status_response(&response, addr_bytes, 0x8F, false)
+            .map_err(|e| crate::south::protocol::mark_write_uncertain_counted(&self.bus, e))
     }
 
     /// 通用写响应解析：验证响应 ctrl 与 STATUS 字节。

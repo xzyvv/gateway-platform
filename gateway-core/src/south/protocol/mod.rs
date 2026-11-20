@@ -327,11 +327,7 @@ pub(crate) fn mark_write_uncertain(e: CollectorError) -> CollectorError {
 /// `BusManager`，用不带计数的 [`mark_write_uncertain`]；
 /// 因此 `gateway_write_uncertain_total` 目前只覆盖走总线总线的协议
 /// （modbus / dlt645 / cjt188），缺口登记为 G-08。
-#[cfg(any(
-    feature = "modbus",
-    feature = "dlt645",
-    feature = "cjt188"
-))]
+#[cfg(any(feature = "modbus", feature = "dlt645", feature = "cjt188"))]
 pub(crate) fn mark_write_uncertain_counted(
     bus: &crate::south::bus::BusManager,
     e: CollectorError,

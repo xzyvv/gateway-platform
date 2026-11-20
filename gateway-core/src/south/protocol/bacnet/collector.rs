@@ -4,9 +4,7 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 
-use crate::south::protocol::{
-    convert_value, mark_write_uncertain, reverse_convert, ResultSlots,
-};
+use crate::south::protocol::{convert_value, mark_write_uncertain, reverse_convert, ResultSlots};
 
 mod batch;
 
@@ -232,15 +230,9 @@ impl Collector for BacnetCollector {
             let packet = frames::wrap_bvlc_npdu(&apdu);
             drain_socket(&socket);
             // 请求已发出：UDP 发送失败也无法证明设备未收到 → 结果未知
-            socket
-                .send(&packet)
-                .await
-                .map_err(|e| {
-                    mark_write_uncertain(CollectorError::IoError(format!(
-                        "BACnet write send: {}",
-                        e
-                    )))
-                })?;
+            socket.send(&packet).await.map_err(|e| {
+                mark_write_uncertain(CollectorError::IoError(format!("BACnet write send: {}", e)))
+            })?;
 
             let deadline = tokio::time::Instant::now() + self.io_timeout;
             let mut buf = vec![0u8; 1500];

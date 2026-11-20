@@ -233,7 +233,10 @@ async fn write_property_end_to_end_rejects_error() {
     assert!(format!("{err}").contains("Error"), "实际: {err}");
     // 设备明确回了 Error → 写确定未生效 → DeviceRejected（明确失败，可安全重试）
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::DeviceRejected(_)
+        ),
         "unexpected: {err:?}"
     );
     server_task.await.unwrap();
@@ -272,7 +275,10 @@ async fn write_property_bvlc_result_error_is_device_rejected() {
         .await
         .expect_err("BVLC-Result 错误须判失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::DeviceRejected(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::DeviceRejected(_)
+        ),
         "unexpected: {err:?}"
     );
     server_task.await.unwrap();
@@ -307,7 +313,10 @@ async fn write_property_no_reply_is_uncertain() {
         .await
         .expect_err("无应答应失败");
     assert!(
-        matches!(err, crate::south::protocol::CollectorError::WriteUncertain(_)),
+        matches!(
+            err,
+            crate::south::protocol::CollectorError::WriteUncertain(_)
+        ),
         "unexpected: {err:?}"
     );
     server_task.await.unwrap();

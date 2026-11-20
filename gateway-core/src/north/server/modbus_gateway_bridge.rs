@@ -245,11 +245,8 @@ pub(crate) async fn handle_client(
                 // 写功能码禁止传输层自动重发：写帧可能已被从站执行，
                 // 重发会造成重复写（累加/脉冲类点位直接出错）。
                 let result = if is_write {
-                    tokio::time::timeout(
-                        timeout,
-                        bus.transaction_no_retry(rtu, None, priority),
-                    )
-                    .await
+                    tokio::time::timeout(timeout, bus.transaction_no_retry(rtu, None, priority))
+                        .await
                 } else {
                     tokio::time::timeout(
                         timeout,
@@ -257,8 +254,7 @@ pub(crate) async fn handle_client(
                     )
                     .await
                 };
-                match result
-                {
+                match result {
                     Ok(Ok(resp)) => resp,
                     Ok(Err(e)) => {
                         tracing::debug!("passthrough bus error: {}", e);

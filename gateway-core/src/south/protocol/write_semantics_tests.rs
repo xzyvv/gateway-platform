@@ -93,11 +93,7 @@ fn write_uncertain_is_idempotent() {
 }
 
 /// 带计数版本：结果未知时计数器 +1，明确失败不计数。
-#[cfg(any(
-    feature = "modbus",
-    feature = "dlt645",
-    feature = "cjt188"
-))]
+#[cfg(any(feature = "modbus", feature = "dlt645", feature = "cjt188"))]
 #[tokio::test]
 async fn counted_variant_increments_metric_only_on_uncertain() {
     use super::mark_write_uncertain_counted;
@@ -118,10 +114,16 @@ async fn counted_variant_increments_metric_only_on_uncertain() {
         BusDeps::production(),
     );
 
-    let before = metrics.bus.write_uncertain_total.load(std::sync::atomic::Ordering::Relaxed);
+    let before = metrics
+        .bus
+        .write_uncertain_total
+        .load(std::sync::atomic::Ordering::Relaxed);
     let mapped = mark_write_uncertain_counted(&bus, CollectorError::NoReply);
     assert!(matches!(mapped, CollectorError::WriteUncertain(_)));
-    let after = metrics.bus.write_uncertain_total.load(std::sync::atomic::Ordering::Relaxed);
+    let after = metrics
+        .bus
+        .write_uncertain_total
+        .load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(after, before + 1, "写结果未知必须计数");
 
     // 明确失败不计数
@@ -225,7 +227,11 @@ fn write_outcome_maps_definite_failures() {
         CollectorError::Unsupported("no write".into()),
     ] {
         let label = format!("{e:?}");
-        assert_eq!(e.write_outcome(), WriteOutcome::Failed, "{label} 必须判为明确失败");
+        assert_eq!(
+            e.write_outcome(),
+            WriteOutcome::Failed,
+            "{label} 必须判为明确失败"
+        );
     }
     #[cfg(feature = "modbus")]
     {
@@ -247,8 +253,8 @@ fn write_outcome_maps_definite_failures() {
 ))]
 #[test]
 fn write_outcome_agrees_with_mark_write_uncertain() {
-    use crate::engine::write::WriteOutcome;
     use super::mark_write_uncertain;
+    use crate::engine::write::WriteOutcome;
     for e in [
         CollectorError::NoReply,
         CollectorError::ChecksumError,
