@@ -193,7 +193,7 @@ pub(crate) async fn require_admin_or_exec_scope(
                 } else {
                     ApiError {
                         status: StatusCode::FORBIDDEN,
-                        code: codes::API_KEY_SCOPE as u32,
+                        code: codes::API_KEY_SCOPE,
                         message: "api key lacks diagnostics exec scope".to_string(),
                     }
                     .into_response()
@@ -241,7 +241,7 @@ fn authenticate_api_key(
                     );
                     return Err(ApiError {
                         status: StatusCode::FORBIDDEN,
-                        code: codes::API_KEY_NO_WRITE as u32,
+                        code: codes::API_KEY_NO_WRITE,
                         message: "api key lacks write scope".to_string(),
                     });
                 }

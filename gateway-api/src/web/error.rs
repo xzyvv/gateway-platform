@@ -14,7 +14,9 @@ use super::error_codes as codes;
 /// API 错误
 pub struct ApiError {
     pub(crate) status: StatusCode,
-    pub(crate) code: u32,
+    /// 业务码，与 `ApiResponse.code` 同一类型（i32）：两个信封共用一个码表，
+    /// 类型不同会逼出满屏 `as u32` 转换，也让「同一码两种有/无符号」成为隐患。
+    pub(crate) code: i32,
     pub(crate) message: String,
 }
 
@@ -22,14 +24,14 @@ impl ApiError {
     pub fn bad_request(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: codes::BAD_REQUEST as u32,
+            code: codes::BAD_REQUEST,
             message: msg.into(),
         }
     }
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
-            code: codes::NOT_FOUND as u32,
+            code: codes::NOT_FOUND,
             message: msg.into(),
         }
     }
@@ -42,21 +44,21 @@ impl ApiError {
     pub fn conflict(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
-            code: codes::STATE_CONFLICT as u32,
+            code: codes::STATE_CONFLICT,
             message: msg.into(),
         }
     }
     pub fn unauthorized(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
-            code: codes::UNAUTHORIZED as u32,
+            code: codes::UNAUTHORIZED,
             message: msg.into(),
         }
     }
     pub fn internal(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: codes::INTERNAL as u32,
+            code: codes::INTERNAL,
             message: msg.into(),
         }
     }
@@ -68,7 +70,7 @@ impl ApiError {
     pub fn service_unavailable(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            code: codes::SERVICE_UNAVAILABLE as u32,
+            code: codes::SERVICE_UNAVAILABLE,
             message: msg.into(),
         }
     }
@@ -81,7 +83,7 @@ impl ApiError {
     pub fn license_required() -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
-            code: codes::LICENSE_REQUIRED as u32,
+            code: codes::LICENSE_REQUIRED,
             message: "license required".into(),
         }
     }
@@ -89,7 +91,7 @@ impl ApiError {
     pub fn license_expired() -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
-            code: codes::LICENSE_INVALID as u32,
+            code: codes::LICENSE_INVALID,
             message: "license expired or invalid".into(),
         }
     }
@@ -98,7 +100,7 @@ impl ApiError {
     pub fn quota_exceeded(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: codes::QUOTA_EXCEEDED as u32,
+            code: codes::QUOTA_EXCEEDED,
             message: msg.into(),
         }
     }
@@ -149,7 +151,8 @@ impl IntoResponse for ApiError {
 /// 将 GatewayError 映射为合适的 HTTP 状态码 + 业务码
 impl From<gateway_core::engine::error::GatewayError> for ApiError {
     fn from(e: gateway_core::engine::error::GatewayError) -> Self {
-        let code = e.code();
+        // core 层的 `code()` 是 u32（核心不依赖 api 层），码值 ≤ 9999，跨界转换安全
+        let code = e.code() as i32;
         let status = match &e {
             gateway_core::engine::error::GatewayError::Config(_) => StatusCode::BAD_REQUEST,
             gateway_core::engine::error::GatewayError::Auth(_) => StatusCode::UNAUTHORIZED,
@@ -196,7 +199,7 @@ impl From<serde_json::Error> for ApiError {
     fn from(e: serde_json::Error) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: codes::CONFIG_OR_JSON as u32,
+            code: codes::CONFIG_OR_JSON,
             message: e.to_string(),
         }
     }
@@ -206,7 +209,7 @@ impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: codes::IO as u32,
+            code: codes::IO,
             message: e.to_string(),
         }
     }
@@ -311,7 +314,7 @@ mod tests {
         for (e, expected) in cases {
             let err: ApiError = e.into();
             assert_eq!(
-                err.code as i32, expected,
+                err.code, expected,
                 "码值漂移：expected={expected}, got={}",
                 err.code
             );

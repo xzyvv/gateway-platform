@@ -38,13 +38,13 @@ impl<T: Serialize> ApiOk<T> {
 #[derive(Serialize)]
 pub(crate) struct ApiErr {
     #[serde(rename = "code")]
-    pub code: u32,
+    pub code: i32,
     #[serde(rename = "message")]
     pub message: String,
 }
 
 impl ApiErr {
-    fn new(code: u32, msg: impl Into<String>) -> Self {
+    fn new(code: i32, msg: impl Into<String>) -> Self {
         Self {
             code,
             message: msg.into(),
@@ -62,7 +62,7 @@ fn ok<T: Serialize>(data: T) -> Resp {
     )
 }
 
-fn err(status: StatusCode, code: u32, msg: impl Into<String>) -> Resp {
+fn err(status: StatusCode, code: i32, msg: impl Into<String>) -> Resp {
     (
         status,
         // D2: 与 ok() 一致——序列化失败返回 Null,避免请求处理路径 panic。

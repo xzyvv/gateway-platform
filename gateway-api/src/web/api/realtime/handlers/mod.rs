@@ -245,7 +245,7 @@ pub(crate) async fn realtime_ws(
             );
             return ApiError {
                 status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                code: codes::REALTIME_LIMIT as u32,
+                code: codes::REALTIME_LIMIT,
                 message: "too many realtime websocket connections".to_string(),
             }
             .into_response();

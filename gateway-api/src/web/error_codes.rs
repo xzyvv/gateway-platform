@@ -124,7 +124,7 @@ pub const INTERNAL: i32 = 9999;
 /// 全部已知业务码（不含成功码 0）及其含义。
 ///
 /// 前端 `errorCodes.ts` 与本表保持同步；新增码必须同时登记，否则
-/// `all_literal_codes_in_source_are_registered` 测试会失败。
+/// `no_literal_codes_outside_code_table` 与前端跨语言守卫都会失败。
 pub const ALL_CODES: &[(i32, &str)] = &[
     (CONFIG_OR_JSON, "配置或请求体解析失败"),
     (IO, "本地 IO 失败"),

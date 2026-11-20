@@ -484,7 +484,7 @@ pub(crate) fn ensure_system_secrets_allowed(
         );
         return Err(ApiError {
             status: axum::http::StatusCode::FORBIDDEN,
-            code: codes::SENSITIVE_FIELD_DENIED as u32,
+            code: codes::SENSITIVE_FIELD_DENIED,
             message: "changing system credentials requires the primary api token".to_string(),
         });
     }

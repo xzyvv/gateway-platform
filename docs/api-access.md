@@ -49,6 +49,9 @@ API 密钥不存在 / 已停用 / 已过期与「错误 token」返回完全相�
 | 404 | 4004 | 目标对象不存在 |
 | 429 | — | 触发限流，响应头固定带 `Retry-After: 1`（秒），无 JSON 信封 |
 
+完整码表（37 个业务码、分段规则、HTTP 映射与特例）见
+[API 错误码表](api-error-codes.md)。
+
 429 由全局限速（`web.rate_limit_per_sec`）或限流规则触发，按客户端 IP 分桶计数。
 `X-Forwarded-For` 仅在 TCP 对端为回环地址时采纳首跳，详见
 [部署架构 §8.5](architecture/deployment.md#85-反向代理与限流)。

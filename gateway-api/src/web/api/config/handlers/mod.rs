@@ -74,7 +74,7 @@ pub(crate) fn ensure_primary_token(
     } else {
         Err(ApiError {
             status: axum::http::StatusCode::FORBIDDEN,
-            code: codes::SENSITIVE_FIELD_DENIED as u32,
+            code: codes::SENSITIVE_FIELD_DENIED,
             message: "plaintext export requires the primary api token".to_string(),
         })
     }
