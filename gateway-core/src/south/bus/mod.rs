@@ -75,7 +75,18 @@ pub struct BusTransaction {
     pub raw: bool,
     /// 调试直发模式的单帧等待超时（ms）；`None` 时沿用 `BusConfig.timeout_ms`
     pub timeout_ms: Option<u64>,
+    /// 调用方入队时刻：总线 task 取出执行时据此记录排队等待时长。
+    pub enqueued_at: std::time::Instant,
+    /// 事务优先级：控制（写）优先于采集（读）。
+    pub priority: BusPriority,
 }
+
+/// 总线事务优先级。
+///
+/// 定义在 engine 中立层（见 [`crate::engine::priority`]）：北向 Modbus 网关桥接
+/// 也需要按功能码区分读写指令，而 `arch_deps` 门禁禁止 north 引用 `crate::south::`。
+/// 此处重导出，南向调用点仍可写 `south::bus::BusPriority`。
+pub use crate::engine::priority::BusPriority;
 
 /// 总线管理器（RS485 串行化）
 pub struct BusManager {
@@ -102,7 +113,10 @@ pub struct BusManager {
     /// OPC UA Client 认证配置（P0-3）：直连型采集器无法从总线 task 取配置，
     /// 在此保存一份启动时的快照（配置变更会重建 BusManager）。
     opcua: Option<OpcUaClientConfig>,
+    /// 普通通道（采集轮询 / 调试直发）。
     tx: mpsc::Sender<BusTransaction>,
+    /// 控制通道（写指令）：与普通通道分离，总线 task 优先消费。
+    ctrl_tx: mpsc::Sender<BusTransaction>,
     /// 单事务往返延迟埋点（决策表 #25）；与 bus_task 共用同一实例（全链路单例约束）。
     metrics: Arc<Metrics>,
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -130,6 +144,9 @@ impl BusManager {
         // 历史配置写成 0 会导致进程启动即崩。
         let cap = bus.channel_capacity.unwrap_or(128).max(1);
         let (tx, rx) = mpsc::channel::<BusTransaction>(cap);
+        // 控制通道（写指令）独立于采集通道：容量与普通通道一致。
+        // 写入稀疏（人工/北向下发），不会挤占采集配额；但总线 task 会优先消费它。
+        let (ctrl_tx, ctrl_rx) = mpsc::channel::<BusTransaction>(cap);
         let name = bus.port_name.clone();
         let tcp_addr = bus.tcp_addr.clone();
         let timeout_ms = bus.timeout_ms;
@@ -138,10 +155,7 @@ impl BusManager {
         let reply_budget = bus_retry_budget(
             Duration::from_millis(bus.timeout_ms),
             bus.retry_count.unwrap_or(DEFAULT_RETRY_COUNT),
-            Duration::from_millis(
-                bus.retry_delay_ms
-                    .unwrap_or(DEFAULT_RETRY_DELAY_MS),
-            ),
+            Duration::from_millis(bus.retry_delay_ms.unwrap_or(DEFAULT_RETRY_DELAY_MS)),
         );
         // Bug 217: 记录读路径并发上限——TCP 支持单 socket 多事务并发（MBAP 事务号路由），
         // 串口为半双工物理上只能串行。采集器据此决定并发提交帧的上限，
@@ -155,7 +169,7 @@ impl BusManager {
 
         let handle = crate::engine::supervision::spawn_catch_unwind(
             "bus_task",
-            bus_task(bus_config, serial, rx, metrics.clone(), deps),
+            bus_task(bus_config, serial, rx, ctrl_rx, metrics.clone(), deps),
         );
 
         Self {
@@ -168,15 +182,31 @@ impl BusManager {
             asdu_addr_len: bus.asdu_addr_len.unwrap_or(2),
             opcua: bus.opcua.clone(),
             tx,
+            ctrl_tx,
             metrics,
             handle: Some(handle),
         }
     }
 
+    /// 普通优先级事务（采集轮询 / 调试直发）。
     pub async fn transaction(
         &self,
         request: Vec<u8>,
         expected_count: Option<u16>,
+    ) -> Result<Vec<u8>, CollectorError> {
+        self.transaction_with_priority(request, expected_count, BusPriority::Normal)
+            .await
+    }
+
+    /// 带优先级的事务下发。
+    ///
+    /// [`BusPriority::Control`] 的写指令进入独立控制通道，总线 task 优先消费，
+    /// 不必排在采集轮询后面；排队深度 / 等待时长指标按同一口径统计。
+    pub async fn transaction_with_priority(
+        &self,
+        request: Vec<u8>,
+        expected_count: Option<u16>,
+        priority: BusPriority,
     ) -> Result<Vec<u8>, CollectorError> {
         let started = std::time::Instant::now();
         // 抓包 A 档：tx 在入队前记录（request 尚未被 move 进 BusTransaction）
@@ -188,6 +218,8 @@ impl BusManager {
             expected_count,
             raw: false,
             timeout_ms: None,
+            enqueued_at: std::time::Instant::now(),
+            priority,
         };
         // Bug 148: 若 mpsc send 失败（总线 task 已退出），oneshot sender 立即 drop，
         // resp_rx.await 会收到 RecvError → 转为 BusClosed。当前逻辑正确，但
@@ -205,20 +237,31 @@ impl BusManager {
         // 间隔 200ms）。重试成功的应答还在回传途中，上层就判超时丢弃 → 静默丢数（原 #107）。
         // 现按 [`bus_retry_budget`] 同一来源推导，并保留固定调度余量。
         let reply_deadline = self.reply_deadline();
-        let result = match tokio::time::timeout(self.io_timeout(), self.tx.send(msg)).await {
-            Ok(Ok(())) => match tokio::time::timeout(reply_deadline, resp_rx).await {
-                // 内层 Ok = 总线 task 回传了事务结果（成功或设备级失败），必须原样透传。
-                // 注意：不能写成 `inner.map_err(|_| BusClosed)`——那会把 NoReply /
-                // ChecksumError / IoError 等**业务失败**全部改标成 BusClosed，
-                // 使"设备不应答"在监控上表现成"总线断开"，后果是整条总线的
-                // 错误归因失真（C-2 之后更明显：设备级失败必须与端口级区分）。
-                Ok(Ok(inner)) => inner,
-                // 内层 Err = 应答 oneshot 的 sender 被 drop（总线 task 已退出/panic）
-                Ok(Err(_)) => Err(CollectorError::BusClosed),
-                Err(_) => Err(CollectorError::Timeout(reply_deadline)),
-            },
+        // 控制（写）走控制通道，采集轮询 / 调试直发走普通通道。
+        // 两条通道共用同一套排队指标口径（深度、等待时长）。
+        let sender = match priority {
+            BusPriority::Control => &self.ctrl_tx,
+            BusPriority::Normal => &self.tx,
+        };
+        let result = match tokio::time::timeout(self.io_timeout(), sender.send(msg)).await {
+            Ok(Ok(())) => {
+                // 已入队：排队深度 +1，由总线 task 取出时 -1（含调用方随后超时放弃的事务）
+                self.metrics.inc_bus_queue_depth();
+                match tokio::time::timeout(reply_deadline, resp_rx).await {
+                    // 内层 Ok = 总线 task 回传了事务结果（成功或设备级失败），必须原样透传。
+                    // 注意：不能写成 `inner.map_err(|_| BusClosed)`——那会把 NoReply /
+                    // ChecksumError / IoError 等**业务失败**全部改标成 BusClosed，
+                    // 使"设备不应答"在监控上表现成"总线断开"，后果是整条总线的
+                    // 错误归因失真（C-2 之后更明显：设备级失败必须与端口级区分）。
+                    Ok(Ok(inner)) => inner,
+                    // 内层 Err = 应答 oneshot 的 sender 被 drop（总线 task 已退出/panic）
+                    Ok(Err(_)) => Err(CollectorError::BusClosed),
+                    Err(_) => Err(CollectorError::Timeout(reply_deadline)),
+                }
+            }
             Ok(Err(_)) => Err(CollectorError::BusClosed),
-            Err(_) => Err(CollectorError::Timeout(self.io_timeout())),
+            // 入队超时 = 队列打满，与「已下发但设备没回」严格区分（BusBusy → BUSY）
+            Err(_) => Err(CollectorError::BusBusy(self.io_timeout())),
         };
         // 决策表 #25：记录单事务往返延迟（排队 + 收发）。失败亦计入，用于错误率观测。
         // 失败原因由 `CollectorError::error_code()` 映射到统计层稳定错误码，
@@ -277,19 +320,26 @@ impl BusManager {
             expected_count: None,
             raw: true,
             timeout_ms,
+            enqueued_at: std::time::Instant::now(),
+            // 调试直发刻意走低优先级：它是运维排查手段，不得抢占控制（写）指令，
+            // 也不应排到采集轮询前面影响实时性。
+            priority: BusPriority::Normal,
         };
         // 应答预算 = 单帧超时 + 100ms 调度余量（总线任务内部已按同一超时收尾，
         // 这里只需略长于它，避免把「刚好收满」的正常响应误判为超时）
         let reply_deadline = frame_timeout + std::time::Duration::from_millis(100);
         let started = std::time::Instant::now();
         let result = match tokio::time::timeout(frame_timeout, self.tx.send(msg)).await {
-            Ok(Ok(())) => match tokio::time::timeout(reply_deadline, resp_rx).await {
-                Ok(Ok(inner)) => inner,
-                Ok(Err(_)) => Err(CollectorError::BusClosed),
-                Err(_) => Err(CollectorError::Timeout(reply_deadline)),
-            },
+            Ok(Ok(())) => {
+                self.metrics.inc_bus_queue_depth();
+                match tokio::time::timeout(reply_deadline, resp_rx).await {
+                    Ok(Ok(inner)) => inner,
+                    Ok(Err(_)) => Err(CollectorError::BusClosed),
+                    Err(_) => Err(CollectorError::Timeout(reply_deadline)),
+                }
+            }
             Ok(Err(_)) => Err(CollectorError::BusClosed),
-            Err(_) => Err(CollectorError::Timeout(frame_timeout)),
+            Err(_) => Err(CollectorError::BusBusy(frame_timeout)),
         };
         if let Ok(resp) = &result {
             crate::south::frame_log::record(
@@ -359,18 +409,38 @@ async fn bus_task(
     bus_config: BusConfig,
     serial: Option<SerialHandle>,
     rx: mpsc::Receiver<BusTransaction>,
+    ctrl_rx: mpsc::Receiver<BusTransaction>,
     metrics: Arc<Metrics>,
     deps: BusDeps,
 ) {
     // Modbus TCP 模式：走 TCP 而非串口
     #[cfg(feature = "modbus")]
     if let Some(tcp_addr) = &bus_config.tcp_addr.clone() {
-        tcp_task::bus_task_tcp(bus_config, tcp_addr.clone(), rx, metrics).await;
+        tcp_task::bus_task_tcp(bus_config, tcp_addr.clone(), rx, ctrl_rx, metrics).await;
         return;
     }
-    serial_task::run_serial_bus_task(bus_config, serial, rx, metrics, deps).await;
+    serial_task::run_serial_bus_task(bus_config, serial, rx, ctrl_rx, metrics, deps).await;
 }
 
+/// 出队后的统一前置处理：更新排队指标，并判断事务是否已被调用方放弃。
+///
+/// 返回 `false` 时必须**直接丢弃、不得下发**：
+/// - 写指令：调用方已收到超时/失败，若照常执行会出现「API 返回失败、设备实际被写」，
+///   调用方重试还会造成重复写；
+/// - 采集：过期请求会白占总线时隙。
+///
+/// 只能拦「尚未开始发送」的事务；帧一旦写进串口就无法撤销。
+fn prepare_dequeued(tx: &BusTransaction, metrics: &crate::engine::metrics::Metrics) -> bool {
+    metrics.dec_bus_queue_depth();
+    let wait_us = tx.enqueued_at.elapsed().as_micros().min(u64::MAX as u128) as u64;
+    metrics.record_bus_queue_wait(wait_us);
+    !tx.response_tx.is_closed()
+}
+
+/// 是否值得在总线 task 内立即重试。
+///
+/// [`CollectorError::BusBusy`] 刻意**不**列为可重试：它表示队列已满（带宽不足），
+/// 立即重试只会再占用一次 `timeout` 并加剧拥堵，交由下一个采集周期自然重试更安全。
 pub(crate) fn is_retryable(e: &CollectorError) -> bool {
     matches!(
         e,

@@ -134,13 +134,12 @@ fn test_build_write_multi_registers_single() {
 }
 
 // =========================================================================
-// C-3: 帧提取的期望字节数必须区分「位」与「寄存器」
+// C-3 + R-3: 帧提取的期望字节数必须区分「位」与「寄存器」
 //
 // FC01/FC02 读的是位（线圈/离散输入），响应字节数 = ceil(n / 8)；
-// FC03/FC04 读寄存器，响应字节数 = n * 2。旧实现一律按 n * 2 校验。
-// 当前唯一入口 read_coils_with_retry 恒传 None，故未爆发；但一旦做"批量读线圈
-// 优化"把 expected_count 传进来，合法响应会被判非法并逐字节丢弃，
-// 症状是"批量线圈恒 NoReply、单点线圈正常"，现场极难定位。
+// FC03/FC04 读寄存器，响应字节数 = n * 2。旧实现一律按 n * 2 校验，
+// 且线圈路径恒传 None 使该 bug 长期休眠。R-3 已让 read_coils_with_retry
+// 传 Some(count)，此处用例锁定「位公式」与「寄存器公式」互不串味。
 // =========================================================================
 
 /// 构造合法 Modbus RTU 响应帧：[slave][fc][byte_count][data...][crc_lo][crc_hi]
@@ -197,6 +196,29 @@ fn extract_modbus_frame_fc03_still_uses_register_formula() {
         Some(frame.as_slice()),
         "FC03 寄存器读取应按 n*2 校验"
     );
+}
+
+/// R-4：FC21(0x15 写文件记录) 响应为变长回显，按 byte_count 定帧，
+/// 且重同步不能吞掉紧随其后的正常帧。
+#[test]
+fn extract_modbus_frame_fc21_uses_byte_count() {
+    use crate::south::bus::FrameBuffer;
+
+    // 数据段 = ref_type(2) + file_num(2) + record_len(2) + data(2*1) = 8 字节
+    let data = [0x00, 0x06, 0x00, 0x01, 0x00, 0x01, 0x12, 0x34];
+    let frame = modbus_response(0x01, 0x15, &data);
+    assert_eq!(frame.len(), 3 + 8 + 2);
+
+    let mut fb = FrameBuffer::new();
+    fb.push(&frame);
+    let got = super::extract_modbus_frame(&mut fb, None);
+    assert_eq!(got.as_deref(), Some(frame.as_slice()), "FC21 应按 byte_count 定帧");
+
+    // 后面紧跟一帧正常 FC03，验证没有被 FC21 的重同步逻辑吞掉
+    let next = modbus_response(0x01, 0x03, &[0x00, 0x2A]);
+    fb.push(&next);
+    let got2 = super::extract_modbus_frame(&mut fb, Some(1));
+    assert_eq!(got2.as_deref(), Some(next.as_slice()));
 }
 
 // =========================================================================

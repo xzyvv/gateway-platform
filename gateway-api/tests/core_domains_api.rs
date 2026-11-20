@@ -377,8 +377,7 @@ async fn io_status_and_control() {
         // 500 类错误的内部细节（文件路径 / 驱动报错）不得回给客户端，
         // 前端应依靠结构化 code=2000 识别 IO 类失败，而不是匹配 message 子串。
         assert_eq!(
-            body["message"],
-            "internal server error",
+            body["message"], "internal server error",
             "内部错误文案必须泛化: {}",
             body
         );

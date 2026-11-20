@@ -17,7 +17,7 @@ use super::{
 };
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
-use crate::south::bus::BusManager;
+use crate::south::bus::{BusManager, BusPriority};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -369,7 +369,11 @@ impl Cjt188Collector {
         }
 
         let request = build_cjt188_frame(addr_bytes, 0x04, &data);
-        let response = self.bus.transaction(request, None).await?;
+        // 写指令走控制通道：优先于采集轮询下发，避免现场「下发等太久」
+        let response = self
+            .bus
+            .transaction_with_priority(request, None, BusPriority::Control)
+            .await?;
         self.parse_write_response(&response, addr_bytes, 0x04)
     }
 
@@ -411,7 +415,10 @@ impl Cjt188Collector {
         data.extend_from_slice(&new_addr);
 
         let request = build_cjt188_frame(addr_bytes, 0x15, &data);
-        let response = self.bus.transaction(request, None).await?;
+        let response = self
+            .bus
+            .transaction_with_priority(request, None, BusPriority::Control)
+            .await?;
         self.parse_write_response(&response, addr_bytes, 0x15)
     }
 

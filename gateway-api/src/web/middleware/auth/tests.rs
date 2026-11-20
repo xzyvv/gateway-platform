@@ -371,7 +371,6 @@ fn unclassified_path_falls_back_to_any_write_scope() {
     ));
 }
 
-
 /// 死信 / 日志 / 看门狗三类读端点此前漏登记，匿名读模式下可直接拉到失败报文
 /// 与故障拓扑，必须补齐强制鉴权。
 #[test]

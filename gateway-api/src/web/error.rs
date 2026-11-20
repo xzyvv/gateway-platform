@@ -261,15 +261,23 @@ mod tests {
         }
 
         let client_facing = [
-            (GatewayError::Config("invalid baud rate".into()), StatusCode::BAD_REQUEST),
-            (GatewayError::NotFound("point p1".into()), StatusCode::NOT_FOUND),
+            (
+                GatewayError::Config("invalid baud rate".into()),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                GatewayError::NotFound("point p1".into()),
+                StatusCode::NOT_FOUND,
+            ),
             (GatewayError::NoReply, StatusCode::GATEWAY_TIMEOUT),
         ];
         for (e, status) in client_facing {
             let err: ApiError = e.into();
             assert_eq!(err.status, status);
-            assert_ne!(err.message, "internal server error", "用户可纠正错误应保留原文");
+            assert_ne!(
+                err.message, "internal server error",
+                "用户可纠正错误应保留原文"
+            );
         }
     }
-
 }

@@ -99,8 +99,7 @@ impl SsrfPolicy {
                 }
             }
             IpAddr::V6(v6) => {
-                let always =
-                    v6.is_unicast_link_local() || v6.is_unspecified() || v6.is_multicast();
+                let always = v6.is_unicast_link_local() || v6.is_unspecified() || v6.is_multicast();
                 if always {
                     return Some(format!("不允许访问受限地址 {}", ip));
                 }
@@ -366,7 +365,9 @@ mod tests {
     #[test]
     fn cgnat_blocked_in_strict_mode() {
         assert!(strict().check_literal(&url("http://100.64.1.1/")).is_err());
-        assert!(strict().check_literal(&url("http://100.127.255.255/")).is_err());
+        assert!(strict()
+            .check_literal(&url("http://100.127.255.255/"))
+            .is_err());
         // 100.128.0.0 不在 CGNAT 段
         assert!(strict().check_literal(&url("http://100.128.0.1/")).is_ok());
     }
@@ -374,10 +375,7 @@ mod tests {
     #[test]
     fn octal_and_hex_host_cannot_bypass() {
         // reqwest::Url 按 WHATWG 规范归一化，归一化结果仍受 IP 判定约束
-        assert_eq!(
-            url("http://0177.0.0.1/x").host_str(),
-            Some("127.0.0.1")
-        );
+        assert_eq!(url("http://0177.0.0.1/x").host_str(), Some("127.0.0.1"));
         assert_eq!(url("http://0x7f.0.0.1/x").host_str(), Some("127.0.0.1"));
         assert!(strict().check_url_str("http://0177.0.0.1/x").is_err());
         assert!(strict().check_url_str("http://0x7f.0.0.1/x").is_err());

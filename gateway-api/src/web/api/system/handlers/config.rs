@@ -150,9 +150,7 @@ pub(crate) async fn post_config(
     let _reload_guard = state.config.config_reload_lock.lock().await;
     let old = state.config.load_full();
     // P0 提权门禁：整份配置可覆盖 web.api_token，须主 token
-    crate::web::config_apply::ensure_system_secrets_allowed(
-        &state, &headers, &old, &new_config,
-    )?;
+    crate::web::config_apply::ensure_system_secrets_allowed(&state, &headers, &old, &new_config)?;
 
     // 2-5. 展开设备模板 + 落盘 + 热重载（E 批起落盘前置：save → reload → store → notify）
     //      统一走 config_apply，消除与 rollback / restart_service 的重复实现。
@@ -316,9 +314,7 @@ pub(crate) async fn rollback_config_version(
     // 否则会因配额卡死重启，违背「稳定性第一」。）
     crate::web::config_apply::check_config_quota(&state, &new_config)?;
     // P0 提权门禁：历史版本里可能含被篡改的 web.api_token，回滚同样须主 token
-    crate::web::config_apply::ensure_system_secrets_allowed(
-        &state, &headers, &old, &new_config,
-    )?;
+    crate::web::config_apply::ensure_system_secrets_allowed(&state, &headers, &old, &new_config)?;
 
     // 展开设备模板 + 落盘 + 热重载（E 批起落盘前置：save → reload → store → notify）
     // 结构完整性校验（D1）已收敛到 config_apply::persist_then_apply 内部统一执行。

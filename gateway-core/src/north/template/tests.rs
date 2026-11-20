@@ -38,7 +38,8 @@ fn test_string_literal_output() {
     let out = engine.render(&vars);
     assert_eq!(out, "{\"x\":\"a\\\"b\\nc\"}");
     // 渲染结果必须是合法 JSON，且能还原出原始点位值
-    let parsed: serde_json::Value = serde_json::from_str(&out).expect("rendered JSON must be valid");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&out).expect("rendered JSON must be valid");
     assert_eq!(parsed["x"].as_str(), Some("a\"b\nc"));
 }
 
@@ -322,7 +323,8 @@ fn test_json_context_escapes_quote_backslash_and_newline() {
     let vars = TemplateVars::new().with_extra("raw", ExtraValue::Str("a\"b\\c\nd".into()));
     let out = engine.render(&vars);
     assert_eq!(out, "{\"v\":\"a\\\"b\\\\c\\nd\"}");
-    let parsed: serde_json::Value = serde_json::from_str(&out).expect("rendered JSON must be valid");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&out).expect("rendered JSON must be valid");
     assert_eq!(parsed["v"].as_str(), Some("a\"b\\c\nd"));
 }
 

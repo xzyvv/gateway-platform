@@ -9,6 +9,7 @@ use std::pin::Pin;
 use crate::config::PointConfig;
 use crate::engine::codec::crc::crc16;
 use crate::engine::model::{DataPoint, Quality};
+use crate::south::bus::BusPriority;
 use crate::south::protocol::ResultSlots;
 
 use super::merge::WriteItem;
@@ -265,7 +266,19 @@ impl Collector for ModbusCollector {
             // FC05/FC06 保持 8 字节全回显比对；FC15/FC16 只比对前 6 字节
             // （与 write_multi 的多点写校验方式一致）。
             let expect_echo = req.clone();
-            let resp = self.bus.transaction(req, None).await?;
+            let resp = self
+                .bus
+                .transaction_with_priority(req, None, BusPriority::Control)
+                .await?;
+            // 修复(R-1)：从站拒绝写入时回的是 5 字节异常帧
+            // [slave][fc|0x80][exception_code][crc_lo][crc_hi]。
+            // 旧实现直接走下面的 `resp.len() < 8` 判定，把它当成「回显不匹配」，
+            // 异常码（0x02 非法地址 / 0x04 从站故障）被彻底吞掉，现场只能看到
+            // 「write response mismatch」，无法区分设备拒绝写与总线噪声。
+            // 定帧层（extract_modbus_frame）本来就正确识别了 5 字节异常帧，这里补上语义。
+            if resp.len() == 5 && resp[1] == (expect_echo[1] | 0x80) {
+                return Err(CollectorError::ModbusException(resp[2]));
+            }
             let echo_len = if matches!(expect_echo[1], 0x05 | 0x06) {
                 8
             } else {
@@ -369,7 +382,11 @@ impl Collector for ModbusCollector {
                     // 请求的 6/7 字节是 byte_count + 数据，与响应第 6/7 字节（CRC）不同，
                     // 故多帧写只能比对**前 6 字节**（slave/fc/addr/qty），不能整段比对。
                     let expect = req.clone();
-                    let resp = match self.bus.transaction(req, None).await {
+                    let resp = match self
+                        .bus
+                        .transaction_with_priority(req, None, BusPriority::Control)
+                        .await
+                    {
                         Ok(r) => r,
                         Err(e) => {
                             for i in range.clone() {
@@ -378,6 +395,15 @@ impl Collector for ModbusCollector {
                             continue;
                         }
                     };
+                    // 修复(R-1)：批量写同样要先识别 5 字节异常帧，否则整批点位
+                    // 只会拿到「回显不匹配」，丢失从站给出的异常码。
+                    if resp.len() == 5 && resp[1] == (expect[1] | 0x80) {
+                        let code = resp[2];
+                        for i in range.clone() {
+                            slots[items[i].2] = Some(Err(CollectorError::ModbusException(code)));
+                        }
+                        continue;
+                    }
                     let echo_len = 6.min(expect.len());
                     if resp.len() < 8 || resp[..echo_len] != expect[..echo_len] {
                         let msg = format!(

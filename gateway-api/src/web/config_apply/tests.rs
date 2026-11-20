@@ -455,7 +455,6 @@ fn self_heal_reload_uses_quota_exempt_entry() {
     );
 }
 
-
 // ===== P0 提权门禁：系统级凭据字段变更须主 token =====
 
 /// 前端回传占位符（未触碰凭据）不得被判为变更，否则每次保存都要主 token。
@@ -500,7 +499,8 @@ fn real_web_secret_changes_are_detected() {
 fn non_secret_changes_do_not_trigger_primary_token_gate() {
     let old = sample_config();
     let mut new = old.clone();
-    new.points.push(gateway_core::config::PointConfig::default());
+    new.points
+        .push(gateway_core::config::PointConfig::default());
     assert!(!system_secrets_changed(&old, &new));
 }
 

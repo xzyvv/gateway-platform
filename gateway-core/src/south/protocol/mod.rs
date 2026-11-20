@@ -123,6 +123,13 @@ pub enum CollectorError {
     /// 与 `IoError` 区分，便于监控按"链路 IO 故障"与"协议栈卡死/无响应"分类告警。
     #[error("collector read timeout after {0:?}")]
     Timeout(std::time::Duration),
+    /// 总线队列拥堵：事务在超时时间内没能入队（总线 channel 已满）。
+    ///
+    /// 必须与 [`CollectorError::Timeout`] 区分——后者是「已下发但设备没回」，
+    /// 前者是「根本没发出去」。混用会让现场无法判断是设备故障还是总线带宽不足，
+    /// 也会把排队超时误算进设备超时率。
+    #[error("bus busy: enqueue timeout after {0:?}")]
+    BusBusy(std::time::Duration),
     #[error("invalid config: {0}")]
     InvalidConfig(String),
     #[error("unsupported: {0}")]
@@ -165,6 +172,7 @@ impl CollectorError {
             CollectorError::ModbusException(code) => CollectErrorCode::ModbusException(*code),
             CollectorError::IoError(_) => CollectErrorCode::Io,
             CollectorError::Timeout(_) => CollectErrorCode::Timeout,
+            CollectorError::BusBusy(_) => CollectErrorCode::Busy,
             CollectorError::InvalidConfig(_) => CollectErrorCode::Config,
             CollectorError::Unsupported(_) => CollectErrorCode::Other,
         }
@@ -197,6 +205,7 @@ pub(crate) fn clone_collector_error(e: &CollectorError) -> CollectorError {
         CollectorError::ModbusException(c) => CollectorError::ModbusException(*c),
         CollectorError::IoError(s) => CollectorError::IoError(s.clone()),
         CollectorError::Timeout(d) => CollectorError::Timeout(*d),
+        CollectorError::BusBusy(d) => CollectorError::BusBusy(*d),
         CollectorError::InvalidConfig(s) => CollectorError::InvalidConfig(s.clone()),
         CollectorError::Unsupported(s) => CollectorError::Unsupported(s.clone()),
     }

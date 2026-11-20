@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Semaphore};
 
 use crate::engine::error::{GatewayError, GatewayResult};
+use crate::engine::priority::BusPriority;
 use crate::north::mqtt::MqttClient;
 use crate::runtime::GatewayRuntime;
 
@@ -356,7 +357,21 @@ impl MqttPacketPassthrough {
                 token,
             });
         }
-        let result = tokio::time::timeout(timeout, bus.transaction(request_bytes, None)).await;
+        // 修复(第一批#4)：透传写必须走控制通道，否则会和采集事务抢普通队列，
+        // 表现为「设备在线但写入要等一整个采集周期」。
+        // 请求是 RTU ADU，第 2 字节即功能码：05/06/0F/10 为标准写，
+        // 15(写文件记录)/16(掩码写寄存器) 同属写类。非 Modbus 协议下该字节
+        // 语义不同，但错标只影响单笔事务的排队顺序、不影响正确性，
+        // 因此按「宁可给高优先级」处理。
+        let priority = match request_bytes.get(1).copied() {
+            Some(0x05 | 0x06 | 0x0F | 0x10 | 0x15 | 0x16) => BusPriority::Control,
+            _ => BusPriority::Normal,
+        };
+        let result = tokio::time::timeout(
+            timeout,
+            bus.transaction_with_priority(request_bytes, None, priority),
+        )
+        .await;
 
         match result {
             Ok(Ok(response)) => {

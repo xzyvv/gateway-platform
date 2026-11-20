@@ -27,6 +27,7 @@ use super::{wait_shutdown_notify, NorthServer};
 use crate::config::ModbusPassthroughConfig;
 use crate::engine::codec::crc::crc16;
 use crate::engine::error::{GatewayError, GatewayResult};
+use crate::engine::priority::BusPriority;
 use crate::runtime::GatewayRuntime;
 
 /// 单次 socket 读取超时。
@@ -230,7 +231,18 @@ pub(crate) async fn handle_client(
         let timeout = Duration::from_millis(config.timeout_ms);
         let response = match gateway.bus_manager(&config.target_bus) {
             Some(bus) => {
-                match tokio::time::timeout(timeout, bus.transaction(rtu, None)).await {
+                // 按 Modbus 功能码判定优先级：写功能码（05/06/0F/10）走控制通道，
+                // 读功能码保持普通通道，避免外部主站的写被采集轮询压住。
+                let priority = match pdu.first() {
+                    Some(0x05) | Some(0x06) | Some(0x0F) | Some(0x10) => BusPriority::Control,
+                    _ => BusPriority::Normal,
+                };
+                match tokio::time::timeout(
+                    timeout,
+                    bus.transaction_with_priority(rtu, None, priority),
+                )
+                .await
+                {
                     Ok(Ok(resp)) => resp,
                     Ok(Err(e)) => {
                         tracing::debug!("passthrough bus error: {}", e);

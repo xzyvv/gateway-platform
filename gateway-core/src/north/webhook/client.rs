@@ -749,7 +749,11 @@ impl WebhookClient {
     pub(super) async fn send_once(&self, msg: &OutgoingMsg) -> SendOutcome {
         // 发送前对 outbox topic 再校验（残留地址 / 热变更绕过 run 校验）。
         if let Err(reason) = url_safety::SsrfPolicy::default().check_url_str(&msg.topic) {
-            tracing::error!("webhook blocked by SSRF policy at send_once: {} ({})", msg.topic, reason);
+            tracing::error!(
+                "webhook blocked by SSRF policy at send_once: {} ({})",
+                msg.topic,
+                reason
+            );
             *self.last_error.write() = Some(format!("webhook target blocked (SSRF): {}", reason));
             if let Some(m) = &self.metrics {
                 m.inc_webhook_publish(false);

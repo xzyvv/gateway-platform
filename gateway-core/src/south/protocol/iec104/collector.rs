@@ -80,7 +80,8 @@ impl Iec104Collector {
         let slots: ResultSlots = std::sync::Arc::new(std::sync::Mutex::new(
             (0..points.len()).map(|_| None).collect(),
         ));
-        self.read_batch_points_with_slots(points, slots.clone()).await;
+        self.read_batch_points_with_slots(points, slots.clone())
+            .await;
         let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .iter_mut()

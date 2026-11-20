@@ -28,7 +28,10 @@ pub async fn import_config(
     let old = state.config.load_full();
     // P0 提权门禁：整份导入可覆盖 web.api_token，须主 token
     crate::web::config_apply::ensure_system_secrets_allowed(
-        &state, &headers, &old, &payload.config,
+        &state,
+        &headers,
+        &old,
+        &payload.config,
     )?;
     // 审计所需的规模数字必须在 persist_then_apply 消费配置之前取好
     let device_count = payload

@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod model;
 pub mod monitor;
 pub mod ports;
+pub mod priority;
 pub mod shutdown;
 pub mod supervision;
 

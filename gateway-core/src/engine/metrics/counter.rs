@@ -200,6 +200,25 @@ impl Metrics {
         self.scoped.inc_reconnect(bus);
     }
 
+    /// 总线排队深度 +1（`BusManager::transaction` 入队成功时调用）。
+    pub fn inc_bus_queue_depth(&self) {
+        self.bus.queue_depth.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 总线排队深度 -1（总线 task 取出事务时调用，含调用方已放弃的过期事务）。
+    pub fn dec_bus_queue_depth(&self) {
+        self.bus.queue_depth.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// 记录一次事务在总线队列中的等待时长（微秒）。
+    ///
+    /// 与事务往返延迟分开统计，用于区分「排队拥堵」与「设备/链路慢」。
+    pub fn record_bus_queue_wait(&self, wait_us: u64) {
+        self.bus
+            .queue_wait
+            .record(wait_us, &super::TRANSACTION_DURATION_BUCKETS);
+    }
+
     /// 记录一次单事务往返延迟（微秒），并区分成功/失败
     ///
     /// 决策表 #25：SLA 埋点。`duration_us` 从提交请求到收到响应（或超时返回）的

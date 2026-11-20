@@ -94,9 +94,10 @@ fn map_txn_err_covers_all_variants() {
         map_txn_err(TransactionError::Malformed("bad".into())),
         CollectorError::InvalidFrame(_)
     ));
+    // 第一批#3：Busy 是本地并发池满，归因为 BusBusy 而非「设备不应答」
     assert!(matches!(
         map_txn_err(TransactionError::Busy),
-        CollectorError::NoReply
+        CollectorError::BusBusy(_)
     ));
     assert!(matches!(
         map_txn_err(TransactionError::Io(std::io::Error::other("io"))),
@@ -143,6 +144,8 @@ fn submit_txn(tx: &mpsc::Sender<BusTransaction>) -> JoinHandle<Result<Vec<u8>, C
             expected_count: Some(1),
             raw: false,
             timeout_ms: None,
+            enqueued_at: std::time::Instant::now(),
+            priority: crate::south::bus::BusPriority::Normal,
         })
         .await
         .map_err(|_| CollectorError::BusClosed)?;
@@ -245,10 +248,12 @@ async fn stale_disconnect_does_not_clear_new_pool() {
     };
 
     let (tx, rx) = mpsc::channel::<BusTransaction>(64);
+    let (_ctrl_tx, ctrl_rx) = mpsc::channel::<BusTransaction>(64);
     let task = tokio::spawn(bus_task_tcp(
         bus,
         addr,
         rx,
+        ctrl_rx,
         std::sync::Arc::new(crate::engine::metrics::Metrics::default()),
     ));
 
@@ -363,6 +368,8 @@ fn submit_custom(
             expected_count: None,
             raw: false,
             timeout_ms: None,
+            enqueued_at: std::time::Instant::now(),
+            priority: crate::south::bus::BusPriority::Normal,
         })
         .await
         .map_err(|_| CollectorError::BusClosed)?;
@@ -421,10 +428,12 @@ async fn disconnect_aborts_pool_and_triggers_reconnect() {
     };
 
     let (tx, rx) = mpsc::channel::<BusTransaction>(DISCONNECT_BURST * 2);
+    let (_ctrl_tx, ctrl_rx) = mpsc::channel::<BusTransaction>(DISCONNECT_BURST * 2);
     let task = tokio::spawn(bus_task_tcp(
         bus,
         addr,
         rx,
+        ctrl_rx,
         std::sync::Arc::new(crate::engine::metrics::Metrics::default()),
     ));
 

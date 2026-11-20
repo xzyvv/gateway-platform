@@ -99,6 +99,11 @@ impl ModbusCollector {
             );
             // Bug 186: 单次重试——现网 90%+ 的 recoverable 都是偶发。
             // 一次重试足够；第二次重试会让通信周期翻倍，无明显收益。
+            // 注（R-6 复核结论）：这一层与 bus 层的 retry_count 不是重复——
+            // bus 层只重试传输类错误（NoReply/Checksum/Io），本层只重试
+            // 「从站回了可恢复异常码」这一协议类错误，两者覆盖不同错误类别，
+            // 删任意一层都会丢失对应场景的重试能力。最坏耗时为
+            // 「首次往返 + 一次完整 bus 重试预算(3T+400ms)」，可接受，故保持现状。
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let second = match self.bus.transaction(request, Some(count)).await {
                 Ok(resp) => parse_read_response(slave, fc, count, &resp),
@@ -141,7 +146,10 @@ impl ModbusCollector {
         let request = build_read_request(slave, fc, start_addr, count);
         // 同 read_registers_with_retry：异常帧由 parse_coils_response 识别，
         // 必须合并「事务结果 + 解帧结果」后再分类，否则异常码走不到重试。
-        let first = match self.bus.transaction(request.clone(), None).await {
+        // 修复(R-3)：线圈读同样传 expected_count —— FC01/02 的期望字节数是
+        // ceil(count/8)（frames.rs 的 C-3 修复已区分位/寄存器两种公式），
+        // 传 None 会让定帧失去字节数校验，脏数据下可能把本帧与后续噪声粘连。
+        let first = match self.bus.transaction(request.clone(), Some(count)).await {
             Ok(resp) => parse_coils_response(slave, fc, count, &resp),
             Err(e) => Err(e),
         };
@@ -166,7 +174,7 @@ impl ModbusCollector {
                 label, fc, slave, start_addr, count, exc.description()
             );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let second = match self.bus.transaction(request, None).await {
+            let second = match self.bus.transaction(request, Some(count)).await {
                 Ok(resp) => parse_coils_response(slave, fc, count, &resp),
                 Err(e) => Err(e),
             };
@@ -277,10 +285,7 @@ impl ModbusCollector {
                                 let value = convert_value(p, raw);
                                 let dp = DataPoint {
                                     point_id: p.id.clone(),
-                                    device_id: p
-                                        .device_id
-                                        .clone()
-                                        .unwrap_or_else(|| p.bus.clone()),
+                                    device_id: p.device_id.clone().unwrap_or_else(|| p.bus.clone()),
                                     value,
                                     raw_value: raw,
                                     raw_type: "bool".to_string(),

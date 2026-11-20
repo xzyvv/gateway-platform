@@ -55,6 +55,7 @@ pub(crate) async fn bus_task_tcp(
     bus_config: BusConfig,
     tcp_addr: String,
     mut rx: mpsc::Receiver<BusTransaction>,
+    mut ctrl_rx: mpsc::Receiver<BusTransaction>,
     metrics: Arc<Metrics>,
 ) {
     let name = bus_config.port_name.clone();
@@ -62,11 +63,8 @@ pub(crate) async fn bus_task_tcp(
     // 与 `BusManager` 的应答预算同源（原 #107）：「重试循环最坏耗时」不得超出
     // 上层「等应答」预算，故两处共用 DEFAULT_RETRY_* 常量。
     let retry_count = bus_config.retry_count.unwrap_or(DEFAULT_RETRY_COUNT);
-    let retry_delay = Duration::from_millis(
-        bus_config
-            .retry_delay_ms
-            .unwrap_or(DEFAULT_RETRY_DELAY_MS),
-    );
+    let retry_delay =
+        Duration::from_millis(bus_config.retry_delay_ms.unwrap_or(DEFAULT_RETRY_DELAY_MS));
     // 下限 1：与 `south/bus/mod.rs` 的 `.max(1)` 保持一致。
     // 若为 0，`TransactionPool::with_stream(0, …)` 后每个事务都判定 `active.len() >= 0`
     // 而恒返回 Busy，该 TCP 总线会静默全线失效。
@@ -85,8 +83,31 @@ pub(crate) async fn bus_task_tcp(
     // 将 pool 置 None，触发主循环下次循环重连。
     let pool_slot: Arc<Mutex<Option<Arc<TransactionPool>>>> = Arc::new(Mutex::new(None));
     let mut in_flight: Vec<JoinHandle<()>> = Vec::new();
+    // 控制（写）指令的独立并发额度，默认 1：
+    // - 写之间串行，保证同一设备的写序一致（并发写会互相覆盖）；
+    // - 写事务不必等采集在途事务全部结束才开始下发（写有自己的排队位）。
+    // 注意：写事务最终仍要提交到同一个 `TransactionPool` 取响应，
+    // 因此它与采集仍共享 pool 的槽位上限（tcp_concurrent）；本信号量额外保证的是
+    // 「写与写之间串行」以及「写不必排在在途采集之后」。
+    let write_sem = Arc::new(tokio::sync::Semaphore::new(1));
 
-    while let Some(tx) = rx.recv().await {
+    loop {
+        // 控制（写）通道优先：`biased` 保证每轮先清写队列。
+        let tx = tokio::select! {
+            biased;
+            Some(t) = ctrl_rx.recv() => t,
+            t = rx.recv() => match t {
+                Some(v) => v,
+                None => break,
+            },
+        };
+        if !super::prepare_dequeued(&tx, metrics.as_ref()) {
+            tracing::debug!(
+                "modbus tcp {}: drop stale transaction (caller canceled while queued)",
+                tcp_addr
+            );
+            continue;
+        }
         // P0-1 调试直发：走一条独立短连接，原样收发。
         //
         // 为什么不复用下方 pool：pool 只接受「RTU → ModbusRequest → MBAP」转换后的
@@ -186,6 +207,7 @@ pub(crate) async fn bus_task_tcp(
         };
         let pool_slot_clone = pool_slot.clone();
         let had_successful_comm = had_successful_comm.clone();
+        let write_sem = write_sem.clone();
         // 取 slave_id 用于构造 RTU 响应帧
         let slave_id = tx.request.first().copied().unwrap_or(0);
 
@@ -201,6 +223,19 @@ pub(crate) async fn bus_task_tcp(
         // 当前三处显式 `response_tx.send()` 仅是为 caller 提供更精确的语义
         // （disconnected / parse_rtu 错误等），不依赖它们也能保证 caller 不挂死。
         let handle = crate::engine::supervision::spawn_catch_unwind("tcp_txn", async move {
+            // 控制（写）指令占用独立额度（默认 1）：写之间串行保证写序，
+            // 且不与采集抢同一批 pool 槽位。
+            let _write_permit = if tx.priority == super::BusPriority::Control {
+                match write_sem.acquire().await {
+                    Ok(p) => Some(p),
+                    Err(_) => {
+                        let _ = tx.response_tx.send(Err(CollectorError::BusClosed));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
             // 解析 RTU -> ModbusRequest
             let req = match parse_rtu_request(&tx.request, timeout) {
                 Ok(r) => r,
@@ -384,7 +419,13 @@ fn map_txn_err(e: TransactionError) -> CollectorError {
         TransactionError::Disconnected => CollectorError::IoError("disconnected".into()),
         TransactionError::Timeout(_) => CollectorError::NoReply,
         TransactionError::Malformed(s) => CollectorError::InvalidFrame(s),
-        TransactionError::Busy => CollectorError::NoReply,
+        // 修复(第一批#3)：Busy 是「本地并发池已满、立即拒绝」，不是设备不应答。
+        // 旧映射成 NoReply 有两个后果：
+        //   1) 现场无法区分「网关带宽不足」与「设备掉线」，排障方向被带偏；
+        //   2) NoReply 在 is_retryable 内，会触发无谓重试，进一步加剧池拥塞。
+        // 映射为 BusBusy（刻意不可重试）后归因正确。等待时长按 0 计——
+        // TransactionPool::submit 在池满时直接返回、不做排队。
+        TransactionError::Busy => CollectorError::BusBusy(std::time::Duration::ZERO),
         TransactionError::Io(e) => CollectorError::IoError(e.to_string()),
         TransactionError::NotBound => CollectorError::IoError("pool not bound".into()),
     }

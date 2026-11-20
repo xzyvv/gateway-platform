@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::{do_transaction, write_timeout_for, ASCII_BUF_LIMIT, TransactionParams};
+use super::{do_transaction, write_timeout_for, TransactionParams, ASCII_BUF_LIMIT};
 #[cfg(feature = "modbus")]
 use crate::engine::codec::crc::crc16;
 use crate::engine::error::GatewayResult;
@@ -650,7 +650,11 @@ async fn ascii_overflow_drops_partial_frame_and_accepts_next_valid_frame() {
         "合法帧不应被前序垃圾数据污染"
     );
     assert!(
-        metrics.bus.ascii_frame_dropped.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+        metrics
+            .bus
+            .ascii_frame_dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 1,
         "缓冲超限必须递增丢弃计数，供运维识别异常设备灌噪声"
     );
 }

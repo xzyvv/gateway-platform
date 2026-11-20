@@ -395,12 +395,18 @@ mod tests {
     #[test]
     fn enqueue_failure_increments_persist_failed_counter() {
         let metrics = Metrics::default();
-        assert_eq!(metrics.queue_persist.persist_failed.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            metrics.queue_persist.persist_failed.load(Ordering::Relaxed),
+            0
+        );
 
         record_enqueue_failure(&metrics, 42, "queue actor exited");
         record_enqueue_failure(&metrics, 7, "queue actor exited");
 
-        assert_eq!(metrics.queue_persist.persist_failed.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            metrics.queue_persist.persist_failed.load(Ordering::Relaxed),
+            2
+        );
     }
 
     /// 四条入队路径（退出 flush / 定时兜底 / 攒批 / 最终 flush）都必须走

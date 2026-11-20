@@ -340,7 +340,11 @@ fn retention_deletes_at_most_one_batch_per_cycle() {
     let first = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
     assert_eq!(first, 1000, "单轮只能删一批");
     assert_eq!(row_count(&conn), 1500);
-    assert_eq!(depth.load(order), 1500, "depth 按本批扣减，不得按全表超期行扣穿");
+    assert_eq!(
+        depth.load(order),
+        1500,
+        "depth 按本批扣减，不得按全表超期行扣穿"
+    );
     assert_eq!(rows_total.load(order), 1500);
 
     let second = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);

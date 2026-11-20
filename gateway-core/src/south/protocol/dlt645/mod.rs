@@ -19,7 +19,7 @@ use super::{
 };
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
-use crate::south::bus::BusManager;
+use crate::south::bus::{BusManager, BusPriority};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -334,7 +334,11 @@ impl Dlt645Collector {
 
         // 控制码 0x04 = 写数据
         let request = self.build_frame(addr_bytes, 0x04, &data);
-        let response = self.bus.transaction(request, None).await?;
+        // 写指令走控制通道：优先于采集轮询下发，避免现场「下发等太久」
+        let response = self
+            .bus
+            .transaction_with_priority(request, None, BusPriority::Control)
+            .await?;
 
         self.parse_write_status_response(&response, addr_bytes, 0x84, true)
     }
@@ -376,7 +380,10 @@ impl Dlt645Collector {
                 })?;
 
         let request = self.build_frame(addr_bytes, 0x0C, &data);
-        let response = self.bus.transaction(request, None).await?;
+        let response = self
+            .bus
+            .transaction_with_priority(request, None, BusPriority::Control)
+            .await?;
         // 0x0C 响应只有 1 字节 STATUS（无 DI）
         self.parse_write_status_response(&response, addr_bytes, 0x8C, false)
     }
@@ -406,7 +413,10 @@ impl Dlt645Collector {
             })?;
 
         let request = self.build_frame(addr_bytes, 0x0F, &data);
-        let response = self.bus.transaction(request, None).await?;
+        let response = self
+            .bus
+            .transaction_with_priority(request, None, BusPriority::Control)
+            .await?;
         // 0x0F 响应只有 1 字节 STATUS（无密码回显）
         self.parse_write_status_response(&response, addr_bytes, 0x8F, false)
     }

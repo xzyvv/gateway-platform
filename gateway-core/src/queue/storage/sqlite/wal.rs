@@ -290,10 +290,7 @@ mod tests {
         conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES (7);")
             .expect("setup wal table");
 
-        assert!(
-            backup_db_consistent(&mut conn, &db, &bak, ""),
-            "备份应成功"
-        );
+        assert!(backup_db_consistent(&mut conn, &db, &bak, ""), "备份应成功");
 
         // 备份文件必须包含 checkpoint 后的已提交行
         let check = Connection::open(&bak).expect("open backup");

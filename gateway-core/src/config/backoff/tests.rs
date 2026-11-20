@@ -193,7 +193,10 @@ fn next_reconnect_backoff_monotonic_and_capped() {
     for attempt in 1..=20 {
         let cur = next_reconnect_backoff(&cfg, attempt, 0.5);
         assert!(cur >= prev, "延迟必须单调不减: {:?} -> {:?}", prev, cur);
-        assert!(cur <= Duration::from_secs_f64(33.0), "不得超过上限档位+抖动");
+        assert!(
+            cur <= Duration::from_secs_f64(33.0),
+            "不得超过上限档位+抖动"
+        );
         prev = cur;
     }
     assert_eq!(

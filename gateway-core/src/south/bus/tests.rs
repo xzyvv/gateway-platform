@@ -23,6 +23,12 @@ async fn transaction_fails_fast_bus_closed_when_task_dead() {
         asdu_addr_len: 2,
         opcua: None,
         tx,
+        // 该用例的失败路径在入队即返回，控制通道不会被使用，给一个立即关闭的通道即可
+        ctrl_tx: {
+            let (ctrl_tx, ctrl_rx) = mpsc::channel::<BusTransaction>(1);
+            drop(ctrl_rx);
+            ctrl_tx
+        },
         metrics: std::sync::Arc::new(Metrics::new()),
         handle: None,
     };
@@ -97,6 +103,291 @@ async fn transaction_fails_fast_when_serial_cannot_be_opened() {
         "must fail fast (under 500ms), actual = {:?}",
         elapsed
     );
+    drop(bm);
+}
+
+// ===== 队列过期事务回归：调用方放弃后不得再写总线 =====
+//
+// 修复前：调用方在排队期间超时（oneshot 接收端 drop），事务仍留在 channel 里被
+//         照常执行——写指令会出现「API 已返回失败、设备实际被写」的假失败，
+//         调用方重试还会造成重复写；采集侧则用过期请求白占总线时隙。
+// 修复后：总线 task 取出事务先查 response_tx.is_closed()，已放弃的直接丢弃。
+
+// 注：AsyncRead / AsyncWrite / ReadBuf / Context / Poll 用全路径引用，
+// 避免与下方 `#[cfg(feature = "modbus")]` 的自检桩导入重复定义。
+
+/// 记录写入字节、读端永远挂起（设备静默）的串口桩
+struct RecordingPort {
+    writes: Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl tokio::io::AsyncWrite for RecordingPort {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.writes
+            .lock()
+            .expect("port writes mutex poisoned")
+            .extend_from_slice(buf);
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncRead for RecordingPort {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+}
+
+#[tokio::test]
+async fn stale_transaction_is_skipped_and_not_written() {
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bus = BusConfig {
+        port_name: "bus_stale_skip".into(),
+        timeout_ms: 300,
+        retry_count: Some(0),
+        retry_delay_ms: Some(50),
+        ..Default::default()
+    };
+    // 直接注入内存串口句柄（不依赖 opener / 后台重连，避免首轮重连的 1s 退避引入抖动）
+    let handle = SerialHandle::from_stream(RecordingPort {
+        writes: writes.clone(),
+    });
+    let metrics = Arc::new(crate::engine::metrics::Metrics::new());
+    let bm = BusManager::spawn_with(
+        &bus,
+        Some(handle),
+        metrics.clone(),
+        crate::south::bus::transport::BusDeps::production(),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // 1) 调用方先放弃：接收端立即 drop，事务仍留在队列里
+    //    本用例直发 channel（绕开 transaction()），故手动补上入队计数，
+    //    使排队深度断言能验证「出队必减」的配对关系。
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    drop(resp_rx);
+    metrics.inc_bus_queue_depth();
+    bm.tx
+        .send(BusTransaction {
+            request: vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A],
+            response_tx: resp_tx,
+            expected_count: None,
+            raw: true,
+            timeout_ms: None,
+            enqueued_at: std::time::Instant::now(),
+            priority: BusPriority::Normal,
+        })
+        .await
+        .expect("enqueue stale tx");
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    assert!(
+        writes
+            .lock()
+            .expect("port writes mutex poisoned")
+            .is_empty(),
+        "stale transaction must be dropped before reaching the wire"
+    );
+    assert_eq!(
+        metrics.bus.queue_depth.load(Ordering::Relaxed),
+        0,
+        "queue depth must be drained by dequeue"
+    );
+
+    // 2) 对照组：接收端存活时事务必须真的下发
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    let _keep_alive = resp_rx;
+    bm.tx
+        .send(BusTransaction {
+            request: vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A],
+            response_tx: resp_tx,
+            expected_count: None,
+            raw: true,
+            timeout_ms: None,
+            enqueued_at: std::time::Instant::now(),
+            priority: BusPriority::Normal,
+        })
+        .await
+        .expect("enqueue live tx");
+    // 轮询等待最多 1s：tmp 环境下调度抖动偶尔会超过固定 sleep
+    for _ in 0..20 {
+        if !writes
+            .lock()
+            .expect("port writes mutex poisoned")
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !writes
+            .lock()
+            .expect("port writes mutex poisoned")
+            .is_empty(),
+        "live transaction must be written to the bus"
+    );
+    drop(bm);
+}
+
+// ===== 队列优先级回归：控制（写）事务必须先于已排队的采集事务下发 =====
+//
+// 现场「点了下发要等好几秒」的根因：写指令与采集轮询共用一个 FIFO 队列，
+// 写必须排在前面所有采集事务之后，而单笔采集最坏耗时 `3T+400ms`。
+// 修复后：写指令走独立控制通道，总线 task 每轮优先消费控制通道。
+//
+// 观测点：串口桩按帧记录写入顺序，断言「先入队的采集事务」排在
+//         「后入队的控制事务」之后。
+
+/// 逐帧记录写入内容、读端永远挂起的串口桩
+struct FrameLogPort {
+    frames: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+}
+
+impl tokio::io::AsyncWrite for FrameLogPort {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.frames
+            .lock()
+            .expect("port frames mutex poisoned")
+            .push(buf.to_vec());
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncRead for FrameLogPort {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+}
+
+#[tokio::test]
+async fn control_transaction_is_served_before_queued_normal_transaction() {
+    let frames = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bus = BusConfig {
+        port_name: "bus_priority".into(),
+        timeout_ms: 150,
+        retry_count: Some(0),
+        retry_delay_ms: Some(10),
+        ..Default::default()
+    };
+    let metrics = Arc::new(crate::engine::metrics::Metrics::new());
+    let bm = BusManager::spawn_with(
+        &bus,
+        Some(SerialHandle::from_stream(FrameLogPort {
+            frames: frames.clone(),
+        })),
+        metrics.clone(),
+        crate::south::bus::transport::BusDeps::production(),
+    );
+
+    // 三笔事务的请求帧各不相同，便于从写入顺序上区分身份
+    let frame_a = vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0xA1, 0xA2];
+    let frame_b = vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0xB1, 0xB2];
+    let frame_c = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x01, 0xC1, 0xC2];
+
+    // 直发通道（绕开 transaction() 的应答预算：排队超过预算的事务会被当作
+    // 过期丢弃，无法用于观察下发顺序），并保持接收端存活以免被提前丢弃。
+    let mut keep_alive = Vec::new();
+    let mut enqueue =
+        |sender: &mpsc::Sender<BusTransaction>, frame: Vec<u8>, priority: BusPriority| {
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            keep_alive.push(resp_rx);
+            metrics.inc_bus_queue_depth();
+            let msg = BusTransaction {
+                request: frame,
+                response_tx: resp_tx,
+                expected_count: None,
+                raw: false,
+                timeout_ms: None,
+                enqueued_at: std::time::Instant::now(),
+                priority,
+            };
+            sender.clone().try_send(msg).expect("enqueue");
+        };
+
+    // 1) 先入队一笔采集事务，占住总线（设备静默 → 等满 timeout）
+    enqueue(&bm.tx, frame_a.clone(), BusPriority::Normal);
+    // 等 A 真正上总线，确保后续两笔都排在它后面
+    let start = std::time::Instant::now();
+    while frames
+        .lock()
+        .expect("port frames mutex poisoned")
+        .is_empty()
+    {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "首笔采集事务未上总线"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // 2) 采集事务 B 先入队，控制事务 C 后入队。
+    //    若两条通道共用一个 FIFO，C 会排在 B 之后；修复后 C 必须先于 B 被消费。
+    enqueue(&bm.tx, frame_b.clone(), BusPriority::Normal);
+    enqueue(&bm.ctrl_tx, frame_c.clone(), BusPriority::Control);
+
+    // 等三笔都上了总线（设备静默，每笔约一个 timeout）
+    let start = std::time::Instant::now();
+    while frames.lock().expect("port frames mutex poisoned").len() < 3 {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "三笔事务未全部下发"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let written = frames.lock().expect("port frames mutex poisoned").clone();
+    assert_eq!(written[0], frame_a, "首笔必须是先发起的采集事务");
+    assert_eq!(
+        written[1], frame_c,
+        "控制事务必须先于已排队的采集事务下发（实际写入顺序 {written:?}）"
+    );
+    assert_eq!(written[2], frame_b, "后入队的采集事务应排在控制事务之后");
+
+    drop(keep_alive);
     drop(bm);
 }
 
@@ -493,10 +784,15 @@ async fn self_check_passes_so_silent_device_does_not_reopen_port() {
 
     // 自检结论必须落到指标上：现场靠这两个计数区分"设备坏"与"端口坏"，
     // 只打 tracing 日志等于不可见。
-    assert!(
-        metrics.bus.self_check_ok.load(Ordering::Relaxed) >= 1,
-        "自检成功应累加 gateway_bus_self_check_ok_total"
-    );
+    // 注意：探测帧出现在 port.requests() 是在 flush 时落定的，而自检结论要等
+    // 回应被读回、判定分支执行完才累加；write_frame 现在还带 3.5 字符静默（R-7），
+    // 两者之间确实存在窗口，必须等计数而不是立即断言。
+    wait_until(
+        || metrics.bus.self_check_ok.load(Ordering::Relaxed) >= 1,
+        2000,
+        "自检成功未累加 gateway_bus_self_check_ok_total",
+    )
+    .await;
     assert_eq!(
         metrics
             .bus
@@ -692,13 +988,12 @@ async fn spawn_snapshots_reply_budget_above_retry_budget() {
         BusDeps::production(),
     );
 
-    let retry_budget = bus_retry_budget(
-        Duration::from_millis(1000),
-        2,
-        Duration::from_millis(200),
-    );
+    let retry_budget = bus_retry_budget(Duration::from_millis(1000), 2, Duration::from_millis(200));
     assert_eq!(bm.reply_budget, retry_budget, "spawn 必须快照同一推导结果");
-    assert!(bm.reply_deadline() >= bm.reply_budget, "应答预算必须覆盖重试预算");
+    assert!(
+        bm.reply_deadline() >= bm.reply_budget,
+        "应答预算必须覆盖重试预算"
+    );
     assert_eq!(
         bm.reply_deadline(),
         retry_budget + Duration::from_millis(100)

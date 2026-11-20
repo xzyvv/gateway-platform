@@ -17,7 +17,8 @@
 //! - `gateway_bus_port_reopen_by_self_check_total`：因自检失败**实际**重开了端口
 //!   （`fail` 中扣除冷却期内跳过的次数，用于判断"端口在反复坏"）
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use super::histogram::Histogram;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 #[derive(Default)]
 pub struct BusMetrics {
@@ -32,6 +33,16 @@ pub struct BusMetrics {
     /// Modbus ASCII 接收缓冲触及硬上限、整段丢弃的次数（异常设备持续发无
     /// CRLF 数据时的内存保护信号；持续增长说明有设备/线路在灌噪声）。
     pub ascii_frame_dropped: AtomicU64,
+    /// 当前排队等待上总线的在途事务数（全部总线合计，进程级 gauge）。
+    ///
+    /// 与 [`Self::queue_wait`] 配合区分「设备慢」与「排队拥堵」：深度长期 > 0
+    /// 且排队等待上升，说明总线带宽不足，或某台设备在反复超时重试堵住队头。
+    pub queue_depth: AtomicI64,
+    /// 事务在队列中的等待时长（入队成功 → 总线 task 取出执行，微秒）。
+    ///
+    /// 与 `gateway_bus_transaction_duration_us` 分开：后者含排队，本项只测排队，
+    /// 用于判断延迟到底来自「排队」还是「设备/链路」。
+    pub queue_wait: Histogram,
 }
 
 impl BusMetrics {
@@ -54,12 +65,26 @@ impl BusMetrics {
              gateway_bus_port_reopen_by_self_check_total {}\n\
              # HELP gateway_bus_ascii_frame_dropped_total Modbus ASCII receive buffer overflow: partial frame dropped\n\
              # TYPE gateway_bus_ascii_frame_dropped_total counter\n\
-             gateway_bus_ascii_frame_dropped_total {}",
+             gateway_bus_ascii_frame_dropped_total {}\n\
+             # HELP gateway_bus_queue_depth Bus transactions queued but not yet executed (all buses)\n\
+             # TYPE gateway_bus_queue_depth gauge\n\
+             gateway_bus_queue_depth {}",
             self.self_check_ok.load(Ordering::Relaxed),
             self.self_check_fail.load(Ordering::Relaxed),
             self.self_check_skipped.load(Ordering::Relaxed),
             self.port_reopen_by_self_check.load(Ordering::Relaxed),
             self.ascii_frame_dropped.load(Ordering::Relaxed),
+            self.queue_depth.load(Ordering::Relaxed),
+        );
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_bus_queue_wait_us Time a transaction waited in the bus queue before execution (microseconds)\n\
+             # TYPE gateway_bus_queue_wait_us histogram"
+        );
+        self.queue_wait.render(
+            "bus_queue_wait_us",
+            &super::TRANSACTION_DURATION_BUCKETS,
+            buf,
         );
     }
 }
@@ -76,9 +101,19 @@ mod tests {
         m.self_check_skipped.fetch_add(1, Ordering::Relaxed);
         m.port_reopen_by_self_check.fetch_add(1, Ordering::Relaxed);
         m.ascii_frame_dropped.fetch_add(4, Ordering::Relaxed);
+        m.queue_depth.fetch_add(2, Ordering::Relaxed);
+        m.queue_wait
+            .record(1_500, &super::super::TRANSACTION_DURATION_BUCKETS);
 
         let mut out = String::new();
         m.render(&mut out);
+
+        assert!(out.contains("gateway_bus_queue_depth 2"), "{out}");
+        assert!(out.contains("gateway_bus_queue_wait_us_count 1"), "{out}");
+        assert!(
+            out.contains("# TYPE gateway_bus_queue_wait_us histogram"),
+            "{out}"
+        );
 
         assert!(out.contains("gateway_bus_self_check_ok_total 3"), "{out}");
         assert!(out.contains("gateway_bus_self_check_fail_total 2"), "{out}");

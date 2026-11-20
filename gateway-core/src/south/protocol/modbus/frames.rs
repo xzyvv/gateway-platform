@@ -250,10 +250,10 @@ pub(crate) fn extract_modbus_frame(
                     // 修复(C-3)：响应字节数公式必须区分"位"与"寄存器"。
                     //   FC01/FC02 读线圈/离散输入 → 每 8 点 1 字节，即 ceil(n / 8)
                     //   FC03/FC04 读保持/输入寄存器 → 每点 2 字节，即 n * 2
-                    // 旧实现一律按 n * 2 校验。当前唯一入口 `read_coils_with_retry`
-                    // 恒传 None 故未触发；一旦将来做"批量读线圈优化"把 expected_count
-                    // 传进来，校验必然失败 → 逐字节丢弃重同步 → 批量线圈恒 NoReply
-                    // 而单点线圈正常，现场极难定位。
+                    // 旧实现一律按 n * 2 校验，把线圈路径也传 expected_count 时
+                    // 必然失败 → 逐字节丢弃重同步 → 批量线圈恒 NoReply。
+                    // 现 read_coils_with_retry 已传 Some(count)（R-3 修复），
+                    // 依赖下面这行公式正确。
                     let expected_bytes = match fc {
                         0x01 | 0x02 => (n as usize).div_ceil(8),
                         _ => (n as usize) * 2,
@@ -270,7 +270,22 @@ pub(crate) fn extract_modbus_frame(
             // 原实现返回 6，导致 CRC 校验对象错位（拿数据字节当 CRC），
             // 串口写操作（FC05/06/0F/10）的响应恒被逐字节丢弃 → 永远 NoReply。
             0x05 | 0x06 | 0x0F | 0x10 | 0x16 => 8,
-            // FC21(0x15 写文件记录) 响应为变长回显，暂不支持：交由默认分支丢弃重同步
+            // 修复(R-4)：FC21(0x15 写文件记录) 的响应是「请求回显」的变长帧，
+            // 与 FC01-04 一样由 buf[2] = byte_count 描述后续数据长度：
+            //   [slave][0x15][byte_count][ref_type(2) file_num(2) rec_len(2) data...][crc(2)]
+            // 旧实现落入默认分支逐字节丢弃 → 用 FC21 的从站写入永远失败，
+            // 且重同步过程会吞掉紧随其后的正常帧（表现为同总线其它设备偶发丢帧）。
+            0x15 => {
+                if buf.len() < 3 {
+                    return None;
+                }
+                let byte_count = buf[2] as usize;
+                if byte_count == 0 || byte_count > 250 {
+                    let _ = fb.pop(1);
+                    continue;
+                }
+                3 + byte_count + 2
+            }
             _ => {
                 // 未知 fc：保守丢弃 1 字节等下一个
                 let _ = fb.pop(1);

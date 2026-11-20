@@ -2,14 +2,14 @@
 //!
 //! 包含串口模式下的总线请求处理循环、重连逻辑和帧提取。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 
 use super::frame_buffer::FrameBuffer;
-use crate::config::{next_reconnect_backoff, BusConfig, ReconnectBackoffConfig};
+use crate::config::BusConfig;
 use crate::engine::metrics::Metrics;
 use crate::south::protocol::codec::{ascii_to_rtu, rtu_to_ascii};
 use crate::south::protocol::CollectorError;
@@ -19,6 +19,11 @@ use super::transport::{BusDeps, GpioOutput};
 use super::{
     is_retryable, BusTransaction, SerialHandle, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_DELAY_MS,
 };
+
+// 后台自愈重连（热拔插）独立成模块：主循环只管「取事务 → 执行 → 回结果」，
+// 端口掉了怎么自愈是另一组关注点。见子模块内注释。
+mod reconnect;
+use reconnect::{ensure_background_reconnect, lock_slot, AliveGuard, ReconnectCtx};
 
 /// NoReply/ChecksumError 连续达到该次数后发一帧自检帧，区分设备级与端口级故障。
 const PROBE_AFTER_SILENT: u32 = 10;
@@ -82,6 +87,7 @@ pub(crate) async fn run_serial_bus_task(
     bus_config: BusConfig,
     serial: Option<SerialHandle>,
     mut rx: mpsc::Receiver<BusTransaction>,
+    mut ctrl_rx: mpsc::Receiver<BusTransaction>,
     metrics: Arc<Metrics>,
     deps: BusDeps,
 ) {
@@ -90,11 +96,8 @@ pub(crate) async fn run_serial_bus_task(
     let timeout = Duration::from_millis(bus_config.timeout_ms);
     // 重试参数与 `BusManager` 的应答预算同源（DEFAULT_RETRY_* 定义在 bus/mod.rs），
     // 保证「重试循环最坏耗时」不会超出上层「等应答」预算（原 #107）。
-    let retry_delay = Duration::from_millis(
-        bus_config
-            .retry_delay_ms
-            .unwrap_or(DEFAULT_RETRY_DELAY_MS),
-    );
+    let retry_delay =
+        Duration::from_millis(bus_config.retry_delay_ms.unwrap_or(DEFAULT_RETRY_DELAY_MS));
     let retry_count = bus_config.retry_count.unwrap_or(DEFAULT_RETRY_COUNT);
     let de_pin = bus_config.de_pin;
     // 决策表 #24：统一变体作为唯一解析点（显式 variant 优先，回退遗留 modbus_mode）。
@@ -138,7 +141,24 @@ pub(crate) async fn run_serial_bus_task(
     // 上次"自检判定端口损坏并重开"的时间，用于重开冷却
     let mut last_reopen_at: Option<tokio::time::Instant> = None;
 
-    while let Some(tx) = rx.recv().await {
+    loop {
+        // 控制（写）通道优先：`biased` 保证每轮先清写队列，
+        // 写指令不必排在采集轮询之后（单笔采集最坏 3T+400ms）。
+        let tx = tokio::select! {
+            biased;
+            Some(t) = ctrl_rx.recv() => t,
+            t = rx.recv() => match t {
+                Some(v) => v,
+                None => break,
+            },
+        };
+        if !super::prepare_dequeued(&tx, metrics.as_ref()) {
+            tracing::debug!(
+                "bus {}: drop stale transaction (caller canceled while queued)",
+                name
+            );
+            continue;
+        }
         // 取出手柄（锁仅在此同步块内持有，不跨 await）
         let mut handle = match lock_slot(&serial_state).take() {
             Some(h) => h,
@@ -198,6 +218,22 @@ pub(crate) async fn run_serial_bus_task(
             match &result {
                 Ok(_) => break,
                 Err(e) if is_retryable(e) && attempt < retry_count => {
+                    // 修复(R-2)：控制通道有积压时放弃本次重试，立即回到主循环让写指令先下发。
+                    // 重试只用于提升「偶发失败」的成功率，优先级低于现场控制指令的及时性；
+                    // 否则一笔长采集事务的内部重试窗口会把写请求一起拖住
+                    // （写延迟上界 = 单笔事务的 3T+400ms，biased 只解决出队顺序，解决不了在途）。
+                    // 注意：这里只「不重试」，不动 ctrl_rx 里的消息，写指令仍会在下一轮
+                    // select! 里被正常取出并执行。
+                    if !ctrl_rx.is_empty() {
+                        tracing::debug!(
+                            "bus {} transaction attempt {}/{} failed ({}), control queue pending -> skip retry",
+                            name,
+                            attempt + 1,
+                            retry_count,
+                            e
+                        );
+                        break;
+                    }
                     attempt += 1;
                     tracing::debug!(
                         "bus {} transaction attempt {}/{} failed ({}), retrying in {}ms",
@@ -205,9 +241,7 @@ pub(crate) async fn run_serial_bus_task(
                         attempt,
                         retry_count,
                         e,
-                        bus_config
-                            .retry_delay_ms
-                            .unwrap_or(DEFAULT_RETRY_DELAY_MS)
+                        bus_config.retry_delay_ms.unwrap_or(DEFAULT_RETRY_DELAY_MS)
                     );
                     tokio::time::sleep(retry_delay).await;
                 }
@@ -354,136 +388,6 @@ pub(crate) async fn run_serial_bus_task(
     // 主循环退出：`_alive_guard` 在 future 结束（正常返回或被 abort）时置
     // alive=false，让后台重连任务尽快收尾，避免任务泄漏。
     tracing::info!("bus {} task ended", name);
-}
-
-/// 修复(审查#B3)：总线存活标志的 Drop guard。
-///
-/// 保证串口总线 task 的 future 在**任何**方式下结束（正常返回、panic、被
-/// `JoinHandle::abort()` 取消）都会把 `bus_alive` 置为 false，从而使
-/// `ensure_background_reconnect` 拉起的后台重连任务在下一轮循环退出，
-/// 不再持续抢占串口。
-struct AliveGuard(Arc<AtomicBool>);
-
-impl Drop for AliveGuard {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
-/// 后台重连任务的共享上下文（字段较多，用结构体承载避免超长参数列表）。
-struct ReconnectCtx {
-    bus_config: BusConfig,
-    name: String,
-    deps: BusDeps,
-    state: Arc<StdMutex<Option<SerialHandle>>>,
-    in_flight: Arc<AtomicBool>,
-    alive: Arc<AtomicBool>,
-    /// 用于累计「每总线重连次数」（统计报表 / 健康报告展示）
-    metrics: Arc<Metrics>,
-}
-
-/// 短暂持有状态桥锁（仅在同步块内使用，绝不跨 await）。锁中毒时取回内部值而非 panic：
-/// 状态桥只是句柄容器，数据本身不因持锁线程 panic 而失效。
-fn lock_slot(
-    state: &StdMutex<Option<SerialHandle>>,
-) -> std::sync::MutexGuard<'_, Option<SerialHandle>> {
-    state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// 确保后台重连任务在跑（单飞）。
-///
-/// 任务按总线退避档位（默认 1/2/5/10/30 秒 + 抖动）反复尝试重开串口；成功后把新句柄**回填状态桥**
-/// （仅在槽位为空时回填，避免覆盖主循环正在使用的句柄），下一笔事务即可正常使用，
-/// 实现热插拔自愈且无需重启进程。总线存活标志被清除（主循环退出）时任务收尾，避免泄漏。
-fn ensure_background_reconnect(ctx: &ReconnectCtx) {
-    // 单飞：已有后台重连在跑则直接返回
-    if ctx
-        .in_flight
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-    let bus_config = ctx.bus_config.clone();
-    let backoff_cfg = bus_config.reconnect_backoff.clone();
-    let name = ctx.name.clone();
-    let deps = ctx.deps.clone();
-    let state = Arc::clone(&ctx.state);
-    let in_flight = Arc::clone(&ctx.in_flight);
-    let alive = Arc::clone(&ctx.alive);
-    let metrics = Arc::clone(&ctx.metrics);
-    tokio::spawn(async move {
-        // 与 Modbus TCP 重连共用同一档位与抖动公式（attempt 从 1 起）。
-        let mut attempt: u32 = 1;
-        loop {
-            if !alive.load(Ordering::Acquire) {
-                break;
-            }
-            tracing::info!("bus {} background reconnect: attempt", name);
-            match try_reopen_serial(&bus_config, &deps).await {
-                Ok(new_handle) => {
-                    // 修复(审查#B3)：打开过程是 await，期间总线可能已退出
-                    // （alive=false）。此时不得把新句柄装回状态桥——否则该句柄
-                    // 的生命周期被状态桥拖住，串口无法随总线一并释放。直接丢弃
-                    // 新句柄（SerialHandle drop 即关闭串口）并收尾。
-                    if !alive.load(Ordering::Acquire) {
-                        drop(new_handle);
-                        break;
-                    }
-                    let mut slot = lock_slot(&state);
-                    if slot.is_none() {
-                        *slot = Some(new_handle);
-                        drop(slot);
-                        // 句柄真正回填成功才算一次「重连」；槽位被占用时是多余重开，不计。
-                        metrics.inc_bus_reconnect(&name);
-                        tracing::info!("bus {} background reopen succeeded, handle restored", name);
-                    } else {
-                        drop(slot);
-                        tracing::debug!(
-                            "bus {} background reopen succeeded but slot occupied; dropping new handle",
-                            name
-                        );
-                    }
-                    break;
-                }
-                Err(e) => {
-                    let delay = next_reconnect_backoff(
-                        &backoff_cfg,
-                        attempt,
-                        ReconnectBackoffConfig::time_rand01(),
-                    );
-                    tracing::warn!(
-                        "bus {} background reopen failed: {}, retrying in {:?}",
-                        name,
-                        e,
-                        delay
-                    );
-                    tokio::time::sleep(delay).await;
-                    attempt = attempt.saturating_add(1);
-                }
-            }
-        }
-        in_flight.store(false, Ordering::Release);
-    });
-}
-
-async fn try_reopen_serial(
-    bus_config: &BusConfig,
-    deps: &BusDeps,
-) -> Result<SerialHandle, std::io::Error> {
-    let cfg = bus_config.clone();
-    let opener = deps.opener.clone();
-    let res = tokio::task::spawn_blocking(move || opener.open(&cfg)).await;
-    match res {
-        Ok(Ok(serial)) => Ok(serial),
-        Ok(Err(e)) => Err(e),
-        Err(join_err) => Err(std::io::Error::other(format!(
-            "reopen task panicked: {}",
-            join_err
-        ))),
-    }
 }
 
 /// `do_transaction` 的入参集合：单次事务的可变参数较多且均为值/借用，
@@ -701,6 +605,15 @@ async fn write_frame(
 
     // DE 拉低：进入接收模式（flush 已在 SerialHandle::write 中完成）
     de_low(de_pin, gpio);
+
+    // 修复(第一批#2 R-7)：Modbus RTU 要求帧间至少 3.5 个字符的静默。
+    // 部分老表在 DE 下降沿过早、紧接着就开始收时会吃掉回帧首字节，
+    // 表现为「偶发 CRC 错 → 重试又成功」这类难复现问题。
+    // 静默时长 = 3.5 字符 × 10 bit / 波特率，向上取整并至少 1ms
+    // （9600bps ≈ 4ms，115200bps ≈ 1ms，对整体采集周期影响可忽略）。
+    let gap_ms = 35_000u64.div_ceil(u64::from(baud.max(300))).max(1);
+    tokio::time::sleep(Duration::from_millis(gap_ms)).await;
+
     Ok(())
 }
 

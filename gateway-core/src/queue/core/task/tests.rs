@@ -242,8 +242,7 @@ fn fallback_join_error_reclaims_whole_batch_and_honors_retry_limit() {
     drop(task_side);
     let pts = (*shared).clone();
 
-    let (retained, dropped) =
-        reclaim_fallback_points(&pts, &fallback, &retry_count, &metrics);
+    let (retained, dropped) = reclaim_fallback_points(&pts, &fallback, &retry_count, &metrics);
     assert_eq!((retained, dropped), (3, 0));
     assert_eq!(fallback.lock().len(), 3, "整批点必须回到 fallback 缓冲");
 

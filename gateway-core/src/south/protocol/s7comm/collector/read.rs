@@ -116,7 +116,8 @@ impl S7CommCollector {
         let slots: ResultSlots = std::sync::Arc::new(std::sync::Mutex::new(
             (0..points.len()).map(|_| None).collect(),
         ));
-        self.read_batch_points_with_slots(points, slots.clone()).await;
+        self.read_batch_points_with_slots(points, slots.clone())
+            .await;
         let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .iter_mut()
@@ -215,31 +216,34 @@ impl S7CommCollector {
             for (i, item_result) in parsed.into_iter().enumerate() {
                 let p = &chunk[i];
                 let point_cfg = &points[p.idx];
-                set(p.idx, match item_result {
-                    Err(rc) => Err(CollectorError::InvalidFrame(format!(
-                        "S7 multi-read item {i} failed (return code 0x{rc:02X})"
-                    ))),
-                    Ok(value_bytes) => match frames::decode_value(&value_bytes, p.data_type) {
-                        Ok(raw) => {
-                            let ts = DataPoint::now();
-                            Ok(DataPoint {
-                                point_id: point_cfg.id.clone(),
-                                device_id: point_cfg.device_id.clone().unwrap_or_default(),
-                                // 批量路径与单点路径同一套换算，避免两条路径数值不一致
-                                value: convert_value(point_cfg, raw),
-                                raw_value: raw,
-                                raw_type: "s7comm".into(),
-                                quality: Quality::Good,
-                                quality_reason: String::new(),
-                                timestamp: ts,
-                                source_ts: ts,
-                                stale_count: 0,
-                                value_text: None,
-                            })
-                        }
-                        Err(e) => Err(e),
+                set(
+                    p.idx,
+                    match item_result {
+                        Err(rc) => Err(CollectorError::InvalidFrame(format!(
+                            "S7 multi-read item {i} failed (return code 0x{rc:02X})"
+                        ))),
+                        Ok(value_bytes) => match frames::decode_value(&value_bytes, p.data_type) {
+                            Ok(raw) => {
+                                let ts = DataPoint::now();
+                                Ok(DataPoint {
+                                    point_id: point_cfg.id.clone(),
+                                    device_id: point_cfg.device_id.clone().unwrap_or_default(),
+                                    // 批量路径与单点路径同一套换算，避免两条路径数值不一致
+                                    value: convert_value(point_cfg, raw),
+                                    raw_value: raw,
+                                    raw_type: "s7comm".into(),
+                                    quality: Quality::Good,
+                                    quality_reason: String::new(),
+                                    timestamp: ts,
+                                    source_ts: ts,
+                                    stale_count: 0,
+                                    value_text: None,
+                                })
+                            }
+                            Err(e) => Err(e),
+                        },
                     },
-                });
+                );
             }
         }
     }

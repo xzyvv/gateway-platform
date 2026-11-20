@@ -715,8 +715,7 @@ fn scrub_stale_tail_zeroes_stale_trailer() {
     let new_img: Vec<u8> = (1u8..=64).collect(); // 64 字节"新镜像"
     f.seek(SeekFrom::Start(0)).expect("seek 0");
     f.write_all(&new_img).expect("write new image");
-    let scrubbed =
-        super::download::scrub_stale_tail(&mut f, 64, 4096).expect("scrub stale tail");
+    let scrubbed = super::download::scrub_stale_tail(&mut f, 64, 4096).expect("scrub stale tail");
     assert_eq!(scrubbed, 4096 - 64, "擦除字节数应为尾部长度");
     drop(f);
     let after = std::fs::read(&path).expect("read back");

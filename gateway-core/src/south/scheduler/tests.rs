@@ -684,18 +684,9 @@ impl Collector for PartialThenHang {
     fn read<'a>(
         &'a self,
         point: &'a PointConfig,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = CollectorResult<DataPoint>> + Send + 'a>,
-    > {
-        Box::pin(async move {
-            Ok(DataPoint::good(
-                &point.id,
-                &point.bus,
-                42.0,
-                42.0,
-                "f64",
-            ))
-        })
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CollectorResult<DataPoint>> + Send + 'a>>
+    {
+        Box::pin(async move { Ok(DataPoint::good(&point.id, &point.bus, 42.0, 42.0, "f64")) })
     }
 
     fn read_batch_with_slots<'a>(
