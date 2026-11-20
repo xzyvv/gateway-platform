@@ -2,7 +2,7 @@
   <div class="section-toggle">
     <el-switch
       :model-value="mb !== null"
-      @update:model-value="(val: boolean) => (mb = val ? { enabled: true, endpoint: 'tcp://0.0.0.0:502', base_register: 0, mode: 'auto' } : null)"
+      @update:model-value="(val: boolean) => (mb = val ? { enabled: true, endpoint: 'tcp://0.0.0.0:502', base_register: 0, mode: 'auto', write_enabled: false } : null)"
       active-text="启用 Modbus Server"
       inactive-text="禁用"
     />
@@ -29,6 +29,12 @@
         <el-option label="自动分配（auto）" value="auto" />
         <el-option label="按点位地址（manual）" value="manual" />
       </el-select>
+    </el-form-item>
+    <el-form-item label="允许主站写回点位">
+      <el-switch v-model="form.write_enabled" />
+      <div class="form-hint">
+        默认拒绝写（FC06/FC16）。开启后仅点位配置中 writable=true 的点位可被写入，写入会下发到南向采集器并记录审计。
+      </div>
     </el-form-item>
   </el-form>
 </template>
