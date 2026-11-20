@@ -279,16 +279,9 @@ impl Collector for ModbusCollector {
             if resp.len() == 5 && resp[1] == (expect_echo[1] | 0x80) {
                 return Err(CollectorError::ModbusException(resp[2]));
             }
-            let echo_len = if matches!(expect_echo[1], 0x05 | 0x06) {
-                8
-            } else {
-                6
-            };
-            if resp.len() < 8 || resp[..echo_len] != expect_echo[..echo_len] {
-                return Err(CollectorError::InvalidFrame(
-                    "write response mismatch (expected echo of request)".into(),
-                ));
-            }
+            // 第三批#8：写成功响应按**语义字段**校验（前 6 字节），不再整帧比对。
+            // 详见 verify_write_echo 的说明。
+            verify_write_echo(&resp, &expect_echo)?;
             Ok(())
         })
     }
@@ -404,13 +397,11 @@ impl Collector for ModbusCollector {
                         }
                         continue;
                     }
-                    let echo_len = 6.min(expect.len());
-                    if resp.len() < 8 || resp[..echo_len] != expect[..echo_len] {
+                    // 第三批#8：与单点写共用同一套语义校验。
+                    if let Err(e) = verify_write_echo(&resp, &expect) {
                         let msg = format!(
-                            "write_multi response mismatch (slave {}, addr {}, expected {}-byte echo)",
-                            slave,
-                            batch.start_addr,
-                            expect.len()
+                            "write_multi response mismatch (slave {}, addr {}): {}",
+                            slave, batch.start_addr, e
                         );
                         for i in range.clone() {
                             slots[items[i].2] =
@@ -436,4 +427,33 @@ impl Collector for ModbusCollector {
                 .collect()
         })
     }
+}
+
+/// 写响应语义校验：只比协议字段，不比 CRC。
+///
+/// 第三批#8。写成功响应固定 8 字节：
+/// `[slave][fc][addr_h][addr_l][值或数量_h][值或数量_l][crc_l][crc_h]`。
+/// 前 6 字节是语义字段——FC05/06 为写入值、FC15/16 为写入数量——必须与请求一致；
+/// CRC 由定帧层（`extract_modbus_frame`）统一校验，这里不再重复。
+///
+/// 旧实现对 FC05/06 做 8 字节全等比对（含 CRC）。串口下从站原样回显请求，恰好成立；
+/// 但 TCP 路径的响应是 `build_rtu_response` 重建的（重算 CRC），"整帧相等"实际依赖
+/// 重建 CRC 恰好与原请求 CRC 一致。一旦 MBAP 封装或功能码映射有改动，这种巧合就会
+/// 静默失效，表现为"写其实成功但报 mismatch"。按语义字段比对可消除这一脆弱点。
+fn verify_write_echo(resp: &[u8], expect: &[u8]) -> CollectorResult<()> {
+    if resp.len() != 8 {
+        return Err(CollectorError::InvalidFrame(format!(
+            "write response must be 8 bytes, got {}",
+            resp.len()
+        )));
+    }
+    let semantic = 6.min(expect.len());
+    if resp[..semantic] != expect[..semantic] {
+        return Err(CollectorError::InvalidFrame(format!(
+            "write response mismatch: expect {:02X?}, got {:02X?}",
+            &expect[..semantic],
+            &resp[..semantic]
+        )));
+    }
+    Ok(())
 }

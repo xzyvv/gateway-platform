@@ -557,7 +557,12 @@ async fn persist_then_apply_inner(
     // 活跃点位集在 reload 前按配置口径算好（expanded 随后会被 move 进 reload_config）。
     let active_points = build_active_points(&expanded, &new);
 
-    // ① 落盘前置：写盘失败则整体不生效，运行态一行都没动。
+    // ① 落盘前置：先抓一份磁盘原始字节，供 ② 失败时做**字节级**回滚。
+    // 不能只靠 `save(old)` 回写：save 会重新序列化并重新加密 secrets，
+    // 语义相同但磁盘字节必然变化（同一明文 token 每次密文不同），
+    // 会让"本次未保存"在字节层面不成立。
+    let disk_before = std::fs::read(state.config.config_loader.path()).ok();
+    // 写盘失败则整体不生效，运行态一行都没动。
     state.config.config_loader.save(&new).map_err(|e| {
         tracing::error!("config save failed, runtime untouched: {}", e);
         ApiError::internal(format!("save config failed: {}", e))
@@ -572,7 +577,7 @@ async fn persist_then_apply_inner(
         }
         Err(e) => {
             let err: ApiError = e.into();
-            let err = rollback_saved_config(state, old, err);
+            let err = rollback_saved_config(state, old, disk_before.as_deref(), err);
             record_reload_rejected(state, &err);
             return Err(err);
         }
@@ -593,11 +598,24 @@ async fn persist_then_apply_inner(
 
 /// 热重载被拒后把磁盘退回旧配置。
 ///
+/// `disk_before` 是落盘 `new` 之前抓到的原始字节，优先用它做**字节级**回滚，
+/// 这样"本次未保存"在磁盘内容上也逐字节成立（`save(old)` 会重新加密 secrets，
+/// 密文每次不同）。拿不到旧字节（如首次启动尚无配置文件）时退回 `save(old)`。
+///
 /// 成功时磁盘与运行态一起回到「本次未保存」，错误消息保持原样（前端按
 /// 「配置未被修改」提示）。回写也失败时只能如实说明：磁盘上已是新配置，
 /// 重启后会生效——这条消息前端专门识别（`disk holds the new config`）。
-fn rollback_saved_config(state: &Arc<AppState>, old: &GatewayConfig, err: ApiError) -> ApiError {
-    match state.config.config_loader.save(old) {
+fn rollback_saved_config(
+    state: &Arc<AppState>,
+    old: &GatewayConfig,
+    disk_before: Option<&[u8]>,
+    err: ApiError,
+) -> ApiError {
+    let restored = match disk_before {
+        Some(bytes) => state.config.config_loader.restore_raw(bytes),
+        None => state.config.config_loader.save(old),
+    };
+    match restored {
         Ok(()) => {
             tracing::warn!(
                 "config reload rejected after disk save; disk rolled back to previous config: {}",

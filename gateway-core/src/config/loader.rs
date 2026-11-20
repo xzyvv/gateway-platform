@@ -178,6 +178,27 @@ impl ConfigLoader {
         atomic_write(&self.path, json.as_bytes())
     }
 
+    /// 字节级回滚：把此前从磁盘读到的原始字节原样写回。
+    ///
+    /// 只用于「落盘成功、但热重载被拒」的补偿路径（`rollback_saved_config`）。
+    /// 不能改用 `save(old)` 代替：`save` 会重新序列化并重新加密 secrets，
+    /// 即使语义完全等价，磁盘内容也必然与失败前不同（同一明文 token 每次加密
+    /// 的密文不同），无法满足「本次未保存 = 磁盘逐字节不变」的原子性承诺。
+    ///
+    /// 写入仍走 `atomic_write`（tmp + fsync + rename），不会留下半个文件。
+    pub fn restore_raw(&self, bytes: &[u8]) -> GatewayResult<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                GatewayError::Config(format!(
+                    "create config parent dir {} failed: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+        atomic_write(&self.path, bytes)
+    }
+
     /// Q18: reload 从磁盘重新读取配置并校验，返回最新的 GatewayConfig。
     ///
     /// 与 `load()` 的区别：
