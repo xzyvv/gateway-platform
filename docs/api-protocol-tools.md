@@ -33,6 +33,16 @@
 判定）：`timeout` → 3001、`crc` / `exception` → 3000、`bus_busy` → 4090、
 `bus_offline` → 4503。若给 0，`data: null` 会把现场指引静默吞掉。
 
+这类响应还带 `"frame_error": true`：**HTTP 状态表达「接口通不通」，业务码表达
+「设备通不通」**。两者在协议工具端点上刻意分离，只按 HTTP 判定的调用方会把
+设备失败当成功；`frame_error` 是唯一可靠的布尔位（等价于「HTTP 200」）。请求
+参数类错误（4 种）恒为 `false`。
+
+```json
+{ "code": 3001, "message": "总线未在 500ms 内收到完整响应帧",
+  "data": null, "error": "timeout", "frame_error": true }
+```
+
 ---
 
 ## 2. 端点分组

@@ -214,17 +214,38 @@ fn error_status_and_code(kind: BusErrorKind) -> (axum::http::StatusCode, i32) {
 /// 要么拿到中文详情（前端无法分支）。这里把两者拆开返回，
 /// 既满足契约的 `error` 取值，又保留现场可读的 `message`。
 pub fn error_response(kind: BusErrorKind, detail: impl Into<String>) -> axum::response::Response {
-    let (status, code) = error_status_and_code(kind);
-    (
-        status,
-        axum::Json(serde_json::json!({
-            "code": code,
-            "message": detail.into(),
-            "data": null,
-            "error": kind.as_str(),
-        })),
+    let (status, _) = error_status_and_code(kind);
+    (status, axum::Json(error_body(kind, detail.into()))).into_response()
+}
+
+/// 错误响应体：`code` / `message` / `data` / `error` / `frame_error`。
+fn error_body(kind: BusErrorKind, detail: String) -> serde_json::Value {
+    let (_, code) = error_status_and_code(kind);
+    serde_json::json!({
+        "code": code,
+        "message": detail,
+        "data": null,
+        "error": kind.as_str(),
+        // 设备/总线侧失败（HTTP 恒 200）：告诉调用方「别改请求参数，去看设备」。
+        // HTTP 与业务码在这类端点上刻意分离，下游仅凭 HTTP 判会误判成成功。
+        "frame_error": is_device_side_failure(kind),
+    })
+}
+
+/// 失败是否由设备/总线侧引起（而非请求参数非法）。
+///
+/// 这五个错误对应 HTTP 200 + 非零业务码：接口调用本身是通的，失败发生在
+/// 设备交互环节。其余四种（invalid_frame / missing_bus / unsupported_protocol /
+/// bus_not_found）是调用方改参数就能解决的，走 400/404。
+fn is_device_side_failure(kind: BusErrorKind) -> bool {
+    matches!(
+        kind,
+        BusErrorKind::Timeout
+            | BusErrorKind::Crc
+            | BusErrorKind::Exception
+            | BusErrorKind::BusBusy
+            | BusErrorKind::BusOffline
     )
-        .into_response()
 }
 
 #[cfg(test)]
@@ -271,5 +292,42 @@ mod tests {
         assert_eq!(crc, error_codes::PROTOCOL);
         assert_eq!(exception, error_codes::PROTOCOL);
         assert_ne!(timeout, crc);
+    }
+
+    /// 契约固化：`frame_error` 必须与 HTTP 200 严格等价。
+    ///
+    /// 这类端点的 HTTP 状态表达「接口通不通」，业务码表达「设备通不通」，
+    /// 两者会分离。下游若只看 HTTP 会把这五个失败当成功，`frame_error`
+    /// 给出唯一可判定的布尔位；两者不等价说明分码表被改坏了。
+    #[test]
+    fn frame_error_flag_matches_http_200() {
+        use axum::http::StatusCode;
+
+        for kind in [
+            BusErrorKind::Timeout,
+            BusErrorKind::Crc,
+            BusErrorKind::Exception,
+            BusErrorKind::BusBusy,
+            BusErrorKind::BusOffline,
+        ] {
+            let (status, code) = error_status_and_code(kind);
+            let body = error_body(kind, "x".into());
+            assert_eq!(status, StatusCode::OK, "{kind:?}");
+            assert_eq!(body["frame_error"], true, "{kind:?} 应标记为设备侧失败");
+            assert_eq!(body["code"], code, "响应体码必须与状态映射同源");
+            assert_ne!(body["code"], 0, "{kind:?} 不能报成功码");
+        }
+
+        for kind in [
+            BusErrorKind::InvalidFrame,
+            BusErrorKind::MissingBus,
+            BusErrorKind::UnsupportedProtocol,
+            BusErrorKind::BusNotFound,
+        ] {
+            let (status, _) = error_status_and_code(kind);
+            let body = error_body(kind, "x".into());
+            assert_ne!(status, StatusCode::OK, "{kind:?} 是调用方可纠正错误");
+            assert_eq!(body["frame_error"], false, "{kind:?} 不是设备侧失败");
+        }
     }
 }
