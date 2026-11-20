@@ -101,3 +101,11 @@ deploy/out/
 # === License 签发私钥（红线：永不进 git / CI / 产物，说明见 tools/license-issuer/src/main.rs 模块注释） ===
 tools/license-issuer/keys/
 *.pk8
+
+# === 证书 / 私钥文件（红线：私钥永不进仓库） ===
+# 运行期证书在 certs/ 下（已由上面的 certs/ 规则覆盖）；测试期证书由 mock 落到
+# 系统临时目录。此处再加一条兜底，防止任何路径下的 PEM（含测试遗留产物）
+# 被误提交。需要入库的证书夹具须用 `git add -f` 显式放行。
+*.pem
+*.key
+*.crt

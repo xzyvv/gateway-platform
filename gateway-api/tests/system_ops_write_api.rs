@@ -65,11 +65,11 @@ async fn call_raw(app: &axum::Router, method: &str, uri: &str, bytes: Vec<u8>) -
 #[tokio::test]
 async fn certificate_upload_then_renew_replaces_pair() {
     let state = common::mock_state::mock_app_state();
+    // 证书路径由 mock 按实例落到临时目录，测试从 CertManager 读回真实路径，
+    // 不再依赖 CWD 下的固定文件名（原实现会在仓库里留下未跟踪的 pem 垃圾）。
+    let cert_path = state.north.cert_manager.cert_path().to_path_buf();
+    let key_path = state.north.cert_manager.key_path().to_path_buf();
     let app = gateway_api::web::build_router(state);
-
-    // Mock 态证书路径为占位文件名（相对 cwd），测试结束统一清理，避免污染工作区
-    let cert_path = "dummy_cert.pem";
-    let key_path = "dummy_key.pem";
 
     let body = call(
         &app,
@@ -84,7 +84,7 @@ async fn certificate_upload_then_renew_replaces_pair() {
     .await;
     assert_eq!(body["code"], 0, "上传证书失败: {body}");
     assert!(
-        std::path::Path::new(cert_path).exists() && std::path::Path::new(key_path).exists(),
+        cert_path.exists() && key_path.exists(),
         "上传必须把证书与私钥都落到磁盘"
     );
 

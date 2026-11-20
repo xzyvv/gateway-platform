@@ -660,7 +660,14 @@ fn build_mock_state_with_devices(
         },
         north: NorthRefs {
             ota: Arc::new(MockOta),
-            cert_manager: Arc::new(CertManager::new("dummy_cert.pem", "dummy_key.pem")),
+            // 证书对落盘到本实例的临时目录：原实现用相对路径 `dummy_cert.pem`，
+            // 会在测试进程的 CWD（gateway-api/）留下未跟踪的仓库垃圾文件，
+            // 且并行测试共用同一对文件名会互相覆盖。临时目录按实例隔离，
+            // 残留交给系统临时目录清理（与上面的 db_path / config_path 同策略）。
+            cert_manager: Arc::new(CertManager::new(
+                tmp_dir.join("cert.pem"),
+                tmp_dir.join("key.pem"),
+            )),
             gateway,
             north_servers: Vec::new(),
             // N-7：测试态无 connector，状态接口按「无可用连接器」如实返回。
