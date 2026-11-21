@@ -87,7 +87,11 @@ impl S7CommCollector {
                 }
             };
 
-        // 响应已收到：解析失败→结果未知；设备明确拒绝→DeviceRejected（明确失败）
+        // 响应已收到：PDU ref 不匹配（串包）→ 结果未知；解析失败→结果未知；
+        // 设备明确拒绝→DeviceRejected（明确失败）
+        if let Err(e) = frames::check_pdu_ref(&resp, pdu_ref) {
+            return Err(mark_write_uncertain_with(self.metrics.as_deref(), e));
+        }
         frames::parse_write_response(&resp)
             .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e))
     }
@@ -204,8 +208,12 @@ impl S7CommCollector {
             let pdu_ref = self.next_pdu_ref().await;
             let req = frames::build_write_var_multi(&items, pdu_ref);
             let outcome = match self.transact(&req).await {
-                Ok(resp) => frames::parse_write_response_multi(&resp, chunk.len())
-                    .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e)),
+                Ok(resp) => match frames::check_pdu_ref(&resp, pdu_ref) {
+                    // ROI-26：串包响应的归属无法证明→按结果未知上报
+                    Err(e) => Err(mark_write_uncertain_with(self.metrics.as_deref(), e)),
+                    Ok(()) => frames::parse_write_response_multi(&resp, chunk.len())
+                        .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e)),
+                },
                 // 请求已下发，失败原因无法证明写未生效 → 结果未知
                 Err(e) => Err(mark_write_uncertain_with(self.metrics.as_deref(), e)),
             };

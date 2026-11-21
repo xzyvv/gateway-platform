@@ -51,6 +51,24 @@ pub(crate) fn build_read_var(
     frame
 }
 
+/// 校验响应回显的 PDU reference 与请求一致（ROI-26）。
+///
+/// S7 头 `s7[4..6]` 是请求/响应配对字段，设备必须原样回显。不比对时，
+/// 高并发或设备缓冲异常下会把上一请求的应答当成本次结果（值串台）。
+pub(crate) fn check_pdu_ref(frame: &[u8], expected: u16) -> CollectorResult<()> {
+    if frame.len() < 3 + 6 {
+        return Err(CollectorError::InvalidFrame("S7 response too short".into()));
+    }
+    let s7 = &frame[3..];
+    let got = u16::from_be_bytes([s7[4], s7[5]]);
+    if got != expected {
+        return Err(CollectorError::InvalidFrame(format!(
+            "S7 PDU reference mismatch: sent {expected}, got {got}"
+        )));
+    }
+    Ok(())
+}
+
 /// 从 S7 Read Var 响应中提取数据值
 pub(crate) fn parse_read_response(
     frame: &[u8],

@@ -398,11 +398,46 @@ pub(crate) fn body_len_checked(len: usize) -> CollectorResult<usize> {
     Ok(len)
 }
 
+/// 校验 3E/4E 响应固定头里的网络号 / PC 号 / 模块 I/O 号 / 站号回显。
+///
+/// ROI-26：这些字段由请求方指定，响应必须原样回显。同一条 TCP 经串口服务器
+/// 接到多个站时，别站应答的子头与本站不同；不比对就会把别站数据当成本站值。
+///
+/// `fields` 为响应头中连续的 `[网络号, PC 号, I/O 号高, I/O 号低, 站号]` 5 字节。
+fn check_qna_echo(fields: &[u8], station: u8) -> CollectorResult<()> {
+    debug_assert_eq!(fields.len(), 5);
+    if fields[0] != 0x00 {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc response network no mismatch: sent 0x00, got 0x{:02X}",
+            fields[0]
+        )));
+    }
+    if fields[1] != 0xFF {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc response pc no mismatch: sent 0xFF, got 0x{:02X}",
+            fields[1]
+        )));
+    }
+    if fields[2..4] != [0xFF, 0x03] {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc response module io mismatch: sent 0xFF03, got 0x{:02X}{:02X}",
+            fields[2], fields[3]
+        )));
+    }
+    if fields[4] != station {
+        return Err(CollectorError::InvalidFrame(format!(
+            "mc response station mismatch: sent {station}, got {}",
+            fields[4]
+        )));
+    }
+    Ok(())
+}
+
 /// 校验 3E 响应头，返回需要读取的帧体长度（`结束代码 + 数据`）。
 ///
 /// 抽成纯函数是为了让 fuzz 能直接喂任意字节（生产路径 `read_response_3e` 只负责
 /// 读满头部再调用本函数，逻辑不复制）。
-pub(crate) fn parse_response_header_3e(head: &[u8]) -> CollectorResult<usize> {
+pub(crate) fn parse_response_header_3e(head: &[u8], station: u8) -> CollectorResult<usize> {
     if head.len() < HEADER_LEN_3E {
         return Err(CollectorError::InvalidFrame(format!(
             "mc 3E response header too short: {} bytes",
@@ -415,11 +450,16 @@ pub(crate) fn parse_response_header_3e(head: &[u8]) -> CollectorResult<usize> {
             head[0], head[1]
         )));
     }
+    check_qna_echo(&head[2..7], station)?;
     body_len_checked(u16::from_le_bytes([head[7], head[8]]) as usize)
 }
 
-/// 校验 4E 响应头（子头 `0xD400` + 序列号回显），返回帧体长度。
-pub(crate) fn parse_response_header_4e(head: &[u8], serial: u16) -> CollectorResult<usize> {
+/// 校验 4E 响应头（子头 `0xD400` + 序列号回显 + 3E 同口径固定头回显），返回帧体长度。
+pub(crate) fn parse_response_header_4e(
+    head: &[u8],
+    serial: u16,
+    station: u8,
+) -> CollectorResult<usize> {
     if head.len() < HEADER_LEN_4E {
         return Err(CollectorError::InvalidFrame(format!(
             "mc 4E response header too short: {} bytes",
@@ -438,6 +478,7 @@ pub(crate) fn parse_response_header_4e(head: &[u8], serial: u16) -> CollectorRes
             "mc 4E serial mismatch: sent {serial}, got {resp_serial}"
         )));
     }
+    check_qna_echo(&head[4..9], station)?;
     body_len_checked(u16::from_le_bytes([head[9], head[10]]) as usize)
 }
 
@@ -500,27 +541,31 @@ async fn read_len_body(stream: &mut TcpStream, len: usize) -> CollectorResult<(u
 }
 
 /// 读取 3E 响应帧（子头 `0xD000`），返回（结束代码，数据区）。
-pub(crate) async fn read_response_3e(stream: &mut TcpStream) -> CollectorResult<(u16, Vec<u8>)> {
+pub(crate) async fn read_response_3e(
+    stream: &mut TcpStream,
+    station: u8,
+) -> CollectorResult<(u16, Vec<u8>)> {
     let mut head = [0u8; HEADER_LEN_3E];
     stream
         .read_exact(&mut head)
         .await
         .map_err(|e| CollectorError::IoError(format!("mc read header: {e}")))?;
-    let len = parse_response_header_3e(&head)?;
+    let len = parse_response_header_3e(&head, station)?;
     read_len_body(stream, len).await
 }
 
-/// 读取 4E 响应帧（子头 `0xD400` + 序列号回显校验），返回（结束代码，数据区）。
+/// 读取 4E 响应帧（子头 `0xD400` + 序列号/站号回显校验），返回（结束代码，数据区）。
 pub(crate) async fn read_response_4e(
     stream: &mut TcpStream,
     serial: u16,
+    station: u8,
 ) -> CollectorResult<(u16, Vec<u8>)> {
     let mut head = [0u8; HEADER_LEN_4E];
     stream
         .read_exact(&mut head)
         .await
         .map_err(|e| CollectorError::IoError(format!("mc read header: {e}")))?;
-    let len = parse_response_header_4e(&head, serial)?;
+    let len = parse_response_header_4e(&head, serial, station)?;
     read_len_body(stream, len).await
 }
 

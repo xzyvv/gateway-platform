@@ -47,7 +47,8 @@ pub(crate) const RET_NOT_FOUND: u8 = 0x05; // 地址不存在
 pub(crate) use decode::{decode_value, encode_value};
 pub(crate) use link::{build_cotp_connect, build_setup_comm, read_tpkt_frame};
 pub(crate) use read::{
-    build_read_var, build_read_var_multi, parse_read_response, parse_read_response_multi,
+    build_read_var, build_read_var_multi, check_pdu_ref, parse_read_response,
+    parse_read_response_multi,
 };
 pub(crate) use spec::{ItemSpec, WriteItem};
 pub(crate) use szl::{build_szl_request, extract_ascii_strings, parse_szl_response, SzlResponse};

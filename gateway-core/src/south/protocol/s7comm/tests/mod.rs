@@ -230,7 +230,7 @@ async fn spawn_s7_stub_counted(
                         // 请求功能码位于 body[13]（COTP 3 + S7 header 10）；
                         // PDU 类型位于 body[4]（COTP 3 + S7 协议 ID 1 之后）
                         let function = body.get(13).copied().unwrap_or(FUNC_READ);
-                        let ack = if body.get(4).copied() == Some(PDU_USERDATA) {
+                        let mut ack = if body.get(4).copied() == Some(PDU_USERDATA) {
                             // Userdata（Read SZL）→ 返回组件标识
                             s7_szl_ack_body()
                         } else if function == FUNC_WRITE {
@@ -243,6 +243,7 @@ async fn spawn_s7_stub_counted(
                             let item_count = body.get(14).copied().unwrap_or(1) as usize;
                             s7_read_ack_body_multi(&value, transport_size, item_count)
                         };
+                        echo_pdu_ref(&body, &mut ack);
                         if !write_tpkt(&mut sock, &ack).await {
                             return;
                         }
@@ -253,12 +254,13 @@ async fn spawn_s7_stub_counted(
                             None => return,
                         };
                         let function = body.get(13).copied().unwrap_or(FUNC_READ);
-                        let ack = if function == FUNC_WRITE {
+                        let mut ack = if function == FUNC_WRITE {
                             write_hits.fetch_add(1, Ordering::SeqCst);
                             s7_write_error_body()
                         } else {
                             s7_read_ack_body_multi(&value, transport_size, 1)
                         };
+                        echo_pdu_ref(&body, &mut ack);
                         if !write_tpkt(&mut sock, &ack).await {
                             return;
                         }
@@ -269,6 +271,13 @@ async fn spawn_s7_stub_counted(
         }
     });
     (addr, conn_count, write_count)
+}
+
+/// ROI-26：桩按真实设备行为回显请求的 PDU reference（COTP 3 字节之后 `s7[4..6]`）。
+fn echo_pdu_ref(request_body: &[u8], ack: &mut [u8]) {
+    if request_body.len() >= 9 && ack.len() >= 9 {
+        ack[7..9].copy_from_slice(&request_body[7..9]);
+    }
 }
 
 fn s7_point(id: &str, address: &str, data_type: &str) -> PointConfig {
@@ -351,7 +360,8 @@ async fn spawn_s7_stub_pdu240() -> (String, Arc<std::sync::Mutex<Vec<usize>>>) {
             req_items_srv.lock().unwrap().push(item_count);
             let start = served.fetch_add(item_count, Ordering::SeqCst);
             let values: Vec<u32> = (0..item_count).map(|i| 1000 + (start + i) as u32).collect();
-            let ack = s7_read_ack_body_values(&values, TS_BYTE);
+            let mut ack = s7_read_ack_body_values(&values, TS_BYTE);
+            echo_pdu_ref(&body, &mut ack);
             if !write_tpkt(&mut sock, &ack).await {
                 return;
             }

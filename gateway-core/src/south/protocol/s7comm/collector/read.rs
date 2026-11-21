@@ -75,6 +75,8 @@ impl S7CommCollector {
                 }
             };
 
+        // ROI-26：先比 PDU reference，防止把迟到/串包的上一请求应答当成本次值
+        frames::check_pdu_ref(&resp, pdu_ref)?;
         let raw_value = frames::parse_read_response(&resp, s7_addr.data_type)?;
         // 与 Modbus/DLT645 对齐：scale/offset/formula + CT/PT 变比统一在 common 层换算。
         // 此前 S7 直接把原始值当工程量上送，点位配了 scale/offset 也不生效。

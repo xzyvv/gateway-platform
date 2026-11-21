@@ -64,6 +64,8 @@ struct McTxn {
     bytes: Vec<u8>,
     /// 4E 帧序列号（其它帧格式不使用）
     serial: u16,
+    /// 3E/4E 请求的目标站号（ROI-26：响应必须回显同一站号）
+    station: u8,
     /// 1E 帧响应上下文（仅 1E 帧格式使用）
     e1: Option<E1Ctx>,
 }
@@ -163,6 +165,7 @@ impl McCollector {
                     station,
                 ),
                 serial: 0,
+                station,
                 e1: None,
             }),
             McFrameFormat::E4 => {
@@ -177,6 +180,7 @@ impl McCollector {
                         station,
                     ),
                     serial,
+                    station,
                     e1: None,
                 })
             }
@@ -189,6 +193,7 @@ impl McCollector {
                 Ok(McTxn {
                     bytes: build_request_1e(func, device, points, MC_TIMER, &[])?,
                     serial: 0,
+                    station: 0,
                     e1: Some(E1Ctx {
                         func,
                         is_read: true,
@@ -207,6 +212,7 @@ impl McCollector {
             McFrameFormat::E3 => Ok(McTxn {
                 bytes: build_write_words_request(device, words, MC_TIMER, McFrameFormat::E3, 0),
                 serial: 0,
+                station: 0,
                 e1: None,
             }),
             McFrameFormat::E4 => {
@@ -220,12 +226,14 @@ impl McCollector {
                         serial,
                     ),
                     serial,
+                    station: 0,
                     e1: None,
                 })
             }
             McFrameFormat::E1 => Ok(McTxn {
                 bytes: build_request_1e(FC_BATCH_WORD_WRITE, device, points, MC_TIMER, words)?,
                 serial: 0,
+                station: 0,
                 e1: Some(E1Ctx {
                     func: FC_BATCH_WORD_WRITE,
                     is_read: false,
@@ -242,6 +250,7 @@ impl McCollector {
             McFrameFormat::E3 => Ok(McTxn {
                 bytes: build_write_bit_request(device, on, MC_TIMER, McFrameFormat::E3, 0),
                 serial: 0,
+                station: 0,
                 e1: None,
             }),
             McFrameFormat::E4 => {
@@ -249,6 +258,7 @@ impl McCollector {
                 Ok(McTxn {
                     bytes: build_write_bit_request(device, on, MC_TIMER, McFrameFormat::E4, serial),
                     serial,
+                    station: 0,
                     e1: None,
                 })
             }
@@ -258,6 +268,7 @@ impl McCollector {
                 Ok(McTxn {
                     bytes: build_request_1e(FC_BATCH_BIT_WRITE, device, 1, MC_TIMER, &payload)?,
                     serial: 0,
+                    station: 0,
                     e1: Some(E1Ctx {
                         func: FC_BATCH_BIT_WRITE,
                         is_read: false,
@@ -312,10 +323,14 @@ impl McCollector {
 
         let read = match self.format {
             McFrameFormat::E3 => {
-                tokio::time::timeout(self.io_timeout, read_response_3e(stream)).await
+                tokio::time::timeout(self.io_timeout, read_response_3e(stream, txn.station)).await
             }
             McFrameFormat::E4 => {
-                tokio::time::timeout(self.io_timeout, read_response_4e(stream, txn.serial)).await
+                tokio::time::timeout(
+                    self.io_timeout,
+                    read_response_4e(stream, txn.serial, txn.station),
+                )
+                .await
             }
             McFrameFormat::E1 => match txn.e1 {
                 Some(c) => {

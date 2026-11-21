@@ -365,3 +365,25 @@ fn malformed_s7_read_response_is_rejected_without_panic() {
     bad_param_len[9] = 0xFF;
     assert!(frames::parse_read_response(&bad_param_len, S7DataType::Real).is_err());
 }
+
+/// ROI-26：响应回显的 PDU reference 必须与请求一致，防串包。
+#[test]
+fn test_check_pdu_ref_echo() {
+    // TPKT 3 字节前缀 + S7 头；PDU reference 位于 s7[4..6]
+    let mut frame = vec![0u8; 9];
+    frame[3] = 0x32; // protocol id
+    frame[7] = 0x00;
+    frame[8] = 0x07; // pdu ref = 7
+    assert!(frames::check_pdu_ref(&frame, 7).is_ok());
+    match frames::check_pdu_ref(&frame, 8) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("sent 8") && msg.contains("got 7"), "msg={msg}")
+        }
+        other => panic!("期望 InvalidFrame，实际 {other:?}"),
+    }
+}
+
+#[test]
+fn test_check_pdu_ref_rejects_short_frame() {
+    assert!(frames::check_pdu_ref(&[0u8; 5], 1).is_err());
+}

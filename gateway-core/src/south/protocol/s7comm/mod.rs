@@ -259,7 +259,10 @@ impl S7CommCollector {
     async fn transact_multi(&self, items: &[frames::ItemSpec]) -> CollectorResult<Vec<u8>> {
         let pdu_ref = self.next_pdu_ref().await;
         let req = frames::build_read_var_multi(items, pdu_ref);
-        self.transact(&req).await
+        let resp = self.transact(&req).await?;
+        // ROI-26：按 PDU reference 校验应答归属，避免取到上一批量请求的应答
+        frames::check_pdu_ref(&resp, pdu_ref)?;
+        Ok(resp)
     }
 }
 

@@ -62,3 +62,43 @@ fn test_check_end_code_is_device_rejected() {
         other => panic!("期望 DeviceRejected，实际 {other:?}"),
     }
 }
+
+/// ROI-26：3E 响应固定头必须回显请求的网络号 / PC 号 / 模块 I/O 号 / 站号。
+#[test]
+fn test_3e_response_header_echo_mismatch_rejected() {
+    // [子头2][网络号][PC号][IO高][IO低][站号][长度2]
+    let mut head = vec![0xD0, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x00, 0x02, 0x00];
+    assert!(parse_response_header_3e(&head, 0).is_ok());
+
+    head[6] = 1; // 站号回显不匹配
+    assert!(parse_response_header_3e(&head, 0).is_err());
+    head[6] = 0;
+
+    head[2] = 1; // 网络号回显不匹配
+    assert!(parse_response_header_3e(&head, 0).is_err());
+    head[2] = 0;
+
+    head[3] = 0x00; // PC 号回显不匹配
+    assert!(parse_response_header_3e(&head, 0).is_err());
+    head[3] = 0xFF;
+
+    head[4] = 0x01; // 模块 I/O 号回显不匹配
+    assert!(parse_response_header_3e(&head, 0).is_err());
+}
+
+/// ROI-26：4E 响应除序列号外，固定头回显同样必须比对。
+#[test]
+fn test_4e_response_header_echo_mismatch_rejected() {
+    // [子头2][序列号2][网络号][PC号][IO高][IO低][站号][长度2]
+    let mut head = vec![
+        0xD4, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x00, 0x02, 0x00,
+    ];
+    assert!(parse_response_header_4e(&head, 1, 0).is_ok());
+
+    head[8] = 2; // 站号回显不匹配
+    assert!(parse_response_header_4e(&head, 1, 0).is_err());
+    head[8] = 0;
+
+    head[2] = 0x02; // 序列号仍优先校验
+    assert!(parse_response_header_4e(&head, 1, 0).is_err());
+}
