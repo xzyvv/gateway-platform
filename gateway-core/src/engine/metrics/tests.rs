@@ -511,3 +511,95 @@ fn test_webhook_outbox_dropped_metric() {
         "{out}"
     );
 }
+
+/// ROI-08：采集总量与失败数按 `bus` 拆分导出。
+#[test]
+fn roi08_collect_metrics_labeled_by_bus() {
+    let m = Metrics::new();
+    m.record_collect_scoped("bus-a", "p1", "dev1", true, 10, None);
+    m.record_collect_scoped(
+        "bus-a",
+        "p1",
+        "dev1",
+        false,
+        10,
+        Some(CollectErrorCode::Timeout),
+    );
+    m.record_collect_scoped("bus-b", "p2", "", true, 10, None);
+
+    let out = m.prometheus_export();
+    assert!(
+        out.contains("gateway_collect_total{bus=\"bus-a\"} 2"),
+        "{out}"
+    );
+    assert!(
+        out.contains("gateway_collect_total{bus=\"bus-b\"} 1"),
+        "{out}"
+    );
+    assert!(
+        out.contains("gateway_collect_failures{bus=\"bus-a\",by_reason=\"timeout\"} 1"),
+        "{out}"
+    );
+    // 未发生失败的总线仍输出 0，避免序列集合抖动
+    assert!(
+        out.contains("gateway_collect_failures{bus=\"bus-b\",by_reason=\"timeout\"} 0"),
+        "{out}"
+    );
+}
+
+/// ROI-08：点位失败序列带 `bus` / `device` 标签，并导出设备在线 gauge。
+#[test]
+fn roi08_scoped_export_has_bus_device_and_online_gauge() {
+    let m = Metrics::new();
+    m.record_collect_scoped(
+        "bus-a",
+        "p1",
+        "dev1",
+        false,
+        10,
+        Some(CollectErrorCode::Timeout),
+    );
+    // 失败后成功：在线状态取「最近一次采集」
+    m.record_collect_scoped("bus-a", "p1", "dev1", true, 10, None);
+    m.record_collect_scoped("bus-b", "p2", "dev2", false, 10, Some(CollectErrorCode::Io));
+
+    let out = m.prometheus_export();
+    assert!(
+        out.contains(
+            "gateway_collect_failures_scoped{bus=\"bus-a\",device=\"dev1\",point=\"p1\"} 1"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "gateway_collect_failures_scoped{bus=\"bus-b\",device=\"dev2\",point=\"p2\"} 1"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("gateway_device_online{device=\"dev1\"} 1"),
+        "{out}"
+    );
+    assert!(
+        out.contains("gateway_device_online{device=\"dev2\"} 0"),
+        "{out}"
+    );
+}
+
+/// ROI-08：热重载裁剪已移除设备，避免在线状态序列残留。
+#[test]
+fn roi08_retain_devices_prunes_removed_device() {
+    let m = Metrics::new();
+    m.record_collect_scoped("bus-a", "p1", "dev1", true, 10, None);
+    m.record_collect_scoped("bus-a", "p2", "dev2", true, 10, None);
+
+    let keep = std::iter::once("dev1".to_string()).collect();
+    m.scoped.retain_devices(&keep);
+
+    let out = m.prometheus_export();
+    assert!(
+        out.contains("gateway_device_online{device=\"dev1\"} 1"),
+        "{out}"
+    );
+    assert!(!out.contains("device=\"dev2\""), "{out}");
+}

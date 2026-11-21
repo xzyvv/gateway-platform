@@ -162,6 +162,14 @@ impl Scheduler {
         // 5. 清理已移除点位的 device_states，并按新配置刷新采集间隔
         let new_ids: std::collections::HashSet<String> =
             self.points.lock().iter().map(|p| p.id.clone()).collect();
+        // ROI-08：同步裁剪已移除设备的在线状态，避免 `gateway_device_online` 残留。
+        let active_devices: std::collections::HashSet<String> = self
+            .points
+            .lock()
+            .iter()
+            .filter_map(|p| p.device_id.clone())
+            .collect();
+        self.metrics.scoped.retain_devices(&active_devices);
         // 修复(审查#A1)：DeviceState 只在**首次采集**时按 point.interval 创建
         // （results.rs 的 `or_insert_with`），而本函数用 `retain` 保留旧条目 →
         // 改完配置里的 interval 触发热重载后，组虽然被重建，interval_fn 仍读到

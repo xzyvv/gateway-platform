@@ -218,6 +218,8 @@ impl Metrics {
         // 指标名不含协议名，不受 r31-PM1 的「协议名指标须在 sink 之后」约束，
         // 但仍放在 sink 段之后以保持导出文本的既有分区顺序。
         self.scoped.render(&mut out);
+        // ROI-08：设备在线状态（设备维度告警用；序列数 = 已知设备数）。
+        self.scoped.render_device_online(&mut out);
 
         // Frontend reads gateway_uplink_total / gateway_queue_length / gateway_devices_online / gateway_errors_total.
         // Exposed as aliases to avoid renaming existing metrics.

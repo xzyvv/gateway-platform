@@ -8,7 +8,7 @@
 //! 采用最近 31 个自然日（UTC）的日桶：日/周/月报表只需按起始日过滤即可，不需要历史库。
 //! 日桶数量恒定（≤31），内存与点位数量同阶；进程重启后清零（历史报表请走持久化方案）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -168,11 +168,18 @@ impl ReasonCounters {
     ///
     /// 所有标签值恒定输出（未发生的原因为 0），避免序列集合抖动。
     pub fn render(&self, metric: &str, buf: &mut String) {
+        self.render_with_prefix(metric, "", buf);
+    }
+
+    /// 同 [`Self::render`]，但在 `by_reason` 前追加额外标签（如 `bus="..."`）。
+    ///
+    /// `prefix` 需自带结尾逗号，例如 `bus="COM1",`。
+    pub fn render_with_prefix(&self, metric: &str, prefix: &str, buf: &mut String) {
         use std::fmt::Write as _;
         for (i, label) in REASON_LABELS.iter().enumerate() {
             let _ = writeln!(
                 buf,
-                "{metric}{{by_reason=\"{label}\"}} {}",
+                "{metric}{{{prefix}by_reason=\"{label}\"}} {}",
                 self.slots[i].load(Ordering::Relaxed)
             );
         }
@@ -251,6 +258,10 @@ struct Series {
     reconnects: u64,
     /// 设备 -> 点位 -> 最近一次是否成功（仅总线维度维护，用于在线设备数）
     devices: HashMap<String, HashMap<String, bool>>,
+    /// 点位所属总线（仅点位维度维护，导出 `bus` 标签用）
+    bus: String,
+    /// 点位所属设备（仅点位维度维护，导出 `device` 标签用）
+    device: String,
 }
 
 /// 按总线 / 点位累计的采集统计
@@ -282,6 +293,13 @@ impl ScopedCollectMetrics {
             let mut map = self.by_point.write();
             let series = map.entry(sample.point.to_string()).or_default();
             record_into(series, day, &sample);
+            // ROI-08：点位序列记住所属总线/设备，导出时带上标签。
+            if series.bus.is_empty() && !sample.bus.is_empty() {
+                series.bus = sample.bus.to_string();
+            }
+            if !sample.device.is_empty() {
+                series.device = sample.device.to_string();
+            }
         }
     }
 
@@ -322,16 +340,23 @@ impl ScopedCollectMetrics {
     ///   随日桶滚动与超期裁剪，该值**可能下降**，故 TYPE 声明为 gauge。
     /// - 只导出失败数最多的前 [`POINT_EXPORT_LIMIT`] 个点位，其余失败点位的
     ///   数量由 `gateway_collect_scoped_points_failing` 体现（避免序列数爆炸）。
+    /// - ROI-08：每条序列带上所属 `bus` / `device` 标签，便于按设备或总线筛选；
+    ///   序列总数仍受 [`POINT_EXPORT_LIMIT`] 限制。
     pub fn render(&self, buf: &mut String) {
         use std::fmt::Write as _;
-        let mut rows: Vec<(String, u64)> = {
+        let mut rows: Vec<(String, u64, String, String)> = {
             let map = self.by_point.read();
             map.iter()
                 .map(|(point, series)| {
                     let failed = series.buckets.iter().map(|b| b.failed).sum();
-                    (point.clone(), failed)
+                    (
+                        point.clone(),
+                        failed,
+                        series.bus.clone(),
+                        series.device.clone(),
+                    )
                 })
-                .filter(|(_, failed)| *failed > 0)
+                .filter(|(_, failed, _, _)| *failed > 0)
                 .collect()
         };
         // 失败数降序；同数按点位名升序，保证导出顺序稳定可复现。
@@ -343,11 +368,11 @@ impl ScopedCollectMetrics {
             "# HELP gateway_collect_failures_scoped Collection failures per point (sum over retained daily buckets)\n\
              # TYPE gateway_collect_failures_scoped gauge"
         );
-        for (point, failed) in rows.iter().take(POINT_EXPORT_LIMIT) {
+        for (point, failed, bus, device) in rows.iter().take(POINT_EXPORT_LIMIT) {
             let _ = writeln!(
                 buf,
-                "gateway_collect_failures_scoped{{point=\"{}\"}} {}",
-                escape_label_value(point),
+                "gateway_collect_failures_scoped{{{}}} {}",
+                point_labels(bus, device, point),
                 failed
             );
         }
@@ -359,10 +384,71 @@ impl ScopedCollectMetrics {
             failing_points,
         );
     }
+
+    /// 导出设备在线状态（ROI-08）。
+    ///
+    /// 口径与 `online_devices` 一致：设备下任一点位「最近一次采集成功」即为在线。
+    /// 序列数等于已知设备数，因此由配置规模决定；热重载时会裁剪已移除设备。
+    pub fn render_device_online(&self, buf: &mut String) {
+        use std::fmt::Write as _;
+        // 同一设备理论上只属于一条总线；跨总线重名时按「任一在线即在线」合并。
+        let mut devices: BTreeMap<String, bool> = BTreeMap::new();
+        {
+            let map = self.by_bus.read();
+            for series in map.values() {
+                for (device, points) in &series.devices {
+                    let online = points.values().any(|&ok| ok);
+                    devices
+                        .entry(device.clone())
+                        .and_modify(|state| *state |= online)
+                        .or_insert(online);
+                }
+            }
+        }
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_device_online Device online state (1 = any point's last collection succeeded)\n\
+             # TYPE gateway_device_online gauge"
+        );
+        for (device, online) in devices {
+            let _ = writeln!(
+                buf,
+                "gateway_device_online{{device=\"{}\"}} {}",
+                escape_label_value(&device),
+                u8::from(online)
+            );
+        }
+    }
+
+    /// 裁剪已从配置中删除的设备（热重载调用），避免在线状态序列长期残留。
+    pub fn retain_devices(&self, keep: &std::collections::HashSet<String>) {
+        for series in self.by_bus.write().values_mut() {
+            series.devices.retain(|device, _| keep.contains(device));
+        }
+    }
+}
+
+/// 组装点位序列的标签串（空标签值省略，保持无总线/无设备场景的旧输出）。
+fn point_labels(bus: &str, device: &str, point: &str) -> String {
+    let mut labels = String::new();
+    if !bus.is_empty() {
+        labels.push_str("bus=\"");
+        labels.push_str(&escape_label_value(bus));
+        labels.push_str("\",");
+    }
+    if !device.is_empty() {
+        labels.push_str("device=\"");
+        labels.push_str(&escape_label_value(device));
+        labels.push_str("\",");
+    }
+    labels.push_str("point=\"");
+    labels.push_str(&escape_label_value(point));
+    labels.push('"');
+    labels
 }
 
 /// 转义 Prometheus 标签值中的特殊字符（`\`、`"`、换行）。
-fn escape_label_value(value: &str) -> String {
+pub(crate) fn escape_label_value(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         match ch {

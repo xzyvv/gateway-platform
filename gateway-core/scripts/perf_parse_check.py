@@ -228,7 +228,7 @@ def check(text: str, truth: dict | None) -> list[tuple[str, bool, str]]:
     # A 结构：by_reason 序列集合恒定（10 个标签值都有样本行）
     present = set()
     for line in text.splitlines():
-        if line.startswith('gateway_collect_failures{by_reason="'):
+        if line.startswith('gateway_collect_failures{') and 'by_reason="' in line:
             present.add(line.split('by_reason="', 1)[1].split('"', 1)[0])
     missing = [label for label in REASON_LABELS if label not in present]
     unknown = sorted(present - set(REASON_LABELS))

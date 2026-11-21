@@ -152,9 +152,20 @@ impl Metrics {
         duration_us: u64,
         error: Option<crate::engine::metrics::CollectErrorCode>,
     ) {
+        self.record_collect_common("", success, duration_us, error);
+    }
+
+    /// 采集计数的公共写入：当日滚动 + 总量/分原因 + 总线维度。
+    fn record_collect_common(
+        &self,
+        bus: &str,
+        success: bool,
+        duration_us: u64,
+        error: Option<crate::engine::metrics::CollectErrorCode>,
+    ) {
         self.roll_day_if_needed();
         self.daily_collect.fetch_add(1, Ordering::Relaxed);
-        self.collect.record(success, duration_us, error);
+        self.collect.record_on_bus(bus, success, duration_us, error);
     }
 
     /// 记录一次采集并同时累计到总线 / 点位维度（运维报表、总线负载、健康评分读取）。
@@ -169,7 +180,7 @@ impl Metrics {
         duration_us: u64,
         error: Option<crate::engine::metrics::CollectErrorCode>,
     ) {
-        self.record_collect_with_reason(success, duration_us, error);
+        self.record_collect_common(bus, success, duration_us, error);
         let now_ms = chrono::Utc::now().timestamp_millis();
         self.scoped.record(crate::engine::metrics::CollectSample {
             bus,

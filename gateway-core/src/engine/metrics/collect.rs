@@ -4,11 +4,21 @@
 //! `collect_failures` / `protocol_decode_errors_total` / `collect_duration_*`。
 //! 历史直方图名 `gateway_collect_duration_us_*` 保持不变。
 
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use parking_lot::RwLock;
+
 use super::histogram::{Histogram, BUCKETS_LEN};
-use super::scoped::{CollectErrorCode, ReasonCounters};
+use super::scoped::{escape_label_value, CollectErrorCode, ReasonCounters};
+
+/// 单条总线的采集计数（ROI-08：给 `gateway_collect_*` 加 `bus` 标签）。
+#[derive(Default)]
+struct BusCollect {
+    total: AtomicU64,
+    failures: ReasonCounters,
+}
 
 #[derive(Default)]
 pub struct CollectMetrics {
@@ -27,6 +37,8 @@ pub struct CollectMetrics {
     pub protocol_decode_errors: AtomicU64,
     /// 采集耗时直方图（桶边界见 `super::COLLECT_DURATION_BUCKETS`）。
     pub duration: Histogram,
+    /// 按总线拆分的采集计数；为空时导出口径回退为无标签总量。
+    by_bus: RwLock<BTreeMap<String, BusCollect>>,
 }
 
 impl CollectMetrics {
@@ -41,13 +53,39 @@ impl CollectMetrics {
     /// `collect_failures` 总量与 `failures_by_reason` 分桶。缺省错误码归入
     /// `other` 桶，保证分桶总和恒等于总量。
     pub fn record(&self, success: bool, duration_us: u64, error: Option<CollectErrorCode>) {
+        self.record_on_bus("", success, duration_us, error);
+    }
+
+    /// 记录一次采集结果，并累加到对应总线维度。
+    ///
+    /// `bus` 为空串时只记总量（测试 / 未分总线的调用方），导出保持旧的无标签口径。
+    pub fn record_on_bus(
+        &self,
+        bus: &str,
+        success: bool,
+        duration_us: u64,
+        error: Option<CollectErrorCode>,
+    ) {
         self.collect_total.fetch_add(1, Ordering::Relaxed);
+        let code = match error {
+            Some(code) => code,
+            None => CollectErrorCode::Other,
+        };
         if !success {
             self.collect_failures.fetch_add(1, Ordering::Relaxed);
-            self.failures_by_reason.inc(match error {
-                Some(code) => code,
-                None => CollectErrorCode::Other,
-            });
+            self.failures_by_reason.inc(code);
+        }
+        if !bus.is_empty() {
+            let mut map = self.by_bus.write();
+            if !map.contains_key(bus) {
+                map.insert(bus.to_string(), BusCollect::default());
+            }
+            if let Some(entry) = map.get(bus) {
+                entry.total.fetch_add(1, Ordering::Relaxed);
+                if !success {
+                    entry.failures.inc(code);
+                }
+            }
         }
         self.duration.record(duration_us, Self::buckets());
     }
@@ -70,10 +108,26 @@ impl CollectMetrics {
         let _ = writeln!(
             buf,
             "# HELP gateway_collect_total Collection attempts\n\
-             # TYPE gateway_collect_total counter\n\
-             gateway_collect_total {}",
-            self.collect_total.load(Ordering::Relaxed),
+             # TYPE gateway_collect_total counter"
         );
+        // ROI-08：有总线维度数据时按 `bus` 导出；否则保留旧的无标签总量口径。
+        let buses = self.by_bus.read();
+        if buses.is_empty() {
+            let _ = writeln!(
+                buf,
+                "gateway_collect_total {}",
+                self.collect_total.load(Ordering::Relaxed),
+            );
+        } else {
+            for (bus, entry) in buses.iter() {
+                let _ = writeln!(
+                    buf,
+                    "gateway_collect_total{{bus=\"{}\"}} {}",
+                    escape_label_value(bus),
+                    entry.total.load(Ordering::Relaxed),
+                );
+            }
+        }
         // 采集失败按原因拆分：`gateway_collect_failures` 由「1 条无标签序列」
         // 变为「N 条带 by_reason 标签序列」，各标签值之和恒等于失败总量
         // （既有告警规则需改写为 `sum(gateway_collect_failures)`）。
@@ -82,8 +136,18 @@ impl CollectMetrics {
             "# HELP gateway_collect_failures Collection failures by reason\n\
              # TYPE gateway_collect_failures counter"
         );
-        self.failures_by_reason
-            .render("gateway_collect_failures", buf);
+        if buses.is_empty() {
+            self.failures_by_reason
+                .render("gateway_collect_failures", buf);
+        } else {
+            for (bus, entry) in buses.iter() {
+                entry.failures.render_with_prefix(
+                    "gateway_collect_failures",
+                    &format!("bus=\"{}\",", escape_label_value(bus)),
+                    buf,
+                );
+            }
+        }
         let _ = writeln!(
             buf,
             "# HELP gateway_protocol_decode_errors_total Protocol decode errors (CRC/checksum failures, invalid frames)\n\

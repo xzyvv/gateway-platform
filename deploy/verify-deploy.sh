@@ -1470,14 +1470,15 @@ elif [ -n "$DISK_LEVEL" ]; then
 fi
 
 # 判据 4：采集是否在推进（两次采样，窗口内计数必须增长）
-COLLECT_0=$(metric_val gateway_collect_total)
+# ROI-08 后 gateway_collect_total 带 bus 标签，按同名序列求和取总量。
+COLLECT_0=$(metric_sum gateway_collect_total)
 COLLECT_0=${COLLECT_0%%.*}
 if [ -n "$METRICS_TXT" ] && [ -n "$COLLECT_0" ]; then
   FAIL_0=$(metric_sum gateway_collect_failures)
   FAIL_0=${FAIL_0%%.*}
   sleep "$COLLECT_WINDOW_SECS"
   METRICS_TXT=$(fetch_metrics)
-  COLLECT_1=$(metric_val gateway_collect_total)
+  COLLECT_1=$(metric_sum gateway_collect_total)
   COLLECT_1=${COLLECT_1%%.*}
   FAIL_1=$(metric_sum gateway_collect_failures)
   FAIL_1=${FAIL_1%%.*}

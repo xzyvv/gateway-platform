@@ -494,7 +494,11 @@ fn scoped_render_exports_failing_points_only() {
 
     let mut buf = String::new();
     m.render(&mut buf);
-    assert!(buf.contains("gateway_collect_failures_scoped{point=\"bad-point\"} 2"));
+    assert!(
+        buf.contains("gateway_collect_failures_scoped{bus=\"bus\",point=\"bad-point\"} 2"),
+        "{}",
+        buf
+    );
     assert!(!buf.contains("ok-point"), "无失败点位不得导出：\n{}", buf);
     assert!(buf.contains("gateway_collect_scoped_points_failing 1"));
 }
