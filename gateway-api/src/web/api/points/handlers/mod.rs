@@ -263,6 +263,15 @@ pub(crate) async fn write_points_core(
             .cloned()
             .ok_or_else(|| ApiError::not_found(format!("point {} not found", w.id)))?;
         ensure_writable(&point)?;
+        // ROI-06（W-1）：越界直接拒绝，不下发到设备。
+        // 只校验「能不能写」不校验「写的值合不合理」，一次手滑就能把设定值
+        // 写到 3000 kW；限幅会悄悄改写意图，因此这里选择显式报错。
+        if let Some(msg) = point.write_range_error(w.value) {
+            return Err(ApiError::with_code(
+                crate::web::error_codes::WRITE_OUT_OF_RANGE,
+                msg,
+            ));
+        }
         let collector = collectors.get(&point.bus).ok_or_else(|| {
             ApiError::not_found(format!("collector for bus {} not found", point.bus))
         })?;
@@ -324,10 +333,26 @@ pub(crate) async fn write_points_core(
     let mut by_bus: BTreeMap<String, Vec<(usize, PointConfig)>> = BTreeMap::new();
     for (i, w) in writes.iter().enumerate() {
         match config.points.iter().find(|p| p.id == w.id) {
-            Some(p) if p.writable => by_bus
-                .entry(p.bus.clone())
-                .or_default()
-                .push((i, p.clone())),
+            Some(p) if p.writable => {
+                // ROI-06（W-1）：越界值不进下发队列，逐条记为该项失败
+                if let Some(message) = p.write_range_error(w.value) {
+                    results[i] = Some(write_item(
+                        p,
+                        w.value,
+                        Some(WriteItemError {
+                            message,
+                            quality: None,
+                            // 未下发 → 明确失败，修正值后可安全重试
+                            outcome: WriteOutcome::Failed,
+                        }),
+                    ));
+                } else {
+                    by_bus
+                        .entry(p.bus.clone())
+                        .or_default()
+                        .push((i, p.clone()));
+                }
+            }
             // S11: 写入白名单——未标记 writable 的点位记为该项失败，不放行写入
             Some(p) => {
                 let message = whitelist_error(p);

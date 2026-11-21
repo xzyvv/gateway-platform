@@ -169,6 +169,9 @@ pub async fn create_point(
         modbus_register: payload.modbus_register,
         // S11: 写入白名单默认拒绝，需显式开启
         writable: payload.writable.unwrap_or(false),
+        // ROI-06: 写入上下限，None=不限制
+        write_min: payload.write_min,
+        write_max: payload.write_max,
     };
     cfg.points.push(point.clone());
     apply_reload(&state, &old, cfg).await?;
@@ -280,6 +283,9 @@ pub async fn update_point(
         if let Some(w) = payload.writable {
             p.writable = w;
         }
+        // ROI-06: PUT 为整行覆盖语义，未传即清除限制（与 alarm_high/low 一致）
+        p.write_min = payload.write_min;
+        p.write_max = payload.write_max;
     });
     if found.is_none() {
         return Ok(ApiResponse::err(codes::NOT_FOUND, "point not found"));

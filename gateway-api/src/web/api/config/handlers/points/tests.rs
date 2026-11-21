@@ -29,6 +29,8 @@ fn payload_with_scale(scale: Option<f64>) -> PointPayload {
         aggregation: None,
         modbus_register: None,
         writable: None,
+        write_min: None,
+        write_max: None,
     }
 }
 

@@ -35,6 +35,17 @@ impl ApiError {
             message: msg.into(),
         }
     }
+    /// 业务码明确、HTTP 状态由码表决定的错误（如 4011 写入越界 → 400）。
+    ///
+    /// 避免为每个细分业务码写一个构造器，同时保证状态码与 `ApiError` /
+    /// `ApiResponse` 两条路径口径一致（都由 [`codes::http_status`] 推导）。
+    pub fn with_code(code: i32, msg: impl Into<String>) -> Self {
+        Self {
+            status: codes::http_status(code),
+            code,
+            message: msg.into(),
+        }
+    }
     /// 状态冲突：当前系统状态不允许该操作（如「已在运行」却又要求启动）。
     ///
     /// 与 `bad_request` 的区别：400 表示「参数本身不对」，409 表示「参数没问题，

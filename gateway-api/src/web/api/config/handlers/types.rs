@@ -95,6 +95,10 @@ pub(crate) struct PointPayload {
     pub(crate) modbus_register: Option<u16>,
     /// S11: 写入白名单标记（缺省 false，可由测点编辑界面 / API 显式开启）
     pub(crate) writable: Option<bool>,
+    /// ROI-06: 写入下限（含），None=不限制
+    pub(crate) write_min: Option<f64>,
+    /// ROI-06: 写入上限（含），None=不限制
+    pub(crate) write_max: Option<f64>,
 }
 
 /// 配置导入请求

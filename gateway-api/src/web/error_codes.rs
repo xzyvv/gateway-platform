@@ -70,6 +70,11 @@ pub const DUPLICATE_ID: i32 = 4009;
 /// 该操作」。此前 `ApiError::conflict` 复用 4009，导致同一码在
 /// `ApiError` 路径是 409、在 `ApiResponse::err` 路径是 400。
 pub const STATE_CONFLICT: i32 = 4010;
+/// 写入值超出点位配置的允许范围（`write_min` / `write_max`）
+///
+/// 越界写入会被**直接拒绝、不下发到设备**：限幅会悄悄改写用户意图，
+/// 现场表现为「我明明写了却没生效」，比明确报错更难排查。
+pub const WRITE_OUT_OF_RANGE: i32 = 4011;
 /// 授权有效但档位配额不足
 pub const QUOTA_EXCEEDED: i32 = 4021;
 /// 总线忙（协议工具会话租约冲突；HTTP 200 + 业务码）
@@ -141,6 +146,7 @@ pub const ALL_CODES: &[(i32, &str)] = &[
     (FORMULA_INVALID, "公式求值失败"),
     (DUPLICATE_ID, "id 已存在"),
     (STATE_CONFLICT, "资源状态冲突"),
+    (WRITE_OUT_OF_RANGE, "写入值超出允许范围"),
     (QUOTA_EXCEEDED, "授权配额不足"),
     (BUS_BUSY, "总线忙"),
     (UNSUPPORTED_MEDIA_TYPE, "Content-Type 不受支持"),

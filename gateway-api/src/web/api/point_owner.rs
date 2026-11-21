@@ -246,6 +246,8 @@ mod tests {
             aggregation: None,
             modbus_register: None,
             writable: false,
+            write_min: None,
+            write_max: None,
         }
     }
 
