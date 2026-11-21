@@ -53,7 +53,7 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | MC-R2 | 3E/4E 响应必须校验子头（`0xD000` / `0xD400`）与固定头长度（9 / 11 字节） | `mc/frames.rs:76-78`、`:405-419`、`:422-442` | 无（`frame_build.rs:5`、`:43` 只测请求构帧，不测响应头） | 串到上一帧或非 MC 报文时被读成长度巨大的垃圾包，连接被丢弃并重连 |
 | MC-R3 | 4E 响应必须回显请求序列号，不匹配即判帧错 | `mc/frames.rs:435-440` | 有（`mc/tests/serial_4e.rs:87`） | 迟到应答被当成当前请求结果，点位值错位（典型「多台设备值相同」） |
 | MC-R4 | 「结束码 + 数据」长度必须落在 2..=960 字节；禁止按对端给的长度直接分配 | `mc/frames.rs:387-398`、`:492` | 无（仅 fuzz `fuzz/fuzz_targets/mc_decode.rs:37` 调用，无单测） | 异常设备/扫描噪声返回超大长度时内存被一次性占满，进程可能 OOM |
-| MC-R5 | 读结束码非 0 必须返回 `InvalidFrame`，不得当成有效数据 | `mc/frames.rs:560-568`、`mc/mod.rs:464` | 有（`mc/tests/e2e.rs:66`、`mc/tests/codec.rs:50`） | 地址不存在时上送 0 或垃圾值，质量仍为 Good |
+| MC-R5 | 读结束码非 0 → `DeviceRejected`（PLC 明确拒绝），不得当成有效数据 | `mc/frames.rs:556-569`、`mc/mod.rs:464` | 有（`mc/tests/e2e.rs:66`、`mc/tests/codec.rs:57`） | 地址不存在时上送 0 或垃圾值，质量仍为 Good |
 | MC-R6 | 1E 响应功能码必须等于请求功能码 \| 0x80；数据长度由请求点数推导且 ≤ 512 字节 | `mc/frames.rs:448-485` | 有（`mc/tests/frame_1e.rs:11`、`:25`、`:55`） | 1E 老设备上错帧被当成有效值；或读数据与点位错位 |
 | MC-R7 | 单次 IO 超时取 `bus.timeout_ms`；发送/接收超时 → `NoReply` 并清空连接，下次惰性重建 | `mc/mod.rs:299-348` | 有（`mc/tests/e2e.rs:147`、`:78`） | 半开 TCP 不清理时整条通道永久卡死，后续所有点位一起超时 |
 | MC-R8 | 批量读按软元件分组、地址升序合并；单帧上限 479 字 / 1916 位 / 1E 256 单元，超限自动分片 | `mc/frames.rs:90-94`、`:646`；`mc/batch.rs:97-112` | 有（`mc/tests/batch.rs:81`、`:172`、`:196`） | 点位跨区或超限时整帧被设备拒绝，表现为「一批点全错、单点读正常」 |
@@ -65,11 +65,11 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | MC-W3 | 写值必须做类型范围校验；越界应在上线前拒绝 | **不成立**：`mc/frames.rs:608-624` 用 `as` 强转，越界静默截断 | 无 | 下发 70000 到 U16 点位写成 4464，界面显示「写成功」但设备值是错的 |
 | MC-W4 | 写后是否读回：协议层**不读回**，读回只由 API 层在 `outcome == uncertain` 时触发 | `mc/mod.rs:520-540`；API 层 `gateway-api/src/web/api/points/handlers/mod.rs:297`、`:462` | 无（`e2e.rs:101` 只验证写出帧正确） | 设备收到写但应答丢失时，只能靠上层读回消除不确定；纯协议层无法自证 |
 | MC-W5 | 写事务不得自动重发（继承 W-01/W-02 口径） | `mc/mod.rs:535-538`（无重试分支） | 无（`e2e.rs:131` 只验定级，未验重发次数） | 一次超时被重发两次，脉冲输出触发两次 |
-| MC-E1 | 读结束码应可区分「地址不存在/设备拒绝」与「帧损坏」 | **不成立**：`mc/frames.rs:560-568` 一律 `InvalidFrame`，统计口径落 `DECODE` | 无 | 现场只看到 `DECODE`，无法判断是点位配错还是链路噪声 |
+| MC-E1 | 读结束码应可区分「地址不存在/设备拒绝」与「帧损坏」 | **成立**：`mc/frames.rs:556-569` 结束码非 0 → `DeviceRejected`；`mc/batch.rs:160-169` 批量逐点保留该变体 | 有（`mc/tests/e2e.rs:66`、`mc/tests/codec.rs:57`） | —— |
 | MC-E2 | 1E 状态码应与 3E/4E 结束码同口径映射 | `mc/frames.rs:468-484`、`mc/mod.rs:464` | 无 | 1E 站点地址错误显示为帧错误，排障方向跑偏 |
 
-**测试覆盖**：18 条中 9 条有守护，9 条是缺口。已覆盖集中在「构帧/地址/结束码/超时/批量分片」；
-缺的全是**长度边界、串包识别、写值范围、错误码粒度**。
+**测试覆盖**：18 条中 10 条有守护，8 条是缺口。已覆盖集中在「构帧/地址/结束码/超时/批量分片」；
+缺的是**长度边界、串包识别、写值范围**。
 
 **风险与建议优先级（按现场最容易踩排序）**
 
@@ -121,7 +121,7 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | S7-R1 | 地址解析必须支持 DB/M/I/Q 与位/字节/字/双字；DB 必须含 `.`，位号与偏移越界返回 `InvalidConfig` | `s7comm/address.rs:72-200` | 有（`s7comm/tests/address_parse.rs:5-124`，共 14 例） | 点位配错时整点不采集，且不发请求 |
 | S7-R2 | TPKT 必须校验版本 `0x03 0x00` 且总长 ≥4；**读取前必须有上限** | 版本/下限：`s7comm/frames/link.rs:59-73`；**上限缺失** | 无 | 异常设备回报 65535 长度时按 64KB 分配并阻塞等待，表现为整条通道卡死 |
 | S7-R3 | 响应必须校验 Protocol ID `0x32`、PDU type、`param_len/data_len` 切片边界，不得越界读 | `s7comm/frames/read.rs:60-120`、`:198-250` | 有（`s7comm/tests/codec.rs:145`、`:176`；`multi_read.rs:83`、`:129`、`:171`） | 错帧被解析成有效值，或 panic 后任务退出（历史 Bug 已修） |
-| S7-R4 | 单点读 `return_code`：`RET_NOT_FOUND` → `InvalidConfig`，其它非 0 → `InvalidFrame` | `s7comm/frames/read.rs:121-133` | 有（`s7comm/tests/codec.rs:189`、`:176`） | 点位地址不存在显示为 `CONFIG`，而设备内部错误显示为 `DECODE` |
+| S7-R4 | 单点读 `return_code`：`RET_NOT_FOUND` → `InvalidConfig`，其它非 0 → `DeviceRejected` | `s7comm/frames/read.rs:121-135` | 有（`s7comm/tests/codec.rs:209`、`:235`） | 点位地址不存在显示为 `CONFIG`，而设备内部拒绝显示为设备拒绝 |
 | S7-R5 | 值数据长度必须 ≥ 数据类型期望字节数，否则 `InvalidFrame` | `s7comm/frames/read.rs:142-148`、`s7comm/frames/decode.rs:5-40` | 有（`s7comm/tests/codec.rs:138`） | 短帧被解码成错误数值，质量仍为 Good |
 | S7-R6 | 多 item 读必须校验 `item_count` 与请求一致；单个 item 失败只污染该点；按协商 PDU 分片（`(pdu-14)/12`，1..=255） | `s7comm/frames/read.rs:245-275`、`s7comm/collector/read.rs:195-225` | 有（`multi_read.rs:129`、`:171`；`regression.rs:18`） | 批量点位错位映射，出现「整屏值相同/错位」 |
 | S7-R7 | 惰性建链；IO 失败清空连接，下次调用自动重连 | `s7comm/collector/read.rs:18-20`、`:47-76` | 有（`s7comm/tests/e2e.rs:17`、`:64`） | 断链后不重连，整站永久离线 |
@@ -132,14 +132,13 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | S7-W3 | 发送/读响应失败 → `WriteUncertain`，不自动重发 | `s7comm/collector/write.rs:51-92` | 有（`s7comm/tests/e2e.rs:206`） | 自动重试会让写操作重复执行 |
 | S7-W4 | 多写必须与入参等长且逐位对应，按 item 值长度分片（不套用读的 12B/item 预算） | `s7comm/collector/write.rs:109-210` | 有（`multi_write.rs:99`、`:121`、`:148`、`:171`；`e2e.rs:162`） | 批写结果与点位错位，写错设备 |
 | S7-W5 | 写后是否读回：协议层不读回，仅 API 层 uncertain 读回 | `s7comm/collector/write.rs:90-93` | 无 | 应答丢失时协议层无法自证，需上层读回 |
-| S7-E1 | PDU 级错误（`pdu_type & 0x80`，error class/code）在读写路径应同口径 | **不一致**：读 → `InvalidFrame`（`frames/read.rs:74-87`），写 → `DeviceRejected`（`frames/write.rs:81-92`） | 无 | 同一个设备错误，读操作显示 `DECODE`、写操作显示设备拒绝，运维误以为是两类问题 |
+| S7-E1 | PDU 级错误（`pdu_type & 0x80`，error class/code）在读写路径应同口径 | **成立**：读 → `DeviceRejected`（`frames/read.rs:73-88`、`:210-225`），写 → `DeviceRejected`（`frames/write.rs:81-92`）；多 item 逐项失败见 `collector/read.rs:222-234` | 有（`s7comm/tests/codec.rs:190`、`:235`） | —— |
 
-**测试覆盖**：15 条中 10 条有守护，5 条是缺口。缺的是**TPKT 上限、PDU ref 回显、PDU 大小边界、写后读回、读路径错误归类**。
+**测试覆盖**：15 条中 11 条有守护，4 条是缺口。缺的是**TPKT 上限、PDU ref 回显、PDU 大小边界、写后读回**。
 
 **风险与建议优先级**
 
 1. **S7-R2（TPKT 无上限）** —— 一个畸形/错位的长度字段就能让采集任务阻塞到超时并反复重连，且只在现场网络异常时出现。应加与 MC `body_len_checked`、FINS `8..=2048` 同等口径的上限。
-2. **S7-E1（读写错误口径不一致）** —— 读失败只看到 `DECODE`，运维会先怀疑链路而不是点位/权限；这是最容易被误判的一类。
 
 ---
 
@@ -160,11 +159,11 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | UA-R7 | 读失败必须清零/累加计数，成功即清零；单点问题不得累加链路失败 | `opcua/mod.rs:210-218`（计数）、`:440`/`:804`（成功清零）、`:384`/`:431`/`:795`（仅链路级失败累加） | 有（`opcua/tests.rs:371`：连续读不到值的点不计链路失败、不拆会话） | 偶发失败累计到阈值后误拆健康会话，出现周期性「闪断」 |
 | UA-R8 | 批量读必须一次请求多节点，并按原下标回填；单点解析失败不得改变其它点位下标 | `opcua/mod.rs:355-506`（`:444-499` 回填） | 无 | 一个坏地址让后续点位整体错位 |
 | UA-W1 | 该协议不支持写，写请求必须是「明确失败」（`Unsupported`），不得伪装成未知 | `protocol/mod.rs:502-511`；`opcua/mod.rs` 无 `fn write` | 有（`registry/tests.rs:387`，跨协议能力位一致性） | 前端显示可写而实际必失败（已被能力位测试挡住） |
-| UA-E1 | 值提取错误必须给出可区分的原因：不支持的 Variant → `Unsupported`，无值/字符串非数字 → `InvalidFrame` | `opcua/frames.rs:69-92` | 无 | 点位类型不匹配时只看到 `DECODE`，无法区分「配错类型」与「设备没值」 |
+| UA-E1 | 值提取错误必须给出可区分的原因：不支持的 Variant → `Unsupported`，无值/字符串非数字 → `InvalidFrame`；Bad/Uncertain 且无值 → `DeviceRejected` | `opcua/frames.rs:69-92`；`opcua/mod.rs:142-152`（`rejected_status`）、`:477-485`/`:819-825`（两读路径） | 有（`opcua/tests.rs:347`） | 点位类型不匹配时只看到 `DECODE`，无法区分「配错类型」「设备没值」与「设备拒绝」 |
 | UA-E2 | 单节点 Bad / 取不到值不得被计为「链路读失败」；Bad/Uncertain 必须带可辨识 `quality_reason` | **成立**：`opcua/mod.rs:439-440`（server 已响应即 `record_read_ok`，先于取值）、`:795-809`（取不到值只降级该点，不再 `record_read_failure`）；`:120-146` 生成 `opcua_status_<StatusCode>:OTHER` | 有（`opcua/tests.rs:312`、`:335`、`:347`、`:371`） | 一个节点被设备拒绝（权限/不存在）时，连续刷新不再拆会话；页面可按 `quality_reason` 区分具体 StatusCode |
 
-**测试覆盖**：11 条中 6 条有守护（UA-R4、UA-R7 由 ROI-21 补齐，UA-E2 已从缺口转为成立），5 条是缺口。
-读服务剩余缺口集中在**批量结果少返回、下标回填、值提取错误原因**（UA-R3/R8/UA-E1），仍无端到端用例。
+**测试覆盖**：11 条中 8 条有守护（UA-R4、UA-R7 由 ROI-21 补齐，UA-E2 已成立，UA-E1 由 ROI-25 补齐），3 条是缺口。
+读服务剩余缺口集中在**建链前置、批量结果少返回、下标回填**（UA-R2/R3/R8），仍无端到端用例。
 
 **风险与建议优先级**
 
@@ -238,21 +237,21 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 
 | 协议 | 表格行数 | 有测试守护 | 缺口 |
 |---|---|---|---|
-| MC | 18 | 9 | 9 |
+| MC | 18 | 10 | 8 |
 | FINS | 15 | 8 | 7 |
-| S7Comm | 15 | 10 | 5 |
-| OPC UA | 11 | 6 | 5 |
+| S7Comm | 15 | 11 | 4 |
+| OPC UA | 11 | 8 | 3 |
 | BACnet MS/TP | 11 | 5 | 6 |
 | IEC101 | 13 | 11 | 2 |
-| 合计 | 83 | 49 | 34 |
+| 合计 | 83 | 53 | 30 |
 
 **先补哪两个**
 
-1. **OPC UA**：已补 UA-R4/R7、UA-E2 已成立，剩余缺口集中在批量对齐与值提取原因（UA-R3/R8/UA-E1）——仍属「不报错但值不对」的高风险区。
+1. **OPC UA**：已补 UA-R4/R7、UA-E2、UA-E1，剩余缺口集中在建链前置与批量对齐（UA-R2/R3/R8）——仍属「不报错但值不对」的高风险区。
 2. **IEC101**：地址归属、ASDU 错误码、解码失败上报已补齐（ROI-22，`d8d85bc`）；剩余 IEC-R10（FCB 校验）与 IEC-R4（变长帧边界），且没有 fuzz。
 
 **跨协议共性缺口（值得一次性处理）**
 
 - **写值范围校验**：MC-W3、FINS-W4 都缺，S7-W1 已有——同一类问题在不同协议实现不一致。
 - **串包识别**：MC（3E/4E 不校验站号/网络号回显）、FINS（UDP 无匹配）、S7（无 PDU ref 校验）、MSTP（不校验源地址）各缺一段，口径可以统一为「能拿到标识就必须比」；IEC101 已按此口径补齐（ROI-22）。
-- **错误码粒度**：设备明确拒绝被归入 `InvalidFrame`/`DECODE` 的现象在 MC 1E、FINS TCP、S7 读、MSTP 都存在。IEC101 已把 COT 否定确认映射为 `DeviceRejected`、类型不支持映射为 `Unsupported`（ROI-22）。`read-write-invariants.md` 的 W-03c 虽按写路径定义（明确错误码必须用 `DeviceRejected`），但读路径同样适用，目前的实现口径与该条不一致。
+- **错误码粒度**：设备明确拒绝被归入 `InvalidFrame`/`DECODE` 的现象在 FINS TCP（`tcp_error`）与 MSTP（Error/Reject/Abort PDU）仍存在（两族列入退役观察，暂不修改）。MC 读结束码、S7 读 PDU/逐项返回码、OPC UA Bad/Uncertain 无值已在 ROI-25 统一为 `DeviceRejected`（`608418f`）；IEC101 已在 ROI-22 把 COT 否定确认映射为 `DeviceRejected`、类型不支持映射为 `Unsupported`。`read-write-invariants.md` 的 W-03c（明确错误码必须用 `DeviceRejected`）现在读写路径口径一致。
