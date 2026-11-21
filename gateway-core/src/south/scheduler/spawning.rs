@@ -37,6 +37,22 @@ pub(crate) fn collect_results(
         .collect()
 }
 
+/// ROI-07（R-3）：点位本轮是否到期。
+///
+/// `last` 为空表示从未尝试过（新点 / 重载后首轮），一律视为到期。
+/// 用 `saturating_duration_since` 防止系统时钟回拨导致 panic。
+#[inline]
+fn point_due(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    interval: std::time::Duration,
+) -> bool {
+    match last {
+        Some(t) => now.saturating_duration_since(t) >= interval,
+        None => true,
+    }
+}
+
 impl Scheduler {
     /// 统一采集任务孵化（所有协议：modbus/dlt645/cjt188/gpio/opcua/iec104/bacnet/s7comm/...）
     ///
@@ -106,11 +122,20 @@ impl Scheduler {
         let group_timeout = collector.batch_timeout_budget(points.len());
         // 优化：Arc 包裹后闭包内只 clone Arc（引用计数），避免每采集周期深拷贝 Vec<PointConfig>
         let points = Arc::new(points);
+        // ROI-07（R-3）：逐点「上次尝试时刻」。
+        //
+        // 旧实现把退避倍率记在**点位**上（`DeviceState.current_interval`），组周期却取
+        // 组内 `min` —— 只要同组还有一个健康点，失败点就照样每轮被读、每轮超时，
+        // 退避等于没生效。这里改为每轮只读「已到重试时间」的点：健康点保持原周期，
+        // 失败点按自己的退避节奏重试，互不拖累。
+        let last_attempt: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
         let handle = tokio::spawn(async move {
             supervision_loop(task_name, shutdown, group_stop_rx, interval_fn, move |interval| {
                 let self_arc = self_arc.clone();
                 let collector = collector.clone();
                 let points = points.clone();
+                let last_attempt = last_attempt.clone();
                 // F-11：在本轮闭包内克隆时序归属键（每轮一次 String 拷贝，非每点）
                 let record_key = record_key.clone();
                 let record_proto = record_proto.clone();
@@ -124,14 +149,54 @@ impl Scheduler {
                     // 批量读取：Modbus 内部按 (slave,fc) 合并；其他协议默认逐点
                     // 超时保护：防止协议栈卡死拖垮整个采集循环
                     let start = std::time::Instant::now();
+                    // ROI-07（R-3）：只读「已到重试时间」的点，退避按点位生效。
+                    let (due_idx, all_due) = {
+                        let states = self_arc.device_states.lock();
+                        let mut last = last_attempt.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut due = Vec::with_capacity(points.len());
+                        for (i, p) in points.iter().enumerate() {
+                            // 未初始化（新点 / 重载后首轮）或没有状态时一律视为到期
+                            let backoff = states
+                                .get(&p.id)
+                                .map(|s| s.current_interval)
+                                .unwrap_or(interval);
+                            let is_due = point_due(last.get(&p.id).copied(), start, backoff);
+                            if is_due {
+                                last.insert(p.id.clone(), start);
+                                due.push(i);
+                            }
+                        }
+                        let all_due = due.len() == points.len();
+                        (due, all_due)
+                    };
+                    // 常态是全部到期：直接借用原切片，避免每周期深拷贝配置
+                    let due_owned: Option<Vec<PointConfig>> = if all_due {
+                        None
+                    } else {
+                        Some(due_idx.iter().map(|&i| points[i].clone()).collect())
+                    };
+                    let read_points: &[PointConfig] = due_owned.as_deref().unwrap_or(&points[..]);
+                    if read_points.is_empty() {
+                        // 全组都在退避期：不占用总线，也不上送伪失败点。
+                        // 陈旧值靠前端按 `source_ts` 自然「变旧」，不伪造刷新时间。
+                        self_arc.timeline.record(
+                            &record_key,
+                            &record_proto,
+                            &record_bus,
+                            interval,
+                            t0_ms,
+                            super::timeline::now_ms(),
+                        );
+                        return;
+                    }
                     // 缺陷 #7：共享进度槽——每个点位完成即写槽，组超时 drop 掉 future 后
                     // 已完成结果仍可取回；未完成点位由 collect_results 统一判 Timeout。
                     let slots: ResultSlots = Arc::new(std::sync::Mutex::new(
-                        (0..points.len()).map(|_| None).collect(),
+                        (0..read_points.len()).map(|_| None).collect(),
                     ));
-                    let read_fut = collector.read_batch_with_slots(&points, slots.clone());
+                    let read_fut = collector.read_batch_with_slots(read_points, slots.clone());
                     let timed_out = tokio::time::timeout(group_timeout, read_fut).await.is_err();
-                    let all_results = collect_results(slots, points.len(), group_timeout);
+                    let all_results = collect_results(slots, read_points.len(), group_timeout);
                     if timed_out {
                         let n_timeout = all_results
                             .iter()
@@ -147,7 +212,7 @@ impl Scheduler {
                         );
                     }
                     let elapsed_us = start.elapsed().as_micros() as u64;
-                    for (point, result) in points.iter().zip(all_results.iter()) {
+                    for (point, result) in read_points.iter().zip(all_results.iter()) {
                         // 成功判定必须同时看错误和质量码：modbus `read_batch` 把失败
                         // 回填成 `Ok(DataPoint{quality:Bad})`（见 protocol/modbus/mod.rs），
                         // 只看 `result.is_ok()` 会让 gateway_collect_failures 对 Modbus
@@ -174,7 +239,7 @@ impl Scheduler {
                         // 构造事件再被立即丢弃——纯开销。采集结果已由上面的
                         // record_collect_scoped 记入指标（成功/失败/耗时），语义完整。
                     }
-                    self_arc.handle_results(&points, all_results).await;
+                    self_arc.handle_results(read_points, all_results).await;
                     self_arc.timeline.record(
                         &record_key,
                         &record_proto,
@@ -251,5 +316,50 @@ impl Scheduler {
         self.handles
             .lock()
             .insert("_aggregation_flush".to_string(), handle);
+    }
+}
+
+#[cfg(test)]
+mod due_tests {
+    use super::point_due;
+    use std::time::{Duration, Instant};
+
+    /// 新点 / 重载后首轮没有任何尝试记录，必须立刻采一次。
+    #[test]
+    fn never_attempted_is_always_due() {
+        let now = Instant::now();
+        assert!(point_due(None, now, Duration::from_secs(3600)));
+    }
+
+    /// R-3 回归：退避中的点在本轮之外不得被读。
+    ///
+    /// 旧实现组周期取组内 `min`，同组健康点是 1s 时，失败点即使退避到 60s
+    /// 也会每秒被读一次、每秒超时 —— 退避形同虚设。
+    #[test]
+    fn backed_off_point_is_skipped_until_its_own_interval() {
+        let last = Instant::now();
+        // 60s 退避：5s 后仍未到期（旧实现会在 1s、2s… 每轮都读）
+        assert!(!point_due(
+            Some(last),
+            last + Duration::from_secs(5),
+            Duration::from_secs(60)
+        ));
+        // 1s 健康点：0.5s 时未到期、1.5s 时到期
+        assert!(!point_due(
+            Some(last),
+            last + Duration::from_millis(500),
+            Duration::from_secs(1)
+        ));
+        assert!(point_due(
+            Some(last),
+            last + Duration::from_millis(1500),
+            Duration::from_secs(1)
+        ));
+        // 退避期满后恢复尝试
+        assert!(point_due(
+            Some(last),
+            last + Duration::from_secs(61),
+            Duration::from_secs(60)
+        ));
     }
 }
