@@ -147,6 +147,7 @@ fn submit_txn(tx: &mpsc::Sender<BusTransaction>) -> JoinHandle<Result<Vec<u8>, C
             enqueued_at: std::time::Instant::now(),
             priority: crate::south::bus::BusPriority::Normal,
             retry_allowed: true,
+            frame_sent: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
         .await
         .map_err(|_| CollectorError::BusClosed)?;
@@ -372,6 +373,7 @@ fn submit_custom(
             enqueued_at: std::time::Instant::now(),
             priority: crate::south::bus::BusPriority::Normal,
             retry_allowed: true,
+            frame_sent: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
         .await
         .map_err(|_| CollectorError::BusClosed)?;

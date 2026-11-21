@@ -19,6 +19,7 @@ pub use transport::{BusDeps, GpioOutput, SerialOpener};
 
 use tokio::sync::{mpsc, oneshot};
 
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crate::config::{BusConfig, OpcUaClientConfig};
@@ -116,6 +117,12 @@ pub struct BusTransaction {
     /// 写路径失败时改为上报 [`CollectorError::WriteUncertain`]，把「可能已生效」
     /// 显式交给调用方判断，而不是由系统自作主张重发。
     pub retry_allowed: bool,
+    /// 写帧是否已尝试下发（ROI-20）。
+    ///
+    /// 总线任务在调用 `write_frame` 前置 true。若任务在收到应答前被
+    /// `reload` abort，写路径据此区分「从未下发（可安全重试）」与
+    /// 「可能已下发（结果未知）」，后者必须上报 [`CollectorError::WriteUncertain`]。
+    pub frame_sent: Arc<AtomicBool>,
 }
 
 /// 总线事务优先级。
@@ -330,6 +337,7 @@ impl BusManager {
             enqueued_at: std::time::Instant::now(),
             priority,
             retry_allowed,
+            frame_sent: Arc::new(AtomicBool::new(false)),
         };
         // Bug 148: 若 mpsc send 失败（总线 task 已退出），oneshot sender 立即 drop，
         // resp_rx.await 会收到 RecvError → 转为 BusClosed。当前逻辑正确，但
@@ -445,6 +453,7 @@ impl BusManager {
             priority: BusPriority::Normal,
             // 调试直发不重发：报文回放要求逐帧对比，重发会破坏回放序列。
             retry_allowed: false,
+            frame_sent: Arc::new(AtomicBool::new(false)),
         };
         // 应答预算 = 单帧超时 + 100ms 调度余量（总线任务内部已按同一超时收尾，
         // 这里只需略长于它，避免把「刚好收满」的正常响应误判为超时）

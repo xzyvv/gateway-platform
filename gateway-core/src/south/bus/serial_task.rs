@@ -2,7 +2,7 @@
 //!
 //! 包含串口模式下的总线请求处理循环、重连逻辑和帧提取。
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -87,6 +87,41 @@ fn build_probe_frame(slave: u8) -> Option<Vec<u8>> {
 #[cfg(not(feature = "modbus"))]
 fn build_probe_frame(_slave: u8) -> Option<Vec<u8>> {
     None
+}
+
+/// 写事务被总线任务取消时的收尾器（ROI-20）。
+///
+/// `reload` 重建总线会 `abort` 旧任务。若写帧已下发、任务却在收到应答前被取消，
+/// 调用方必须看到「结果未知」，而不是 `BusClosed`——写路径把后者等价于
+/// 「明确失败、可安全重试」，会造成重复写（累加 / 脉冲类点位直接出错）。
+///
+/// 正常路径通过 [`Self::respond`] 回送并置空 sender；`Drop` 只在异常取消时兜底。
+struct TxnResponder {
+    response_tx: Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, CollectorError>>>,
+    frame_sent: Arc<AtomicBool>,
+    is_write: bool,
+}
+
+impl TxnResponder {
+    fn respond(&mut self, result: Result<Vec<u8>, CollectorError>) {
+        if let Some(tx) = self.response_tx.take() {
+            let _ = tx.send(result);
+        }
+    }
+}
+
+impl Drop for TxnResponder {
+    fn drop(&mut self) {
+        let Some(tx) = self.response_tx.take() else {
+            return;
+        };
+        if self.is_write && self.frame_sent.load(Ordering::SeqCst) {
+            let _ = tx.send(Err(CollectorError::WriteUncertain(
+                "bus task cancelled after write frame sent".into(),
+            )));
+        }
+        // 未下发（或读事务）：sender 直接 drop，调用方按 BusClosed 明确失败处理。
+    }
 }
 
 /// 串口总线请求处理循环
@@ -222,20 +257,37 @@ pub(crate) async fn run_serial_bus_task(
             *lock_slot(&serial_state) = Some(handle);
             continue;
         }
+        // ROI-20：拆分事务字段。写路径通过 `TxnResponder` 回送结果，任务被
+        // abort 且写帧已下发时由 Drop 兜底回送 WriteUncertain。
+        let BusTransaction {
+            request,
+            response_tx,
+            expected_count,
+            timeout_ms,
+            retry_allowed,
+            frame_sent,
+            ..
+        } = tx;
+        let mut responder = TxnResponder {
+            response_tx: Some(response_tx),
+            frame_sent: Arc::clone(&frame_sent),
+            is_write: !retry_allowed,
+        };
         // P1-2：本次事务的单次超时由 BusManager 按帧长/波特率算好后随事务下发
         // （大块读在低波特率下需要更长时间收帧）。拿不到时才退回总线配置值。
-        let attempt_timeout = tx.timeout_ms.map(Duration::from_millis).unwrap_or(timeout);
+        let attempt_timeout = timeout_ms.map(Duration::from_millis).unwrap_or(timeout);
         loop {
             result = do_transaction(
                 &mut handle,
                 TransactionParams {
-                    request: &tx.request,
+                    request: &request,
                     timeout: attempt_timeout,
                     protocol: &protocol,
-                    expected_count: tx.expected_count,
+                    expected_count,
                     de_pin,
                     modbus_mode: &modbus_mode,
                     baud: bus_config.baud_rate,
+                    frame_sent: Some(&frame_sent),
                 },
                 deps.gpio.as_ref(),
                 Some(metrics.as_ref()),
@@ -246,7 +298,7 @@ pub(crate) async fn run_serial_bus_task(
                 // 写事务（retry_allowed=false）失败后**不得重发**：
                 // 写帧可能已被从站执行，重发会造成重复写（累加/脉冲类点位直接出错）。
                 // 失败原样上报，由写路径转成 WriteUncertain 交给调用方判断。
-                Err(e) if !tx.retry_allowed => {
+                Err(e) if !retry_allowed => {
                     tracing::warn!(
                         "bus {} write transaction failed ({}), not resending (write outcome may be uncertain)",
                         name,
@@ -299,7 +351,7 @@ pub(crate) async fn run_serial_bus_task(
                 // 记录最近一次成功通信的 Modbus 从站地址，作为后续自检帧的探测目标。
                 // slave 0 是广播地址（从站不应答），不能作为探测目标。
                 if protocol == "modbus" {
-                    last_good_slave = tx.request.first().copied().filter(|&s| s != 0);
+                    last_good_slave = request.first().copied().filter(|&s| s != 0);
                 }
             }
             Err(CollectorError::IoError(_)) => {
@@ -329,9 +381,7 @@ pub(crate) async fn run_serial_bus_task(
 
         // 先把结果回给调用方，再做（可能耗时一个 timeout 的）自检：
         // 自检只决定"是否重开端口"，不应拖延 caller 取响应。
-        if tx.response_tx.send(result).is_err() {
-            tracing::warn!("bus {}: response channel closed (caller canceled)", name);
-        }
+        responder.respond(result);
 
         if need_probe {
             // 自检帧：对「最近一次成功通信的从站」做一次最小读（FC03 addr=0 count=1）。
@@ -350,6 +400,7 @@ pub(crate) async fn run_serial_bus_task(
                                 de_pin,
                                 modbus_mode: &modbus_mode,
                                 baud: bus_config.baud_rate,
+                                frame_sent: None,
                             },
                             deps.gpio.as_ref(),
                             Some(metrics.as_ref()),
@@ -438,6 +489,9 @@ struct TransactionParams<'a> {
     modbus_mode: &'a str,
     /// Bug 225: 总线波特率，用于按帧长推算写超时（原固定 100ms 对长帧/低速总线过短）
     baud: u32,
+    /// ROI-20：写帧下发标记。事务一旦开始写帧即置 true；任务被取消时
+    /// 写路径据此判断「可能已生效」。自检 / 读事务传 `None`。
+    frame_sent: Option<&'a AtomicBool>,
 }
 
 /// 写超时下限（ms）：即便帧极短也保留 100ms，覆盖驱动缓冲排队与流控抖动
@@ -489,6 +543,7 @@ async fn do_transaction(
         de_pin,
         modbus_mode,
         baud,
+        frame_sent,
     } = params;
     // Modbus ASCII 模式：将 RTU 请求转为 ASCII 发送
     let tx_data: Vec<u8> = if protocol == "modbus" && modbus_mode == "ascii" {
@@ -513,7 +568,12 @@ async fn do_transaction(
         );
     }
 
-    // 写请求（含 DE 方向控制与自适应写超时）
+    // 写请求（含 DE 方向控制与自适应写超时）。
+    // ROI-20：进入写帧前先标记「已尝试下发」——write_all 中途被取消时无法
+    // 证明一个字节都没发出去，保守按「结果未知」处理。
+    if let Some(sent) = frame_sent {
+        sent.store(true, Ordering::SeqCst);
+    }
     write_frame(serial, &tx_data, de_pin, gpio, baud, timeout).await?;
 
     // 用 FrameBuffer 累积数据，按协议提取完整帧

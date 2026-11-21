@@ -204,6 +204,7 @@ async fn stale_transaction_is_skipped_and_not_written() {
             enqueued_at: std::time::Instant::now(),
             priority: BusPriority::Normal,
             retry_allowed: true,
+            frame_sent: Arc::new(AtomicBool::new(false)),
         })
         .await
         .expect("enqueue stale tx");
@@ -235,6 +236,7 @@ async fn stale_transaction_is_skipped_and_not_written() {
             enqueued_at: std::time::Instant::now(),
             priority: BusPriority::Normal,
             retry_allowed: true,
+            frame_sent: Arc::new(AtomicBool::new(false)),
         })
         .await
         .expect("enqueue live tx");
@@ -353,6 +355,7 @@ async fn control_transaction_is_served_before_queued_normal_transaction() {
                 enqueued_at: std::time::Instant::now(),
                 priority,
                 retry_allowed: true,
+                frame_sent: Arc::new(AtomicBool::new(false)),
             };
             sender.clone().try_send(msg).expect("enqueue");
         };
@@ -1145,4 +1148,104 @@ async fn spawn_snapshots_reply_budget_above_retry_budget() {
         "新预算必须严格大于旧 2T+100ms（否则重试成功仍会被误判超时）"
     );
     drop(bm);
+}
+
+// ===== ROI-20：reload 取消在途事务时，写必须报「结果未知」 =====
+//
+// `BusManager::drop` 走 `handle.abort()`。修复前，写帧已下发而任务被取消时，
+// 调用方只看到 BusClosed；写路径把 BusClosed 当作「明确失败、可安全重试」，
+// 自动重试会造成重复写（累加 / 脉冲类点位直接多点）。修复后写路径回送
+// WriteUncertain；读事务仍保持 BusClosed（读可安全重试）。
+
+/// 构造一条「设备永远静默」的串口总线，并把超时放大到足以留出 abort 窗口。
+#[cfg(feature = "modbus")]
+fn spawn_silent_serial_bus(
+    port: &SwitchablePort,
+) -> (BusManager, Arc<crate::engine::metrics::Metrics>) {
+    let bus = BusConfig {
+        port_name: "bus_reload_abort".into(),
+        protocol: "modbus".into(),
+        modbus_mode: "rtu".into(),
+        de_pin: None,
+        // 足够长：写帧落线后事务一直停在读应答阶段，供用例精确 abort
+        timeout_ms: 5000,
+        retry_count: Some(0),
+        retry_delay_ms: Some(10),
+        ..Default::default()
+    };
+    let metrics = Arc::new(crate::engine::metrics::Metrics::new());
+    let bm = BusManager::spawn_with(
+        &bus,
+        Some(SerialHandle::from_stream(port.clone())),
+        metrics.clone(),
+        BusDeps::production(),
+    );
+    (bm, metrics)
+}
+
+/// 构造合法 Modbus RTU FC06 单寄存器写请求。
+#[cfg(feature = "modbus")]
+fn modbus_fc06_write(slave: u8, addr: u16, value: u16) -> Vec<u8> {
+    let mut frame = vec![slave, 0x06];
+    frame.extend_from_slice(&addr.to_be_bytes());
+    frame.extend_from_slice(&value.to_be_bytes());
+    let crc = crc16(&frame);
+    frame.push((crc & 0xFF) as u8);
+    frame.push((crc >> 8) as u8);
+    frame
+}
+
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn aborted_in_flight_write_reports_write_uncertain() {
+    let port = SwitchablePort::new(&[]); // 全部静默：写帧发出后永远等不到应答
+    let (bm, _metrics) = spawn_silent_serial_bus(&port);
+    let bm = Arc::new(bm);
+
+    let bm2 = Arc::clone(&bm);
+    let task = tokio::spawn(async move {
+        bm2.transaction_no_retry(
+            modbus_fc06_write(1, 0x0001, 0x1234),
+            None,
+            BusPriority::Control,
+        )
+        .await
+    });
+
+    // 等写帧真正落线（桩在 flush 时记录），再模拟 reload abort 旧总线任务
+    wait_until(|| !port.requests().is_empty(), 2000, "写帧未下发").await;
+    bm.handle.as_ref().expect("总线任务句柄必须存在").abort();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .expect("取消后调用方必须立即返回")
+        .expect("写事务任务不应 panic");
+    assert!(
+        matches!(result, Err(CollectorError::WriteUncertain(_))),
+        "在途写被取消必须报结果未知，实际 {result:?}"
+    );
+}
+
+/// 对照组：读事务被取消仍是 BusClosed（读可安全重试，不得误报结果未知）。
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn aborted_in_flight_read_still_reports_bus_closed() {
+    let port = SwitchablePort::new(&[]);
+    let (bm, _metrics) = spawn_silent_serial_bus(&port);
+    let bm = Arc::new(bm);
+
+    let bm2 = Arc::clone(&bm);
+    let task = tokio::spawn(async move { bm2.transaction(read_one(1), Some(1)).await });
+
+    wait_until(|| !port.requests().is_empty(), 2000, "读帧未下发").await;
+    bm.handle.as_ref().expect("总线任务句柄必须存在").abort();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .expect("取消后调用方必须立即返回")
+        .expect("读事务任务不应 panic");
+    assert!(
+        matches!(result, Err(CollectorError::BusClosed)),
+        "读事务被取消应保持 BusClosed，实际 {result:?}"
+    );
 }
