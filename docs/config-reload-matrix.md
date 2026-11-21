@@ -3,17 +3,24 @@
 回答一个问题：**在前端改完并保存后，哪些参数立刻生效，哪些必须重启进程？**
 
 判定逻辑的唯一来源是 [`gateway-core/src/config/reload_scope.rs`](../gateway-core/src/config/reload_scope.rs)；
-保存链路是 `POST /api/config` → `persist_then_apply`（先原子落盘，再热重载内存，最后写入配置版本库）。
-落盘失败时整次保存不生效：内存、运行态、磁盘都保持旧配置，接口直接报错。
-本表与代码由守护用例 `every_config_section_is_classified_in_reload_scope` 对齐，新增分节必须同步登记。
+保存链路是 `POST /api/config` → `persist_then_apply`，按 **prepare（零副作用）→ 落盘 → commit（内存交换）**
+三阶段执行（ROI-12），最后写入配置版本库。
+
+- prepare 阶段校验/预构建失败（协议未注册、点位组缺 collector、新 MQTT 连不上）：
+  整次保存被拒，**磁盘、内存、运行态都保持旧配置**；
+- 落盘失败：同样整次不生效，什么都不改；
+- commit 阶段只有串口重新打开可能失败，失败时运行态已自愈回滚，磁盘再由原始字节回滚。
+
+因此正常情况下不会出现「磁盘已新、运行态仍旧」的中间态。本表与代码由守护用例
+`every_config_section_is_classified_in_reload_scope` 对齐，新增分节必须同步登记。
 
 ## 一、保存后立即生效（热更）
 
 | 分节 | 关键字段 | 生效方式 | 失败/边界行为 |
 |---|---|---|---|
-| `buses` | 端口、波特率、校验/数据位/停止位、对端地址、协议/变体、`timeout_ms`、`retry_*`、`tcp_concurrent`、`channel_capacity`、`de_pin`、`reconnect_backoff`、OPC UA 客户端认证 | 重建发生变更的总线与采集器 | 校验不过则整次保存被拒，旧配置继续运行 |
-| `points` / `devices` | 点位全字段（地址、类型、字节序、公式、变比、量程等）、设备参数 | 增量重载点位与设备 | 引用不存在设备的点位会被校验拦截。字段语义与换算顺序见 [`点位配置与换算.md`](点位配置与换算.md) |
-| `mqtt` | broker / topic / qos / 凭据 / 心跳 / 压缩 / 续传限速 / `tls.ca_cert_path` / payload 模板 | 重建 MQTT 客户端 | 新客户端连不上时**保留旧客户端**，接口返回 notes 提示 |
+| `buses` | 端口、波特率、校验/数据位/停止位、对端地址、协议/变体、`timeout_ms`、`retry_*`、`tcp_concurrent`、`channel_capacity`、`de_pin`、`reconnect_backoff`、OPC UA 客户端认证 | 重建发生变更的总线与采集器；串口在 commit 阶段先关旧口再开新口 | TCP 新总线在 prepare 阶段建好；串口打开失败则整次保存被拒并恢复旧口，旧配置继续运行 |
+| `points` / `devices` | 点位全字段（地址、类型、字节序、公式、变比、量程等）、设备参数 | 增量重载点位与设备；分组差异在 prepare 阶段算好 | 引用不存在总线/设备的点位会在 prepare 阶段被拒（整组不会静默消失）。字段语义与换算顺序见 [`点位配置与换算.md`](点位配置与换算.md) |
+| `mqtt` | broker / topic / qos / 凭据 / 心跳 / 压缩 / 续传限速 / `tls.ca_cert_path` / payload 模板 | 重建 MQTT 客户端（prepare 阶段完成 ConnAck，commit 阶段原子替换） | 新客户端连不上时**整次保存被拒**，旧客户端与磁盘配置都保持不变 |
 | `ntp` | `server`、`sync_interval` | 下一轮同步循环读取新值 | — |
 | `web`（动态项） | `api_token`、`allow_anon_read`、`realtime_max_subscribers`、`webhook_test_*` | 鉴权中间件 / WS 升级流程每次请求现读 | 超并发上限的新连接直接 503 |
 | `virtual_points` | 公式、单位、小数位、启用开关 | 原子替换虚拟点位规则集 | 公式非法会在保存校验时被拒 |
@@ -47,7 +54,7 @@
 |---|---|
 | 配置文件 | `GATEWAY_CONFIG_PATH`（Linux 默认 `/etc/gateway/config.json`），整份原子替换 |
 | 版本库 | `GATEWAY_VERSION_DB`（默认 `config/versions.db`）；`POST /api/config`、`PUT /api/config/import`、回滚、手动备份都会留快照 |
-| 落盘失败 | 返回 500，但**内存已是新配置**：运行态生效、磁盘仍旧值，重启会回退（前端提示会明确说明） |
+| 落盘失败 | 返回 500，磁盘、内存与运行态都保持旧配置（prepare 已成功但尚未 commit，预建资源自动释放） |
 | 导入老配置 | `PUT /api/config/import` 遇到 `mqtt.enabled` 与 `sim_consumer.enabled` 同时为真（两个消费者分流同一批队列数据导致静默丢数）时，按存量策略**关掉模拟消费者后落盘**，响应 `sanitized` 字段给出说明——与磁盘加载路径一致，老版本备份恢复不会被 400 挡死；Web 交互式保存仍严格拒绝该组合，不让新配置继续写非法值 |
 | 热重启 | 不做进程自重启（主进程无法通过 API 重启），只热更新可分节 |
 
@@ -55,5 +62,6 @@
 
 1. 在 `GatewayConfig` 增加字段并实现 `Default`；
 2. 在 `reload_scope` 中显式归类：`applied` / `restart_required` / 静默（纯元数据）；
-3. 若为热更，必须在 `GatewayRuntime::reload_config` 中真正消费该字段，否则属于「静默生效」回归；
+3. 若为热更，必须在 `GatewayRuntime::prepare_reload`（预构建/校验）与 `commit_reload`（原子交换）
+   中真正消费该字段，否则属于「静默生效」回归；
 4. 同步更新本表，并确保 `every_config_section_is_classified_in_reload_scope` 通过。

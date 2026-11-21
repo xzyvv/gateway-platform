@@ -387,7 +387,7 @@ score = 100
 ## 9. 设备分组
 
 持久化到 `GatewayConfig.device_groups`；所有写操作都在 `config_reload_lock` 下克隆配置、
-改完调用 `persist_then_apply`（先写入 `config.json`，成功后热重载运行时配置）。
+改完调用 `persist_then_apply`（prepare 预构建/校验 → 写入 `config.json` → commit 运行态原子切换）。
 
 `DeviceGroup` 结构：`id`、`name`、`description`、`color`（hex）、`device_ids: string[]`、
 `created_at`（毫秒）。
