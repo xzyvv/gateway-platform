@@ -25,6 +25,9 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 | 部署架构 | [`architecture/deployment.md`](architecture/deployment.md) | 目录布局 / 进程模型 / 开发联调 / ServeDir 静态托管 |
 | 现场 TLS 决策 | [`architecture/tls-decision.md`](architecture/tls-decision.md) | 各链路加密现状 / 现场必答 4 问 / 分场景配置 / 已知不一致与排障速查 |
 | 关键设计约束 | [`architecture/constraints.md`](architecture/constraints.md) | 稳定性 / 安全 / 资源占用 相关硬性约束 |
+| 重载并发语义 | [`architecture/reload-inflight-semantics.md`](architecture/reload-inflight-semantics.md) | 热重载与在途写事务并发语义审计（ROI-18）：锁粒度、`abort_all` 实际调用点、串口/TCP 在途写结局、未验证边界、对热重载原子化的输入 |
+| 数据链路不变量 | [`architecture/data-pipeline-invariants.md`](architecture/data-pipeline-invariants.md) | 数据处理链路不变量清单（ROI-17）：采集 → 换算/质量 → 虚拟点 → 队列 → 北向，58 条可判定不变量与测试缺口汇总 |
+| 协议族不变量 | [`architecture/protocol-family-invariants.md`](architecture/protocol-family-invariants.md) | 次要协议族不变量清单（ROI-16）：MC / FINS / S7Comm / OPC UA / MSTP / IEC101 的读写不变量、错误映射、测试缺口与优先补测建议 |
 
 ## 开发指南
 
