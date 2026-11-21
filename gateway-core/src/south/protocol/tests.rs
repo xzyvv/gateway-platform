@@ -221,3 +221,33 @@ fn only_timeout_error_maps_to_timeout_code() {
         );
     }
 }
+
+/// R-1：失败原因必须以 `<场景>:<稳定错误码>` 上送，让现场能区分「设备不回」
+/// 与「报文解析失败」——否则所有失败被压成一句「采集失败」，排查方向全凭猜。
+#[test]
+fn quality_reason_carries_stable_error_code() {
+    assert_eq!(
+        CollectorError::Timeout(Duration::from_secs(2)).quality_reason("collect_failed"),
+        "collect_failed:TIMEOUT"
+    );
+    assert_eq!(
+        CollectorError::NoReply.quality_reason("collect_failed"),
+        "collect_failed:NO_REPLY"
+    );
+    assert_eq!(
+        CollectorError::ChecksumError.quality_reason("modbus_read_failed"),
+        "modbus_read_failed:CRC"
+    );
+    assert_eq!(
+        CollectorError::InvalidFrame("bad".into()).quality_reason("modbus_read_failed"),
+        "modbus_read_failed:DECODE"
+    );
+
+    // 上送的后缀必须能被 from_code 还原，否则前端/告警按码分类会失效。
+    let reason = CollectorError::IoError("io".into()).quality_reason("collect_failed");
+    let code = reason.rsplit_once(':').map(|(_, c)| c).unwrap();
+    assert_eq!(
+        CollectErrorCode::from_code(code),
+        Some(CollectErrorCode::Io)
+    );
+}

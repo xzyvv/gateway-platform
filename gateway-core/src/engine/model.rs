@@ -150,11 +150,13 @@ pub struct DataPoint {
     pub value: f64,
     /// 原始解析值
     pub raw_value: f64,
-    /// 原始类型：u16/i16/u32/i32/f32/u64/unknown
+    /// 原始类型：u16/i16/u32/i32/f32/u64/unknown；
+    /// 采集失败时为 `last_good`（`value` 是复用的历史值）或 `none`（从未采到有效值）
     pub raw_type: String,
     /// 质量码
     pub quality: Quality,
-    /// 质量码原因（失败原因：device_timeout/parse_error/empty_window 等）
+    /// 质量码原因：`<场景>:<稳定错误码>`（如 `collect_failed:TIMEOUT` /
+    /// `modbus_read_failed:CRC`），可用 `CollectErrorCode::from_code` 还原分类
     #[serde(default)]
     pub quality_reason: String,
     /// 上送时刻时间戳（UTC 毫秒），平台按此排序
@@ -259,6 +261,12 @@ impl DataPoint {
     /// 构造失败数据点（value=last_good，quality=对应质量码，source_ts=last_good 的原始采集时间）
     ///
     /// 新签名（Q13）：含 device_id、last_source_ts、reason、stale_count。
+    ///
+    /// **陈旧值契约（R-2）**：本轮采集失败时 `value` 沿用上一次成功值，此时
+    /// `raw_type` 恒为 `"last_good"`，`source_ts` 是那次成功采集的时间，`stale_count`
+    /// 是连续复用次数。消费方看到 `raw_type == "last_good"` 必须按「陈旧值」处理，
+    /// 不得当作本轮实时值；从未成功采集过的点 `raw_type` 为 `"none"`（`value` 为 0
+    /// 也不代表真实读数）。
     pub fn failed(
         point_id: &str,
         device_id: &str,
@@ -268,13 +276,18 @@ impl DataPoint {
         reason: &str,
         stale_count: u32,
     ) -> Self {
-        let safe_last = last_value.filter(|v| v.is_finite()).unwrap_or(0.0);
+        let last_value = last_value.filter(|v| v.is_finite());
         Self {
             point_id: point_id.to_string(),
             device_id: device_id.to_string(),
-            value: safe_last,
+            value: last_value.unwrap_or(0.0),
             raw_value: 0.0,
-            raw_type: "unknown".to_string(),
+            raw_type: if last_value.is_some() {
+                "last_good"
+            } else {
+                "none"
+            }
+            .to_string(),
             quality,
             quality_reason: reason.to_string(),
             timestamp: Self::now(),
@@ -344,6 +357,43 @@ mod tests {
             p.source_ts >= before && p.source_ts <= after,
             "source_ts 必须落在构造时刻区间内"
         );
+    }
+
+    /// R-2：失败点复用上一次成功值时，必须用 `raw_type = "last_good"` 显式标记
+    /// 「这是旧值」，否则消费方会把旧值当成本轮实时值（静默的错误数据）。
+    #[test]
+    fn failed_marks_reused_value_as_last_good() {
+        let p = DataPoint::failed(
+            "p1",
+            "d1",
+            Some(12.5),
+            1_700_000_000_000,
+            Quality::Bad,
+            "collect_failed:TIMEOUT",
+            3,
+        );
+        assert_eq!(p.value, 12.5);
+        assert_eq!(p.raw_type, "last_good");
+        assert_eq!(p.source_ts, 1_700_000_000_000);
+        assert_eq!(p.stale_count, 3);
+        assert_eq!(p.quality_reason, "collect_failed:TIMEOUT");
+    }
+
+    /// R-2：从未成功采集过的点必须标 `none`，不能把 0.0 伪装成真实读数。
+    #[test]
+    fn failed_without_last_good_is_marked_none() {
+        let p = DataPoint::failed(
+            "p1",
+            "d1",
+            None,
+            0,
+            Quality::Bad,
+            "collect_failed:NO_REPLY",
+            0,
+        );
+        assert_eq!(p.value, 0.0);
+        assert_eq!(p.raw_type, "none");
+        assert_eq!(p.stale_count, 0);
     }
 
     /// r24-MOD1：NaN value 必须降级为 Uncertain(0.0)，不可标记为 Good。

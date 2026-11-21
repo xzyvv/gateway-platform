@@ -16,6 +16,9 @@ pub enum PointAction {
     Err {
         quality: Quality,
         last_good: Option<f64>,
+        /// 上送用的质量原因：`<场景>:<稳定错误码>`（如 `collect_failed:TIMEOUT`）
+        quality_reason: String,
+        /// 原始错误文本，仅用于日志
         err_msg: String,
         point_id: String,
         consecutive_failures: u32,

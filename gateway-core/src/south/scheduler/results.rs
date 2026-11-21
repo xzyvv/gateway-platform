@@ -81,6 +81,9 @@ impl Scheduler {
                         PointAction::Err {
                             quality,
                             last_good,
+                            // R-1：把真实错因的稳定错误码一起上送，
+                            // 不再让所有失败都压成同一个 "collect_failed"。
+                            quality_reason: e.quality_reason("collect_failed"),
                             err_msg: e.to_string(),
                             point_id: point.id.clone(),
                             consecutive_failures,
@@ -99,6 +102,7 @@ impl Scheduler {
                 PointAction::Err {
                     quality,
                     last_good,
+                    quality_reason,
                     err_msg,
                     point_id,
                     consecutive_failures,
@@ -111,7 +115,7 @@ impl Scheduler {
                         last_good,
                         last_good_ts,
                         quality,
-                        "collect_failed",
+                        &quality_reason,
                         stale_count,
                     );
                     items.push((point.clone(), dp));

@@ -315,11 +315,17 @@ const realtimeColumns = computed<ColumnDef<RealtimePoint>[]>(() => [
     key: 'timestamp',
     title: '更新时间',
     width: 170,
-    cell: (row) =>
-      h('div', { class: 'time-cell' }, [
-        h('span', formatTime(row.timestamp)),
-        h(FreshnessBadge, { timestamp: row.timestamp }),
-      ]),
+    // 采集失败时后端沿用上次成功值（stale_count>0），此时 timestamp 是
+    // 「本轮上送时刻」、source_ts 才是「值真正的采集时刻」。必须用 source_ts
+    // 展示，否则旧值会被显示成「刚刚更新」，属于静默的错误数据。
+    cell: (row) => {
+      const ts = row.source_ts && row.source_ts > 0 ? row.source_ts : row.timestamp
+      const stale = row.stale_count ? `采集失败 ${row.stale_count} 次，显示上次成功值` : undefined
+      return h('div', { class: 'time-cell', title: stale }, [
+        h('span', formatTime(ts)),
+        h(FreshnessBadge, { timestamp: ts }),
+      ])
+    },
   },
 ])
 </script>

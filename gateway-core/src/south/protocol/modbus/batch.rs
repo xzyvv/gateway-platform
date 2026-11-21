@@ -82,7 +82,8 @@ pub(crate) fn parse_point_value(point: &PointConfig, regs: &[u16], batch_start: 
             None,
             0,
             Quality::Bad,
-            "modbus_decode_failed",
+            // 解码所需的寄存器数量超出批次范围，固定标为 DECODE
+            "modbus_decode_failed:DECODE",
             0,
         );
     }

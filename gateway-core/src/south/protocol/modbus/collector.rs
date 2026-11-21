@@ -310,7 +310,7 @@ impl ModbusCollector {
                                     None,
                                     0,
                                     e.to_quality(),
-                                    "modbus_batch_failed",
+                                    &e.quality_reason("modbus_batch_failed"),
                                     0,
                                 );
                                 write_slot(&p.id, &dp);
@@ -368,7 +368,7 @@ impl ModbusCollector {
                                     None,
                                     0,
                                     e.to_quality(),
-                                    "modbus_read_failed",
+                                    &e.quality_reason("modbus_read_failed"),
                                     0,
                                 );
                                 write_slot(&p.id, &dp);
@@ -400,7 +400,9 @@ impl ModbusCollector {
                         None,
                         0,
                         Quality::Bad,
-                        "modbus_no_result",
+                        // 协议返回了 Ok 但没有该点的结果（组内结果缺失），
+                        // 没有可用的错误对象，只能标为 OTHER。
+                        "modbus_no_result:OTHER",
                         0,
                     )
                 })

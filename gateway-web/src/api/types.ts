@@ -34,9 +34,19 @@ export interface DataPoint {
   device_id: string
   value: number
   raw_value: number
+  /**
+   * 原始类型；采集失败时为 `last_good`（value 是复用的历史值）
+   * 或 `none`（从未采到有效值，value=0 不代表真实读数）
+   */
   raw_type: string
   quality: string
+  /** 质量原因：`<场景>:<稳定错误码>`，如 `collect_failed:TIMEOUT` */
+  quality_reason?: string
   timestamp: number
+  /** 原始采集时刻；`stale_count>0` 时为上一次成功采集的时间 */
+  source_ts?: number
+  /** 连续复用旧值的次数，0 表示本轮读到的是新值 */
+  stale_count?: number
 }
 
 /**

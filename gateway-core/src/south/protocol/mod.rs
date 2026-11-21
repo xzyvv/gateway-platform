@@ -207,10 +207,22 @@ impl CollectorError {
             CollectorError::InvalidConfig(_) => CollectErrorCode::Config,
             // 写结果未知暂归 Other：by_reason 的分桶是固定长度数组，
             // 单独加一桶会牵动标签表与下标映射。写不确定另有专用计数器
-            // gateway_write_uncertain_total，不靠 by_reason 观察。
+            // `gateway_bus_write_uncertain_total`，不靠 by_reason 观察。
             CollectorError::WriteUncertain(_) => CollectErrorCode::Other,
             CollectorError::Unsupported(_) => CollectErrorCode::Other,
         }
+    }
+
+    /// 采集失败的质量原因字符串：`<前缀>:<稳定错误码>`（如 `collect_failed:TIMEOUT`）。
+    ///
+    /// 前缀由调用方给出（场景名 / 协议名），错误码取自 [`Self::error_code`] 的
+    /// 稳定口径（`TIMEOUT` / `CRC` / `DECODE` / `EXC_02` ...）。北向报文与前端
+    /// 按冒号后的段区分「怎么坏的」，可用 [`CollectErrorCode::from_code`] 还原。
+    ///
+    /// 为什么要带错误码：只写「采集失败」时，运维无法区分「设备不在线」与
+    /// 「报文格式错」，排查方向容易整体跑偏。
+    pub fn quality_reason(&self, prefix: &str) -> String {
+        format!("{}:{}", prefix, self.error_code().code())
     }
 
     /// 映射为跨协议统一的写结果三态（见 [`crate::engine::write::WriteOutcome`]）。

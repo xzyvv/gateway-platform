@@ -887,7 +887,7 @@ fn parse_point_value_out_of_range_is_bad_not_panic() {
     let point = mk_addr_point(2, "f32");
     let dp = super::parse_point_value(&point, &[0x42F7], 0);
     assert_eq!(dp.quality, Quality::Bad);
-    assert_eq!(dp.quality_reason, "modbus_decode_failed");
+    assert_eq!(dp.quality_reason, "modbus_decode_failed:DECODE");
 }
 
 /// 写元件类型判定与 `write` 的功能码语义一致；其余功能码视为只读。
@@ -1010,7 +1010,12 @@ async fn batch_read_config_error_is_reported_without_retry() {
 
     let out = c.read_batch_points(&pts).await;
     assert_eq!(out[0].quality, Quality::Bad);
-    assert_eq!(out[0].quality_reason, "modbus_read_failed");
+    // R-1：原因前缀保留，后缀为具体稳定错误码（随实际异常码变化，故只锁前缀）
+    assert!(
+        out[0].quality_reason.starts_with("modbus_read_failed:"),
+        "实际: {}",
+        out[0].quality_reason
+    );
     assert_eq!(
         metrics
             .protocol_exception
