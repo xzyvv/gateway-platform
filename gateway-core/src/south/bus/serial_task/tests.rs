@@ -737,7 +737,7 @@ fn shrink_ascii_buf_clears_garbage_without_frame_start() {
 #[test]
 fn shrink_ascii_buf_drops_frame_start_too_far_back() {
     let mut buf = vec![b':'];
-    buf.extend(std::iter::repeat(b'A').take(ASCII_BUF_LIMIT * 2));
+    buf.extend(std::iter::repeat_n(b'A', ASCII_BUF_LIMIT * 2));
 
     let dropped = shrink_ascii_buf(&mut buf);
 

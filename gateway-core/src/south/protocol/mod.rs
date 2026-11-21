@@ -313,20 +313,23 @@ pub(crate) fn clone_collector_error(e: &CollectorError) -> CollectorError {
 /// 能证明没生效的才是明确失败；证明不了的都算未知——宁可多报一次人工确认，
 /// 也不要漏报一次重复写（累加 / 脉冲类点位一次重复写就是数据错）。
 ///
-/// 仅自研客户端协议（s7comm / fins / mc / iec104 / bacnet）使用；
-/// 这些协议全部关闭时本函数无人调用，在 `-D dead_code` 下会报错（F1 协议裁剪矩阵）。
-#[cfg(any(
-    feature = "s7comm",
-    feature = "fins",
-    feature = "mc",
-    feature = "iec104",
-    feature = "bacnet"
+/// 仅供单元测试锁住纯映射语义（`write_semantics_tests`）；
+/// 生产路径一律走带计数的 [`mark_write_uncertain_with`] / [`mark_write_uncertain_counted`]。
+#[cfg(all(
+    test,
+    any(
+        feature = "s7comm",
+        feature = "fins",
+        feature = "mc",
+        feature = "iec104",
+        feature = "bacnet"
+    )
 ))]
 pub(crate) fn mark_write_uncertain(e: CollectorError) -> CollectorError {
     classify_write_uncertain(None, e)
 }
 
-/// [`mark_write_uncertain`] 的带计数版本（自研 TCP/UDP 协议用）。
+/// `mark_write_uncertain` 的带计数版本（自研 TCP/UDP 协议用）。
 ///
 /// G-08: 这些协议没有 `BusManager`，metrics 由采集器在构造时注入
 /// （`with_metrics`，生产路径见 `protocol/registry/factories.rs`）。

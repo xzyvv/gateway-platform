@@ -179,10 +179,12 @@ fn write_range_unbounded_by_default() {
 /// 越界必须拒绝，且消息里带完整范围，便于现场直接看到该改到多少。
 #[test]
 fn write_range_rejects_out_of_bounds() {
-    let mut p = PointConfig::default();
-    p.id = "p1".into();
-    p.write_min = Some(0.0);
-    p.write_max = Some(1000.0);
+    let p = PointConfig {
+        id: "p1".into(),
+        write_min: Some(0.0),
+        write_max: Some(1000.0),
+        ..Default::default()
+    };
 
     // 闭区间：两端点合法
     assert_eq!(p.write_range_error(0.0), None);
@@ -201,8 +203,10 @@ fn write_range_rejects_out_of_bounds() {
 /// 只配置一侧时，另一侧不限制。
 #[test]
 fn write_range_supports_single_side() {
-    let mut p = PointConfig::default();
-    p.write_min = Some(10.0);
+    let p = PointConfig {
+        write_min: Some(10.0),
+        ..Default::default()
+    };
     assert_eq!(p.write_range_error(1e6), None);
     assert!(p.write_range_error(9.9).is_some());
 }
