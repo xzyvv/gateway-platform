@@ -40,6 +40,10 @@ reload 在持锁期间会打开新串口、构造新 collector、替换 map、�
 要点：**总线层只回传一个终态**（`Result<Vec<u8>, CollectorError>`）。它没有「已入队 / 已下发 / 已收应答」
 的分阶段状态位，因此一旦总线 task 被取消，调用方只能从 oneshot 的断开推断，无法知道帧是否已经写到线上。
 
+> **ROI-20 修复**：`BusTransaction` 增加 `frame_sent` 标记（`bus/mod.rs:120-125`）。总线任务在写帧前置 true
+> （`serial_task.rs:571-577`），任务被 abort 时由 `TxnResponder` 的 `Drop` 向调用方回送 `WriteUncertain`
+> （`serial_task.rs:92-125`）；未下发或读事务仍按 `BusClosed` 处理。
+
 ---
 
 ## 2. reload 重建总线时，在途写事务被如何处理
@@ -61,7 +65,7 @@ reload 在持锁期间会打开新串口、构造新 collector、替换 map、�
 | 在途状态 | 机制 | 调用方看到 | 判定是否正确 |
 |---|---|---|---|
 | 仍在队列里，未被总线 task 取出 | 旧 `BusManager` 析构时 `bus_task` 被 abort（`gateway-core/src/south/bus/mod.rs:585-590`），`rx`/`ctrl_rx` 关闭，`BusTransaction` 连同 `response_tx` 一起 drop | `RecvError` → `BusClosed`（`bus/mod.rs:371-372`） | **正确**：帧未下发，回报「明确失败」成立 |
-| 串口总线上已出队，正在写帧或等应答 | 同上，`bus_task` future 在任意 `.await` 点被 drop；`serial_task` 栈上的 `tx` 被 drop | `BusClosed`（same path） | **不正确（窗口）**：若帧已写出（`serial_task.rs:517` 已返回），设备可能已执行，却按 `BusClosed → Failed → 5101 可安全重试` 上报（`protocol/mod.rs:250-255`、`gateway-api/src/web/api/points/mod.rs:132-133`） |
+| 串口总线上已出队，正在写帧或等应答 | 同上，`bus_task` future 在任意 `.await` 点被 drop；`TxnResponder` 的 `Drop` 兜底 | 已下发 → `WriteUncertain`；未下发 → `BusClosed` | **已修复（ROI-20）**：`frame_sent=true` 时回送 `WriteUncertain` → 5102，不再按 `BusClosed → Failed → 5101 可安全重试` 上报（`serial_task.rs:113-125`、`bus/tests.rs` 的 `aborted_in_flight_write_reports_write_uncertain`） |
 | Modbus TCP 上已出队 | 每个事务由独立 task 提交（`tcp_task.rs:225-300`），该 task 持有 `Arc<TransactionPool>` 与 `response_tx`；abort 的只是外层总线 task，`in_flight` 的 `JoinHandle` 被直接 drop（detach） | 事务可继续完成并把真实响应回传；调用方仍在预算内等待 | **不作废**。风险不在结果，而在 reload 后旧连接与新连接并存（见第 4 节） |
 
 补充一个关键时序：旧 manager 并不是在 `bus_managers` 替换的那一刻立即析构。`reload_buses` 在
@@ -77,6 +81,8 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
   （`gateway-core/src/south/bus/serial.rs:64-68`）。future 在写中途被取消时，代码无法证明已写字节数，
   物理上**存在只写出帧前缀的可能**。半帧通常会被从站按长度 / CRC 丢弃而不执行，但本仓库没有证据能证明
   「一定不会执行」，只能归入「结果未知」。**结论：窗口存在，实际触发概率未验证。**
+  ROI-20 之后，写帧一旦开始（含 `write_all` 中途）即标记 `frame_sent`，取消一律按 `WriteUncertain` 上报，
+  不再声称「明确失败、可安全重试」。
 - **Modbus TCP**：整帧 MBAP 在 writer 互斥锁内一次 `write_all`（`transaction.rs:267-299`），且 reload
   不会取消已出队的事务 task，因此 **reload 本身不会造成 TCP 半帧**。TCP 的问题是旧 socket 继续存活，
   不是帧被截断。
@@ -91,7 +97,8 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 4. 单写失败按三态映射业务码（`:216-227`；`gateway-api/src/web/api/points/mod.rs:130-142`）。
 
 因此当 reload 打断串口在途写并产生 `BusClosed` 时，API 会返回 **5101「写入失败」**，前端据此认为
-「可安全重试」——而设备可能已经执行。这是本次审计中最需要 ROI-12 处理的一处语义错位。
+「可安全重试」——而设备可能已经执行。该语义错位已由 **ROI-20** 消除：串口在途写被 abort 时回送
+`WriteUncertain` → 5102；只有「未出队 / 未下发」才保持 `BusClosed` → 5101。
 
 ---
 
@@ -130,8 +137,8 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 | 场景 | 当前行为 | 证据 | 风险等级 |
 |---|---|---|---|
 | reload 时写事务还在队列，未取出 | 通道关闭 → `BusClosed`，帧未下发，报「明确失败」 | `gateway-core/src/south/bus/mod.rs:371-372`、`:611-624` | 低（语义正确） |
-| 串口在途写已完整写出帧、尚未收到应答时 reload | 总线 task 被 abort → `BusClosed` → `Failed` → 5101，可被重试 | `gateway.rs:493-497`、`bus/mod.rs:585-590`、`protocol/mod.rs:250-255` | **高**（重复写风险） |
-| 串口在途写正处于 `write_all` 中途被 abort | 可能只写出帧前缀；调用方仍收到 `BusClosed`/5101 | `serial_task.rs:655-666`、`serial.rs:64-68` | **高**（写一半 + 误判失败） |
+| 串口在途写已完整写出帧、尚未收到应答时 reload | 总线 task 被 abort → 已下发 → `WriteUncertain` → 5102，调用方不会把它当「明确失败」重试 | `serial_task.rs:113-125`、`bus/tests.rs` | 低（ROI-20 已修复） |
+| 串口在途写正处于 `write_all` 中途被 abort | 进入写帧即标记 `frame_sent`，中途取消同样报 `WriteUncertain` | `serial_task.rs:571-577`、`serial.rs:64-68` | 低（ROI-20 已修复，保守按结果未知） |
 | Modbus TCP 在途写在 reload 期间 | 独立事务 task 被 detach，继续完成；旧 pool / 旧 socket 存活到任务结束 | `tcp_task.rs:225-300`、`:300-304`、`:306-314` | 中（旧新连接并存、写序不可控） |
 | reload 打开新串口时旧串口句柄仍被旧总线持有 | 两个句柄可能同时指向同一端口；无排他锁 | `gateway.rs:434-461`、`serial.rs:110-118` | 中（平台相关，未验证） |
 | 变更总线打开失败 | 保留旧 manager/collector，跳过重建计数，但 `reload_config` 仍返回成功并提示 "buses reloaded online" | `gateway.rs:440-459`、`:299-304` | 中（提示与实际不符） |
@@ -163,8 +170,8 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 
 | # | 未证明项 | 依据/现状 |
 |---|---|---|
-| U-1 | 串口 abort 落在「帧已写出」之后时，`BusClosed → Failed` 是否会造成现场重复写 | 代码路径成立；无并发用例、无发生频率数据。reload 不等待在途写 drain |
-| U-2 | 串口 `write_all` 被取消时实际写出多少字节 | 依赖驱动与 tokio-serial；仓库内无证据 |
+| U-1 | 串口 abort 落在「帧已写出」之后时，`BusClosed → Failed` 是否会造成现场重复写 | **已修复（ROI-20）**：`frame_sent` + `TxnResponder` Drop → `WriteUncertain`；用例 `south::bus::tests::aborted_in_flight_write_reports_write_uncertain` |
+| U-2 | 串口 `write_all` 被取消时实际写出多少字节 | 驱动层仍未知，但对外口径已保守统一为 `WriteUncertain`（ROI-20），不再声称明确失败 |
 | U-3 | reload 后旧 TCP 连接还会存活多久、与新连接是否会向同一设备交叉写 | 事务 task 被 detach（`tcp_task.rs:300-304`），旧 pool 由 `Arc` 续命；无观测指标 |
 | U-4 | 「新 collector + 旧点位」窗口内下发会造成什么现场后果 | 代次不一致由代码结构证明，无测试、无版本号约束 |
 | U-5 | 同一串口被新旧两个 `SerialHandle` 同时打开的后果 | `serial.rs:116-118` 无排他；Windows/Linux 行为不同，未验证 |
@@ -184,7 +191,8 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 ## 7. 待确认项
 
 1. `config-reload-matrix.md:50` 的「落盘失败但内存已新」与 `config_apply.rs:565-570` 的现行顺序不一致，以哪边为准？需要主流程统一修正。
-2. 串口在途写被 reload 取消时，API 应报 5102（结果未知）还是允许 5101（明确失败）？这是产品语义决策，不是纯代码问题。
+2. ~~串口在途写被 reload 取消时，API 应报 5102（结果未知）还是允许 5101（明确失败）？~~ **已确定（ROI-20）**：
+   已下发的在途写报 5102（结果未知），仅未下发的排队事务报 5101。
 3. 变更总线打开失败时，整次保存是否应该失败并回滚？当前是「保留旧实例 + 仍返回成功」（`gateway.rs:440-459`）。
 4. 同一串口在 reload 窗口内被新旧句柄同时打开，在目标部署平台（Linux / Windows）是否可接受？未做真机验证。
 5. 旧 TCP 连接在 reload 后被 detach 的事务是否需要在切换前 drain？当前没有任何等待。
@@ -212,7 +220,8 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 2. **如果保留 abort 作为兜底，必须区分「未下发 / 已下发」**：给 `BusTransaction` 或 `BusManager`
    增加发送标记，在 future 被 drop 时由清理守卫向调用方回送 `WriteUncertain`，而不是让 oneshot 静默断开
    被解释成 `BusClosed`。否则 U-1 无法修复：`BusClosed` 在 `write_outcome` 里被固定归类为明确失败
-   （`gateway-core/src/south/protocol/mod.rs:250-255`）。
+   （`gateway-core/src/south/protocol/mod.rs:250-255`）。**已实现（ROI-20，兜底路径）**：见 `frame_sent` 与
+   `TxnResponder`（`serial_task.rs:92-125`）；ROI-12 的门控/drain 仍可作为进一步收敛。
 3. **给配置与 collector 绑定同一代次**：reload 生成 generation，写入口一次性取「配置 + collector」同代快照；
    或在 API 写路径上获取 reload 的读侧门控。这解决 U-4，而不是靠调整 `store` 与 map 替换的先后顺序。
 4. **reload 失败必须可回滚**：把 `reload_points_incremental` 的失败挡在「替换 managers/collectors 之前」，
