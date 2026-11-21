@@ -185,6 +185,26 @@ fn test_parse_read_response_error() {
     assert!(frames::parse_read_response(&frame, S7DataType::Real).is_err());
 }
 
+/// ROI-25：PDU 级错误 class/code 是设备明确拒绝，不能报成 InvalidFrame。
+#[test]
+fn test_parse_read_response_error_is_device_rejected() {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&[0x02, 0xF0, 0x80]); // COTP DT
+    frame.push(0x32);
+    frame.push(0x83); // Ack-Data with error (0x03 | 0x80)
+    frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+    frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    frame.extend_from_slice(&[0x00, 0x00]);
+    frame.extend_from_slice(&[FUNC_READ, 0x01]); // 补足最小长度，让错误头生效
+
+    match frames::parse_read_response(&frame, S7DataType::Real) {
+        Err(crate::south::protocol::CollectorError::DeviceRejected(msg)) => {
+            assert!(msg.contains("S7 error response"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 DeviceRejected，实际 {other:?}"),
+    }
+}
+
 #[test]
 fn test_parse_read_response_not_found() {
     let data_section = vec![RET_NOT_FOUND, 0x00, 0x00, 0x00];
@@ -201,7 +221,38 @@ fn test_parse_read_response_not_found() {
     frame.extend_from_slice(&param);
     frame.extend_from_slice(&data_section);
 
-    assert!(frames::parse_read_response(&frame, S7DataType::Real).is_err());
+    // 地址不存在保留配置错误语义（ROI-25）
+    match frames::parse_read_response(&frame, S7DataType::Real) {
+        Err(crate::south::protocol::CollectorError::InvalidConfig(msg)) => {
+            assert!(msg.contains("not found"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 InvalidConfig，实际 {other:?}"),
+    }
+}
+
+/// 其余非 OK 返回码（如 0x03 访问被拒）→ DeviceRejected（ROI-25）。
+#[test]
+fn test_parse_read_response_rejected_return_code() {
+    let data_section = vec![0x03u8, 0x00, 0x00, 0x00];
+    let param = vec![FUNC_READ, 0x01];
+
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&[0x02, 0xF0, 0x80]);
+    frame.push(0x32);
+    frame.push(PDU_ACK);
+    frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+    frame.extend_from_slice(&(param.len() as u16).to_be_bytes());
+    frame.extend_from_slice(&(data_section.len() as u16).to_be_bytes());
+    frame.extend_from_slice(&[0x00, 0x00]);
+    frame.extend_from_slice(&param);
+    frame.extend_from_slice(&data_section);
+
+    match frames::parse_read_response(&frame, S7DataType::Real) {
+        Err(crate::south::protocol::CollectorError::DeviceRejected(msg)) => {
+            assert!(msg.contains("0x03"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 DeviceRejected，实际 {other:?}"),
+    }
 }
 
 #[test]

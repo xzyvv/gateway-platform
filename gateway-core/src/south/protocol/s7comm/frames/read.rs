@@ -75,7 +75,8 @@ pub(crate) fn parse_read_response(
         if (pdu_type & 0x80) != 0 {
             let err_class = if s7.len() > 10 { s7[10] } else { 0 };
             let err_code = if s7.len() > 11 { s7[11] } else { 0 };
-            return Err(CollectorError::InvalidFrame(format!(
+            // ROI-25：设备回了明确的错误 class/code，属设备拒绝而非解码失败。
+            return Err(CollectorError::DeviceRejected(format!(
                 "S7 error response: class=0x{:02X} code=0x{:02X}",
                 err_class, err_code
             )));
@@ -120,14 +121,15 @@ pub(crate) fn parse_read_response(
     let data_section = &s7[data_start..];
     let return_code = data_section[0];
     if return_code != RET_OK {
+        // 地址不存在仍按配置错误处理（点表配错）；其余非 OK 返回码是设备明确拒绝。
         if return_code == RET_NOT_FOUND {
             return Err(CollectorError::InvalidConfig(format!(
                 "S7 address not found (return code 0x{:02X})",
                 return_code
             )));
         }
-        return Err(CollectorError::InvalidFrame(format!(
-            "S7 read failed (return code 0x{:02X})",
+        return Err(CollectorError::DeviceRejected(format!(
+            "S7 read rejected (return code 0x{:02X})",
             return_code
         )));
     }
@@ -210,7 +212,8 @@ pub(crate) fn parse_read_response_multi(
         if (pdu_type & 0x80) != 0 {
             let err_class = if s7.len() > 10 { s7[10] } else { 0 };
             let err_code = if s7.len() > 11 { s7[11] } else { 0 };
-            return Err(CollectorError::InvalidFrame(format!(
+            // ROI-25：设备回了明确的错误 class/code，属设备拒绝而非解码失败。
+            return Err(CollectorError::DeviceRejected(format!(
                 "S7 error response: class=0x{:02X} code=0x{:02X}",
                 err_class, err_code
             )));

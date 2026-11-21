@@ -65,8 +65,8 @@ use std::time::Duration;
 
 use opcua::client::{ClientBuilder, Session};
 use opcua::types::{
-    AttributeId, EndpointDescription, NodeId, NumericRange, QualifiedName, ReadValueId, StatusCode,
-    TimestampsToReturn,
+    AttributeId, DataValue, EndpointDescription, NodeId, NumericRange, QualifiedName, ReadValueId,
+    StatusCode, TimestampsToReturn,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -136,6 +136,18 @@ fn quality_from_status(status: Option<&StatusCode>) -> (Quality, String) {
         Some(code) => (Quality::Bad, status_quality_reason(code)),
         // 无状态码按 Bad 处理，原因明确标注「Bad」，不伪造 Good。
         None => (Quality::Bad, status_quality_reason(&StatusCode::Bad)),
+    }
+}
+
+/// ROI-25：DataValue 带 Bad/Uncertain 状态且取不到值时，是服务端明确拒绝
+/// 该点位（地址不存在、权限不足等），不是报文解码失败。
+fn rejected_status(dv: &DataValue) -> Option<CollectorError> {
+    match dv.status.as_ref() {
+        Some(code) if !code.is_good() => Some(CollectorError::DeviceRejected(format!(
+            "OPC UA read rejected: {}",
+            status_quality_reason(code)
+        ))),
+        _ => None,
     }
 }
 
@@ -466,7 +478,8 @@ impl OpcUaCollector {
             let value = match extract_value(dv) {
                 Ok(v) => v,
                 Err(e) => {
-                    set(i, Err(e));
+                    // ROI-25：Bad 状态且无值 = 服务端明确拒绝该点位
+                    set(i, Err(rejected_status(dv).unwrap_or(e)));
                     continue;
                 }
             };
@@ -806,9 +819,9 @@ impl Collector for OpcUaCollector {
             let dv = &results[0];
             let value = match extract_value(dv) {
                 Ok(v) => v,
-                // 取不到值只影响本点位，不计链路失败；错误码由调度层统一上送
-                // （`collect_failed:DECODE|OTHER`）。
-                Err(e) => return Err(e),
+                // 取不到值只影响本点位，不计链路失败；Bad 状态且无值是服务端
+                // 明确拒绝（DeviceRejected），其余按解码/类型错误上送。
+                Err(e) => return Err(rejected_status(dv).unwrap_or(e)),
             };
 
             let (quality, quality_reason) = quality_from_status(dv.status.as_ref());

@@ -161,9 +161,9 @@ impl McCollector {
             match self.transact(&p.txn).await {
                 Ok((end_code, data)) => {
                     if let Err(e) = check_end_code(end_code) {
-                        let msg = e.to_string();
+                        // 保留原始错误变体（设备明确拒绝 → DeviceRejected）
                         for it in &p.members {
-                            set(it.idx, Err(CollectorError::InvalidFrame(msg.clone())));
+                            set(it.idx, Err(clone_collector_error(&e)));
                         }
                         continue;
                     }

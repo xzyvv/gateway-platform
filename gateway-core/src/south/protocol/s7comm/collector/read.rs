@@ -219,9 +219,19 @@ impl S7CommCollector {
                 set(
                     p.idx,
                     match item_result {
-                        Err(rc) => Err(CollectorError::InvalidFrame(format!(
-                            "S7 multi-read item {i} failed (return code 0x{rc:02X})"
-                        ))),
+                        Err(rc) => {
+                            // ROI-25：设备逐 item 返回的失败码是明确拒绝；
+                            // 仅「地址不存在」保留配置错误语义（与单点读一致）。
+                            if rc == frames::RET_NOT_FOUND {
+                                Err(CollectorError::InvalidConfig(format!(
+                                    "S7 multi-read item {i} not found (return code 0x{rc:02X})"
+                                )))
+                            } else {
+                                Err(CollectorError::DeviceRejected(format!(
+                                    "S7 multi-read item {i} rejected (return code 0x{rc:02X})"
+                                )))
+                            }
+                        }
                         Ok(value_bytes) => match frames::decode_value(&value_bytes, p.data_type) {
                             Ok(raw) => {
                                 let ts = DataPoint::now();

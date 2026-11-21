@@ -342,6 +342,31 @@ fn ua_e2_good_has_no_reason_and_missing_status_is_bad() {
     assert_eq!(reason, "opcua_status_Bad:OTHER");
 }
 
+/// ROI-25：Bad 状态且无值是服务端明确拒绝，不得报成 InvalidFrame。
+#[test]
+fn ua_roi25_bad_status_without_value_is_device_rejected() {
+    let dv = DataValue {
+        value: None,
+        status: Some(StatusCode::BadNodeIdUnknown),
+        ..Default::default()
+    };
+    assert!(extract_value(&dv).is_err(), "前提：确实取不到值");
+    match rejected_status(&dv) {
+        Some(CollectorError::DeviceRejected(msg)) => {
+            assert!(msg.contains("BadNodeIdUnknown"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 DeviceRejected，实际 {other:?}"),
+    }
+
+    // Good 状态取不到值仍属解码问题，不冒充拒绝
+    let dv = DataValue {
+        value: None,
+        status: Some(StatusCode::Good),
+        ..Default::default()
+    };
+    assert!(rejected_status(&dv).is_none());
+}
+
 /// 原因前缀不得命中北向 OPC UA 服务端的细分关键字（小写子串匹配）。
 #[test]
 fn ua_e2_reason_does_not_trip_north_status_classifier() {

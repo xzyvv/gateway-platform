@@ -68,10 +68,13 @@ async fn test_error_end_code_is_rejected() {
     let c = McCollector::new(addr, "mc-bus".into(), Duration::from_secs(5), None);
     let p = point("p1", "D100", "u16");
     let err = c.read(&p).await.expect_err("should fail");
-    assert!(
-        matches!(err, crate::south::protocol::CollectorError::InvalidFrame(_)),
-        "unexpected: {err:?}"
-    );
+    // ROI-25：PLC 明确回错误结束码 → DeviceRejected，而不是 DECODE
+    match err {
+        crate::south::protocol::CollectorError::DeviceRejected(msg) => {
+            assert!(msg.contains("0xC059"), "原因需可辨识: {msg}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
 }
 
 #[tokio::test]

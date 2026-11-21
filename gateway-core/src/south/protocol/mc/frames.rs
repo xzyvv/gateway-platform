@@ -553,15 +553,16 @@ pub(crate) async fn read_response_1e(
     Ok((status, data))
 }
 
-/// 将结束代码/状态码的非零值转为协议错误。
+/// 将结束代码/状态码的非零值转为协议错误（读路径）。
 ///
-/// 读路径专用：读失败只影响本次读，不涉及「写是否生效」，
-/// 沿用 [`CollectorError::InvalidFrame`] 的既有口径（错误码分类不变）。
+/// ROI-25：结束码由 PLC 明确返回，表示「该地址/该请求被拒绝」，不是帧解码问题。
+/// 归为 [`CollectorError::DeviceRejected`]，避免现场把「地址不存在/被拒」
+/// 误判成链路或报文故障（`NoReply` / `DECODE`）。
 pub(crate) fn check_end_code(end_code: u16) -> CollectorResult<()> {
     if end_code == 0 {
         Ok(())
     } else {
-        Err(CollectorError::InvalidFrame(format!(
+        Err(CollectorError::DeviceRejected(format!(
             "mc end code 0x{end_code:04X}"
         )))
     }

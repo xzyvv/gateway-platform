@@ -51,3 +51,14 @@ fn test_check_end_code() {
     assert!(check_end_code(0).is_ok());
     assert!(check_end_code(0xC059).is_err());
 }
+
+/// ROI-25：结束码是 PLC 明确拒绝，必须映射 DeviceRejected 而非 InvalidFrame。
+#[test]
+fn test_check_end_code_is_device_rejected() {
+    match check_end_code(0xC059) {
+        Err(crate::south::protocol::CollectorError::DeviceRejected(msg)) => {
+            assert!(msg.contains("0xC059"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 DeviceRejected，实际 {other:?}"),
+    }
+}
