@@ -152,7 +152,21 @@ impl MqttClient {
         // outbox 必须在事件循环前创建，以便 ConnAck 时触发 replay
         let outbox = match outbox_path {
             Some(p) => match OutboxStore::open(std::path::Path::new(p)) {
-                Ok(store) => Some(Arc::new(AsyncMutex::new(store))),
+                Ok(store) => {
+                    // Bug-N1 (fix)：sqlite open 失败时 OutboxStore 内部已降级到
+                    // 内存模式（进程内可用、重启丢失）。此处必须递增降级计数，
+                    // 否则 MQTT 通道会「静默降级」——数据丢了监控上却一切正常。
+                    if store.is_degraded() {
+                        metrics
+                            .queue_persist
+                            .outbox_degraded
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::warn!(
+                            "mqtt outbox 持久化模式 open 失败，已降级到内存模式 — 重启后未送达数据将丢失（gateway_outbox_degraded_total +1）"
+                        );
+                    }
+                    Some(Arc::new(AsyncMutex::new(store)))
+                }
                 Err(e) => {
                     tracing::warn!("outbox init failed, continuing without outbox: {}", e);
                     None

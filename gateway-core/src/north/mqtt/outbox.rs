@@ -110,8 +110,11 @@ impl OutboxStore {
     /// 代价：进程崩溃时内存 outbox 消息全部丢失——但网关自身已经在崩溃，丢失的消息
     /// 本来也无法投递；正常运行时（不崩溃）持久化能力由下层 sqlite 保留。
     ///
-    /// 仍然递增 metrics（`metrics.outbox_degraded_total`），Grafana 告警
-    /// `rate(gateway_outbox_degraded_total[5m]) > 0` 可报"outbox 异常降级到内存"。
+    /// 降级告警由**调用方**负责（本函数不持有 metrics 句柄）：
+    /// 调用方在拿到 `Ok(store)` 后必须检查 [`Self::is_degraded`]，为真则递增
+    /// `queue_persist.outbox_degraded`，使 Grafana 能用
+    /// `rate(gateway_outbox_degraded_total[5m]) > 0` 报「outbox 异常降级到内存」。
+    /// 目前已覆盖 MQTT（`connection.rs`）与 Webhook（`bootstrap/helpers/north.rs`）。
     pub fn open(db_path: &Path) -> GatewayResult<Self> {
         match Self::open_sqlite(db_path) {
             Ok(store) => Ok(store),

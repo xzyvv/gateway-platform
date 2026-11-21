@@ -1,0 +1,96 @@
+# 网关「数据丢弃 / 静默降级」告警规则（Prometheus 格式）
+#
+# 背景：这些指标此前只有定义、没有任何告警规则，等于埋了点但没人看。
+# 本文件覆盖网关所有「数据真的丢了」或「即将静默丢数据」的路径。
+#
+# 部署方式：
+#   1) 将本文件放入 Prometheus 的 rules 目录（如 /etc/prometheus/rules/）；
+#   2) 在 prometheus.yml 的 rule_files 中加入该路径；
+#   3) reload Prometheus（curl -X POST http://localhost:9090/-/reload）。
+#
+# 指标来源：gateway-core/src/engine/metrics/{queue_persist,alarm}.rs
+# 所有规则都按「5 分钟内有增量」判定，避免只看累计值导致告警永不恢复。
+
+groups:
+  - name: gateway-data-loss
+    rules:
+      # 1) outbox 从 sqlite 降级到内存模式：进程内还能发，重启就丢。
+      #    触发原因多为文件被误删 / 目录权限 / 磁盘临时满。
+      - alert: GatewayOutboxDegraded
+        expr: rate(gateway_outbox_degraded_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关 outbox 已降级到内存模式"
+          description: >-
+            北向 outbox 持久化打开失败并降级为内存模式（{{ $labels.instance }}）。
+            降级期间未送达的数据在进程重启后会丢失，请立即检查 outbox 数据库文件
+            是否存在、目录权限与磁盘空间。
+
+      # 2) 队列因容量上限物理淘汰了行（为腾空间删最旧数据）。
+      #    说明容量规划不足或上行链路长期不畅。
+      - alert: GatewayQueueEvictedRows
+        expr: rate(gateway_queue_evicted_rows_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网关本地队列正在淘汰数据"
+          description: >-
+            {{ $labels.instance }} 因队列容量上限正在物理删除最旧数据（5 分钟内持续发生）。
+            请检查上行链路是否长期不畅、队列容量配置是否过小。
+
+      # 3) 被淘汰的行中从未送达北向 —— 彻底的计费/审计数据丢失，严重度最高。
+      - alert: GatewayQueueEvictedUndelivered
+        expr: rate(gateway_queue_evicted_undelivered_rows_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关淘汰了未送达的数据（永久丢失）"
+          description: >-
+            {{ $labels.instance }} 正在删除「从未送达北向」的队列行，这部分数据已永久丢失。
+            请立即恢复上行链路并评估补偿方案。
+
+      # 4) 队列淘汰告警触发（网关主动判定「已经丢数据」的告警计数器）。
+      - alert: GatewayQueueEvictionAlarm
+        expr: rate(gateway_queue_eviction_alarm_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关队列淘汰告警被触发"
+          description: >-
+            {{ $labels.instance }} 触发了队列淘汰告警，表示已有数据被物理删除。
+            与 GatewayQueueEvictedRows 配合定位：本条代表「已判定丢数据」，
+            而非仅仅容量告警。
+
+      # 5) 持久化失败后被 fallback 缓冲丢弃的数据点。
+      #    说明存储层（磁盘 / sqlite）出现故障。
+      - alert: GatewayQueuePersistDropped
+        expr: rate(gateway_queue_persist_dropped_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关持久化失败导致数据点被丢弃"
+          description: >-
+            {{ $labels.instance }} 有数据点因入队持久化失败被 fallback 缓冲丢弃。
+            请检查磁盘空间、磁盘健康与 sqlite 主库状态。
+
+  - name: gateway-liveness
+    rules:
+      # 6) 主队列 sqlite 打开失败时进程会「拒绝启动」直接退出（fail-fast，
+      #    见 queue/storage/sqlite/db_init.rs::refuse_unusable_db），
+      #    代码里没有可递增的指标，因此用抓取目标存活来判断。
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关进程不可达"
+          description: >-
+            {{ $labels.instance }} 已连续 2 分钟抓取失败。若进程刚刚重启，
+            请优先排查主队列 sqlite 是否损坏或无权限打开（该场景下网关会拒绝启动）。
