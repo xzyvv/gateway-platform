@@ -60,7 +60,7 @@ ring = "0.17"
 # （C SQLite CVE-2026-119375，修复版本 SQLite 3.54.0）。
 rusqlite = { version = "0.42", features = ["bundled", "backup"] }
 tokio-serial = "5"
-rsntp = "3"
+rsntp = "4"
 thiserror = "1"
 evalexpr = "11"
 validator = { version = "0.21", features = ["derive"] }
