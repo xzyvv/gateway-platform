@@ -20,8 +20,8 @@
 | ROI-03 | ✅ 已完成 | `8359f85` | `read-write-invariants.md` 回填 G-01 / G-06 / G-08 为已关闭，修正 `gateway_write_uncertain_total` → `gateway_bus_write_uncertain_total` |
 | ROI-04 | ✅ 已完成 | `a8c836c` | MQTT outbox 降级时递增 `gateway_outbox_degraded_total` 并告警，修正 `outbox.rs` 中「已递增」的失实注释 |
 | ROI-05 | ✅ 已完成 | `a8c836c` | 新增 [deploy/monitoring/prometheus-alerts.yaml](../deploy/monitoring/prometheus-alerts.yaml)，覆盖 outbox 降级 / 队列淘汰 / 未送达淘汰 / 淘汰告警 / 持久化丢弃 / 进程不可达 |
-| ROI-06 | ✅ 已完成（待提交） | — | 点位新增 `write_min` / `write_max`；写入越界按 `WRITE_OUT_OF_RANGE 4011` 直接拒绝、不下发设备；配置页新增「写入范围」；配置校验拦截 `min > max` |
-| ROI-07 | ✅ 已完成（待提交） | — | 调度改为「组内跳过未到期的点」：健康点保持原周期，失败点按自己的退避节奏重试，不再被组内 `min` 拉平 |
+| ROI-06 | ✅ 已完成 | `61d4bcf` / `b5f36cf` / `3e6ac12` | 点位新增 `write_min` / `write_max`；写入越界按 `WRITE_OUT_OF_RANGE 4011` 直接拒绝、不下发设备；配置页新增「写入范围」；配置校验拦截 `min > max` |
+| ROI-07 | ✅ 已完成 | `977c6a0` | 调度改为「组内跳过未到期的点」：健康点保持原周期，失败点按自己的退避节奏重试，不再被组内 `min` 拉平 |
 
 > 验证：`cargo test -p gateway-core --lib` 1760 passed、`cargo test -p gateway-api --lib` 311 passed、
 > `cargo fmt --check` 通过、`vue-tsc --noEmit` 通过、前端 `vitest` 2419 passed。
@@ -224,7 +224,7 @@
 | 18 | ROI-13 | 配置文件改动自动生效 | 大 | 中 | 建议在 ROI-12 之后 | — |
 
 > 前 5 项已于 2026-11-21 完成（提交 `600ebc0` / `a8c836c` / `8359f85`）；
-> ROI-06 / ROI-07 已完成、待提交。剩余 11 项按上表顺序推进。
+> ROI-06 / ROI-07 已完成并推送（`8fe2836` 顺带清掉 3 处 clippy `-D warnings` 阻断项）。剩余 11 项按上表顺序推进。
 
 ---
 
