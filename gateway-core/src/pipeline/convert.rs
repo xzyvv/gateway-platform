@@ -211,7 +211,7 @@ impl ConvertEngine {
                         } else {
                             // 防御深度：换算结果 NaN/Inf 时降级，不让脏数据进北向/落库
                             dp.quality = Quality::Uncertain;
-                            dp.quality_reason = "convert_non_finite".to_string();
+                            dp.quality_reason = "convert:NON_FINITE".to_string();
                             tracing::warn!(
                                 "convert rule {}: linear({}*{}+{}) 非有限，点 {} 降级 Uncertain",
                                 rule.id,
@@ -559,6 +559,6 @@ mod tests {
         let mut points = vec![dp("p1", f64::MAX)];
         engine.apply(&mut points);
         assert_eq!(points[0].quality, Quality::Uncertain);
-        assert_eq!(points[0].quality_reason, "convert_non_finite");
+        assert_eq!(points[0].quality_reason, "convert:NON_FINITE");
     }
 }

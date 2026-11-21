@@ -51,7 +51,7 @@ fn empty_window_point(point_id: &str, window_end: i64) -> DataPoint {
         raw_value: 0.0,
         raw_type: "empty_window".to_string(),
         quality: Quality::Bad,
-        quality_reason: "empty_window".to_string(),
+        quality_reason: "aggregate:EMPTY_WINDOW".to_string(),
         timestamp: window_end,
         source_ts: window_end,
         stale_count: 0,

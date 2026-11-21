@@ -22,7 +22,7 @@ use crate::south::scheduler::DeviceState;
 /// 统一后与 [`DataPoint::failed`] 完全一致：有 last_good 就复用其值与采集时刻并
 /// 标记 `raw_type=last_good`；从未成功过才保留 `none` / 0（I-06 的「无成功历史」语义）。
 /// 质量码与协议给出的 `quality_reason` 原样保留；仅当调用方已把 Good 降级
-/// （如非有限值）时补 `non_finite_value`。
+/// （如非有限值）时补 `value:NON_FINITE`。
 pub(crate) fn failed_from_ok(
     dp: DataPoint,
     point: &PointConfig,
@@ -33,7 +33,7 @@ pub(crate) fn failed_from_ok(
     let was_good = dp.quality == Quality::Good;
     let quality = if was_good { Quality::Bad } else { dp.quality };
     let reason = if was_good && dp.quality_reason.is_empty() {
-        "non_finite_value".to_string()
+        "value:NON_FINITE".to_string()
     } else {
         dp.quality_reason
     };

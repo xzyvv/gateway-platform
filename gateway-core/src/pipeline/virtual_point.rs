@@ -13,7 +13,7 @@
 //! - 虚拟点位可**级联引用**其它虚拟点位；按固定点迭代求解，最多 8 轮，
 //!   超限（存在环）记 `circular_reference` 错误。
 //! - 求值失败不静默丢弃：产出 `Quality::Uncertain` +
-//!   `quality_reason = "virtual_point_error"` 的数据点，让平台能感知异常。
+//!   `quality_reason = "virtual_point:ERROR"` 的数据点，让平台能感知异常。
 //!
 //! # 上报节流
 //!
@@ -348,7 +348,7 @@ impl VirtualPointEngine {
             raw_value: 0.0,
             raw_type: "virtual".to_string(),
             quality: Quality::Uncertain,
-            quality_reason: "virtual_point_error".to_string(),
+            quality_reason: "virtual_point:ERROR".to_string(),
             timestamp: now,
             source_ts: now,
             stale_count: 0,
@@ -416,7 +416,7 @@ mod tests {
         let out = engine.evaluate();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].quality, Quality::Uncertain);
-        assert_eq!(out[0].quality_reason, "virtual_point_error");
+        assert_eq!(out[0].quality_reason, "virtual_point:ERROR");
         let states = engine.states();
         assert!(states["vp1"].error.is_some());
         assert!(states["vp1"].value.is_none());

@@ -127,7 +127,7 @@ pub(crate) fn parse_point_value(point: &PointConfig, regs: &[u16], batch_start: 
         raw_type,
         quality,
         quality_reason: if quality != Quality::Good {
-            "modbus_decode_err".to_string()
+            "modbus_decode:DECODE".to_string()
         } else {
             String::new()
         },

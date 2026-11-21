@@ -193,7 +193,7 @@ impl DataPoint {
     ///
     /// r24-MOD1（防御深度）：value/raw_value 若非有限（NaN/+Inf/-Inf），
     /// 则回退为 `Quality::Uncertain` 并把无效值替换为 0.0，
-    /// quality_reason 标注 "non_finite_value"。这样：
+    /// quality_reason 标注 "value:NON_FINITE"。这样：
     ///   - NaN/Inf 不会进入 MQTT/Kafka payload（serde_json 对 NaN 序列化为 null，
     ///     下游 InfluxDB / Kafka Connect 通常拒收）
     ///   - SQLite REAL 列不会存 NaN（聚合/比较异常）
@@ -220,7 +220,7 @@ impl DataPoint {
                 point_id,
                 value
             );
-            (0.0, Some("non_finite_value"))
+            (0.0, Some("value:NON_FINITE"))
         };
         let (safe_raw, raw_reason) = if raw_value.is_finite() {
             (raw_value, None)
@@ -230,7 +230,7 @@ impl DataPoint {
                 point_id,
                 raw_value
             );
-            (0.0, Some("non_finite_raw_value"))
+            (0.0, Some("value:NON_FINITE_RAW"))
         };
         // 任一非 finite 都降级为 Uncertain（value 非有限直接污染工程量，必须降级）
         let (quality, reason) = match (value_reason, raw_reason) {
@@ -403,7 +403,7 @@ mod tests {
         assert_eq!(p.quality, Quality::Uncertain);
         assert_eq!(p.value, 0.0, "NaN 应被替换为 0.0");
         assert_eq!(p.raw_value, 100.0);
-        assert_eq!(p.quality_reason, "non_finite_value");
+        assert_eq!(p.quality_reason, "value:NON_FINITE");
     }
 
     /// r24-MOD1：+Inf value 必须降级为 Uncertain(0.0)。
@@ -412,7 +412,7 @@ mod tests {
         let p = DataPoint::good("p_inf", "d1", f64::INFINITY, 50.0, "f32");
         assert_eq!(p.quality, Quality::Uncertain);
         assert_eq!(p.value, 0.0);
-        assert_eq!(p.quality_reason, "non_finite_value");
+        assert_eq!(p.quality_reason, "value:NON_FINITE");
     }
 
     /// r24-MOD1：-Inf value 必须降级为 Uncertain(0.0)。
@@ -421,7 +421,7 @@ mod tests {
         let p = DataPoint::good("p_ninf", "d1", f64::NEG_INFINITY, 50.0, "f32");
         assert_eq!(p.quality, Quality::Uncertain);
         assert_eq!(p.value, 0.0);
-        assert_eq!(p.quality_reason, "non_finite_value");
+        assert_eq!(p.quality_reason, "value:NON_FINITE");
     }
 
     /// r24-MOD1：value 合法但 raw 非有限时，记录 raw 原因。
@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(p.quality, Quality::Uncertain);
         assert_eq!(p.value, 10.0, "value 合法时应保留");
         assert_eq!(p.raw_value, 0.0);
-        assert_eq!(p.quality_reason, "non_finite_raw_value");
+        assert_eq!(p.quality_reason, "value:NON_FINITE_RAW");
     }
 
     /// 对外质量码按连续失败次数单调递进，且 `bad` 分支必须可达。
@@ -452,5 +452,93 @@ mod tests {
         assert_eq!(view_quality_code(None, 0), "unknown");
         // 采集成功但值可疑，不按失败次数降级
         assert_eq!(view_quality_code(Some("uncertain"), 5), "uncertain");
+    }
+
+    /// I-10 / ROI-27：`quality_reason` 统一为 `<场景>:<稳定码>` 契约。
+    ///
+    /// 场景为小写标识，码为非空、无空白片段；成功时为空串（不参与校验）。
+    /// 这里既校验公共构造函数，也扫描各阶段写入 reason 的字面量，防止
+    /// 以后新增一个「无冒号」的原因把按场景统计错因的脚本打回未知分类。
+    #[test]
+    fn quality_reason_follows_scene_code_contract() {
+        fn assert_scene_code(reason: &str) {
+            let (scene, code) = reason
+                .split_once(':')
+                .unwrap_or_else(|| panic!("quality_reason 缺少场景分隔符: {reason}"));
+            assert!(
+                !scene.is_empty() && !code.is_empty(),
+                "片段不得为空: {reason}"
+            );
+            assert!(
+                scene
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()),
+                "场景应为小写标识: {reason}"
+            );
+            assert!(
+                !reason.contains(char::is_whitespace),
+                "不得含空白: {reason}"
+            );
+        }
+
+        use crate::south::protocol::CollectorError;
+        use std::time::Duration;
+
+        for reason in [
+            CollectorError::Timeout(Duration::from_secs(1)).quality_reason("collect_failed"),
+            CollectorError::NoReply.quality_reason("collect_failed"),
+            CollectorError::ChecksumError.quality_reason("modbus_read_failed"),
+            CollectorError::InvalidFrame("x".into()).quality_reason("modbus_read_failed"),
+            CollectorError::DeviceRejected("x".into()).quality_reason("modbus_write_failed"),
+        ] {
+            assert_scene_code(&reason);
+        }
+
+        // DataPoint::good 的降级原因（value 非有限 / raw_value 非有限）
+        assert_scene_code(&DataPoint::good("p", "d", f64::NAN, 1.0, "f64").quality_reason);
+        assert_scene_code(&DataPoint::good("p", "d", 1.0, f64::NAN, "f64").quality_reason);
+
+        // 各阶段直接赋值的字面量必须带场景前缀
+        const SOURCES: &[(&str, &str)] = &[
+            (
+                "pipeline/convert.rs",
+                include_str!("../pipeline/convert.rs"),
+            ),
+            (
+                "pipeline/virtual_point.rs",
+                include_str!("../pipeline/virtual_point.rs"),
+            ),
+            ("pipeline/nodes.rs", include_str!("../pipeline/nodes.rs")),
+            (
+                "pipeline/quality_rules.rs",
+                include_str!("../pipeline/quality_rules.rs"),
+            ),
+            (
+                "south/protocol/modbus/batch.rs",
+                include_str!("../south/protocol/modbus/batch.rs"),
+            ),
+        ];
+        for (file, src) in SOURCES {
+            for (lineno, line) in src.lines().enumerate() {
+                let Some(pos) = line.find("quality_reason = ") else {
+                    continue;
+                };
+                let rest = &line[pos..];
+                let Some(start) = rest.find('"') else {
+                    continue;
+                };
+                let tail = &rest[start + 1..];
+                let Some(end) = tail.find('"') else { continue };
+                let literal = &tail[..end];
+                let (scene, code) = literal.split_once(':').unwrap_or_else(|| {
+                    panic!("{file}:{} 的 reason 缺少场景分隔符: {literal}", lineno + 1)
+                });
+                assert!(
+                    !scene.is_empty() && !code.is_empty(),
+                    "{file}:{} 的 reason 片段为空: {literal}",
+                    lineno + 1
+                );
+            }
+        }
     }
 }

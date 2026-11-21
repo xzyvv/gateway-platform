@@ -841,7 +841,7 @@ fn roi19_ok_bad_reuses_last_good_and_keeps_reason() {
         None,
         0,
         Quality::Bad,
-        "modbus_decode_err",
+        "modbus_decode:DECODE",
         0,
     );
     assert_eq!(bad.value, 0.0);
@@ -857,7 +857,7 @@ fn roi19_ok_bad_reuses_last_good_and_keeps_reason() {
     assert_eq!(unified.stale_count, 3);
     assert_eq!(unified.quality, Quality::Bad);
     assert_eq!(
-        unified.quality_reason, "modbus_decode_err",
+        unified.quality_reason, "modbus_decode:DECODE",
         "协议给出的失败原因必须保留"
     );
 }
@@ -889,12 +889,12 @@ fn roi19_uncertain_quality_is_not_escalated_to_bad() {
     let unc = DataPoint::good("p_unc", "dev1", 10.0, 10.0, "f64");
     let unc = DataPoint {
         quality: Quality::Uncertain,
-        quality_reason: "invalid_bcd".into(),
+        quality_reason: "decode:INVALID_BCD".into(),
         ..unc
     };
     let unified = super::results::failed_from_ok(unc, &p, Some(9.5), 1234, 2);
     assert_eq!(unified.quality, Quality::Uncertain);
-    assert_eq!(unified.quality_reason, "invalid_bcd");
+    assert_eq!(unified.quality_reason, "decode:INVALID_BCD");
     assert_eq!(unified.value, 9.5);
 }
 
@@ -906,7 +906,7 @@ fn roi19_non_finite_good_is_re_badged_with_reason() {
     nan.value = f64::NAN;
     let unified = super::results::failed_from_ok(nan, &p, Some(8.0), 999, 1);
     assert_eq!(unified.quality, Quality::Bad, "非有限值不得以 Good 下发");
-    assert_eq!(unified.quality_reason, "non_finite_value");
+    assert_eq!(unified.quality_reason, "value:NON_FINITE");
     assert_eq!(unified.value, 8.0);
 }
 
@@ -947,7 +947,15 @@ async fn roi19_handle_results_unifies_ok_bad_before_pipeline() {
     };
     assert!(last_good_ts > 0);
 
-    let bad = DataPoint::failed("p_bad", "b1", None, 0, Quality::Bad, "modbus_decode_err", 0);
+    let bad = DataPoint::failed(
+        "p_bad",
+        "b1",
+        None,
+        0,
+        Quality::Bad,
+        "modbus_decode:DECODE",
+        0,
+    );
     scheduler.handle_results(&pts, vec![Ok(bad)]).await;
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -965,5 +973,5 @@ async fn roi19_handle_results_unifies_ok_bad_before_pipeline() {
     assert_eq!(it.raw_type, "last_good");
     assert_eq!(it.stale_count, 1);
     assert_eq!(it.quality, "bad");
-    assert_eq!(it.quality_reason, "modbus_decode_err");
+    assert_eq!(it.quality_reason, "modbus_decode:DECODE");
 }
