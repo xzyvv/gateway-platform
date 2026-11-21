@@ -56,7 +56,7 @@
 | W-03 | 能证明写未生效的错误不得转成 `WriteUncertain`（`DeviceRejected` / `ModbusException` / `BusBusy` / `Unsupported` / `InvalidConfig`） | ✅ | `mark_write_uncertain` 白名单；测试 `definite_failures_keep_their_variant` |
 | W-03b | `InvalidFrame`（应答无法解析）**属于结果未知**，不是明确失败 | ✅ | `mark_write_uncertain` 黑名单；测试 `uncertain_errors_become_write_uncertain` |
 | W-03c | 设备明确回了错误码（拒绝 / 异常码 / 否定确认）必须用 `DeviceRejected`，不得混进 `InvalidFrame` | ✅ | `DeviceRejected` 变体 + 各协议错误点改造；测试 `device_rejected_is_distinct_from_invalid_frame` |
-| W-04 | 写结果未知必须计数 | 🟡 | `gateway_write_uncertain_total`；**缺口 G-08**：自研协议（无 `BusManager`）不计数 |
+| W-04 | 写结果未知必须计数 | ✅ | 指标 `gateway_bus_write_uncertain_total`（Prom 名带 `bus_` 前缀）；自研协议经 `mark_write_uncertain_with(metrics, e)` 计入 —— **缺口 G-08 已关闭** |
 | W-05 | 写路径必须走控制通道（优先级） | ✅ | Modbus / DLT645 / CJT188 全部 `BusPriority::Control` |
 | W-06 | 写不确定的错误必须传到 API 层可见 | ✅ | `CollectorError::write_outcome()` → `engine::write::WriteOutcome`（中立层）；API 层 `results[].outcome` + 业务码 5102 |
 | W-07 | 上游（前端 / MES）不得对 `WriteUncertain` 自动重试 | ✅ | 业务码 **5102**（结果未知）+ `outcome: "uncertain"` + 统一提示「设备可能已执行，请先读回核实，不要自动重试」；前端仅提示不阻断重试 |
@@ -97,7 +97,7 @@
 | RTU-10 | 读超时必须 ≥ 帧长 × 10bit / 波特率 + 余量 | ✅ | `effective_attempt_timeout`；测试 `adaptive_timeout_covers_frame_time_at_low_baud` |
 | RTU-11 | 帧长估算只在 Modbus 总线启用（其它协议第 2 字节不是功能码） | ✅ | `BusManager.is_modbus`；测试 `adaptive_timeout_is_disabled_for_non_modbus_protocol` |
 | RTU-12 | 写超时预算按不重试推导（不白等 `retry_count` 轮） | ✅ | `transaction_inner` |
-| RTU-13 | ASCII 缓冲溢出不得整段丢弃（应保留末段） | ❌ | **缺口 G-06** |
+| RTU-13 | ASCII 缓冲溢出不得整段丢弃（应保留末段） | ✅ | `serial_task.rs` 超过 `ASCII_BUF_LIMIT` 时保留末段并 `inc_ascii_frame_dropped()` —— **缺口 G-06 已关闭** |
 
 ## 5. Modbus TCP 特有
 
@@ -105,7 +105,7 @@
 |---|---|---|---|
 | TCP-01 | MBAP `protocol_id` 必须为 0、`length` 必须 ≤ 255 | ✅ | `read_mbap_response` |
 | TCP-02 | 响应必须按 `tx_id` 路由到等待者 | ✅ | `TransactionPool.deliver` |
-| TCP-03 | 响应 `unit_id` 必须与请求的从站地址一致 | ❌ | **缺口 G-01**：`let _unit_id = header[6]` 被丢弃 |
+| TCP-03 | 响应 `unit_id` 必须与请求的从站地址一致 | ✅ | `transaction.rs::deliver(tx_id, unit_id, payload)` 校验 `pending.slave_id == unit_id`，不一致则丢弃并记原因 —— **缺口 G-01 已关闭** |
 | TCP-04 | 写与写必须串行（同一 socket 上不可交叉） | ✅ | `write_sem = Semaphore(1)` |
 | TCP-05 | 连接断开必须触发重连，且不得重发在途请求 | ✅ | `tcp_task` 代次校验（`Arc::ptr_eq`） |
 | TCP-06 | 写超时必须作废在途事务并强制重连，且**不得重发**该写 | ✅ | `abort_all()` + `retry_allowed=false` |
@@ -117,14 +117,14 @@
 
 | # | 缺口 | 工作量 | 价值 | 备注 |
 |---|---|---|---|---|
-| G-01 | TCP 响应 `unit_id` 不校验 | S | 低 | 异常网关下会误认应答 |
+| G-01 | TCP 响应 `unit_id` 不校验 | — | — | **已关闭**：`TransactionPool::deliver` 校验 `pending.slave_id == unit_id`，不一致丢弃并记原因（`ab44c3d`） |
 | G-02 | API 契约未区分 `WriteUncertain`（错误码 / `outcome` 字段 / 前端文案） | — | — | **已关闭**：双轨契约（`results[].outcome` 三态 + 业务码 5102）+ 前端仅提示不阻断 |
 | G-03 | 写超时读回消歧 | — | — | **已关闭**：单写 `read` / 批写 `read_batch` 读回，仅「读回值 == 写入值」正向收敛为成功；不一致保持 5102 并附读回值（不做反向判定，避免设备限幅/联锁导致误判可重试） |
 | G-04 | 点位写入属性（写值 / 增量 / 脉冲）未建模 | M | 中高 | 增量点位的正确性前提；也是 G-03 读回判据能否覆盖脉冲/增量写的前提（当前只覆盖设定值语义） |
 | G-05 | TCP 单设备拖垮总线（无 per-slave 观测/熔断） | M~L | 中高 | 建议先加 per-slave NoReply 观测再定方案 |
-| G-06 | RTU ASCII 缓冲溢出整段丢弃 | S | 低 | 仅 ASCII 模式且跨帧边界时触发 |
+| G-06 | RTU ASCII 缓冲溢出整段丢弃 | — | — | **已关闭**：`ASCII_BUF_LIMIT` + 收缩保留末段 + `inc_ascii_frame_dropped()`（`ab44c3d`） |
 | G-07 | 写路径错误分级分散在各协议（无统一入口） | — | — | **已关闭**：统一走 `mark_write_uncertain` / `mark_write_uncertain_counted` |
-| G-08 | 自研协议（s7comm / fins / mc / iec104 / bacnet）写结果未知**不计数** | S | 中 | 这些协议不走 `BusManager`，拿不到总线 metrics；需下沉一个协议无关的全局计数器 |
+| G-08 | 自研协议（s7comm / fins / mc / iec104 / bacnet）写结果未知**不计数** | — | — | **已关闭**：`mark_write_uncertain_with(metrics, e)`，5 个 collector 均注入 `Option<Arc<Metrics>>`（`9748c60`）；Prom 名 `gateway_bus_write_uncertain_total` |
 
 ## 7. 变更检查清单
 

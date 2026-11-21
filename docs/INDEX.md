@@ -76,6 +76,8 @@ Gateway Platform 仓库所有文档的统一入口。按主题分类，便于快
 |---|---|
 | [`docs/functional-review-and-next-phase.md`](functional-review-and-next-phase.md) | 上一阶段功能评审结论：实测体量基线、三因子价值评估、去留决策与各轮落地记录 |
 | [`docs/functional-inventory-and-next-roadmap.md`](functional-inventory-and-next-roadmap.md) | 全量功能清单（后端 16 路由组 / 前端 10 Hub）+ SKU 与授权分层现状 + 下一阶段路线图（§4 行动项、§5 验收口径） |
+| [`docs/core-function-design-review-2026-11.md`](core-function-design-review-2026-11.md) | **核心功能设计级复核清单**（2026-11-20）：10 个核心功能域 + 15 项设计级缺口（读/写/配置/诊断，按 ROI 排序）+ 「为什么此前一直漏掉读写设计」根因复盘 |
+| [`docs/remaining-roi-backlog-2026-11.md`](remaining-roi-backlog-2026-11.md) | **剩余待办 ROI 推荐清单**（2026-11-21）：18 项剩余待办按 ROI 排序，每项用大白话标注「现在的毛病 / 现场会看到什么 / 工作量 / 价值 / 阻塞点」，附建议执行顺序 |
 
 ## 设计文档（`docs/design/`）
 
