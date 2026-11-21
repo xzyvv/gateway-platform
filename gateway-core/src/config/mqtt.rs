@@ -66,7 +66,9 @@ pub struct MqttConfig {
     #[ts(type = "number")]
     pub publish_interval: u64,
 
-    /// QoS 等级 0/1/2
+    /// QoS 等级（仅支持 1）。
+    /// 上行固定 QoS1（PubAck 确认 + outbox 重传）；配置 0/2 会在校验阶段被拒绝，
+    /// 不再出现「配置值与 broker 实测不一致」的静默偏差。
     #[serde(default = "default_qos")]
     #[validate(custom(function = "validate_qos"))]
     pub qos: u8,
@@ -310,5 +312,30 @@ mod tests {
         assert!(validate_mqtt_topic("a b").is_err());
         assert!(validate_mqtt_topic("a\0b").is_err());
         assert!(validate_mqtt_topic("a\nb").is_err());
+    }
+
+    /// ROI-23 / I-49：QoS 只接受 1；0/2 必须在配置校验阶段被拒绝，
+    /// 而不是静默按 1 发布造成「配置值与 broker 实测不一致」。
+    #[test]
+    fn roi23_qos_only_accepts_1() {
+        use validator::Validate;
+
+        assert!(validate_qos(1).is_ok());
+        for bad in [0, 2, 3, 255] {
+            let err = validate_qos(bad).expect_err("非 1 的 QoS 必须拒绝");
+            assert_eq!(err.code, "invalid_qos", "qos={bad} 的错误码应稳定");
+        }
+
+        let mut cfg = MqttConfig {
+            enabled: true,
+            qos: 2,
+            ..MqttConfig::default()
+        };
+        assert!(
+            cfg.validate().is_err(),
+            "整配置校验必须拦住 qos=2（覆盖 API / 热更新的写入路径）"
+        );
+        cfg.qos = 1;
+        assert!(cfg.validate().is_ok(), "qos=1 是唯一合法值");
     }
 }

@@ -128,26 +128,27 @@ impl VirtualPointEngine {
 
     /// 更新点位实时值缓存
     ///
-    /// `items` 是本批采集结果（采集侧原始值），`final_points` 是经过
-    /// 边缘过滤 / 协议转换后的最终值——后者覆盖前者，使虚拟点位看到的
-    /// 是**上报口径**的工程量。
+    /// **只写上报口径**：`final_points` 是经过边缘过滤 / 协议转换 / 质量规则后的
+    /// 最终值，缓存只接受其中仍为 `Good` 的点。
+    ///
+    /// 被死区 / 变化阈值 / 聚合过滤掉（本轮未上报）或被质量规则降级的点**不写缓存**：
+    /// 保留上一条上报口径值，由 TTL 自然过期。绝不回退到 `items` 里的采集原始值——
+    /// 原始值未换算（量纲不同），直接喂给虚拟点位会让派生值忽大忽小、且与平台收到
+    /// 的上报值对不上（I-28）。
     pub fn update_cache(&self, items: &[(PointConfig, DataPoint)], final_points: &[DataPoint]) {
         let now = DataPoint::now();
-        let mut overlay: HashMap<&str, f64> = HashMap::with_capacity(final_points.len());
+        // TTL 仍需按点位采集周期计算；interval 来自配置侧 items。
+        let intervals: HashMap<&str, u64> = items
+            .iter()
+            .map(|(cfg, dp)| (dp.point_id.as_str(), cfg.interval))
+            .collect();
         for dp in final_points {
-            if dp.quality == Quality::Good {
-                overlay.insert(dp.point_id.as_str(), dp.value);
-            }
-        }
-        for (cfg, dp) in items {
             if dp.quality != Quality::Good {
                 continue;
             }
-            let value = overlay
-                .get(dp.point_id.as_str())
-                .copied()
-                .unwrap_or(dp.value);
-            self.cache.put(&dp.point_id, value, now, cfg.interval);
+            if let Some(interval) = intervals.get(dp.point_id.as_str()) {
+                self.cache.put(&dp.point_id, dp.value, now, *interval);
+            }
         }
     }
 
@@ -544,5 +545,56 @@ mod tests {
         assert_eq!(engine.rule_count(), 0);
         assert!(engine.evaluate().is_empty());
         assert!(engine.recalc("nope").is_none());
+    }
+
+    /// I-28（ROI-24）：缓存只存上报口径（换算后）值，不能用采集原始值。
+    #[test]
+    fn cache_uses_reported_caliber_not_raw_value() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2")]);
+        // 原始值 1000 → 上报口径 1.0（如 0.001 倍率）
+        let items = vec![item("p1", 1000.0)];
+        let reported = vec![DataPoint::good("p1", "dev1", 1.0, 1000.0, "f32")];
+        engine.update_cache(&items, &reported);
+        let out = engine.evaluate();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, 2.0, "公式必须基于上报口径值 1.0");
+    }
+
+    /// I-28（ROI-24）：点位本轮被边缘过滤（未上报）时，缓存保留上一条上报口径值，
+    /// 不得回退为本批采集原始值。
+    #[test]
+    fn filtered_point_keeps_last_reported_caliber() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2")]);
+        engine.update_cache(
+            &[item("p1", 1000.0)],
+            &[DataPoint::good("p1", "dev1", 1.0, 1000.0, "f32")],
+        );
+        assert_eq!(engine.evaluate()[0].value, 2.0);
+
+        // 第二批：原始值变了，但被死区 / 变化阈值拦下 → final_points 为空
+        engine.update_cache(&[item("p1", 1005.0)], &[]);
+        assert!(
+            engine.evaluate().is_empty(),
+            "缓存应仍是上报口径 1.0，派生值不应因原始值变化而重算"
+        );
+    }
+
+    /// I-28（ROI-24）：点位被质量规则降级（final 非 Good）时同样保留上一条上报口径值。
+    #[test]
+    fn downgraded_point_does_not_poison_cache_with_raw_value() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} + 1")]);
+        engine.update_cache(
+            &[item("p1", 100.0)],
+            &[DataPoint::good("p1", "dev1", 10.0, 100.0, "f32")],
+        );
+        assert_eq!(engine.evaluate()[0].value, 11.0);
+
+        let mut degraded = DataPoint::good("p1", "dev1", 20.0, 200.0, "f32");
+        degraded.quality = Quality::Bad;
+        engine.update_cache(&[item("p1", 200.0)], &[degraded]);
+        assert!(
+            engine.evaluate().is_empty(),
+            "降级点不得把原始值 200 写进缓存（应保留 10.0）"
+        );
     }
 }

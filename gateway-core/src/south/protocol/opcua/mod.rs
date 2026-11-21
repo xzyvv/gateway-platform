@@ -65,13 +65,14 @@ use std::time::Duration;
 
 use opcua::client::{ClientBuilder, Session};
 use opcua::types::{
-    AttributeId, EndpointDescription, NodeId, NumericRange, QualifiedName, ReadValueId,
+    AttributeId, EndpointDescription, NodeId, NumericRange, QualifiedName, ReadValueId, StatusCode,
     TimestampsToReturn,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::config::{OpcUaClientConfig, PointConfig};
+use crate::engine::metrics::CollectErrorCode;
 use crate::engine::model::DataPoint;
 use crate::engine::model::Quality;
 use crate::south::protocol::{Collector, CollectorError, CollectorResult, ResultSlots};
@@ -104,6 +105,39 @@ pub(crate) const KEEPALIVE_MAX_CONSECUTIVE_FAILURES: u32 = 2;
 
 /// C-14: keepalive 探测节点——OPC UA 标准 ServerStatus（ns=0;i=2256）
 pub(crate) const SERVER_STATUS_NODE_NUMERIC_ID: u32 = 2256;
+
+/// UA-E2: 单点 StatusCode 非 Good 时的质量原因。
+///
+/// 格式沿用 `<场景>:<稳定错误码>` 契约：后缀固定 `OTHER`——`CollectErrorCode`
+/// 的分桶是固定长度（10 桶），单点坏不属于任何一桶，也不应为它新增桶。
+/// 前缀带上 StatusCode 名，让现场能区分「权限不足 / 节点不存在 / 数据源不可用」，
+/// 而不是只看到「质量 Bad、无原因」。
+///
+/// ⚠️ 前缀不得含 `timeout` / `communication` / `disconnect` / `connection`
+/// 小写子串：北向 OPC UA 服务端按这些子串细分 StatusCode
+/// （见 `north/server/opcua_server.rs::map_data_point_to_value`）。StatusCode
+/// 自带名称是驼峰形式，不会命中这些子串。
+fn status_quality_reason(code: &StatusCode) -> String {
+    format!(
+        "opcua_status_{}:{}",
+        code.sub_code().name(),
+        CollectErrorCode::Other.code()
+    )
+}
+
+/// UA-E2: DataValue 状态码 →（质量码，质量原因）。
+///
+/// Good 不带原因；Bad / Uncertain 一律带可辨识原因，且**不参与**链路失败计数
+/// （链路健康只取决于 server 是否响应了本次 Read 请求）。
+fn quality_from_status(status: Option<&StatusCode>) -> (Quality, String) {
+    match status {
+        Some(code) if code.is_good() => (Quality::Good, String::new()),
+        Some(code) if code.is_uncertain() => (Quality::Uncertain, status_quality_reason(code)),
+        Some(code) => (Quality::Bad, status_quality_reason(code)),
+        // 无状态码按 Bad 处理，原因明确标注「Bad」，不伪造 Good。
+        None => (Quality::Bad, status_quality_reason(&StatusCode::Bad)),
+    }
+}
 
 /// OPC UA Client 采集器
 pub struct OpcUaCollector {
@@ -437,11 +471,8 @@ impl OpcUaCollector {
                 }
             };
 
-            let quality = match &dv.status {
-                Some(code) if code.is_good() => Quality::Good,
-                Some(code) if code.is_uncertain() => Quality::Uncertain,
-                _ => Quality::Bad,
-            };
+            // UA-E2: 与单点路径同口径——Bad / Uncertain 必须带可辨识原因。
+            let (quality, quality_reason) = quality_from_status(dv.status.as_ref());
 
             let source_ts = dv
                 .source_timestamp
@@ -458,7 +489,7 @@ impl OpcUaCollector {
                     raw_value: value,
                     raw_type: "opcua".into(),
                     quality,
-                    quality_reason: String::new(),
+                    quality_reason,
                     timestamp: now,
                     source_ts,
                     stale_count: 0,
@@ -767,23 +798,20 @@ impl Collector for OpcUaCollector {
                 ));
             }
 
+            // C-11 / UA-E2: server 已返回 Read 响应 → 链路健康，先清零链路失败计数。
+            // 单点取不到值 / StatusCode 为 Bad 属于点位问题：只降级该点质量，
+            // **不得**计入拆会话阈值（否则一个权限不足的点位会把整台设备踢下线）。
+            self.record_read_ok();
+
             let dv = &results[0];
             let value = match extract_value(dv) {
                 Ok(v) => v,
-                Err(e) => {
-                    self.record_read_failure().await;
-                    return Err(e);
-                }
+                // 取不到值只影响本点位，不计链路失败；错误码由调度层统一上送
+                // （`collect_failed:DECODE|OTHER`）。
+                Err(e) => return Err(e),
             };
 
-            // C-11: 成功路径清零失败计数
-            self.record_read_ok();
-
-            let quality = match &dv.status {
-                Some(code) if code.is_good() => Quality::Good,
-                Some(code) if code.is_uncertain() => Quality::Uncertain,
-                _ => Quality::Bad,
-            };
+            let (quality, quality_reason) = quality_from_status(dv.status.as_ref());
 
             let source_ts = dv
                 .source_timestamp
@@ -798,7 +826,7 @@ impl Collector for OpcUaCollector {
                 raw_value: value,
                 raw_type: "opcua".into(),
                 quality,
-                quality_reason: String::new(),
+                quality_reason,
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 source_ts,
                 stale_count: 0,

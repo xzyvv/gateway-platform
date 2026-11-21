@@ -21,11 +21,12 @@
       </div>
     </el-form-item>
     <el-form-item label="QoS 等级">
+      <!-- ROI-23：确认链路（PubAck/超时重发/outbox 续传）只支持 QoS1，
+           0/2 会被后端配置校验拒绝，因此不再提供其它选项 -->
       <el-select v-model="mqtt.qos" style="width: 100%">
-        <el-option :value="0" label="0 - 最多一次" />
-        <el-option :value="1" label="1 - 至少一次" />
-        <el-option :value="2" label="2 - 精确一次" />
+        <el-option :value="1" label="1 - 至少一次（固定）" />
       </el-select>
+      <div class="field-hint">固定 QoS1：依赖 broker 确认与离线 outbox 重传</div>
     </el-form-item>
     <el-form-item label="上报周期">
       <!-- max 以「秒」为单位（3600 秒 = 1 小时） -->

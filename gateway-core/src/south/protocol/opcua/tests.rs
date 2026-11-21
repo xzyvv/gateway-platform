@@ -301,3 +301,118 @@ async fn drop_delivers_close_session_to_real_server() {
         server_session_count(&handle)
     );
 }
+
+// =========================================================
+// UA-E2（ROI-21）：单点 Bad / 取不到值 ≠ 链路失败
+// =========================================================
+
+/// 单点 Bad / Uncertain 必须带可辨识的 `<场景>:<稳定错误码>` 原因，
+/// 且后缀能被 `CollectErrorCode::from_code` 还原（北向 / 前端按码分类依赖此契约）。
+#[test]
+fn ua_e2_bad_and_uncertain_carry_identifiable_reason() {
+    let (q, reason) = quality_from_status(Some(&StatusCode::BadUserAccessDenied));
+    assert_eq!(q, Quality::Bad);
+    assert_eq!(reason, "opcua_status_BadUserAccessDenied:OTHER");
+    let code = reason.rsplit_once(':').map(|(_, c)| c).unwrap();
+    assert_eq!(
+        CollectErrorCode::from_code(code),
+        Some(CollectErrorCode::Other),
+        "原因后缀必须能被 from_code 还原：{reason}"
+    );
+
+    let (q, reason) = quality_from_status(Some(&StatusCode::UncertainLastUsableValue));
+    assert_eq!(q, Quality::Uncertain, "Uncertain 不得被降级成 Bad");
+    assert_eq!(reason, "opcua_status_UncertainLastUsableValue:OTHER");
+
+    // 不同坏因必须可区分：权限不足 vs 节点不存在不能压成同一句
+    let (_, denied) = quality_from_status(Some(&StatusCode::BadUserAccessDenied));
+    let (_, unknown) = quality_from_status(Some(&StatusCode::BadNodeIdUnknown));
+    assert_ne!(denied, unknown);
+}
+
+/// Good 不带原因；无状态码按 Bad 处理且原因非空（不伪造 Good）。
+#[test]
+fn ua_e2_good_has_no_reason_and_missing_status_is_bad() {
+    let (q, reason) = quality_from_status(Some(&StatusCode::Good));
+    assert_eq!(q, Quality::Good);
+    assert!(reason.is_empty(), "Good 不应带失败原因：{reason}");
+
+    let (q, reason) = quality_from_status(None);
+    assert_eq!(q, Quality::Bad);
+    assert_eq!(reason, "opcua_status_Bad:OTHER");
+}
+
+/// 原因前缀不得命中北向 OPC UA 服务端的细分关键字（小写子串匹配）。
+#[test]
+fn ua_e2_reason_does_not_trip_north_status_classifier() {
+    for code in [
+        StatusCode::Bad,
+        StatusCode::BadCommunicationError,
+        StatusCode::BadTimeout,
+        StatusCode::BadUserAccessDenied,
+        StatusCode::BadNodeIdUnknown,
+    ] {
+        let (_, reason) = quality_from_status(Some(&code));
+        for needle in ["timeout", "communication", "disconnect", "connection"] {
+            assert!(
+                !reason.contains(needle),
+                "原因 {:?} 误命中北向细分关键字 {:?}",
+                reason,
+                needle
+            );
+        }
+    }
+}
+
+/// 回归：对「取不到值」的点位连续读取超过拆会话阈值次，
+/// 链路失败计数必须保持 0、会话不得被拆（旧实现第 3 次就会拆会话）。
+#[cfg(feature = "opcua-server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ua_e2_bad_point_does_not_trip_session_teardown() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定本地端口");
+    let port = listener.local_addr().expect("取本地端口").port();
+    let endpoint = format!("opc.tcp://127.0.0.1:{port}/");
+    let (server, _handle) = ServerBuilder::new_anonymous("gw-opcua-ua-e2-test")
+        .application_uri("urn:gateway:opcua-ua-e2-test-server")
+        .create_sample_keypair(true)
+        .trust_client_certs(true)
+        .discovery_urls(vec![endpoint.clone()])
+        .diagnostics_enabled(true)
+        .build()
+        .expect("构建测试服务端");
+    tokio::spawn(server.run_with(listener));
+
+    let collector = OpcUaCollector::new(endpoint, "bus_opcua_ua_e2".into());
+    tokio::time::timeout(Duration::from_secs(10), collector.connect())
+        .await
+        .expect("connect 超时")
+        .expect("真实建链必须成功");
+
+    let point: PointConfig = serde_json::from_value(serde_json::json!({
+        "id": "ua_e2_bad",
+        "bus": "bus_opcua_ua_e2",
+        "protocol": "opcua",
+        "address": "ns=2;i=999999",
+        "interval": 1
+    }))
+    .expect("构造点位配置");
+
+    // 该节点在示例服务端不存在 → 每轮都拿不到值（点级失败，非链路失败）
+    for _ in 0..(READ_FAILURE_THRESHOLD + 2) {
+        let res = tokio::time::timeout(Duration::from_secs(5), collector.read(&point))
+            .await
+            .expect("read 超时");
+        assert!(res.is_err(), "不存在的节点不应返回成功数据点");
+        assert_eq!(
+            collector.consecutive_read_failures.load(Ordering::Relaxed),
+            0,
+            "单点取不到值不得计入拆会话阈值"
+        );
+        assert!(
+            collector.connected.load(Ordering::Relaxed),
+            "单点问题不得把整条会话置为断连"
+        );
+    }
+}

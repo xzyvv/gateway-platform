@@ -8,7 +8,9 @@ export type MqttConfig = { enabled: boolean, broker: string, topic: string,
  */
 publish_interval: number, 
 /**
- * QoS 等级 0/1/2
+ * QoS 等级（仅支持 1）。
+ * 上行固定 QoS1（PubAck 确认 + outbox 重传）；配置 0/2 会在校验阶段被拒绝，
+ * 不再出现「配置值与 broker 实测不一致」的静默偏差。
  */
 qos: number, 
 /**

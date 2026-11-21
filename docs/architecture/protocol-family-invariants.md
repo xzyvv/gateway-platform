@@ -146,30 +146,30 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 ## 4. OPC UA Client（目录 `opcua`）
 
 拓扑：async-opcua 客户端，共享 `Arc<Mutex<Option<Session>>>`；读入口惰性建链，
-连续读失败达阈值后由后台任务拆会话（`opcua/mod.rs:174-201`），并有 keepalive 探测
-（`opcua/mod.rs:207-318`）。**未覆写 `write`，默认实现返回 `Unsupported`**（`protocol/mod.rs:502-511`）。
+连续读失败达阈值后由后台任务拆会话（`opcua/mod.rs:189-208`），并有 keepalive 探测
+（`opcua/mod.rs:241-338`）。**未覆写 `write`，默认实现返回 `Unsupported`**（`protocol/mod.rs:502-511`）。
 
 | 编号 | 不变量 | 代码依据（文件:行） | 测试守护（有/无 + 位置） | 违反后的现场表现 |
 |---|---|---|---|---|
 | UA-R1 | NodeId 只接受 `ns=N;s=`、`ns=N;i=`、`ns=N;g=` 与 `ns,X` 简写；其它形式返回 `InvalidConfig` | `opcua/frames.rs:16-66` | 有（`opcua/tests.rs:4`、`:10`、`:16`、`:22`） | 点位地址写错时不发请求，日志明确指出格式 |
 | UA-R2 | 建链必须先 `wait_for_connection()` 成功，否则 `IoError`；重复 connect 不重建会话 | `opcua/mod.rs:556-630` | 无（只有 `tests.rs:108` 验证 diag 在连接失败时如实报错） | 会话未就绪就发起读，全部点位 `IoError`，且可能反复重建 |
-| UA-R3 | 批量读返回的结果数必须 ≥ 请求数；不足的按原下标逐点 `InvalidFrame` | `opcua/mod.rs:421-429` | 无 | 少返回时部分点位拿到别人的值或空结果 |
-| UA-R4 | 单节点 `StatusCode` 必须影响质量：Good/Uncertain/Bad | `opcua/mod.rs:440-444`、`:782-786` | 无 | 见 UA-E2：Bad 仍以 `Ok(DataPoint)` 上送，调度层按「采集成功」计 |
-| UA-R5 | 读失败阈值必须小于会话超时，避免「会话先掉、计数还没到」 | `opcua/mod.rs:89`（`READ_FAILURE_THRESHOLD`）、`:103`（`KEEPALIVE_MAX_CONSECUTIVE_FAILURES`）、`:174-199` | 有（`opcua/tests.rs:35`、`:47`，只锁阈值取值范围） | 阈值配错时会话永不重建，整站离线但页面显示「连接中」 |
-| UA-R6 | keepalive 探测失败达阈值必须拆会话并标记断连；`try_lock` 抢不到时必须跳过，不得阻塞采集 | `opcua/mod.rs:227-318` | 有（`opcua/tests.rs:65`、`:87`） | 半开会话不重建；或 keepalive 与采集争锁导致轮询周期抖动 |
-| UA-R7 | 读失败必须清零/累加计数，成功即清零 | `opcua/mod.rs:146-148`（`record_read_ok`）、`:405-406`、`:780` | 无（无读路径 e2e） | 偶发失败累计到阈值后误拆健康会话，出现周期性「闪断」 |
-| UA-R8 | 批量读必须一次请求多节点，并按原下标回填；单点解析失败不得改变其它点位下标 | `opcua/mod.rs:363-387`、`:410-468` | 无 | 一个坏地址让后续点位整体错位 |
+| UA-R3 | 批量读返回的结果数必须 ≥ 请求数；不足的按原下标逐点 `InvalidFrame` | `opcua/mod.rs:455-462` | 无 | 少返回时部分点位拿到别人的值或空结果 |
+| UA-R4 | 单节点 `StatusCode` 必须影响质量：Good/Uncertain/Bad，且非 Good 必须带可辨识原因 | `opcua/mod.rs:120-146`（映射）、`:475`（批量）、`:814`（单点） | 有（`opcua/tests.rs:312`、`:335`；映射函数单测，两条读路径共用） | 见 UA-E2：Bad 以 `Ok(DataPoint)` 上送且无原因，现场无法区分「配错/权限/设备没值」 |
+| UA-R5 | 读失败阈值必须小于会话超时，避免「会话先掉、计数还没到」 | `opcua/mod.rs:89`（`READ_FAILURE_THRESHOLD`）、`:104`（`KEEPALIVE_MAX_CONSECUTIVE_FAILURES`）、`:189-207` | 有（`opcua/tests.rs:35`、`:47`，只锁阈值取值范围） | 阈值配错时会话永不重建，整站离线但页面显示「连接中」 |
+| UA-R6 | keepalive 探测失败达阈值必须拆会话并标记断连；`try_lock` 抢不到时必须跳过，不得阻塞采集 | `opcua/mod.rs:241-338` | 有（`opcua/tests.rs:65`、`:87`） | 半开会话不重建；或 keepalive 与采集争锁导致轮询周期抖动 |
+| UA-R7 | 读失败必须清零/累加计数，成功即清零；单点问题不得累加链路失败 | `opcua/mod.rs:210-218`（计数）、`:440`/`:804`（成功清零）、`:384`/`:431`/`:795`（仅链路级失败累加） | 有（`opcua/tests.rs:371`：连续读不到值的点不计链路失败、不拆会话） | 偶发失败累计到阈值后误拆健康会话，出现周期性「闪断」 |
+| UA-R8 | 批量读必须一次请求多节点，并按原下标回填；单点解析失败不得改变其它点位下标 | `opcua/mod.rs:355-506`（`:444-499` 回填） | 无 | 一个坏地址让后续点位整体错位 |
 | UA-W1 | 该协议不支持写，写请求必须是「明确失败」（`Unsupported`），不得伪装成未知 | `protocol/mod.rs:502-511`；`opcua/mod.rs` 无 `fn write` | 有（`registry/tests.rs:387`，跨协议能力位一致性） | 前端显示可写而实际必失败（已被能力位测试挡住） |
 | UA-E1 | 值提取错误必须给出可区分的原因：不支持的 Variant → `Unsupported`，无值/字符串非数字 → `InvalidFrame` | `opcua/frames.rs:69-92` | 无 | 点位类型不匹配时只看到 `DECODE`，无法区分「配错类型」与「设备没值」 |
-| UA-E2 | 单节点 Bad 质量不得被计为「链路读失败」，否则会触发拆会话 | **不成立**：`opcua/mod.rs:770-776` 对 `extract_value` 失败调用 `record_read_failure`；而 Bad + 有值则返回 `Ok` + `Quality::Bad` 且 `quality_reason` 为空 | 无 | 一个节点被设备拒绝（权限/不存在）时，连续刷新会把整条会话拆掉，连带其它点位闪断；页面只看到质量 Bad 无原因 |
+| UA-E2 | 单节点 Bad / 取不到值不得被计为「链路读失败」；Bad/Uncertain 必须带可辨识 `quality_reason` | **成立**：`opcua/mod.rs:439-440`（server 已响应即 `record_read_ok`，先于取值）、`:795-809`（取不到值只降级该点，不再 `record_read_failure`）；`:120-146` 生成 `opcua_status_<StatusCode>:OTHER` | 有（`opcua/tests.rs:312`、`:335`、`:347`、`:371`） | 一个节点被设备拒绝（权限/不存在）时，连续刷新不再拆会话；页面可按 `quality_reason` 区分具体 StatusCode |
 
-**测试覆盖**：11 条中 4 条有守护，7 条是缺口。现有测试基本只覆盖「NodeId 解析 / 阈值常量 / keepalive 时序 / 能力位」，
-**读服务本身（批量对齐、状态码、失败计数）没有端到端用例**。
+**测试覆盖**：11 条中 6 条有守护（UA-R4、UA-R7 由 ROI-21 补齐，UA-E2 已从缺口转为成立），5 条是缺口。
+读服务剩余缺口集中在**批量结果少返回、下标回填、值提取错误原因**（UA-R3/R8/UA-E1），仍无端到端用例。
 
 **风险与建议优先级**
 
-1. **UA-E2（单点 Bad 触发整会话拆除）** —— 现场最常见的「某个点位权限不足/被删」会演变成「整台设备周期性掉线」，并且日志只有 teardown，没有点位级原因。优先级最高。
-2. **UA-R3/UA-R4（结果数与状态码处理）** —— 属于「不报错但值不对」的一类，一旦遇到只能靠比对上游数据发现。
+1. **UA-E2（单点 Bad 触发整会话拆除）** —— 已修复（ROI-21）：server 响应即清零链路计数，取不到值只降级该点；Bad/Uncertain 现在带 `opcua_status_<StatusCode>:OTHER`。
+2. **UA-R3/UA-R8（批量结果数与下标对齐）** —— 属于「不报错但值不对」的一类，一旦遇到只能靠比对上游数据发现。
 
 ---
 
@@ -241,14 +241,14 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | MC | 18 | 9 | 9 |
 | FINS | 15 | 8 | 7 |
 | S7Comm | 15 | 10 | 5 |
-| OPC UA | 11 | 4 | 7 |
+| OPC UA | 11 | 6 | 5 |
 | BACnet MS/TP | 11 | 5 | 6 |
 | IEC101 | 13 | 8 | 5 |
-| 合计 | 83 | 44 | 39 |
+| 合计 | 83 | 46 | 37 |
 
 **先补哪两个**
 
-1. **OPC UA**：缺口比例最高（7/11），而且缺口集中在采集主路径（批量结果对齐、StatusCode、失败计数），现有测试只覆盖配置与 keepalive 时序。更关键的是 UA-E2 会把「单点权限不足」放大成「整条会话闪断」，属于现场高频且难归因的问题。
+1. **OPC UA**：已补 UA-R4/R7、UA-E2 已成立，剩余缺口集中在批量对齐与值提取原因（UA-R3/R8/UA-E1）——仍属「不报错但值不对」的高风险区。
 2. **IEC101**：帧层测得好，但**地址归属与解码失败上报**完全空白（IEC-R6/R7、IEC-E2），且没有 fuzz。错站数据进缓存后数值仍然「合理」，不会触发任何告警，是这 6 个协议里最晚才会被发现的故障类型。
 
 **跨协议共性缺口（值得一次性处理）**

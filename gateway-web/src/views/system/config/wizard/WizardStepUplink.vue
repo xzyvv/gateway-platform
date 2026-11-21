@@ -16,10 +16,9 @@
         <span class="unit">秒</span>
       </el-form-item>
       <el-form-item label="QoS">
+        <!-- ROI-23：上行只支持 QoS1，其它等级会被后端校验拒绝 -->
         <el-select v-model="uplinkForm.qos" style="width: 160px">
-          <el-option :value="0" label="0 · 最多一次" />
-          <el-option :value="1" label="1 · 至少一次" />
-          <el-option :value="2" label="2" />
+          <el-option :value="1" label="1 · 至少一次（固定）" />
         </el-select>
       </el-form-item>
     </el-form>

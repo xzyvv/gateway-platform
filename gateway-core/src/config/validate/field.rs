@@ -61,8 +61,14 @@ pub(crate) fn validate_mqtt_topic(topic: &str) -> Result<(), ValidationError> {
     }
 }
 
+/// ROI-23 / I-49：上行 QoS 固定为 1。
+///
+/// 发布的确认链路（PubAck FIFO 槽位、ack 超时重发、outbox 续传）全部建立在
+/// QoS1 语义上；QoS0 无确认、QoS2 走 PubRec/PubRel/PubComp，均与现有机型不兼容。
+/// 因此 0/2 不是「暂不支持」而是**配置契约不允许**——在校验阶段直接拒绝，
+/// 避免现场配了 0/2 却按 1 发布、日志里还看不出来。
 pub(crate) fn validate_qos(qos: u8) -> Result<(), ValidationError> {
-    if qos <= 2 {
+    if qos == 1 {
         Ok(())
     } else {
         Err(ValidationError::new("invalid_qos"))

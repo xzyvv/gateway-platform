@@ -68,8 +68,8 @@
 
 | 编号 | 不变量 | 代码依据 | 现有测试 / 守护用例 | 违反后的现场表现 |
 |---|---|---|---|---|
-| I-27 | 虚拟点只能读到「未过期」的缓存值；只有 Good 采集点写缓存；TTL 取 `max(30s, 3×interval)`。 | `gateway-core/src/pipeline/virtual_point.rs:142-151`、`gateway-core/src/pipeline/point_cache.rs:21-22`、`:51-84` | 【有守护】`gateway-core/src/pipeline/point_cache.rs:111-160` | 设备离线后仍用陈旧值算出「正常」结果，且永不报引用缺失。 |
-| I-28 | 虚拟点缓存写入的值应为最终上报口径值；现状只有「本批通过边缘过滤且仍为 Good」的点使用 convert 后值，被死区/变化/聚合过滤或被质量规则降级的点回退为 convert 前的 `items.value`。 | `gateway-core/src/pipeline/virtual_point.rs:134-152`、`gateway-core/src/pipeline/mod.rs:294-325` | 【无（缺口）】 | 同一采集点在不同批次给虚拟点提供的量纲不一致，派生值抖动或与上报值对不上。 |
+| I-27 | 虚拟点只能读到「未过期」的缓存值；只有 Good 采集点写缓存；TTL 取 `max(30s, 3×interval)`。 | `gateway-core/src/pipeline/virtual_point.rs:138-150`、`gateway-core/src/pipeline/point_cache.rs:21-22`、`:51-84` | 【有守护】`gateway-core/src/pipeline/point_cache.rs:111-160` | 设备离线后仍用陈旧值算出「正常」结果，且永不报引用缺失。 |
+| I-28 | 虚拟点缓存只写「最终上报口径」值（边缘过滤 → convert → 质量规则后的 `final_points`）；被过滤/降级的点保留上一条上报口径值，绝不回退到 convert 前的 `items.value`。 | `gateway-core/src/pipeline/virtual_point.rs:130-150`、`gateway-core/src/pipeline/mod.rs:312-323` | 【有守护】`gateway-core/src/pipeline/virtual_point.rs:552`、`:566`、`:584` | 同一采集点在不同批次给虚拟点提供的量纲不一致，派生值抖动或与上报值对不上。 |
 | I-29 | 虚拟点可引用其它虚拟点，按固定点迭代最多 8 轮；同级解出后必须立即可被后续规则看到。 | `gateway-core/src/pipeline/virtual_point.rs:171-229` | 【有守护】`gateway-core/src/pipeline/virtual_point.rs:434-498` | 级联只算一层，或结果依赖规则书写顺序而不稳定。 |
 | I-30 | 无进展（缺引用/存在环）时，剩余规则必须产出 `Uncertain`、`value=0`、`quality_reason="virtual_point_error"`；具体错因只保存在内部 state，文案固定为「引用点位不可用（未采集 / 已过期 / 存在循环引用）」。 | `gateway-core/src/pipeline/virtual_point.rs:213-229`、`:342-356` | 【有守护】仅 `:413-424`、`:490-499` 断言 `Uncertain`；【无（缺口）】reason 与具体错因不可区分 | 现场无法区分「输入没采到」「缓存过期」与「公式配成环」。 |
 | I-31 | 派生点只在数值变化、首次求值或错误状态变化时产出一次。 | `gateway-core/src/pipeline/virtual_point.rs:231-264` | 【有守护】`gateway-core/src/pipeline/virtual_point.rs:400-412`、`gateway-core/tests/virtual_point_pipeline.rs:193` | 虚拟点每个周期重复上报，淹没真实变化并放大北向流量。 |
@@ -104,7 +104,7 @@
 | I-46 | MQTT 不得从 NorthFeed 取数，必须直接从 DataQueue 出队发布；`MqttClient::publish_batch` 必须是幂等空实现。 | `gateway-core/src/north/mqtt/mod.rs:831-845`、`gateway-core/src/north/mqtt/publish.rs:159-166` | 【有守护】`gateway-core/tests/north_single_delivery.rs:123-198` | 同一批点在 `data_queue` 出现两行、broker 收到两条 PUBLISH，形成系统性重复上报。 |
 | I-47 | 所有点位必须发布到同一 `config.topic`，且 `retain=false`；默认 payload 按 `device_id` 分组，组内点序等于出队顺序，组间顺序不保证；自定义模板模式为每点一行 JSON Lines。 | `gateway-core/src/north/mqtt/publish.rs:199-206`、`:240-243`、`gateway-core/src/north/mqtt/payload.rs:41-57`、`:184-215` | 【有守护】`gateway-core/src/north/mqtt/payload/tests.rs:66-121` | 消费方按设备订阅时收不到数据；或按报文中设备顺序做差分会误判抖动。 |
 | I-48 | 报文顶层 `ts` 是构建时刻（`DataPoint::now()`），采样时刻只在每点的 `source_ts`；顶层 `ts` 不得被当作采样时刻。 | `gateway-core/src/north/mqtt/payload.rs:193-213` | 【无（缺口）】 | 平台按顶层 `ts` 对齐时，把积压补发的历史数据当成「当前值」，曲线出现平台期。 |
-| I-49 | MQTT 实际发布 QoS 恒为 1（AtLeastOnce），配置项 `qos`（0/1/2）只做合法性校验，不参与发布；outbox 记录的 `qos` 也固定为 1。 | `gateway-core/src/north/mqtt/publish.rs:199-206`、`:240-243`、`gateway-core/src/config/mqtt.rs:69-72` | 【无（缺口）】 | 配置 `qos=0/2` 与 broker 实测行为不一致；现场按 QoS2 设计幂等链路时出现语义偏差。 |
+| I-49 | MQTT 上行固定 QoS1（AtLeastOnce）：`qos` 配置项只允许 1，0/2 在配置校验阶段直接拒绝（`invalid_qos`），发布与 outbox 记录的 `qos` 恒为 1。 | `gateway-core/src/north/mqtt/publish.rs:199-206`、`:240-243`、`gateway-core/src/config/validate/field.rs:64-76`、`gateway-core/src/config/mqtt.rs:69-74` | 【有守护】`gateway-core/src/config/mqtt.rs:320`（`roi23_qos_only_accepts_1`） | 配置 `qos=0/2` 不再被静默按 1 发布，而是在写入时明确报错，避免按 QoS2 设计幂等链路的语义偏差。 |
 | I-50 | snapshot 模式下每个上报周期每个 `(device_id, point_id)` 只出队最新一行（按 `MAX(id)`，不按 `source_ts`）；`cutoff` 必须排除本周期排空期间新到的样本；stream 模式逐行按 id 顺序出队。 | `gateway-core/src/north/mqtt/publish.rs:159-166`、`gateway-core/src/queue/storage/sqlite/limit.rs:549-579`、`gateway-core/src/config/mqtt.rs:129-142` | 【有守护】`gateway-core/src/queue/tests.rs:1493-1560` | 同一周期同一点上行两次；或迟到的旧样本覆盖新值。 |
 | I-51 | NorthDispatcher 必须对启用 connector 并发 fan-out；单个 connector 失败只记 warn，不得阻塞或影响其它 connector；停机时必须先 drain 已积压批次再退出。 | `gateway-core/src/north/dispatch.rs:99-131`、`:139-158` | 【有守护】`gateway-core/src/north/dispatch/tests.rs:35-84`、`:126-165` | 慢 connector 拖死快 connector；停机丢最后积压批次。 |
 
@@ -139,7 +139,6 @@
 | §2 换算与质量 | I-19 | 无 rate 上值表容量/TTL 清理测试 |
 | §2 换算与质量 | I-20 | 无「质量规则不得产出 Stale」测试 |
 | §2 换算与质量 | I-22 | 无「死区/变化阈值作用于 convert 之前」测试 |
-| §3 虚拟点 | I-28 | 无「虚拟点缓存值口径一致性」测试 |
 | §3 虚拟点 | I-30 | 无「虚拟点失败具体原因」断言 |
 | §3 虚拟点 | I-33 | 无 error 状态保留、删除规则状态清理、缓存不重置的测试 |
 | §3 虚拟点 | I-34 | 无禁用虚拟点不产出、状态为 disabled 的测试 |
@@ -147,12 +146,11 @@
 | §4 队列入队 | I-40 | 无 `persist_failed` 与 SQLite 写失败关系的断言 |
 | §4 队列入队 | I-43 | 无 micro-batch 残留 flush 的测试 |
 | §5 北向分发 | I-48 | 无「顶层 ts=构建时刻」契约测试 |
-| §5 北向分发 | I-49 | 无「配置 qos 不参与发布」测试 |
 | §6 跨阶段 | I-52 | 无阶段顺序端到端断言 |
 | §6 跨阶段 | I-56 | 无统一时间语义（尤其 `Ok+Bad` 的 `source_ts=0`）测试 |
 
 最值得优先补测的三条：
 
 1. I-08：失败点的两条构造路径字段语义分叉最直接导致现场「值为 0 / 时间戳为 1970」，且与 I-56 相互放大。
-2. I-28：虚拟点缓存混用 convert 前后两种口径，是「派生值对不上上报值」的高概率根因。
-3. I-49：配置项 `qos` 与实际发布行为不一致，属于配置契约层面的静默偏差，现场几乎无法从日志发现。
+2. I-52：阶段顺序一旦换序，过滤口径与虚拟点输入都会变，但现象分散到各下游，最难定位。
+3. I-56：统一时间语义（尤其 `Ok+Bad` 的 `source_ts=0`）仍未断言，补上可直接消除「1970 曲线」的归因歧义。
