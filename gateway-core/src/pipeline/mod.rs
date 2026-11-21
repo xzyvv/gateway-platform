@@ -388,9 +388,13 @@ fn record_enqueue_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::record_enqueue_failure;
+    use super::*;
+    use crate::config::{ConvertRuleConfig, VirtualPoint};
     use crate::engine::metrics::Metrics;
+    use crate::engine::model::Quality;
+    use crate::north::NorthFeed;
     use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     #[test]
     fn enqueue_failure_increments_persist_failed_counter() {
@@ -423,6 +427,161 @@ mod tests {
             src.matches(&checked).count(),
             4,
             "退出/定时/攒批/最终四条 flush 路径都必须记录失败"
+        );
+    }
+
+    // ===== ROI-27：数据管道不变量 I-52 / I-35 =====
+
+    fn point(id: &str, deadband: f64) -> PointConfig {
+        PointConfig {
+            id: id.to_string(),
+            interval: 1,
+            deadband,
+            ..PointConfig::default()
+        }
+    }
+
+    fn linear_rule(point_id: &str) -> ConvertRuleConfig {
+        ConvertRuleConfig {
+            id: "cv".into(),
+            name: "cv".into(),
+            source_proto: "modbus".into(),
+            source_point_id: point_id.into(),
+            source_point_name: String::new(),
+            target_proto: "mqtt".into(),
+            target_tag: String::new(),
+            transform: "linear".into(),
+            scale: Some(10.0),
+            offset: Some(0.0),
+            enum_map: None,
+            enabled: true,
+            created_at_ms: 0,
+        }
+    }
+
+    fn virtual_point(id: &str, formula: &str) -> VirtualPoint {
+        VirtualPoint {
+            id: id.to_string(),
+            name: id.to_string(),
+            device_id: Some("dev".into()),
+            formula: formula.into(),
+            unit: String::new(),
+            decimals: 2,
+            enabled: true,
+            created_at: 0,
+        }
+    }
+
+    /// 装配一条真实处理管道，返回管道、队列与北向接收端。
+    fn spawn_pipeline(
+        convert: Vec<ConvertRuleConfig>,
+        vps: Vec<VirtualPoint>,
+    ) -> (
+        Arc<ProcessingPipeline>,
+        Arc<DataQueue>,
+        mpsc::Receiver<Arc<Vec<DataPoint>>>,
+    ) {
+        let queue = Arc::new(DataQueue::new_memory().expect("memory queue"));
+        let (north_tx, north_rx) = NorthFeed::channel(16);
+        let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
+            edge: Arc::new(EdgeProcessor::new()),
+            convert: ConvertEngine::new(convert),
+            virtual_points: VirtualPointEngine::new(vps),
+            queue: queue.clone(),
+            realtime_bus: None,
+            north_tx: Some(north_tx),
+            buffer: 16,
+            metrics: Arc::new(Metrics::default()),
+        });
+        (pipeline, queue, north_rx)
+    }
+
+    /// I-52：处理顺序必须是「边缘过滤 → 协议转换 → 虚拟点」。
+    ///
+    /// 用死区 0.5 + 线性 ×10 构造顺序敏感场景：
+    /// - 正确顺序：原始差 0.2 被死区过滤 → 只上送 1 个点，值为 100；
+    /// - 反过来先换算再过滤：差变成 2.0，两个点都会上送。
+    /// 同时虚拟点 `{p1} + 1` 必须看到换算后的 100（得到 101），证明转换先于虚拟点。
+    #[tokio::test]
+    async fn stage_order_is_edge_then_convert_then_virtual() {
+        let (pipeline, queue, mut north_rx) = spawn_pipeline(
+            vec![linear_rule("p1")],
+            vec![virtual_point("p2", "{p1} + 1")],
+        );
+
+        let items = vec![
+            (
+                point("p1", 0.5),
+                DataPoint::good("p1", "dev", 10.0, 10.0, "f32"),
+            ),
+            (
+                point("p1", 0.5),
+                DataPoint::good("p1", "dev", 10.2, 10.2, "f32"),
+            ),
+        ];
+        pipeline.submit(CollectedBatch::new(items)).await;
+
+        let batch = tokio::time::timeout(Duration::from_secs(2), north_rx.recv())
+            .await
+            .expect("管道必须在超时前产出批次")
+            .expect("北向通道不应关闭");
+        assert_eq!(
+            batch.len(),
+            2,
+            "应为 1 个物理点 + 1 个虚拟点，实际 {batch:?}"
+        );
+
+        let p1 = batch.iter().find(|d| d.point_id == "p1").expect("缺 p1");
+        assert!(
+            (p1.value - 100.0).abs() < 1e-9,
+            "p1 必须已线性换算为 100，实际 {}",
+            p1.value
+        );
+        let p2 = batch.iter().find(|d| d.point_id == "p2").expect("缺 p2");
+        assert!(
+            (p2.value - 101.0).abs() < 1e-9,
+            "虚拟点必须基于换算后的值求值（101），实际 {}",
+            p2.value
+        );
+
+        // 队列最终也应收到这两条（micro-batch 有 10ms 窗口，等一下）
+        for _ in 0..100 {
+            if queue.len().await >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(queue.len().await >= 2, "物理点与虚拟点都必须入队");
+    }
+
+    /// I-35：采集失败点（Bad + last_good 值）必须原样进入上报/入队路径，
+    /// 不能因为质量不为 Good 被边缘层过滤掉。
+    #[tokio::test]
+    async fn failed_points_reach_queue() {
+        let (pipeline, queue, _north_rx) = spawn_pipeline(Vec::new(), Vec::new());
+        let failed = DataPoint::failed(
+            "p1",
+            "dev",
+            Some(12.5),
+            12345,
+            Quality::Bad,
+            "collect_failed:TIMEOUT",
+            3,
+        );
+        pipeline
+            .submit(CollectedBatch::new(vec![(point("p1", 0.0), failed)]))
+            .await;
+
+        for _ in 0..100 {
+            if queue.len().await >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            queue.len().await,
+            1,
+            "失败点必须入队，否则平台感知不到设备异常"
         );
     }
 }
