@@ -150,19 +150,19 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | 编号 | 不变量 | 代码依据（文件:行） | 测试守护（有/无 + 位置） | 违反后的现场表现 |
 |---|---|---|---|---|
 | UA-R1 | NodeId 只接受 `ns=N;s=`、`ns=N;i=`、`ns=N;g=` 与 `ns,X` 简写；其它形式返回 `InvalidConfig` | `opcua/frames.rs:16-66` | 有（`opcua/tests.rs:4`、`:10`、`:16`、`:22`） | 点位地址写错时不发请求，日志明确指出格式 |
-| UA-R2 | 建链必须先 `wait_for_connection()` 成功，否则 `IoError`；重复 connect 不重建会话 | `opcua/mod.rs:556-630` | 无（只有 `tests.rs:108` 验证 diag 在连接失败时如实报错） | 会话未就绪就发起读，全部点位 `IoError`，且可能反复重建 |
-| UA-R3 | 批量读返回的结果数必须 ≥ 请求数；不足的按原下标逐点 `InvalidFrame` | `opcua/mod.rs:455-462` | 无 | 少返回时部分点位拿到别人的值或空结果 |
+| UA-R2 | 建链必须先 `wait_for_connection()` 成功，否则 `IoError`；重复 connect 不重建会话 | `opcua/mod.rs:556-630` | 有（部分）：`ua_r2_read_connects_lazily_before_first_read` 验证首次 read 先惰性建链；「重复 connect 不重建」仍无断言 | 会话未就绪就发起读，全部点位 `IoError`，且可能反复重建 |
+| UA-R3 | 批量读返回的结果数必须 ≥ 请求数；不足的按原下标逐点 `InvalidFrame` | `opcua/mod.rs:178-186`（`fill_batch_results`） | 有（`ua_r3_short_batch_marks_only_missing_index`） | 少返回时部分点位拿到别人的值或空结果 |
 | UA-R4 | 单节点 `StatusCode` 必须影响质量：Good/Uncertain/Bad，且非 Good 必须带可辨识原因 | `opcua/mod.rs:120-146`（映射）、`:475`（批量）、`:814`（单点） | 有（`opcua/tests.rs:312`、`:335`；映射函数单测，两条读路径共用） | 见 UA-E2：Bad 以 `Ok(DataPoint)` 上送且无原因，现场无法区分「配错/权限/设备没值」 |
 | UA-R5 | 读失败阈值必须小于会话超时，避免「会话先掉、计数还没到」 | `opcua/mod.rs:89`（`READ_FAILURE_THRESHOLD`）、`:104`（`KEEPALIVE_MAX_CONSECUTIVE_FAILURES`）、`:189-207` | 有（`opcua/tests.rs:35`、`:47`，只锁阈值取值范围） | 阈值配错时会话永不重建，整站离线但页面显示「连接中」 |
 | UA-R6 | keepalive 探测失败达阈值必须拆会话并标记断连；`try_lock` 抢不到时必须跳过，不得阻塞采集 | `opcua/mod.rs:241-338` | 有（`opcua/tests.rs:65`、`:87`） | 半开会话不重建；或 keepalive 与采集争锁导致轮询周期抖动 |
 | UA-R7 | 读失败必须清零/累加计数，成功即清零；单点问题不得累加链路失败 | `opcua/mod.rs:210-218`（计数）、`:440`/`:804`（成功清零）、`:384`/`:431`/`:795`（仅链路级失败累加） | 有（`opcua/tests.rs:371`：连续读不到值的点不计链路失败、不拆会话） | 偶发失败累计到阈值后误拆健康会话，出现周期性「闪断」 |
-| UA-R8 | 批量读必须一次请求多节点，并按原下标回填；单点解析失败不得改变其它点位下标 | `opcua/mod.rs:355-506`（`:444-499` 回填） | 无 | 一个坏地址让后续点位整体错位 |
+| UA-R8 | 批量读必须一次请求多节点，并按原下标回填；单点解析失败不得改变其它点位下标 | `opcua/mod.rs:154-224`（`fill_batch_results`） | 有（`ua_r8_batch_values_keep_request_order`） | 一个坏地址让后续点位整体错位 |
 | UA-W1 | 该协议不支持写，写请求必须是「明确失败」（`Unsupported`），不得伪装成未知 | `protocol/mod.rs:502-511`；`opcua/mod.rs` 无 `fn write` | 有（`registry/tests.rs:387`，跨协议能力位一致性） | 前端显示可写而实际必失败（已被能力位测试挡住） |
 | UA-E1 | 值提取错误必须给出可区分的原因：不支持的 Variant → `Unsupported`，无值/字符串非数字 → `InvalidFrame`；Bad/Uncertain 且无值 → `DeviceRejected` | `opcua/frames.rs:69-92`；`opcua/mod.rs:142-152`（`rejected_status`）、`:477-485`/`:819-825`（两读路径） | 有（`opcua/tests.rs:347`） | 点位类型不匹配时只看到 `DECODE`，无法区分「配错类型」「设备没值」与「设备拒绝」 |
 | UA-E2 | 单节点 Bad / 取不到值不得被计为「链路读失败」；Bad/Uncertain 必须带可辨识 `quality_reason` | **成立**：`opcua/mod.rs:439-440`（server 已响应即 `record_read_ok`，先于取值）、`:795-809`（取不到值只降级该点，不再 `record_read_failure`）；`:120-146` 生成 `opcua_status_<StatusCode>:OTHER` | 有（`opcua/tests.rs:312`、`:335`、`:347`、`:371`） | 一个节点被设备拒绝（权限/不存在）时，连续刷新不再拆会话；页面可按 `quality_reason` 区分具体 StatusCode |
 
-**测试覆盖**：11 条中 8 条有守护（UA-R4、UA-R7 由 ROI-21 补齐，UA-E2 已成立，UA-E1 由 ROI-25 补齐），3 条是缺口。
-读服务剩余缺口集中在**建链前置、批量结果少返回、下标回填**（UA-R2/R3/R8），仍无端到端用例。
+**测试覆盖**：11 条中 10 条有守护（UA-R2 为部分守护：惰性建链已断言，「重复 connect 不重建」仍缺桩服务用例），UA-R7 由 ROI-21 补齐，UA-E1 由 ROI-25 补齐；UA-R3/R8 由 ROI-27 补齐。
+读服务剩余缺口仅剩 UA-R2 的「重复 connect 不重建」断言。
 
 **风险与建议优先级**
 
@@ -217,18 +217,17 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | IEC-R7 | ASDU 解码失败必须能上报为可辨识错误，不得静默丢弃 | `common/asdu.rs:326-514`（`parse_asdu_checked`）、`iec101/mod.rs:195-206`、`:254-281` | 有（`tests.rs:808`、`:855`） | 数据格式不符时点位一直 `NoReply`，现场以为设备没回，实际是解码失败 |
 | IEC-R8 | IOA 必须为十进制 `u32`，非法配置返回 `InvalidConfig` | `iec101/mod.rs:284-288` | 有（`tests.rs:510`） | 点位配错时不刷新该点，不发请求 |
 | IEC-R9 | 缓存缺该 IOA 时必须返回 `NoReply`，不得伪造 0 值 | `iec101/mod.rs:223-245` | 有（`tests.rs:442`） | 点值恒为 0 且质量 Good，上游看不出异常 |
-| IEC-R10 | 应答控制域的 FCB/ACD 位必须与请求匹配（防重复帧） | **不成立**：`iec101/mod.rs:145-148`、`:168-171` 只递增请求 FCB，不校验应答 | 无 | 重复帧被当新数据，总召唤数据重复入库 |
+| IEC-R10 | 防重复帧：主站请求的 FCB 必须逐次翻转，从站据此丢弃重复请求；非平衡模式下应答控制域不回显 FCB，故不校验应答位 | `iec101/mod.rs:85-89`、`frames.rs` 的 `request_class2` | 有（`tests.rs:561-573`：golden 帧 + FCB 位翻转断言） | 请求 FCB 不翻转时，从站把每帧当重发丢弃，表现为整轮无数据 |
 | IEC-W1 | 该协议不支持写，写必须返回 `Unsupported` | `iec101/mod.rs` 无 `fn write`；`protocol/mod.rs:502-511` | 有（`registry/tests.rs:387`） | 前端误开放写入口（已被能力位测试挡住） |
 | IEC-E1 | 链路复位失败可「尽力而为」忽略；总召唤/二级数据失败必须上抛，且诊断文本如实记录复位结果 | `iec101/mod.rs:91-102`、`:307-340` | 有（`tests.rs:327`、`:343`、`:373`） | 复位被拒仍显示「诊断正常」，或第一次采集前需要人工复位 |
 | IEC-E2 | ASDU 层错误（COT 否定确认、类型不支持）应映射为设备拒绝/不支持，而非笼统超时 | `iec101/mod.rs:254-281`、`common/asdu.rs:516-522` | 有（`tests.rs:832`、`:808`） | 设备回否定确认时点位显示 `NoReply`，现场去查串口接线 |
 
-**测试覆盖**：13 条中 11 条有守护，2 条是缺口（R4 变长帧边界、R10 FCB 校验）。
-地址归属（链路地址/CA）、ASDU 错误码、解码失败上报已由 ROI-22 补齐（`d8d85bc`）；仍无 fuzz target。
+**测试覆盖**：13 条中 12 条有守护，1 条缺口（R4 变长帧边界）。
+地址归属（链路地址/CA）、ASDU 错误码、解码失败上报已由 ROI-22 补齐（`d8d85bc`）；R10 的「请求 FCB 翻转」已有 golden 断言（ROI-27 澄清口径：非平衡模式应答不回显 FCB）；仍无 fuzz target。
 
 **风险与建议优先级**
 
-1. **IEC-R10（不校验应答 FCB）** —— 重复帧被当新数据，总线重发/干扰时同一帧会重复入库，且不会有任何告警。
-2. **IEC-R4（变长帧 L 字节边界）** —— 错误长度会整帧丢弃并重同步，表现为偶发丢一轮；建议补边界用例 + fuzz。
+1. **IEC-R4（变长帧 L 字节边界）** —— 错误长度会整帧丢弃并重同步，表现为偶发丢一轮；建议补边界用例 + fuzz。
 
 ---
 
@@ -239,15 +238,15 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | MC | 18 | 11 | 7 |
 | FINS | 15 | 8 | 7 |
 | S7Comm | 15 | 12 | 3 |
-| OPC UA | 11 | 8 | 3 |
+| OPC UA | 11 | 10 | 1 |
 | BACnet MS/TP | 11 | 5 | 6 |
-| IEC101 | 13 | 11 | 2 |
-| 合计 | 83 | 55 | 28 |
+| IEC101 | 13 | 12 | 1 |
+| 合计 | 83 | 58 | 25 |
 
 **先补哪两个**
 
-1. **OPC UA**：已补 UA-R4/R7、UA-E2、UA-E1，剩余缺口集中在建链前置与批量对齐（UA-R2/R3/R8）——仍属「不报错但值不对」的高风险区。
-2. **IEC101**：地址归属、ASDU 错误码、解码失败上报已补齐（ROI-22，`d8d85bc`）；剩余 IEC-R10（FCB 校验）与 IEC-R4（变长帧边界），且没有 fuzz。
+1. **OPC UA**：UA-R3/R8 已由 ROI-27 补齐（批量回填抽取为 `fill_batch_results` 并加单测），仅剩 UA-R2「重复 connect 不重建」断言。
+2. **IEC101**：R10 口径澄清为「请求 FCB 翻转」并有 golden 断言（ROI-27）；剩余 IEC-R4（变长帧边界），且没有 fuzz。
 
 **跨协议共性缺口（值得一次性处理）**
 
