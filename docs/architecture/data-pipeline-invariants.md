@@ -56,7 +56,7 @@
 | I-19 | rate 规则必须与同 `point_id` 的上一次采样值比较，首样本永不命中；上值表上限 4096 点、TTL 1 小时，超限先按时间淘汰、仍超则整体清空。 | `gateway-core/src/pipeline/quality_rules.rs:27-31`、`:84-106`、`:150-158` | 【有守护】上一采样比较 `:239-258`；【无（缺口）】容量/TTL 清理 | 点位数逼近上限时短时丢失历史基准，rate 规则在部分点上静默失效。 |
 | I-20 | `stale` 不得由质量规则判定，必须由调度器的连续失败/超时机制负责；质量规则不得产出 `Stale`。 | `gateway-core/src/pipeline/quality_rules.rs:12-16`、`:114-115` | 【无（缺口）】 | 两套口径互相覆盖，前端质量码与退避计数不一致。 |
 | I-21 | 死区按 `abs(value-last) < deadband` 过滤；变化节点在 `deadband>0` 时复用死区阈值、否则用 `EPSILON`；NaN/Inf 直接放行且不更新基线。 | `gateway-core/src/pipeline/nodes.rs:308-327`、`:368-400` | 【有守护】`gateway-core/src/pipeline/edge/tests.rs:39-58`、`:103-121` | 异常值污染基线导致后续比较全失效；变化上报退化为每样本都传。 |
-| I-22 | 死区/变化/聚合判定的对象是 convert 模板**之前**的 `value`（边缘处理先于 convert 执行）。 | `gateway-core/src/pipeline/mod.rs:291-312` | 【无（缺口）】 | 同时配置 linear 模板与 deadband 时，阈值按转换前量纲判定，过滤量与配置直觉不符。 |
+| I-22 | 死区/变化/聚合判定的对象是 convert 模板**之前**的 `value`（边缘处理先于 convert 执行）。 | `gateway-core/src/pipeline/mod.rs:291-312` | 【有守护】`gateway-core/src/pipeline/mod.rs` 的 `stage_order_is_edge_then_convert_then_virtual`（原始差 0.2 被死区过滤，若先换算则差 2.0 会漏过） | 同时配置 linear 模板与 deadband 时，阈值按转换前量纲判定，过滤量与配置直觉不符。 |
 | I-23 | 聚合只对配置了 `aggregation` 的 Good 点生效，原始样本不上行；聚合点 `timestamp=source_ts=窗口右边界`、`raw_type="aggregated"`；空窗口必须产出 `Bad`/`empty_window` 占位点。 | `gateway-core/src/pipeline/nodes.rs:28-60`、`:153-163`、`:176-247` | 【有守护】`gateway-core/src/pipeline/edge/tests.rs:177-237` | 原始点与聚合点重复上行；设备离线期间平台收不到任何占位样本。 |
 | I-24 | 聚合补窗最多连续 64 个窗口；超出后跳到当前窗口边界，不再逐窗产出占位点。 | `gateway-core/src/pipeline/nodes.rs:21`、`:207-235` | 【有守护】`gateway-core/src/pipeline/edge/tests.rs:309-349` | 长时间离线或时钟前跳后，一次性产出海量点撑爆内存与下游。 |
 | I-25 | 聚合 flush 产物不得重新进入聚合缓冲（`process_flushed` 直通），但仍要经过后续死区/变化节点。 | `gateway-core/src/pipeline/edge.rs:150-159`、`gateway-core/src/pipeline/nodes.rs:165-173` | 【有守护】`gateway-core/src/pipeline/edge/tests.rs:238-308` | 同一聚合值每秒重复上报；或聚合值被死区静默吞掉。 |
@@ -83,7 +83,7 @@
 
 | 编号 | 不变量 | 代码依据 | 现有测试 / 守护用例 | 违反后的现场表现 |
 |---|---|---|---|---|
-| I-35 | Bad/Uncertain/Stale 点必须与 Good 点一样进入 DataQueue，失败点不得被队列层过滤。 | `gateway-core/src/pipeline/mod.rs:294-299`、`:351-353` | 【无（缺口）】仅有 Edge 层透传断言 `gateway-core/src/pipeline/edge/tests.rs:61-71`，无失败点落库断言 | 平台看不到设备离线；现场表现为「整条总线静默、队列却为空」。 |
+| I-35 | Bad/Uncertain/Stale 点必须与 Good 点一样进入 DataQueue，失败点不得被队列层过滤。 | `gateway-core/src/pipeline/mod.rs:294-299`、`:351-353` | 【有守护】端到端落库断言 `gateway-core/src/pipeline/mod.rs` 的 `failed_points_reach_queue`（另有 Edge 层透传断言 `edge/tests.rs:61-71`） | 平台看不到设备离线；现场表现为「整条总线静默、队列却为空」。 |
 | I-36 | 队列唯一键必须是 `(point_id, timestamp)`；重复行以 `ON CONFLICT DO NOTHING` 跳过（保留最早 id），不得计入 depth。 | `gateway-core/src/queue/storage/sqlite/db_init.rs:302-315`、`gateway-core/src/queue/storage/sqlite/limit.rs:376-381`、`:470-480` | 【有守护】`gateway-core/src/queue/tests.rs:331-365` | 重发/重放产生重复计费；队列深度指标虚高。 |
 | I-37 | 出队必须按 `id` 升序（入库顺序 FIFO），不得按 `timestamp`/`source_ts` 排序；`in_flight=1` 或 `delivered=1` 的行不得被再次选中。 | `gateway-core/src/queue/storage/sqlite/limit.rs:483-499` | 【有守护】`gateway-core/src/queue/tests.rs:23-48`、`:618-650` | 迟到的旧样本覆盖新值；已送达行重复上报。 |
 | I-38 | 容量淘汰只选 `in_flight=0` 的行，按 `timestamp ASC, id ASC` 删除；在途（待 ACK）行受保护。 | `gateway-core/src/queue/storage/sqlite/db_init.rs:239-247` | 【有守护】`gateway-core/src/queue/tests.rs:367-409` | 淘汰把正在发送的行删掉，ACK 失败后再也找不到原行。 |
@@ -114,7 +114,7 @@
 
 | 编号 | 不变量 | 代码依据 | 现有测试 / 守护用例 | 违反后的现场表现 |
 |---|---|---|---|---|
-| I-52 | 阶段顺序必须固定为：采集解码/换算 → 边缘（聚合/死区/变化）→ convert 模板 → 质量规则 → 虚拟点 → 广播/NorthFeed → 入队 → dispatcher → connector；MQTT 另从 DataQueue 出队。 | `gateway-core/src/pipeline/mod.rs:288-353` | 【无（缺口）】没有端到端顺序断言 | 任一阶段换序都会改变「哪些数据被过滤、虚拟点看到什么值」，且现象分散、难定位。 |
+| I-52 | 阶段顺序必须固定为：采集解码/换算 → 边缘（聚合/死区/变化）→ convert 模板 → 质量规则 → 虚拟点 → 广播/NorthFeed → 入队 → dispatcher → connector；MQTT 另从 DataQueue 出队。 | `gateway-core/src/pipeline/mod.rs:288-353` | 【有守护】`gateway-core/src/pipeline/mod.rs` 的 `stage_order_is_edge_then_convert_then_virtual`（用死区×换算的敏感场景锁定「边缘→换算→虚拟点」；质量规则段仍未单独断言） | 任一阶段换序都会改变「哪些数据被过滤、虚拟点看到什么值」，且现象分散、难定位。 |
 | I-53 | 非 Good 点不得进入边缘节点、convert、质量规则、虚拟点缓存；必须原样透传到广播/队列/北向。 | `gateway-core/src/pipeline/mod.rs:294-299`、`gateway-core/src/pipeline/edge.rs:128-130`、`gateway-core/src/pipeline/convert.rs:193-196`、`gateway-core/src/pipeline/quality_rules.rs:69-71`、`gateway-core/src/pipeline/virtual_point.rs:142-145` | 【有守护】`gateway-core/src/pipeline/edge/tests.rs:61-71`、`gateway-core/src/pipeline/convert.rs:458-473`、`gateway-core/src/pipeline/quality_rules.rs:277-295` | 故障样本被换算或质量规则「洗白」，平台丢失真实故障原因。 |
 | I-54 | 上游已判定的非 Good 质量与原因不得被后续阶段覆盖；convert 与质量规则只允许修改 Good 点。 | `gateway-core/src/pipeline/convert.rs:193-196`、`gateway-core/src/pipeline/quality_rules.rs:68-71` | 【有守护】`gateway-core/src/pipeline/convert.rs:458-473`、`gateway-core/src/pipeline/quality_rules.rs:277-295` | 第一个失败原因被第二个规则覆盖，现场按 reason 排查时指向错误模块。 |
 | I-55 | `value_text` 必须由 pipeline 的 convert 在入队前固化；北向优先读持久化值，缺失时才按当前规则回查，保证报文标签与历史查询同源。 | `gateway-core/src/pipeline/mod.rs:312`、`gateway-core/src/north/mqtt/payload.rs:105-127`、`:196-207` | 【有守护】`gateway-core/src/north/mqtt/payload/tests.rs:247-330` | 历史查询显示「运行」，MQTT 报文显示「故障」（或反之），同一时刻两种标签。 |
@@ -137,18 +137,18 @@
 | §2 换算与质量 | I-12 | 无公式失败回退 `scale*raw+offset` 的测试 |
 | §2 换算与质量 | I-19 | 无 rate 上值表容量/TTL 清理测试 |
 | §2 换算与质量 | I-20 | 无「质量规则不得产出 Stale」测试 |
-| §2 换算与质量 | I-22 | 无「死区/变化阈值作用于 convert 之前」测试 |
+| §2 换算与质量 | I-22 | 已补「死区作用于 convert 之前」断言（ROI-27 第一批，与 I-52 同一用例） |
 | §3 虚拟点 | I-30 | 无「虚拟点失败具体原因」断言 |
 | §3 虚拟点 | I-33 | 无 error 状态保留、删除规则状态清理、缓存不重置的测试 |
 | §3 虚拟点 | I-34 | 无禁用虚拟点不产出、状态为 disabled 的测试 |
-| §4 队列入队 | I-35 | 无「失败点也落库」端到端测试 |
+| §4 队列入队 | I-35 | 已补端到端「失败点也落库」测试（ROI-27 第一批） |
 | §4 队列入队 | I-40 | 无 `persist_failed` 与 SQLite 写失败关系的断言 |
 | §4 队列入队 | I-43 | 无 micro-batch 残留 flush 的测试 |
 | §5 北向分发 | I-48 | 无「顶层 ts=构建时刻」契约测试 |
-| §6 跨阶段 | I-52 | 无阶段顺序端到端断言 |
+| §6 跨阶段 | I-52 | 已补「边缘→换算→虚拟点」顺序断言（ROI-27 第一批）；质量规则段仍待补 |
 
 最值得优先补测的三条：
 
-1. I-52：阶段顺序一旦换序，过滤口径与虚拟点输入都会变，但现象分散到各下游，最难定位。
-2. I-10：`quality_reason` 仍未统一为 `<场景>:<稳定错误码>`，按冒号统计错因的脚本会把部分失败归入未知，且与新增的 `opcua_status_*` 规则并存。
-3. I-35：失败点「也落库」缺少端到端断言，I-08/I-56 的口径修正目前只验证到上报队列之前。
+1. I-10：`quality_reason` 仍未统一为 `<场景>:<稳定错误码>`，按冒号统计错因的脚本会把部分失败归入未知，且与新增的 `opcua_status_*` 规则并存。**这条是质量口径缺陷，需要先定编码表再补断言**（ROI-27 下一批）。
+2. I-52 → 已补（ROI-27 第一批）；质量规则段仍可单独加断言。
+3. I-35 → 已补（ROI-27 第一批）；剩余可补 I-40（`persist_failed` 与 SQLite 写失败）与 I-43（micro-batch 残留 flush）。
