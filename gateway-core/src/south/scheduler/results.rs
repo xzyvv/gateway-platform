@@ -13,6 +13,42 @@ use super::task::PointAction;
 use super::Scheduler;
 use crate::south::scheduler::DeviceState;
 
+/// I-08 / I-56（ROI-19）：把「采集返回 `Ok` 但质量非 Good」的点统一成失败点口径。
+///
+/// 旧实现把协议层构造的 `Ok+Bad` 点原样上送：`value=0`、`source_ts=0`（1970）、
+/// `stale_count=0`、`raw_type=none`，与 `Err` 路径（复用 last_good + 上次成功时刻）
+/// 字段语义完全分叉，平台会把「从没读到的 0」当成真实读数。
+///
+/// 统一后与 [`DataPoint::failed`] 完全一致：有 last_good 就复用其值与采集时刻并
+/// 标记 `raw_type=last_good`；从未成功过才保留 `none` / 0（I-06 的「无成功历史」语义）。
+/// 质量码与协议给出的 `quality_reason` 原样保留；仅当调用方已把 Good 降级
+/// （如非有限值）时补 `non_finite_value`。
+pub(crate) fn failed_from_ok(
+    dp: DataPoint,
+    point: &PointConfig,
+    last_good: Option<f64>,
+    last_good_ts: i64,
+    stale_count: u32,
+) -> DataPoint {
+    let was_good = dp.quality == Quality::Good;
+    let quality = if was_good { Quality::Bad } else { dp.quality };
+    let reason = if was_good && dp.quality_reason.is_empty() {
+        "non_finite_value".to_string()
+    } else {
+        dp.quality_reason
+    };
+    let device_id = point.device_id.clone().unwrap_or_else(|| point.bus.clone());
+    DataPoint::failed(
+        &point.id,
+        &device_id,
+        last_good,
+        last_good_ts,
+        quality,
+        &reason,
+        stale_count,
+    )
+}
+
 impl Scheduler {
     /// tracing: 采集结果处理 span（n=points.len()），tracing feature off 时 cfg_attr 剥离为零成本。
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self, points, results), fields(n = points.len())))]
@@ -46,30 +82,35 @@ impl Scheduler {
                 });
 
                 match result {
-                    Ok(mut dp) => {
-                        if dp.quality == Quality::Good {
-                            // NaN/Inf 检测：非法值降级为 Bad，避免污染下游
-                            if !DataPoint::is_value_valid(dp.value)
-                                || !DataPoint::is_value_valid(dp.raw_value)
-                            {
+                    Ok(dp) => {
+                        let finite = DataPoint::is_value_valid(dp.value)
+                            && DataPoint::is_value_valid(dp.raw_value);
+                        if dp.quality == Quality::Good && finite {
+                            state.record_success(dp.value);
+                            PointAction::Ok(dp)
+                        } else {
+                            if dp.quality == Quality::Good {
+                                // 正常点里混入 NaN/Inf：降级为 Bad（旧实现只改 quality，
+                                // 却把 NaN 留在 value 里继续下发）。
                                 tracing::warn!(
                                     "point {} produced non-finite value ({}), degrading",
                                     point.id,
                                     dp.value
                                 );
-                                dp.quality = Quality::Bad;
-                                state.record_failure();
-                            } else {
-                                state.record_success(dp.value);
                             }
-                        } else {
-                            // Bug D2: 采集成功但质量码非 Good（如解码失败返回 Ok+Bad）。
-                            // 原实现不更新 DeviceState → consecutive_failures 恒为 0 →
-                            // current_quality() 恒为 Good，点位在线统计虚高且永不进入退避。
-                            // 此处按失败计入，使设备状态与质量码保持一致。
+                            // Bug D2：采集成功但质量码非 Good（如解码失败返回 Ok+Bad）
+                            // 仍按失败计入设备状态，使退避与在线统计与质量码一致。
+                            // ROI-19：随后走与 `Err` 完全相同的失败点口径，
+                            // 复用 last_good 值/采集时刻，不再上送 value=0、source_ts=0。
                             state.record_failure();
+                            PointAction::Ok(failed_from_ok(
+                                dp,
+                                point,
+                                state.last_good_value,
+                                state.last_good_ts,
+                                state.stale_count,
+                            ))
                         }
-                        PointAction::Ok(dp)
                     }
                     Err(e) => {
                         state.record_failure();

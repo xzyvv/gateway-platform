@@ -826,3 +826,144 @@ fn collect_results_keeps_done_and_marks_pending_timeout() {
         "长度必须恒为 n"
     );
 }
+
+// =========================================================
+// ROI-19（I-08 / I-56）：失败点统一时间 / 值口径
+// =========================================================
+
+/// `Ok+Bad` 必须复用 last_good 的值与采集时刻，不能上送 value=0 / source_ts=0（1970）。
+#[test]
+fn roi19_ok_bad_reuses_last_good_and_keeps_reason() {
+    let p = point("p_bad", "b1", "0");
+    let bad = DataPoint::failed(
+        "p_bad",
+        "dev1",
+        None,
+        0,
+        Quality::Bad,
+        "modbus_decode_err",
+        0,
+    );
+    assert_eq!(bad.value, 0.0);
+    assert_eq!(bad.source_ts, 0);
+
+    let unified = super::results::failed_from_ok(bad, &p, Some(42.5), 1_700_000_000_000, 3);
+    assert_eq!(unified.value, 42.5, "必须复用上次成功值，不能上送 0");
+    assert_eq!(unified.raw_type, "last_good", "平台据此识别陈旧值");
+    assert_eq!(
+        unified.source_ts, 1_700_000_000_000,
+        "时间戳必须是上次成功时刻，不能是 1970"
+    );
+    assert_eq!(unified.stale_count, 3);
+    assert_eq!(unified.quality, Quality::Bad);
+    assert_eq!(
+        unified.quality_reason, "modbus_decode_err",
+        "协议给出的失败原因必须保留"
+    );
+}
+
+/// 从未成功过的点保持 I-06 的 `none` / 0 语义，不伪造 last_good。
+#[test]
+fn roi19_never_good_point_keeps_none_semantics() {
+    let p = point("p_never", "b1", "0");
+    let bad = DataPoint::failed(
+        "p_never",
+        "dev1",
+        None,
+        0,
+        Quality::Bad,
+        "modbus_no_result:OTHER",
+        0,
+    );
+    let unified = super::results::failed_from_ok(bad, &p, None, 0, 1);
+    assert_eq!(unified.value, 0.0);
+    assert_eq!(unified.raw_type, "none");
+    assert_eq!(unified.source_ts, 0);
+    assert_eq!(unified.stale_count, 1);
+}
+
+/// Uncertain 是协议级「可疑但可用」，不得被统一逻辑升级成 Bad。
+#[test]
+fn roi19_uncertain_quality_is_not_escalated_to_bad() {
+    let p = point("p_unc", "b1", "0");
+    let unc = DataPoint::good("p_unc", "dev1", 10.0, 10.0, "f64");
+    let unc = DataPoint {
+        quality: Quality::Uncertain,
+        quality_reason: "invalid_bcd".into(),
+        ..unc
+    };
+    let unified = super::results::failed_from_ok(unc, &p, Some(9.5), 1234, 2);
+    assert_eq!(unified.quality, Quality::Uncertain);
+    assert_eq!(unified.quality_reason, "invalid_bcd");
+    assert_eq!(unified.value, 9.5);
+}
+
+/// Good + NaN/Inf 降级后同样复用 last_good，且原因可辨识。
+#[test]
+fn roi19_non_finite_good_is_re_badged_with_reason() {
+    let p = point("p_nan", "b1", "0");
+    let mut nan = DataPoint::good("p_nan", "dev1", 1.0, 1.0, "f64");
+    nan.value = f64::NAN;
+    let unified = super::results::failed_from_ok(nan, &p, Some(8.0), 999, 1);
+    assert_eq!(unified.quality, Quality::Bad, "非有限值不得以 Good 下发");
+    assert_eq!(unified.quality_reason, "non_finite_value");
+    assert_eq!(unified.value, 8.0);
+}
+
+/// 端到端接线：`handle_results` 收到 `Ok+Bad` 后，进入上报链路的值必须是
+/// last_good（而非协议层填的 0），source_ts 也必须是上次成功时刻。
+#[tokio::test]
+async fn roi19_handle_results_unifies_ok_bad_before_pipeline() {
+    let metrics = Arc::new(Metrics::new());
+    let queue = Arc::new(
+        DataQueue::with_storage(Arc::new(MemoryStorage::new()) as Arc<dyn QueueStorage>)
+            .expect("build queue"),
+    );
+    let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
+        edge: Arc::new(EdgeProcessor::new()),
+        convert: crate::pipeline::ConvertEngine::empty(),
+        virtual_points: crate::pipeline::VirtualPointEngine::empty(),
+        queue: queue.clone(),
+        realtime_bus: None,
+        north_tx: None,
+        buffer: 8,
+        metrics: metrics.clone(),
+    });
+    let pts = vec![point("p_bad", "b1", "0")];
+    let scheduler = Arc::new(Scheduler::new(
+        HashMap::new(),
+        pts.clone(),
+        pipeline,
+        metrics,
+    ));
+
+    let last_good_ts = {
+        let mut states = scheduler.device_states.lock();
+        let st = states
+            .entry("p_bad".to_string())
+            .or_insert_with(|| DeviceState::new(Duration::from_secs(1)));
+        st.record_success(42.5);
+        st.last_good_ts
+    };
+    assert!(last_good_ts > 0);
+
+    let bad = DataPoint::failed("p_bad", "b1", None, 0, Quality::Bad, "modbus_decode_err", 0);
+    scheduler.handle_results(&pts, vec![Ok(bad)]).await;
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut items = Vec::new();
+    while items.is_empty() && Instant::now() < deadline {
+        items = queue.dequeue(10).await.expect("dequeue");
+        if items.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    assert_eq!(items.len(), 1, "失败点也必须进入上报链路");
+    let it = &items[0];
+    assert_eq!(it.value, 42.5, "上报值必须是 last_good，不是协议层的 0");
+    assert_eq!(it.source_ts, last_good_ts, "上报时间必须是上次成功时刻");
+    assert_eq!(it.raw_type, "last_good");
+    assert_eq!(it.stale_count, 1);
+    assert_eq!(it.quality, "bad");
+    assert_eq!(it.quality_reason, "modbus_decode_err");
+}
