@@ -294,7 +294,20 @@ pub(crate) fn parse_float(bytes: &[u8]) -> f64 {
 /// （iec101/iec104 的总召唤快照与本解析函数共用此一类型别名）
 pub(crate) type IoaDataMap = HashMap<u32, (f64, Quality, u64)>;
 
-/// 解析 ASDU，提取测量值写入 data_map
+/// ASDU 解码结果（IEC-R6/R7：让调用方能区分「没收到」与「收到了但解不了」）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsduDecode {
+    /// 全部信息体解析成功
+    Decoded,
+    /// 合法但无信息体（如对象数为 0）
+    Empty,
+    /// 不支持的类型标识
+    Unsupported(u8),
+    /// 报文在信息体中途被截断（含公共地址字段不足）
+    Truncated(u8),
+}
+
+/// 解析 ASDU，提取测量值写入 data_map（兼容旧调用，忽略解码失败细节）
 ///
 /// data_map 值三元组为 `(value, quality, source_ts_millis)`；`source_ts_millis`
 /// 仅对带 CP56Time2a 时标的类型（30/32/33/34）非 0，其余类型填 0（表示无时标）。
@@ -302,15 +315,28 @@ pub(crate) type IoaDataMap = HashMap<u32, (f64, Quality, u64)>;
 /// `addr_len` 为公共地址（CA）字节数（1 或 2，见 [`ca_len`]）；信息体地址（IOA）
 /// 恒为 3 字节，不受其影响。
 pub(crate) fn parse_asdu(asdu: &[u8], data_map: &mut IoaDataMap, addr_len: u8) {
+    let _ = parse_asdu_checked(asdu, data_map, addr_len);
+}
+
+/// 解析 ASDU 并返回解码结果，供需要「如实上报解码失败」的链路层使用
+///
+/// 已解析出的信息体即使后续截断也会写入 `data_map`；调用方可通过返回值区分：
+/// - [`AsduDecode::Unsupported`] / [`AsduDecode::Truncated`]：报文质量有问题；
+/// - [`AsduDecode::Empty`]：合法控制类/空报文，不算失败。
+pub(crate) fn parse_asdu_checked(
+    asdu: &[u8],
+    data_map: &mut IoaDataMap,
+    addr_len: u8,
+) -> AsduDecode {
     let header_len = 4 + ca_len(addr_len);
+    let type_id = asdu.first().copied().unwrap_or(0);
     if asdu.len() < header_len {
-        return;
+        return AsduDecode::Truncated(type_id);
     }
-    let type_id = asdu[0];
     let vsq = asdu[1];
     let num_objects = vsq & 0x7F;
     if num_objects == 0 {
-        return;
+        return AsduDecode::Empty;
     }
     // SQ 位（bit7）=1 时，只有第一个信息体包含 IOA（3 字节），
     // 后续信息体的 IOA 递增 1 且不带 IOA 字段。
@@ -319,6 +345,7 @@ pub(crate) fn parse_asdu(asdu: &[u8], data_map: &mut IoaDataMap, addr_len: u8) {
 
     let mut pos = header_len;
     let mut current_ioa: Option<u32> = None;
+    let mut decoded = 0usize;
     for _ in 0..num_objects {
         if sq {
             if current_ioa.is_none() {
@@ -474,9 +501,15 @@ pub(crate) fn parse_asdu(asdu: &[u8], data_map: &mut IoaDataMap, addr_len: u8) {
                 data_map.insert(ioa, (v, q, ts));
                 8
             }
-            _ => return,
+            _ => return AsduDecode::Unsupported(type_id),
         };
         pos += obj_len;
+        decoded += 1;
+    }
+    if decoded < num_objects as usize {
+        AsduDecode::Truncated(type_id)
+    } else {
+        AsduDecode::Decoded
     }
 }
 
@@ -486,6 +519,22 @@ pub(crate) fn asdu_cot(asdu: &[u8]) -> Option<u16> {
         return None;
     }
     Some(u16::from_le_bytes([asdu[2], asdu[3]]) & 0x3F)
+}
+
+/// 读取 ASDU 的公共地址（CA，按 `addr_len` 解 1/2 字节，小端）
+///
+/// 返回 `None` 表示 ASDU 头部不足（公共地址字段被截断）——调用方应视为解码失败，
+/// 而不是默认为本站数据。
+pub(crate) fn asdu_common_addr(asdu: &[u8], addr_len: u8) -> Option<u16> {
+    let ca = ca_len(addr_len);
+    if asdu.len() < 4 + ca {
+        return None;
+    }
+    Some(if ca == 1 {
+        asdu[4] as u16
+    } else {
+        u16::from_le_bytes([asdu[4], asdu[5]])
+    })
 }
 
 /// 判断 ASDU 是否为总召唤激活终止报文（类型 100 且 COT=激活终止）

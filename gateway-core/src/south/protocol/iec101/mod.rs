@@ -35,7 +35,9 @@ use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
 use crate::south::bus::BusManager;
 use crate::south::protocol::common::asdu::IoaDataMap;
-use crate::south::protocol::common::asdu::{is_interrogation_termination, parse_asdu};
+use crate::south::protocol::common::asdu::{
+    asdu_common_addr, asdu_cot, is_interrogation_termination, parse_asdu_checked, AsduDecode,
+};
 use crate::south::protocol::{
     clone_collector_error, convert_value, Collector, CollectorError, CollectorResult, ResultSlots,
 };
@@ -101,19 +103,41 @@ impl Iec101Collector {
 
         // 2. 总召唤
         let fcb = self.toggle_fcb();
+        let addr_len = self.bus.asdu_addr_len();
         let mut collected: IoaDataMap = HashMap::new();
+        let mut asdu_error: Option<CollectorError> = None;
         let resp = self
             .bus
-            .transaction(
-                interrogation(LINK_ADDR, ASDU_ADDR, fcb, self.bus.asdu_addr_len()),
-                None,
-            )
+            .transaction(interrogation(LINK_ADDR, ASDU_ADDR, fcb, addr_len), None)
             .await?;
-        // 部分设备对总召唤直接回数据帧（而非先 ACK），此处一并解析避免丢数据
-        if let Ok(Ft12Frame::Variable { asdu, .. }) = parse_frame(&resp) {
-            if !is_interrogation_termination(&asdu) {
-                parse_asdu(&asdu, &mut collected, self.bus.asdu_addr_len());
+        // 部分设备对总召唤直接回数据帧（而非先 ACK），此处一并解析避免丢数据。
+        // IEC-R6：只接受链路地址与公共地址都指向本站的帧；他站帧丢弃，
+        // 否则同网段内别的 RTU 的数据会被当成本站值。
+        match parse_frame(&resp) {
+            Ok(Ft12Frame::Variable { addr, asdu, .. }) => {
+                if addr != LINK_ADDR {
+                    tracing::debug!("iec101 丢弃链路地址 {addr} 的帧（本站 {LINK_ADDR}）");
+                } else if !is_interrogation_termination(&asdu) {
+                    match asdu_common_addr(&asdu, addr_len) {
+                        Some(ca) if ca == ASDU_ADDR => {
+                            if let Some(e) = ingest_asdu(&asdu, &mut collected, addr_len) {
+                                asdu_error.get_or_insert(e);
+                            }
+                        }
+                        Some(ca) => {
+                            tracing::debug!("iec101 丢弃公共地址 {ca} 的帧（本站 {ASDU_ADDR}）")
+                        }
+                        None => {
+                            asdu_error.get_or_insert(CollectorError::InvalidFrame(
+                                "iec101 ASDU 公共地址缺失/截断".into(),
+                            ));
+                        }
+                    }
+                }
             }
+            Ok(_) => {}
+            // 应答帧本身损坏（长度/起止符/校验和）：如实上报，不吞成 NoReply
+            Err(e) => return Err(e),
         }
 
         // 3. 轮询二级数据直至激活终止或无更多数据
@@ -132,12 +156,33 @@ impl Iec101Collector {
                 }
             };
             match parse_frame(&resp)? {
-                Ft12Frame::Variable { asdu, .. } => {
+                Ft12Frame::Variable { addr, asdu, .. } => {
+                    if addr != LINK_ADDR {
+                        tracing::debug!("iec101 丢弃链路地址 {addr} 的帧（本站 {LINK_ADDR}）");
+                        continue;
+                    }
+                    match asdu_common_addr(&asdu, addr_len) {
+                        Some(ca) if ca == ASDU_ADDR => {}
+                        Some(ca) => {
+                            tracing::debug!("iec101 丢弃公共地址 {ca} 的帧（本站 {ASDU_ADDR}）");
+                            continue;
+                        }
+                        None => {
+                            asdu_error.get_or_insert(CollectorError::InvalidFrame(
+                                "iec101 ASDU 公共地址缺失/截断".into(),
+                            ));
+                            continue;
+                        }
+                    }
                     if is_interrogation_termination(&asdu) {
                         break;
                     }
-                    parse_asdu(&asdu, &mut collected, self.bus.asdu_addr_len());
-                    got_data = true;
+                    match ingest_asdu(&asdu, &mut collected, addr_len) {
+                        None => got_data = true,
+                        Some(e) => {
+                            asdu_error.get_or_insert(e);
+                        }
+                    }
                 }
                 Ft12Frame::Ack => {
                     // 已收到数据后遇到空确认 → 本帧为数据结束；否则再试一次
@@ -145,12 +190,26 @@ impl Iec101Collector {
                         break;
                     }
                 }
-                Ft12Frame::Fixed { .. } => break,
+                Ft12Frame::Fixed { addr, .. } => {
+                    // 他站的固定帧不能终止本站轮询
+                    if addr == LINK_ADDR {
+                        break;
+                    }
+                }
             }
         }
 
         if collected.is_empty() {
-            return Err(CollectorError::NoReply);
+            // IEC-R7 / IEC-E2：收到了帧但解不出来（或从站明确拒绝），
+            // 与「没有任何应答」必须区分开
+            return Err(asdu_error.unwrap_or(CollectorError::NoReply));
+        }
+        if let Some(e) = asdu_error {
+            // 部分对象已解出：保留有效数据，但不能静默吞掉解码失败
+            tracing::warn!(
+                "iec101 部分 ASDU 处理失败（已保留 {} 个 IOA）：{e}",
+                collected.len()
+            );
         }
 
         let mut cache = self.data.lock().await;
@@ -182,6 +241,41 @@ impl Iec101Collector {
             }
             None => Err(CollectorError::NoReply),
         }
+    }
+}
+
+/// 控制 / 初始化类 ASDU（初始化结束 70，控制方向 100~107）。
+///
+/// 这类报文本来就不携带测量数据，出现在总召唤/轮询里属正常，不能算解码失败。
+fn is_control_asdu(type_id: u8) -> bool {
+    matches!(type_id, 70 | 100..=107)
+}
+
+/// 解析一个已确认属于本站的 ASDU。
+///
+/// 返回 `None` 表示本次收到了有效应答（含合法的空/控制类报文）；
+/// 返回 `Some(err)` 表示应上报的失败：
+/// - 从站否定确认 → [`CollectorError::DeviceRejected`]（IEC-E2，设备明确拒绝）；
+/// - 类型未实现 / 信息体截断 → [`CollectorError::InvalidFrame`]（IEC-R7，解码失败）。
+fn ingest_asdu(asdu: &[u8], collected: &mut IoaDataMap, addr_len: u8) -> Option<CollectorError> {
+    // COT 44~47 为否定确认（未知类型/原因/公共地址/IOA）：设备明确拒绝，
+    // 不能与「没有任何应答」混为一谈。
+    if let Some(cot) = asdu_cot(asdu) {
+        if (44..=47).contains(&cot) {
+            return Some(CollectorError::DeviceRejected(format!(
+                "iec101 从站否定确认（COT={cot}）"
+            )));
+        }
+    }
+    match parse_asdu_checked(asdu, collected, addr_len) {
+        AsduDecode::Decoded | AsduDecode::Empty => None,
+        AsduDecode::Unsupported(t) if is_control_asdu(t) => None,
+        AsduDecode::Unsupported(t) => Some(CollectorError::InvalidFrame(format!(
+            "iec101 ASDU 类型 {t} 未实现"
+        ))),
+        AsduDecode::Truncated(t) => Some(CollectorError::InvalidFrame(format!(
+            "iec101 ASDU 类型 {t} 信息体截断"
+        ))),
     }
 }
 

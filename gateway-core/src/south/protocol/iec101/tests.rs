@@ -161,8 +161,13 @@ fn ack() -> Vec<u8> {
 
 /// 构造测试用可变帧（含校验和），独立于生产构造逻辑。
 fn test_var_frame(asdu: &[u8]) -> Vec<u8> {
+    test_var_frame_with_link(asdu, 1)
+}
+
+/// 构造测试用可变帧，指定链路地址（用于模拟同网段他站报文）。
+fn test_var_frame_with_link(asdu: &[u8], link_addr: u8) -> Vec<u8> {
     let l = (2 + asdu.len()) as u8;
-    let mut body = vec![0x08u8, 1]; // 从站用户数据 + 链路地址
+    let mut body = vec![0x08u8, link_addr]; // 从站用户数据 + 链路地址
     body.extend_from_slice(asdu);
     let cs = body.iter().fold(0u8, |a, &b| a.wrapping_add(b));
     let mut f = vec![0x68, l, l, 0x68];
@@ -174,7 +179,13 @@ fn test_var_frame(asdu: &[u8]) -> Vec<u8> {
 
 /// 构造短浮点测量值 ASDU（类型 14，SQ=0，单对象，COT=20 响应站召唤）。
 fn float_asdu(ioa: u32, value: f32) -> Vec<u8> {
-    let mut a = vec![14u8, 0x01, 20, 0x00, 0x01, 0x00];
+    float_asdu_ca(ioa, value, 1)
+}
+
+/// 构造短浮点测量值 ASDU，指定公共地址（模拟他站 / 地址不一致）。
+fn float_asdu_ca(ioa: u32, value: f32, ca: u16) -> Vec<u8> {
+    let mut a = vec![14u8, 0x01, 20, 0x00];
+    a.extend_from_slice(&ca.to_le_bytes());
     a.extend_from_slice(&[ioa as u8, (ioa >> 8) as u8, (ioa >> 16) as u8]);
     a.extend_from_slice(&value.to_le_bytes());
     a.push(0x00); // 品质：Good
@@ -682,4 +693,182 @@ fn malformed_iec101_fixed_and_ack_frames_are_rejected() {
     ));
     // 未知起始字节
     assert!(parse_frame(&[0xFF, 0x00, 0x00, 0x00, 0x16]).is_err());
+}
+
+// ============================================================
+// ROI-22（IEC-R6 / IEC-R7 / IEC-E2）
+// 应答归属校验：链路地址 / 公共地址不符的帧不得填进本站缓存；
+// 解码失败必须如实报 InvalidFrame，不能吞成 NoReply。
+// ============================================================
+
+#[test]
+fn asdu_common_addr_handles_one_and_two_byte_ca() {
+    use crate::south::protocol::common::asdu::asdu_common_addr;
+    // 1 字节 CA：type, vsq, cot(2), ca
+    assert_eq!(asdu_common_addr(&[14, 1, 20, 0, 7], 1), Some(7));
+    // 2 字节 CA：低字节在前
+    assert_eq!(
+        asdu_common_addr(&[14, 1, 20, 0, 0x02, 0x01], 2),
+        Some(0x0102)
+    );
+    // 头部不足 → None（调用方必须视为解码失败）
+    assert_eq!(asdu_common_addr(&[14, 1, 20, 0, 0x02], 2), None);
+}
+
+/// 同网段他站（链路地址 != 1）的数据不得被当成本站值。
+#[tokio::test]
+async fn foreign_link_addr_frame_is_never_cached() {
+    let st = stub_state();
+    {
+        let mut g = st.lock().unwrap();
+        g.class2_queue
+            .push(test_var_frame_with_link(&float_asdu(100, 99.0), 2));
+        g.class2_queue.push(test_var_frame(&termination_asdu()));
+    }
+    let bus = spawn_bus(st);
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let err = c
+        .read(&point("p1", 100))
+        .await
+        .expect_err("他站数据不得被采信");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::NoReply),
+        "unexpected: {err:?}"
+    );
+}
+
+/// 链路地址相同但公共地址不同的帧（他站广播/串扰）同样不得采信。
+#[tokio::test]
+async fn foreign_common_addr_frame_is_never_cached() {
+    let st = stub_state();
+    {
+        let mut g = st.lock().unwrap();
+        g.class2_queue
+            .push(test_var_frame(&float_asdu_ca(100, 88.0, 2)));
+        g.class2_queue.push(test_var_frame(&termination_asdu()));
+    }
+    let bus = spawn_bus(st);
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let err = c
+        .read(&point("p1", 100))
+        .await
+        .expect_err("公共地址不符的数据不得被采信");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::NoReply),
+        "unexpected: {err:?}"
+    );
+}
+
+/// 他站帧只是噪声，不能覆盖本站已经解析出的值。
+#[tokio::test]
+async fn foreign_frame_does_not_overwrite_own_value() {
+    let st = stub_state();
+    {
+        let mut g = st.lock().unwrap();
+        g.class2_queue.push(test_var_frame(&float_asdu(100, 1.5)));
+        g.class2_queue
+            .push(test_var_frame_with_link(&float_asdu(100, 99.0), 2));
+        g.class2_queue
+            .push(test_var_frame(&float_asdu_ca(100, 88.0, 2)));
+        g.class2_queue.push(test_var_frame(&termination_asdu()));
+    }
+    let bus = spawn_bus(st);
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let dp = c.read(&point("p1", 100)).await.expect("read ok");
+    assert!(
+        (dp.raw_value - 1.5).abs() < 1e-6,
+        "本站值被他站帧覆盖: {}",
+        dp.raw_value
+    );
+}
+
+/// 总召唤应答里的他站帧同样要丢弃。
+#[tokio::test]
+async fn foreign_frame_in_interrogation_reply_is_ignored() {
+    let st = stub_state();
+    st.lock().unwrap().interrogation_reply = test_var_frame_with_link(&float_asdu(100, 77.0), 2);
+    let bus = spawn_bus(st);
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let err = c
+        .read(&point("p1", 100))
+        .await
+        .expect_err("总召唤应答中的他站帧不得采信");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::NoReply),
+        "unexpected: {err:?}"
+    );
+}
+
+/// 收到本站帧但类型未实现：必须报 InvalidFrame（可辨识的解码失败），不能是 NoReply。
+#[tokio::test]
+async fn unsupported_measurement_asdu_reports_invalid_frame() {
+    let st = stub_state();
+    {
+        let mut g = st.lock().unwrap();
+        // 类型 3 = 双点信息（本采集器未实现）
+        let mut asdu = vec![3u8, 0x01, 20, 0x00, 0x01, 0x00];
+        asdu.extend_from_slice(&[100, 0, 0, 0x00]);
+        g.class2_queue.push(test_var_frame(&asdu));
+        g.class2_queue.push(test_var_frame(&termination_asdu()));
+    }
+    let bus = spawn_bus(st);
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let err = c.read(&point("p1", 100)).await.expect_err("应报解码失败");
+    match err {
+        crate::south::protocol::CollectorError::InvalidFrame(msg) => {
+            assert!(msg.contains("类型 3"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 InvalidFrame，实际 {other:?}"),
+    }
+}
+
+/// 从站否定确认（COT 44~47）：应报 DeviceRejected，而不是 NoReply。
+#[tokio::test]
+async fn negative_confirmation_reports_device_rejected() {
+    let st = stub_state();
+    {
+        let mut g = st.lock().unwrap();
+        // 类型 100，COT=45（未知传送原因），CA=1
+        g.class2_queue
+            .push(test_var_frame(&[100u8, 0x01, 45, 0x00, 0x01, 0x00]));
+        g.class2_queue.push(test_var_frame(&termination_asdu()));
+    }
+    let bus = spawn_bus(st);
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let err = c.read(&point("p1", 100)).await.expect_err("应报设备拒绝");
+    match err {
+        crate::south::protocol::CollectorError::DeviceRejected(msg) => {
+            assert!(msg.contains("COT=45"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 DeviceRejected，实际 {other:?}"),
+    }
+}
+
+/// 本站帧但信息体被截断：同样报 InvalidFrame。
+#[tokio::test]
+async fn truncated_measurement_asdu_reports_invalid_frame() {
+    let st = stub_state();
+    {
+        let mut g = st.lock().unwrap();
+        let mut asdu = float_asdu(100, 1.5);
+        asdu.truncate(9); // 头部 6 + IOA 3，缺少 4 字节值与品质
+        g.class2_queue.push(test_var_frame(&asdu));
+        g.class2_queue.push(test_var_frame(&termination_asdu()));
+    }
+    let bus = spawn_bus(st);
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let err = c.read(&point("p1", 100)).await.expect_err("应报解码失败");
+    match err {
+        crate::south::protocol::CollectorError::InvalidFrame(msg) => {
+            assert!(msg.contains("截断"), "原因需可辨识: {msg}");
+        }
+        other => panic!("期望 InvalidFrame，实际 {other:?}"),
+    }
 }
