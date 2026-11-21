@@ -128,6 +128,7 @@ fn make_point_for_convert(
         byte_order: None,
         register_count: Some(1),
         interval: 1,
+        timeout_ms: None,
         scale,
         offset,
         formula,

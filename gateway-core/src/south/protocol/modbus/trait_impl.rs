@@ -108,7 +108,9 @@ impl Collector for ModbusCollector {
                 // Bug 186 (N16): single-point read uses _with_retry variant.
                 let slave = point.slave_id.unwrap_or(1);
                 let addr = point.address_num.unwrap_or(0);
-                let bits = self.read_coils_with_retry(slave, fc, addr, 1).await?;
+                let bits = self
+                    .read_coils_with_retry(slave, fc, addr, 1, point.timeout_ms)
+                    .await?;
                 let bit = bits.first().copied().unwrap_or(false);
                 let raw = if bit { 1.0 } else { 0.0 };
                 let value = convert_value(point, raw);
@@ -138,7 +140,7 @@ impl Collector for ModbusCollector {
             let addr = point.address_num.unwrap_or(0);
             // Bug 186 (N16): single-point read uses _with_retry variant.
             let regs = self
-                .read_registers_with_retry(slave, fc, addr, reg_count)
+                .read_registers_with_retry(slave, fc, addr, reg_count, point.timeout_ms)
                 .await?;
             Ok(parse_point_value(point, &regs, addr))
         })

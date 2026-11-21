@@ -288,8 +288,29 @@ impl BusManager {
         expected_count: Option<u16>,
         priority: BusPriority,
     ) -> Result<Vec<u8>, CollectorError> {
-        self.transaction_inner(request, expected_count, priority, true)
+        self.transaction_inner(request, expected_count, priority, true, None)
             .await
+    }
+
+    /// ROI-11：读路径带点位级超时的事务下发。
+    ///
+    /// `timeout_ms` 覆盖总线配置的单次尝试超时（含应答预算推导），但不会低于
+    /// 串口物理帧传输时间——1200 波特率下的大帧配置再小也要等帧传完。
+    /// 写路径不走本方法（写继续用总线超时，避免影响写入确定性）。
+    pub async fn transaction_with_timeout(
+        &self,
+        request: Vec<u8>,
+        expected_count: Option<u16>,
+        timeout_ms: Option<u64>,
+    ) -> Result<Vec<u8>, CollectorError> {
+        self.transaction_inner(
+            request,
+            expected_count,
+            BusPriority::Normal,
+            true,
+            timeout_ms,
+        )
+        .await
     }
 
     /// 禁止自动重发的事务下发（写路径专用）。
@@ -306,7 +327,7 @@ impl BusManager {
         expected_count: Option<u16>,
         priority: BusPriority,
     ) -> Result<Vec<u8>, CollectorError> {
-        self.transaction_inner(request, expected_count, priority, false)
+        self.transaction_inner(request, expected_count, priority, false, None)
             .await
     }
 
@@ -320,13 +341,16 @@ impl BusManager {
         expected_count: Option<u16>,
         priority: BusPriority,
         retry_allowed: bool,
+        timeout_override_ms: Option<u64>,
     ) -> Result<Vec<u8>, CollectorError> {
         let started = std::time::Instant::now();
         // 抓包 A 档：tx 在入队前记录（request 尚未被 move 进 BusTransaction）
         crate::south::frame_log::record(&self.name, true, &request, None);
         // P1-2：按帧长/波特率算出本次单次尝试的有效超时（串口读大块时可能大于配置值）。
         // 该值随事务下发，并用于下面推导应答预算，保证「调用方等待」不会先于「总线 task 收帧」。
-        let attempt_timeout = self.effective_attempt_timeout(&request, expected_count);
+        // ROI-11：点位级 timeout_ms 覆盖总线配置，物理帧时间仍是下限。
+        let attempt_timeout =
+            self.attempt_timeout_for(&request, expected_count, timeout_override_ms);
         let (resp_tx, resp_rx) = oneshot::channel();
         let msg = BusTransaction {
             request,
@@ -529,12 +553,20 @@ impl BusManager {
     ///
     /// 放大后的值会同时用于推导弹到 [`BusManager::transaction_with_priority`] 的
     /// 应答预算，否则调用方会先于总线 task 超时（重试成功的应答被丢弃，原 #107）。
-    pub(crate) fn effective_attempt_timeout(
+    /// ROI-11：按点位级覆盖值推导单次尝试超时。
+    ///
+    /// `override_ms` 替换配置基线，但串口「波特率 × 响应帧长」仍为下限，
+    /// 避免慢波特率大帧在物理上传完之前就被判超时。
+    pub(crate) fn attempt_timeout_for(
         &self,
         request: &[u8],
         expected_count: Option<u16>,
+        override_ms: Option<u64>,
     ) -> Duration {
-        let base = self.io_timeout();
+        let base = match override_ms {
+            Some(ms) => Duration::from_millis(ms),
+            None => self.io_timeout(),
+        };
         if !self.is_modbus {
             // 非 Modbus 协议：无法从请求字节反推响应帧长，维持配置超时
             return base;
@@ -550,7 +582,13 @@ impl BusManager {
         let bits_per_byte = if self.ascii_frame { 22 } else { 10 };
         let wire_ms = u64::from(bytes as u32) * bits_per_byte * 1000 / u64::from(baud);
         let need = Duration::from_millis(wire_ms.saturating_add(20));
-        let effective = base.max(need).min(Duration::from_secs(10));
+        // 配置区间已限制 ≤600s；显式点位超时不再套 10s 的防呆上限，
+        // 否则现场为慢表配置 30s 会被静默截短成 10s。
+        let cap = match override_ms {
+            Some(_) => Duration::from_secs(600),
+            None => Duration::from_secs(10),
+        };
+        let effective = base.max(need).min(cap);
         if effective > base {
             tracing::debug!(
                 bus = %self.name,

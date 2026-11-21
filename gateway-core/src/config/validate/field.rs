@@ -83,6 +83,20 @@ pub(crate) fn validate_non_zero_interval(interval: u64) -> Result<(), Validation
     }
 }
 
+/// ROI-11：点位级读超时范围校验（validator 对 `Option` 仅在 `Some` 时调用）。
+///
+/// `0` 等价于「发出即超时」，所有点位都会被判离线；超过 10 分钟的超时则通常意味着
+/// 配置贴错单位（秒/毫秒混淆）。两种情况都在加载/保存时 fail-fast。
+pub(crate) fn validate_optional_point_timeout(ms: u64) -> Result<(), ValidationError> {
+    if !(1..=600_000).contains(&ms) {
+        let mut err = ValidationError::new("timeout_ms_out_of_range");
+        err.message = Some("timeout_ms 必须在 1~600000 毫秒之间".into());
+        Err(err)
+    } else {
+        Ok(())
+    }
+}
+
 /// Bug 228: 显式配置 `scale = 0` 的 fail-fast 校验。
 ///
 /// 读路径 `convert_value` 为 `raw * scale + offset`，scale=0 时结果恒等于 `offset`——

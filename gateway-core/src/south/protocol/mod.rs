@@ -475,6 +475,33 @@ pub trait Collector: Send + Sync {
         Duration::from_millis(ms)
     }
 
+    /// ROI-11：按点位配置估算组级预算。
+    ///
+    /// 没有任何点位设置 `timeout_ms` 时与 [`Self::batch_timeout_budget`] 完全一致
+    /// （零配置零行为变化）；有配置时按点位累加 `max(1000, timeout_ms × 3)`
+    /// （覆盖默认 2 次重试），仍钳制在 [5s, 60s]。
+    ///
+    /// 这是**上界**：合并读取时多个点位共用一次事务，实际耗时会小于按点位累加；
+    /// 宁可为慢设备多等一会儿，也不能提前判组失败丢弃仍在回传的应答。
+    fn batch_timeout_budget_for(&self, points: &[PointConfig]) -> Duration {
+        const FALLBACK_MS: u64 = 1000;
+        const MIN_MS: u64 = 5_000;
+        const MAX_MS: u64 = 60_000;
+        if points.iter().all(|p| p.timeout_ms.is_none()) {
+            return self.batch_timeout_budget(points.len());
+        }
+        let ms = points
+            .iter()
+            .map(|p| {
+                p.timeout_ms
+                    .map(|t| t.saturating_mul(3).max(FALLBACK_MS))
+                    .unwrap_or(FALLBACK_MS)
+            })
+            .fold(0u64, |acc, v| acc.saturating_add(v))
+            .clamp(MIN_MS, MAX_MS);
+        Duration::from_millis(ms)
+    }
+
     /// 是否实现了真实协议诊断。
     ///
     /// 默认 `false`：协议未覆写 [`Collector::diag`] 时调用只能得到「未实现」提示。

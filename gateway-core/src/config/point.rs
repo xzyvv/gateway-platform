@@ -8,8 +8,8 @@ use validator::Validate;
 use crate::engine::model::{AggFn, ByteOrder, PointDataType};
 
 use super::{
-    validate_byte_order, validate_non_zero_interval, validate_protocol, validate_ratio,
-    validate_scale,
+    validate_byte_order, validate_non_zero_interval, validate_optional_point_timeout,
+    validate_protocol, validate_ratio, validate_scale,
 };
 
 /// 模板模式设备配置（§3.5）
@@ -128,6 +128,15 @@ pub struct PointConfig {
     #[validate(custom(function = "validate_non_zero_interval"))]
     #[ts(type = "number")]
     pub interval: u64,
+
+    /// 单点读超时（ms，1~600000）；None = 沿用总线 `timeout_ms`
+    ///
+    /// ROI-11：慢设备可单独放大，避免为了它把整条总线的超时全调大。
+    /// 串口物理帧传输时间仍是下限，配置过小不会低于该值。
+    #[serde(default)]
+    #[validate(custom(function = "validate_optional_point_timeout"))]
+    #[ts(type = "number")]
+    pub timeout_ms: Option<u64>,
 
     /// 倍率（formula 为空时使用）
     #[serde(default = "default_scale")]
@@ -283,6 +292,7 @@ impl Default for PointConfig {
             // 与 JSON 一致：interval 无 serde 缺省值（必填，且校验要求 >= 1），
             // 此处保留 0 以暴露"未显式赋值"，不擅自给合法值掩盖配置缺失。
             interval: 0,
+            timeout_ms: None,
             // 关键修复：缺省倍率必须为 1.0（原 derive 得到 0.0，会把采集值归零）
             scale: default_scale(),
             offset: default_offset(),

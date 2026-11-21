@@ -155,6 +155,8 @@ pub async fn create_point(
         byte_order: payload.byte_order,
         register_count: payload.register_count,
         interval: payload.interval,
+        // ROI-11: 点位级读超时，None = 沿用总线
+        timeout_ms: payload.timeout_ms,
         scale: payload.scale.unwrap_or(1.0),
         offset: payload.offset.unwrap_or(0.0),
         formula: payload.formula,
@@ -254,6 +256,8 @@ pub async fn update_point(
         p.byte_order = payload.byte_order.clone();
         p.register_count = payload.register_count;
         p.interval = payload.interval;
+        // ROI-11: PUT 整行覆盖，未传即回退为沿用总线超时
+        p.timeout_ms = payload.timeout_ms;
         if let Some(s) = payload.scale {
             p.scale = s;
         }
@@ -465,6 +469,14 @@ fn validate_point(payload: &PointPayload, cfg: &GatewayConfig) -> GatewayResult<
     }
     if payload.interval == 0 {
         return Err(GatewayError::Config("interval 必须大于 0".into()));
+    }
+    // ROI-11: 点位级读超时范围与 core 校验同源（1~600000 ms）
+    if let Some(ms) = payload.timeout_ms {
+        if !(1..=600_000).contains(&ms) {
+            return Err(GatewayError::Config(
+                "timeout_ms 必须在 1~600000 毫秒之间".into(),
+            ));
+        }
     }
     // 采集周期必须小于北向上报周期：与 update_point / validate_cycle_conflict 三处同源。
     // 旧实现硬编码 60s，与可配置的 mqtt.publish_interval 脱节，现按实际配置判定。

@@ -48,6 +48,7 @@ fn default_matches_serde_defaults() {
     assert_eq!(d.on_change, from_json.on_change, "on_change");
     assert_eq!(d.writable, from_json.writable, "writable");
     assert_eq!(d.device_id, from_json.device_id, "device_id");
+    assert_eq!(d.timeout_ms, from_json.timeout_ms, "timeout_ms");
     assert_eq!(d.data_id, from_json.data_id, "data_id");
     assert_eq!(d.data_type, from_json.data_type, "data_type");
     assert_eq!(d.byte_order, from_json.byte_order, "byte_order");
@@ -71,6 +72,32 @@ fn default_point_keeps_linear_pass_through() {
         raw,
         "缺省倍率下 raw*scale+offset 必须等于原始值"
     );
+}
+
+/// ROI-11：点位级读超时缺省为空（沿用总线），0 与超上限必须 fail-fast。
+#[test]
+fn point_timeout_ms_validation() {
+    use validator::Validate;
+    let p: PointConfig = serde_json::from_str(MINIMAL_JSON).expect("最小点位 JSON 应可反序列化");
+    assert_eq!(p.timeout_ms, None, "缺省必须为 None（沿用总线超时）");
+    p.validate().expect("缺省超时应通过校验");
+
+    for bad in [0u64, 600_001] {
+        let json = MINIMAL_JSON.replace(
+            "\"interval\": 1",
+            &format!("\"interval\": 1, \"timeout_ms\": {bad}"),
+        );
+        let p: PointConfig = serde_json::from_str(&json).expect("应可反序列化");
+        assert!(
+            p.validate().is_err(),
+            "timeout_ms={bad} 必须在校验阶段被拒绝"
+        );
+    }
+
+    let json = MINIMAL_JSON.replace("\"interval\": 1", "\"interval\": 1, \"timeout_ms\": 30000");
+    let p: PointConfig = serde_json::from_str(&json).expect("应可反序列化");
+    p.validate().expect("30s 属于合法区间");
+    assert_eq!(p.timeout_ms, Some(30_000));
 }
 
 /// Bug 228 回归：显式配置 `"scale": 0` 必须被校验 fail-fast 拒绝。

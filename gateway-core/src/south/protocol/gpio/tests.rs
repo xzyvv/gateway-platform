@@ -17,6 +17,7 @@ fn make_point(id: &str, address: &str, data_type: Option<&str>) -> PointConfig {
         byte_order: None,
         register_count: None,
         interval: 1,
+        timeout_ms: None,
         scale: 1.0,
         offset: 0.0,
         formula: None,

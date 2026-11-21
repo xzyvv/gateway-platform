@@ -233,6 +233,7 @@ mod tests {
             byte_order: None,
             register_count: None,
             interval: 5,
+            timeout_ms: None,
             scale: 1.0,
             offset: 0.0,
             formula: None,

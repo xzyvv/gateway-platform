@@ -72,6 +72,8 @@ pub(crate) struct PointPayload {
     pub(crate) byte_order: Option<String>,
     pub(crate) register_count: Option<u16>,
     pub(crate) interval: u64,
+    /// ROI-11: 单点读超时（ms）；None = 沿用总线 `timeout_ms`
+    pub(crate) timeout_ms: Option<u64>,
     pub(crate) scale: Option<f64>,
     pub(crate) offset: Option<f64>,
     /// 公式（优先于 scale+offset）

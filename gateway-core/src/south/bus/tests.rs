@@ -611,7 +611,7 @@ async fn adaptive_timeout_covers_frame_time_at_low_baud() {
 
     // 9600bps 下 255 字节 ≈ 265ms 线上时间，200ms 配置值必须被放大
     let read125 = vec![1u8, 0x03, 0, 0, 0, 125, 0, 0];
-    let adapted = bm.effective_attempt_timeout(&read125, Some(125));
+    let adapted = bm.attempt_timeout_for(&read125, Some(125), None);
     assert!(
         adapted >= std::time::Duration::from_millis(285),
         "9600bps 读 125 寄存器需要 ≥285ms 的收帧时间，实际 {adapted:?}"
@@ -620,15 +620,55 @@ async fn adaptive_timeout_covers_frame_time_at_low_baud() {
     // 小请求不受影响，仍用配置值
     let read2 = vec![1u8, 0x03, 0, 0, 0, 2, 0, 0];
     assert_eq!(
-        bm.effective_attempt_timeout(&read2, Some(2)),
+        bm.attempt_timeout_for(&read2, Some(2), None),
         std::time::Duration::from_millis(200)
     );
 
     // 写请求（无 expected_count）不放大
     let write = vec![1u8, 0x06, 0, 0, 0, 1, 0, 0];
     assert_eq!(
-        bm.effective_attempt_timeout(&write, None),
+        bm.attempt_timeout_for(&write, None, None),
         std::time::Duration::from_millis(200)
+    );
+    drop(bm);
+}
+
+/// ROI-11：点位级超时覆盖总线配置，但串口物理帧时间仍是下限。
+#[tokio::test]
+async fn point_timeout_override_keeps_wire_floor() {
+    let cfg = BusConfig {
+        port_name: "bus_roi11_override".into(),
+        tcp_addr: None,
+        baud_rate: 9600,
+        timeout_ms: 200,
+        ..Default::default()
+    };
+    let bm = BusManager::spawn_with(
+        &cfg,
+        None,
+        Arc::new(crate::engine::metrics::Metrics::new()),
+        BusDeps::production(),
+    );
+
+    // 小帧：覆盖值直接生效（800ms > 总线 200ms）
+    let read2 = vec![1u8, 0x03, 0, 0, 0, 2, 0, 0];
+    assert_eq!(
+        bm.attempt_timeout_for(&read2, Some(2), Some(800)),
+        std::time::Duration::from_millis(800)
+    );
+
+    // 大帧：覆盖值小于物理传输时间时，仍按「帧传完 + 20ms」托底
+    let read125 = vec![1u8, 0x03, 0, 0, 0, 125, 0, 0];
+    assert!(
+        bm.attempt_timeout_for(&read125, Some(125), Some(100))
+            >= std::time::Duration::from_millis(285),
+        "1200/9600bps 大帧不得因覆盖值过小而提前判超时"
+    );
+
+    // 覆盖值大于总线时不被 10s 防呆上限截断（慢表可配 30s）
+    assert_eq!(
+        bm.attempt_timeout_for(&read2, Some(2), Some(30_000)),
+        std::time::Duration::from_secs(30)
     );
     drop(bm);
 }
@@ -653,7 +693,7 @@ async fn adaptive_timeout_is_disabled_for_non_modbus_protocol() {
     );
     let fake_modbus_read = vec![0x68u8, 0x03, 0, 0, 0, 125, 0, 0];
     assert_eq!(
-        bm.effective_attempt_timeout(&fake_modbus_read, Some(125)),
+        bm.attempt_timeout_for(&fake_modbus_read, Some(125), None),
         std::time::Duration::from_millis(200),
         "非 Modbus 总线不得套用帧长估算"
     );

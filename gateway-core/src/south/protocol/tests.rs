@@ -68,6 +68,63 @@ async fn default_batch_timeout_budget_scales_and_clamps() {
     );
 }
 
+/// ROI-11：没有任何点位配置超时时，带点位预算必须与旧公式完全一致。
+#[tokio::test]
+async fn roi11_budget_without_point_timeout_matches_legacy() {
+    let c = SkeletonCollector::new("roi11_legacy", test_bus("roi11_legacy", 500));
+    let points: Vec<PointConfig> = (0..12)
+        .map(|i| PointConfig {
+            id: format!("p{i}"),
+            ..Default::default()
+        })
+        .collect();
+    assert_eq!(
+        c.batch_timeout_budget_for(&points),
+        c.batch_timeout_budget(points.len()),
+        "零配置时不得产生行为变化"
+    );
+}
+
+/// ROI-11：配置了超时后按点位累加 `max(1000, timeout×3)`，并受 [5s, 60s] 钳制。
+#[tokio::test]
+async fn roi11_budget_sums_configured_point_timeouts() {
+    let c = SkeletonCollector::new("roi11_sum", test_bus("roi11_sum", 500));
+    let points = vec![
+        PointConfig {
+            id: "slow".into(),
+            timeout_ms: Some(2_000),
+            ..Default::default()
+        },
+        PointConfig {
+            id: "fast".into(),
+            timeout_ms: Some(10),
+            ..Default::default()
+        },
+        PointConfig {
+            id: "inherit".into(),
+            ..Default::default()
+        },
+    ];
+    // 2000×3 = 6000；10×3 取 1000 下限；缺省 1000 → 8000
+    assert_eq!(
+        c.batch_timeout_budget_for(&points),
+        Duration::from_millis(8_000)
+    );
+
+    let huge: Vec<PointConfig> = (0..10)
+        .map(|i| PointConfig {
+            id: format!("h{i}"),
+            timeout_ms: Some(600_000),
+            ..Default::default()
+        })
+        .collect();
+    assert_eq!(
+        c.batch_timeout_budget_for(&huge),
+        Duration::from_secs(60),
+        "按点位累加后必须收敛到 60s 上限"
+    );
+}
+
 /// DLT645/CJT188 覆写：按 `总线 io_timeout × 3`（首试 + 2 次重试）× 点数估算，
 /// 上限 120s。500ms 总线上的 10 点位组应得 15s，而非硬编码的 5s。
 #[cfg(all(feature = "dlt645", feature = "cjt188"))]

@@ -86,7 +86,10 @@ impl Dlt645Collector {
         }
 
         let request = self.build_frame(&addr_bytes, 0x01, &data);
-        let response = self.bus.transaction(request, None).await?;
+        let response = self
+            .bus
+            .transaction_with_timeout(request, None, point.timeout_ms)
+            .await?;
 
         let resp_data = parse_dlt645_response(&response, &addr_bytes, self.version)?;
         if resp_data.len() < 4 {
@@ -210,6 +213,20 @@ impl Collector for Dlt645Collector {
             .saturating_mul(n_points.max(1) as u64)
             .clamp(min_ms, 120_000);
         Duration::from_millis(ms)
+    }
+
+    /// ROI-11：逐点串行读取时，按点位 `timeout_ms` 累加组预算。
+    fn batch_timeout_budget_for(&self, points: &[PointConfig]) -> Duration {
+        if points.iter().all(|p| p.timeout_ms.is_none()) {
+            return self.batch_timeout_budget(points.len());
+        }
+        let bus_ms = self.bus.io_timeout().as_millis() as u64;
+        let sum = points
+            .iter()
+            .map(|p| p.timeout_ms.unwrap_or(bus_ms).saturating_mul(3))
+            .fold(0u64, u64::saturating_add);
+        let min_ms = (self.bus.reply_deadline().as_millis() as u64).max(5_000);
+        Duration::from_millis(sum.clamp(min_ms, 120_000))
     }
 
     fn read<'a>(

@@ -17,6 +17,7 @@ fn make_point(id: &str, deadband: f64, on_change: bool) -> PointConfig {
         byte_order: None,
         register_count: Some(1),
         interval: 1,
+        timeout_ms: None,
         scale: 1.0,
         offset: 0.0,
         formula: None,

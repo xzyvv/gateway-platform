@@ -17,6 +17,18 @@ use super::{
 };
 use crate::south::protocol::ResultSlots;
 
+/// ROI-11：合并批次的分组键。
+///
+/// 点位级超时参与分组，保证不同超时的点位不会合进同一帧——否则只能取最大值，
+/// 让快点位为慢点位买单。`None` 表示沿用总线超时，全部落在同一组。
+pub(super) fn read_group_key(p: &PointConfig) -> (u8, u8, Option<u64>) {
+    (
+        p.slave_id.unwrap_or(1),
+        p.function_code.unwrap_or(3),
+        p.timeout_ms,
+    )
+}
+
 impl ModbusCollector {
     // Bug 186 (N16): single-point read uses _with_retry variant.
     /// 在 bootstrap 阶段调用；调用后所有 read/write 路径上的 ModbusException
@@ -66,13 +78,19 @@ impl ModbusCollector {
         fc: u8,
         start_addr: u16,
         count: u16,
+        timeout_ms: Option<u64>,
     ) -> CollectorResult<Vec<u16>> {
         let request = build_read_request(slave, fc, start_addr, count);
         // 关键：异常响应是「从站正常应答的一帧」，由 parse_read_response 识别，
         // 而不是 bus.transaction 的 Err。原实现只匹配 `Err(ModbusException)`，
         // 于是异常码永远进不了重试/计数分支（Bug 186 的「可恢复异常重试一次」
         // 实际是死代码）。这里把「事务结果 + 解帧结果」先合并，再统一分类。
-        let first = match self.bus.transaction(request.clone(), Some(count)).await {
+        // ROI-11：点位级超时随事务下发（None = 沿用总线配置）。
+        let first = match self
+            .bus
+            .transaction_with_timeout(request.clone(), Some(count), timeout_ms)
+            .await
+        {
             Ok(resp) => parse_read_response(slave, fc, count, &resp),
             Err(e) => Err(e),
         };
@@ -105,7 +123,11 @@ impl ModbusCollector {
             // 删任意一层都会丢失对应场景的重试能力。最坏耗时为
             // 「首次往返 + 一次完整 bus 重试预算(3T+400ms)」，可接受，故保持现状。
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let second = match self.bus.transaction(request, Some(count)).await {
+            let second = match self
+                .bus
+                .transaction_with_timeout(request, Some(count), timeout_ms)
+                .await
+            {
                 Ok(resp) => parse_read_response(slave, fc, count, &resp),
                 Err(e) => Err(e),
             };
@@ -142,6 +164,7 @@ impl ModbusCollector {
         fc: u8,
         start_addr: u16,
         count: u16,
+        timeout_ms: Option<u64>,
     ) -> CollectorResult<Vec<bool>> {
         let request = build_read_request(slave, fc, start_addr, count);
         // 同 read_registers_with_retry：异常帧由 parse_coils_response 识别，
@@ -149,7 +172,11 @@ impl ModbusCollector {
         // 修复(R-3)：线圈读同样传 expected_count —— FC01/02 的期望字节数是
         // ceil(count/8)（frames.rs 的 C-3 修复已区分位/寄存器两种公式），
         // 传 None 会让定帧失去字节数校验，脏数据下可能把本帧与后续噪声粘连。
-        let first = match self.bus.transaction(request.clone(), Some(count)).await {
+        let first = match self
+            .bus
+            .transaction_with_timeout(request.clone(), Some(count), timeout_ms)
+            .await
+        {
             Ok(resp) => parse_coils_response(slave, fc, count, &resp),
             Err(e) => Err(e),
         };
@@ -174,7 +201,11 @@ impl ModbusCollector {
                 label, fc, slave, start_addr, count, exc.description()
             );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let second = match self.bus.transaction(request, Some(count)).await {
+            let second = match self
+                .bus
+                .transaction_with_timeout(request, Some(count), timeout_ms)
+                .await
+            {
                 Ok(resp) => parse_coils_response(slave, fc, count, &resp),
                 Err(e) => Err(e),
             };
@@ -239,17 +270,19 @@ impl ModbusCollector {
         // 决策表 #3：按观测自适应 gap
         // （保守：仅调 gap，不调 max_count；max_count 为 Modbus 协议上限）
         let adaptive_gap = self.merge_stats.lock().next_gap();
-        // 按 (slave_id, function_code) 分组
-        let mut groups: HashMap<(u8, u8), Vec<&PointConfig>> = HashMap::new();
+        // 按 (slave_id, function_code, 点位级超时) 分组
+        //
+        // ROI-11：超时也作为分组键——不同超时的点位不再合进同一帧，
+        // 否则只能被迫取最大值，让快点位为慢点位买单。未配置超时的点位
+        // 全部落在 None 组，行为与改动前完全一致。
+        let mut groups: HashMap<(u8, u8, Option<u64>), Vec<&PointConfig>> = HashMap::new();
         for p in points {
-            let slave = p.slave_id.unwrap_or(1);
-            let fc = p.function_code.unwrap_or(3);
-            groups.entry((slave, fc)).or_default().push(p);
+            groups.entry(read_group_key(p)).or_default().push(p);
         }
 
         let mut results: HashMap<String, DataPoint> = HashMap::new();
 
-        for ((slave, fc), mut group) in groups {
+        for ((slave, fc, timeout_ms), mut group) in groups {
             group.sort_by_key(|p| p.address_num.unwrap_or(0));
 
             if fc == 1 || fc == 2 {
@@ -271,7 +304,13 @@ impl ModbusCollector {
                         let _permit = sem.acquire().await;
                         // Bug 186 (N16): use _with_retry variant on batch read path.
                         let res = self
-                            .read_coils_with_retry(slave, fc, batch.start_addr, batch.count)
+                            .read_coils_with_retry(
+                                slave,
+                                fc,
+                                batch.start_addr,
+                                batch.count,
+                                timeout_ms,
+                            )
                             .await;
                         (batch, res)
                     }
@@ -345,7 +384,13 @@ impl ModbusCollector {
                         let _permit = sem.acquire().await;
                         // Bug 186 (N16): use _with_retry variant on batch read path.
                         let res = self
-                            .read_registers_with_retry(slave, fc, batch.start_addr, batch.count)
+                            .read_registers_with_retry(
+                                slave,
+                                fc,
+                                batch.start_addr,
+                                batch.count,
+                                timeout_ms,
+                            )
                             .await;
                         (batch, res)
                     }

@@ -16,6 +16,7 @@ fn payload_with_scale(scale: Option<f64>) -> PointPayload {
         byte_order: None,
         register_count: None,
         interval: 10,
+        timeout_ms: None,
         scale,
         offset: None,
         formula: None,

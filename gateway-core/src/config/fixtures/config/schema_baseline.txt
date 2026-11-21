@@ -11,6 +11,7 @@ BusConfig.data_bits = integer
 BusConfig.de_pin = integer|null
 BusConfig.dlt645_version = string
 BusConfig.modbus_mode = string
+BusConfig.opcua = OpcUaClientConfig
 BusConfig.parity = string
 BusConfig.port_name = string
 BusConfig.protocol = string
@@ -116,6 +117,7 @@ GatewayConfig.ntp = NtpConfig
 GatewayConfig.opcua = OpcuaConfig
 GatewayConfig.point_trash = array|null
 GatewayConfig.points = array
+GatewayConfig.queue = QueueConfig
 GatewayConfig.schema_version = integer
 GatewayConfig.self_heal = SelfHealConfig
 GatewayConfig.sim_consumer = SimConsumerConfig
@@ -137,6 +139,7 @@ ModbusServerConfig.base_register = integer
 ModbusServerConfig.enabled = boolean
 ModbusServerConfig.endpoint = string
 ModbusServerConfig.mode = string
+ModbusServerConfig.write_enabled = boolean
 MqttConfig.ack_timeout_secs = integer|null
 MqttConfig.broker = string
 MqttConfig.compression = null|string
@@ -148,6 +151,7 @@ MqttConfig.payload_template = null|string
 MqttConfig.publish_interval = integer
 MqttConfig.qos = integer
 MqttConfig.reconnect_backoff = ReconnectBackoffConfig
+MqttConfig.report_mode = ReportMode
 MqttConfig.resume_rate_limit = integer|null
 MqttConfig.tls = MqttTlsConfig
 MqttConfig.topic = string
@@ -156,9 +160,26 @@ MqttTlsConfig.ca_cert_path = null|string
 MqttTlsConfig.insecure_skip_verify = boolean
 NtpConfig.server = string
 NtpConfig.sync_interval = integer
+OpcUaClientConfig.auth = string
+OpcUaClientConfig.client_cert_path = null|string
+OpcUaClientConfig.client_key_path = null|string
+OpcUaClientConfig.password = null|string
+OpcUaClientConfig.security_mode = string
+OpcUaClientConfig.security_policy = string
+OpcUaClientConfig.trust_server_certs = boolean
+OpcUaClientConfig.username = null|string
 OpcuaConfig.allow_anonymous = boolean
+OpcuaConfig.cert_path = null|string
 OpcuaConfig.enabled = boolean
 OpcuaConfig.endpoint = string
+OpcuaConfig.key_path = null|string
+OpcuaConfig.trust_client_certs = boolean
+OpcuaConfig.users = array
+OpcuaConfig.write_enabled = boolean
+OpcuaUserConfig#required password
+OpcuaUserConfig#required username
+OpcuaUserConfig.password = string
+OpcuaUserConfig.username = string
 PointConfig#required address
 PointConfig#required bus
 PointConfig#required id
@@ -189,12 +210,16 @@ PointConfig.pt_ratio = null|number
 PointConfig.register_count = integer|null
 PointConfig.scale = number
 PointConfig.slave_id = integer|null
+PointConfig.timeout_ms = integer|null
 PointConfig.unit = null|string
 PointConfig.writable = boolean
+PointConfig.write_max = null|number
+PointConfig.write_min = null|number
 PointTrashEntry#required deleted_at_ms
 PointTrashEntry#required point
 PointTrashEntry.deleted_at_ms = integer
 PointTrashEntry.point = PointConfig
+QueueConfig.max_rows = integer
 Quota.max_points = integer|null
 Quota.max_protocols = integer|null
 Quota.northbound_channels = integer|null
@@ -237,13 +262,17 @@ WebConfig.allow_anon_read = boolean
 WebConfig.allow_default_token = boolean
 WebConfig.api_token = string
 WebConfig.cors_origins = array|null
+WebConfig.demo_replay_sessions = boolean
 WebConfig.listen_addr = string
 WebConfig.ota_signing_key = null|string
 WebConfig.password_hash = string
 WebConfig.rate_limit_per_sec = integer|null
 WebConfig.realtime_buffer = integer
+WebConfig.realtime_max_subscribers = integer
 WebConfig.username = string
 WebConfig.users = array
+WebConfig.webhook_test_allow_hosts = array
+WebConfig.webhook_test_block_private = boolean
 WebUser#required created_at
 WebUser#required display_name
 WebUser#required id

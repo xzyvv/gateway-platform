@@ -391,6 +391,7 @@ impl TemplateManager {
                 byte_order: template.default_byte_order.clone(),
                 register_count: pt.register_count,
                 interval,
+                timeout_ms: None,
                 scale: pt.scale,
                 offset: pt.offset,
                 formula: pt.formula.clone(),

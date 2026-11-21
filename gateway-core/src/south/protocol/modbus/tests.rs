@@ -554,7 +554,7 @@ async fn coil_read_with_expected_count_parses_valid_response() {
     let c = super::ModbusCollector::new("modbus_coil_read", modbus_tcp_bus(addr, 1000));
 
     let coils = c
-        .read_coils_with_retry(1, 0x01, 0, 16)
+        .read_coils_with_retry(1, 0x01, 0, 16, None)
         .await
         .expect("合法 FC01 响应应解析成功");
     assert_eq!(coils.len(), 16);
@@ -1201,4 +1201,46 @@ fn read_roundtrip_covers_coil_and_register_length_formulas() {
             n as usize
         );
     }
+}
+
+/// ROI-11：点位级超时参与合并分组键。
+///
+/// 不同超时的点位必须落在不同子组，否则只能退化为取最大值；
+/// 相同超时（含同为 None）仍可正常合帧。
+#[test]
+fn roi11_read_group_key_separates_different_timeouts() {
+    use crate::config::PointConfig;
+
+    let point = |slave_id: u8, timeout_ms: Option<u64>| PointConfig {
+        slave_id: Some(slave_id),
+        function_code: Some(3),
+        timeout_ms,
+        ..Default::default()
+    };
+
+    // None 表示沿用总线超时，单独成组
+    assert_eq!(
+        super::collector::read_group_key(&point(2, None)),
+        (2, 3, None)
+    );
+    // 配置了超时后与默认组分离
+    assert_ne!(
+        super::collector::read_group_key(&point(2, None)),
+        super::collector::read_group_key(&point(2, Some(500)))
+    );
+    // 超时值不同则分组不同
+    assert_ne!(
+        super::collector::read_group_key(&point(2, Some(500))),
+        super::collector::read_group_key(&point(2, Some(2000)))
+    );
+    // 从站相同、超时相同仍可合帧
+    assert_eq!(
+        super::collector::read_group_key(&point(2, Some(500))),
+        super::collector::read_group_key(&point(2, Some(500)))
+    );
+    // 从站仍是分组维度
+    assert_ne!(
+        super::collector::read_group_key(&point(2, Some(500))),
+        super::collector::read_group_key(&point(3, Some(500)))
+    );
 }

@@ -127,7 +127,7 @@ impl Scheduler {
         let record_bus = bus_name.to_string();
         // 修复(审查#B2)：组级读超时预算按「点位数 × 单点预算」自适应，
         // 不再硬编码 5s（原实现对逐点串行的 DLT645/CJT188 大组必然误判超时）。
-        let group_timeout = collector.batch_timeout_budget(points.len());
+        let group_timeout = collector.batch_timeout_budget_for(&points);
         // 优化：Arc 包裹后闭包内只 clone Arc（引用计数），避免每采集周期深拷贝 Vec<PointConfig>
         let points = Arc::new(points);
         // ROI-07（R-3）：逐点「上次尝试时刻」。
