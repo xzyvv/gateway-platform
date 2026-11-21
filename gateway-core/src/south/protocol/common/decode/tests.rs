@@ -141,6 +141,8 @@ fn make_point_for_convert(
         pt_ratio: pt,
         modbus_register: None,
         writable: false,
+        write_min: None,
+        write_max: None,
     }
 }
 

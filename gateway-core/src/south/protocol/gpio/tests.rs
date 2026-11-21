@@ -30,6 +30,8 @@ fn make_point(id: &str, address: &str, data_type: Option<&str>) -> PointConfig {
         alarm_low: None,
         modbus_register: None,
         writable: false,
+        write_min: None,
+        write_max: None,
     }
 }
 

@@ -30,6 +30,8 @@ fn make_point(id: &str, deadband: f64, on_change: bool) -> PointConfig {
         alarm_low: None,
         modbus_register: None,
         writable: false,
+        write_min: None,
+        write_max: None,
     }
 }
 

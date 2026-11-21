@@ -165,3 +165,53 @@ fn trash_entry_roundtrip() {
     assert_eq!(entry.point.id, "p1");
     assert_eq!(entry.deleted_at_ms, 1_700_000_000_000);
 }
+
+// ---------- ROI-06（W-1）：写入值域校验 ----------
+
+/// 未配置上下限时一律放行（兼容存量配置）。
+#[test]
+fn write_range_unbounded_by_default() {
+    let p = PointConfig::default();
+    assert_eq!(p.write_range_error(1e9), None);
+    assert_eq!(p.write_range_error(-1e9), None);
+}
+
+/// 越界必须拒绝，且消息里带完整范围，便于现场直接看到该改到多少。
+#[test]
+fn write_range_rejects_out_of_bounds() {
+    let mut p = PointConfig::default();
+    p.id = "p1".into();
+    p.write_min = Some(0.0);
+    p.write_max = Some(1000.0);
+
+    // 闭区间：两端点合法
+    assert_eq!(p.write_range_error(0.0), None);
+    assert_eq!(p.write_range_error(1000.0), None);
+    assert_eq!(p.write_range_error(500.0), None);
+
+    let low = p.write_range_error(-1.0).expect("低于下限必须拒绝");
+    assert!(low.contains("下限"), "{low}");
+    assert!(low.contains("[0, 1000]"), "{low}");
+
+    let high = p.write_range_error(3000.0).expect("高于上限必须拒绝");
+    assert!(high.contains("上限"), "{high}");
+    assert!(high.contains("[0, 1000]"), "{high}");
+}
+
+/// 只配置一侧时，另一侧不限制。
+#[test]
+fn write_range_supports_single_side() {
+    let mut p = PointConfig::default();
+    p.write_min = Some(10.0);
+    assert_eq!(p.write_range_error(1e6), None);
+    assert!(p.write_range_error(9.9).is_some());
+}
+
+/// NaN / inf 即使没配上下限也必须拒绝：否则会原样编码成非法寄存器值下发。
+#[test]
+fn write_range_rejects_non_finite() {
+    let p = PointConfig::default();
+    assert!(p.write_range_error(f64::NAN).is_some());
+    assert!(p.write_range_error(f64::INFINITY).is_some());
+    assert!(p.write_range_error(f64::NEG_INFINITY).is_some());
+}

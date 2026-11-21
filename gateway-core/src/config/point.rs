@@ -184,6 +184,57 @@ pub struct PointConfig {
     /// 工业现场默认拒绝写入，避免未授权的任意寄存器被误写。
     #[serde(default)]
     pub writable: bool,
+
+    /// ROI-06（W-1）：写入下限（含），None=不限制。
+    ///
+    /// 仅对 `writable=true` 的点位生效：写入值小于下限时按 `WRITE_OUT_OF_RANGE`
+    /// 拒绝，**不会下发到设备**。用于防止上位机手滑把设定值写到物理不可行区间。
+    #[serde(default)]
+    #[ts(optional)]
+    pub write_min: Option<f64>,
+
+    /// ROI-06（W-1）：写入上限（含），None=不限制。
+    #[serde(default)]
+    #[ts(optional)]
+    pub write_max: Option<f64>,
+}
+
+impl PointConfig {
+    /// ROI-06（W-1）：校验写入值是否落在 `[write_min, write_max]` 内。
+    ///
+    /// 返回 `None` 表示通过；返回 `Some(原因)` 表示必须拒绝写入。
+    /// 上下限均为闭区间，未配置的一侧不限制；值必须是有限数值。
+    ///
+    /// 为什么不限幅：限幅会悄悄改写用户意图（写 3000 实际写 1000），
+    /// 现场表现为「我明明写了却没生效」，比直接报错更难排查。
+    pub fn write_range_error(&self, value: f64) -> Option<String> {
+        if !value.is_finite() {
+            return Some(format!("写入值 {value} 非法：必须是有限数值"));
+        }
+        if let Some(min) = self.write_min {
+            if value < min {
+                return Some(format!(
+                    "写入值 {value} 低于点位 {} 允许下限 {min}{}",
+                    self.id,
+                    self.write_max
+                        .map(|max| format!("（允许范围 [{min}, {max}]）"))
+                        .unwrap_or_default()
+                ));
+            }
+        }
+        if let Some(max) = self.write_max {
+            if value > max {
+                return Some(format!(
+                    "写入值 {value} 高于点位 {} 允许上限 {max}{}",
+                    self.id,
+                    self.write_min
+                        .map(|min| format!("（允许范围 [{min}, {max}]）"))
+                        .unwrap_or_default()
+                ));
+            }
+        }
+        None
+    }
 }
 
 /// 点位回收站条目（软删除）。
@@ -246,6 +297,8 @@ impl Default for PointConfig {
             aggregation: None,
             modbus_register: None,
             writable: false,
+            write_min: None,
+            write_max: None,
         }
     }
 }

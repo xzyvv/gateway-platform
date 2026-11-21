@@ -413,6 +413,9 @@ impl TemplateManager {
                 // 未配置 id 的设备仍保持 None（由下游回退到 bus 名）。
                 device_id: Some(device.id.clone()).filter(|s| !s.is_empty()),
                 writable: false,
+                // ROI-06：模板展开不预设写入范围，由现场按需补充
+                write_min: None,
+                write_max: None,
             };
             points.push(point);
         }

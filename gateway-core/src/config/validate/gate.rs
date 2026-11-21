@@ -413,6 +413,18 @@ impl GatewayConfig {
                     }
                 }
             }
+            // ROI-06（W-1）：写入上下限必须构成有效闭区间，否则所有写请求都会被拒。
+            // 两个字段互相依赖，字段级校验拿不到对方，只能放在结构级。
+            if let (Some(min), Some(max)) = (p.write_min, p.write_max) {
+                if !min.is_finite() || !max.is_finite() {
+                    errs.push(format!("point '{}' 写入上下限必须是有限数值", p.id));
+                } else if min > max {
+                    errs.push(format!(
+                        "point '{}' 写入范围非法：write_min {} > write_max {}",
+                        p.id, min, max
+                    ));
+                }
+            }
         }
 
         // 总线统一变体字段校验（决策表 #24）：取值按 protocol 限定。
