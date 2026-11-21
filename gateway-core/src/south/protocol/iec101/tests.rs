@@ -803,9 +803,9 @@ async fn foreign_frame_in_interrogation_reply_is_ignored() {
     );
 }
 
-/// 收到本站帧但类型未实现：必须报 InvalidFrame（可辨识的解码失败），不能是 NoReply。
+/// 收到本站帧但类型未实现：必须报 Unsupported（可辨识的能力不支持），不能是 NoReply。
 #[tokio::test]
-async fn unsupported_measurement_asdu_reports_invalid_frame() {
+async fn unsupported_measurement_asdu_reports_unsupported() {
     let st = stub_state();
     {
         let mut g = st.lock().unwrap();
@@ -818,12 +818,12 @@ async fn unsupported_measurement_asdu_reports_invalid_frame() {
     let bus = spawn_bus(st);
     let c = Iec101Collector::new("iec101-bus", bus);
 
-    let err = c.read(&point("p1", 100)).await.expect_err("应报解码失败");
+    let err = c.read(&point("p1", 100)).await.expect_err("应报不支持");
     match err {
-        crate::south::protocol::CollectorError::InvalidFrame(msg) => {
+        crate::south::protocol::CollectorError::Unsupported(msg) => {
             assert!(msg.contains("类型 3"), "原因需可辨识: {msg}");
         }
-        other => panic!("期望 InvalidFrame，实际 {other:?}"),
+        other => panic!("期望 Unsupported，实际 {other:?}"),
     }
 }
 

@@ -256,7 +256,8 @@ fn is_control_asdu(type_id: u8) -> bool {
 /// 返回 `None` 表示本次收到了有效应答（含合法的空/控制类报文）；
 /// 返回 `Some(err)` 表示应上报的失败：
 /// - 从站否定确认 → [`CollectorError::DeviceRejected`]（IEC-E2，设备明确拒绝）；
-/// - 类型未实现 / 信息体截断 → [`CollectorError::InvalidFrame`]（IEC-R7，解码失败）。
+/// - 类型未实现 → [`CollectorError::Unsupported`]（IEC-E2，能力不支持）；
+/// - 信息体截断 → [`CollectorError::InvalidFrame`]（IEC-R7，解码失败）。
 fn ingest_asdu(asdu: &[u8], collected: &mut IoaDataMap, addr_len: u8) -> Option<CollectorError> {
     // COT 44~47 为否定确认（未知类型/原因/公共地址/IOA）：设备明确拒绝，
     // 不能与「没有任何应答」混为一谈。
@@ -270,7 +271,7 @@ fn ingest_asdu(asdu: &[u8], collected: &mut IoaDataMap, addr_len: u8) -> Option<
     match parse_asdu_checked(asdu, collected, addr_len) {
         AsduDecode::Decoded | AsduDecode::Empty => None,
         AsduDecode::Unsupported(t) if is_control_asdu(t) => None,
-        AsduDecode::Unsupported(t) => Some(CollectorError::InvalidFrame(format!(
+        AsduDecode::Unsupported(t) => Some(CollectorError::Unsupported(format!(
             "iec101 ASDU 类型 {t} 未实现"
         ))),
         AsduDecode::Truncated(t) => Some(CollectorError::InvalidFrame(format!(
