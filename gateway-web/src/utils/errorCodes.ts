@@ -48,6 +48,8 @@ export const ERR = {
   DUPLICATE_ID: 4009,
   /** 资源状态冲突（HTTP 409）：如模拟消费者已在运行、MQTT 已启用 */
   STATE_CONFLICT: 4010,
+  /** 写入值超出点位允许范围（write_min / write_max），不下发到设备 */
+  WRITE_OUT_OF_RANGE: 4011,
   /** 授权配额不足（v2.0 档位限制，授权有效但档位不够） */
   QUOTA_EXCEEDED: 4021,
   /** 总线忙（协议工具会话租约冲突；HTTP 200 + 业务码） */
@@ -157,6 +159,10 @@ export const ERROR_CODES: Readonly<Record<number, ErrorCodeEntry>> = {
   [ERR.STATE_CONFLICT]: {
     message: '当前状态不允许该操作',
     hint: '请先停止/关闭冲突的功能（如正在运行的模拟消费者或已启用的 MQTT）后重试',
+  },
+  [ERR.WRITE_OUT_OF_RANGE]: {
+    message: '写入值超出允许范围',
+    hint: '修正写入值到点位配置的上下限之间再提交；越界值不会下发到设备',
   },
   [ERR.UNAUTHORIZED]: {
     message: '登录状态已失效',

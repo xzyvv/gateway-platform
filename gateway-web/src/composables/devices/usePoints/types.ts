@@ -28,6 +28,10 @@ export interface PointForm {
   interval: number
   /** S11: 写入白名单标记（false=拒绝写入，默认） */
   writable: boolean
+  /** ROI-06: 写入下限（含），null=不限制；越界写入直接拒绝 */
+  write_min: number | null
+  /** ROI-06: 写入上限（含），null=不限制 */
+  write_max: number | null
   // BUG-B: 高级参数。此前表单不收集这些字段，后端 `PointPayload` 又忽略未知字段，
   // 用户在别处填的告警阈值/死区/聚合会静默丢失。现在表单直接编辑并随请求提交。
   unit: string

@@ -22,6 +22,7 @@ function createPointForm(): PointForm {
   return {
     id: '', name: '', bus: 'bus1', protocol: 'modbus', address: '', slave_id: 1, address_num: 0,
     interval: 1, writable: false, unit: '', scale: 1, offset: 0,
+    write_min: null, write_max: null,
     ct_ratio: null, pt_ratio: null, function_code: 3, data_type: '', byte_order: '',
     register_count: null, formula: '', deadband: 0, on_change: false,
     alarm_high: undefined, alarm_low: undefined, aggregation_fn: '', aggregation_window: 60,

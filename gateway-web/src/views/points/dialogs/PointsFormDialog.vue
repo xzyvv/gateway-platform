@@ -79,6 +79,16 @@
         <el-switch v-model="pointForm.writable" />
         <span style="margin-left: 8px; color: var(--text-secondary); font-size: 0.75rem">开启后该点位可在「点位读写」页面写入，也可通过「远程控制」下发；关闭（默认）则拒绝一切写入</span>
       </el-form-item>
+      <el-form-item v-if="pointForm.writable" label="写入范围">
+        <div class="write-range-row">
+          <el-input-number v-model="writeMin" :controls="false" placeholder="下限（含）" />
+          <span class="write-range-sep">~</span>
+          <el-input-number v-model="writeMax" :controls="false" placeholder="上限（含）" />
+        </div>
+        <div class="point-inherit-hint">
+          留空表示该侧不限制。超出范围的写入会被 <strong>直接拒绝</strong>（错误码 4011），不会下发到设备 —— 只校验「能不能写」不校验「值合不合理」，一次手滑就可能把设定值写到物理不可行区间。
+        </div>
+      </el-form-item>
 
       <!-- BUG-B: 高级参数。这些字段后端一直支持，但表单此前不收集，
            用户填的告警/死区/聚合会被后端静默丢弃。 -->
@@ -208,6 +218,24 @@ const {
 } = ctx
 
 /**
+ * ROI-06：写入范围用 el-input-number 编辑，但 el-input-number 的 v-model
+ * 类型是 `number | undefined`，而表单模型是 `number | null`（null=不限制）。
+ * 用 computed 做一次互转，避免在模板里写 `as any`。
+ */
+const writeMin = computed<number | undefined>({
+  get: () => pointForm.write_min ?? undefined,
+  set: (v) => {
+    pointForm.write_min = v ?? null
+  },
+})
+const writeMax = computed<number | undefined>({
+  get: () => pointForm.write_max ?? undefined,
+  set: (v) => {
+    pointForm.write_max = v ?? null
+  },
+})
+
+/**
  * 北向上报周期（秒）：采集周期上界。
  *
  * 正常由 composable 的 state 提供；读不到时退回兜底值（与 usePoints 同源），
@@ -296,5 +324,18 @@ void pointFormRef
   gap: 8px;
   align-items: center;
   width: 100%;
+}
+/* ROI-06: 写入上下限成对输入（留空表示该侧不限制） */
+.write-range-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 340px;
+}
+.write-range-row :deep(.el-input-number) {
+  flex: 1;
+}
+.write-range-sep {
+  color: var(--text-secondary);
 }
 </style>

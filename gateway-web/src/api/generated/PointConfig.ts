@@ -120,4 +120,15 @@ modbus_register: number | null,
  * 仅当该点为 `true` 时才允许通过 API / 远程控制下发写入（默认 `false` = 拒绝）。
  * 工业现场默认拒绝写入，避免未授权的任意寄存器被误写。
  */
-writable: boolean, };
+writable: boolean, 
+/**
+ * ROI-06（W-1）：写入下限（含），None=不限制。
+ *
+ * 仅对 `writable=true` 的点位生效：写入值小于下限时按 `WRITE_OUT_OF_RANGE`
+ * 拒绝，**不会下发到设备**。用于防止上位机手滑把设定值写到物理不可行区间。
+ */
+write_min?: number, 
+/**
+ * ROI-06（W-1）：写入上限（含），None=不限制。
+ */
+write_max?: number, };

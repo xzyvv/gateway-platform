@@ -32,6 +32,9 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
     address_num: 0,
     interval: 1,
     writable: false,
+    // ROI-06: 默认不限制写入范围
+    write_min: null,
+    write_max: null,
     unit: '',
     scale: 1,
     offset: 0,
@@ -168,6 +171,9 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
     pointForm.interval = clampInterval(row.interval)
     // S11: 回填写入白名单标记
     pointForm.writable = row.writable ?? false
+    // ROI-06: 回填写入范围（PUT 无条件覆盖，不回填 = 编辑即清除限制）
+    pointForm.write_min = row.write_min ?? null
+    pointForm.write_max = row.write_max ?? null
     // BUG-B: 回填高级参数（编辑时不回填就会被默认值覆盖）
     pointForm.unit = row.unit ?? ''
     pointForm.scale = row.scale ?? 1
@@ -207,6 +213,9 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
     pointForm.interval = 1
     // S11: 重置写入白名单为默认拒绝
     pointForm.writable = false
+    // ROI-06: 重置写入范围
+    pointForm.write_min = null
+    pointForm.write_max = null
     pointForm.unit = ''
     pointForm.scale = 1
     pointForm.offset = 0
@@ -251,6 +260,9 @@ export function createPointForm(state: PointsState, loadPoints: () => Promise<vo
         device_id: selectedDevice.value,
         // S11: 随表单提交写入白名单标记
         writable: pointForm.writable,
+        // ROI-06: 写入范围，留空即清空限制
+        write_min: pointForm.write_min ?? undefined,
+        write_max: pointForm.write_max ?? undefined,
         // BUG-B: 高级参数随请求提交（此前缺失 → 后端只收到基础字段）
         unit: pointForm.unit.trim() || undefined,
         scale: pointForm.scale,
