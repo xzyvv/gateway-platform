@@ -67,6 +67,8 @@ pub use timeline::{ScheduleTimeline, Timeline, TimelineGroup, TimelineOverlap, T
 mod breaker;
 mod device_state;
 mod reload;
+
+pub(crate) use reload::PointsReloadPlan;
 mod results;
 mod spawning;
 mod status;
@@ -216,6 +218,11 @@ impl Scheduler {
     /// 供北向写回入口（如 OPC UA Server）校验 `writable` 白名单与定位 collector。
     pub fn point_by_id(&self, id: &str) -> Option<PointConfig> {
         self.points.lock().iter().find(|p| p.id == id).cloned()
+    }
+
+    /// 当前生效的点位快照（热重载回滚时按原配置重建采集组）。
+    pub fn points(&self) -> Vec<PointConfig> {
+        self.points.lock().clone()
     }
 
     /// E1：暂停某总线的采集（供调试工具独占总线）。
@@ -382,19 +389,11 @@ impl Scheduler {
     /// 现在改为：替换 collectors 后调 reload_points_incremental，仅停
     /// 真正变更的组，其余保持运行不中断。
     ///
-    /// Bug-R5 (fix)：reload 中途失败时回滚已装上的 collectors / points。
-    ///
-    /// 旧实现：步骤 1（L281 替换 collectors）+ 步骤 2（L284 替换 points），
-    /// **先于**步骤 3（reload_points_incremental 的 stop + spawn）执行——
-    /// 若 reload_points_incremental 抛错（spawn panic / runtime 校验失败），
-    /// 新 collectors / points **已装上**但**新采集组未起来**，
-    /// 而老 handles 已被 reload_points_incremental 内部移到 to_shutdown 删除——
-    /// 现场表现为「整张采集系统 silent 死锁」，需 gatewayd 重启恢复。
-    ///
-    /// 新实现：步骤 1/2 之前先快照原 collectors / points，异常路径 try/catch
-    /// 回滚。reload_points_incremental 内部 stop 的 handles **无法回滚**（task
-    /// 已 abort），降级处理：记 warn 日志并把 ReloadStats.failed = true 暴露给
-    /// 上层（web handler 据此返回 503 而非 200，运维可即时感知）。
+    /// Bug-R5 (fix) → ROI-12：失败判定前移到 `prepare_points_reload`，
+    /// 在替换 collectors / points **之前**完成校验（含 collector 缺失检查）。
+    /// 因此拒绝路径零副作用：collectors、points、采集组全部保持原样，
+    /// 不再需要「先替换再快照回滚」，也不会出现「新 collectors 已装上、
+    /// 老组已停掉、新组没起来」的静默死锁态。
     pub async fn reload(
         self: &Arc<Self>,
         new_collectors: HashMap<String, Arc<dyn Collector>>,
@@ -407,51 +406,35 @@ impl Scheduler {
             new_points.len()
         );
 
-        // Bug-R5：reload 前快照原状态（用于步骤 1/2 异常时回滚）。
-        // 锁 clone 模式——parking_lot Mutex 不跨 await，立即释放，零延迟。
-        let old_collectors = self.collectors.lock().clone();
-        let old_points = self.points.lock().clone();
+        // force_buses：所有涉及总线都要重建（collectors 协议实现可能换了）
+        let force_buses: std::collections::HashSet<String> =
+            new_points.iter().map(|p| p.bus.clone()).collect();
+        let available_buses: std::collections::HashSet<String> =
+            new_collectors.keys().cloned().collect();
+
+        // ROI-12：先 prepare（纯校验，失败零副作用），再替换 collectors、最后 commit。
+        // 旧实现先装 collectors/points 再执行增量重载，失败时只能靠快照回滚，
+        // 而「已停掉的采集组」无法回滚（task 已 abort）→ 现场出现部分生效的死锁态。
+        let plan = match self
+            .prepare_points_reload(new_points.clone(), &force_buses, &available_buses)
+            .await
+        {
+            Ok(plan) => plan,
+            Err(reason) => {
+                tracing::error!("scheduler reload rejected before any change: {}", reason);
+                return ReloadStats {
+                    collectors: self.collectors.lock().len(),
+                    duration_ms: started_at.elapsed().as_millis() as u64,
+                    force_buses_rebuilt: 0,
+                };
+            }
+        };
 
         // 1) 替换 collectors（总线协议实现可能换了）
         *self.collectors.lock() = new_collectors.clone();
 
-        // 2) 替换 points（在增量重建前先更新，让 device_states 处理逻辑看到新 points）
-        *self.points.lock() = new_points.clone();
-
-        // 3) force_buses：所有涉及总线都要重建（collectors 协议实现可能换了）
-        let force_buses: std::collections::HashSet<String> =
-            new_points.iter().map(|p| p.bus.clone()).collect();
-
-        // Bug-R5：try 块包住 reload_points_incremental（返回 Result）。
-        // 注意：reload_points_incremental 已被 reload_lock 串行化（Semaphore），
-        // 所以同一时间只有一个 reload 在跑——回滚路径无需担心并发竞争。
-        //
-        // 函数内部 panic（spawn / await 链路）仍可能传到这里，但 spawn 通过
-        // crate::engine::supervision 的 catch_unwind 吸收；mod.rs L17 deny(clippy::expect_used)
-        // 已在代码审查阶段挡住 `.expect()` —— 真正可能 propagate 的就是 Result::Err。
-        let reload_result = self
-            .reload_points_incremental(new_points.clone(), &force_buses)
-            .await;
-
-        if let Err(reason) = reload_result {
-            // 回滚 collectors + points 到 reload 前的快照。
-            // device_states 的清理（步骤 4）在 reload_points_incremental 内部已经做过；
-            // 不能 100% 回滚——但 collectors/points 是核心可见状态，必回滚。
-            // reload_points_incremental 内部 stop 的 handles 无法回滚（task 已 abort），
-            // 属于降级：log error + 暴露给上层（web handler 据此返回 503 + 提示运维重启采集）。
-            let old_collectors_len = old_collectors.len();
-            *self.collectors.lock() = old_collectors;
-            *self.points.lock() = old_points;
-            tracing::error!(
-                "scheduler reload FAILED, rolled back collectors/points to pre-reload snapshot: {}",
-                reason
-            );
-            return ReloadStats {
-                collectors: old_collectors_len,
-                duration_ms: started_at.elapsed().as_millis() as u64,
-                force_buses_rebuilt: 0,
-            };
-        }
+        // 2) 提交点位计划（内部会替换 points 并重建变更组）
+        self.commit_points_reload(plan).await;
 
         // 4) device_states 仅清空已移除点位的状态（保留活跃点位）
         let new_ids: std::collections::HashSet<String> =

@@ -435,6 +435,33 @@ impl BusManager {
         &self.name
     }
 
+    /// 中断总线 task 并等待其真正退出（最多 `timeout`）。
+    ///
+    /// 热重载重建**串口**总线时必须先调用：串口在 Windows 上是独占资源，
+    /// 旧 task 只要还持有句柄，`open_bus` 新配置就必然失败。旧实现先开新口
+    /// 再替换 manager，因此在 Windows 上「串口配置变更」几乎必然失败并被静默忽略。
+    ///
+    /// 等待 `is_finished` 是必要的：`abort()` 只是投递取消请求，task 的 future
+    /// （含 `SerialHandle`）要等运行时真正 drop 后才释放端口。
+    pub async fn close_task(&self, timeout: Duration) {
+        let Some(handle) = self.handle.as_ref() else {
+            return;
+        };
+        handle.abort();
+        let deadline = tokio::time::Instant::now() + timeout;
+        while !handle.is_finished() {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    "bus {} task did not stop within {:?} after abort",
+                    self.name,
+                    timeout
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
     /// 指标句柄：供协议层上报协议级事件（如写结果未知计数）。
     pub fn metrics(&self) -> &Arc<Metrics> {
         &self.metrics

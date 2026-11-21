@@ -1,8 +1,16 @@
-//! 点位热重载：全量替换与增量更新
+//! 点位热重载：两阶段（prepare / commit）与增量更新
+//!
+//! ROI-12：热重载「要么全生效、要么全不生效」。
+//! - [`Scheduler::prepare_points_reload`] 只做**纯计算 + 校验**（分组差异、collector
+//!   是否齐全），任何失败都发生在改动运行态之前；
+//! - [`Scheduler::commit_points_reload`] 才真正停旧组、替换 points、起新组，不再返回错误。
+//!
+//! 生产配置写回路径（gateway-api `persist_then_apply`）按
+//! 「prepare → 落盘 → commit」调用，磁盘与运行态不会出现一前一后的中间态。
 //!
 //! 从 scheduler/mod.rs 拆分。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use std::time::Duration;
@@ -11,25 +19,57 @@ use crate::config::PointConfig;
 
 use super::{group_key_for_point, point_config_equal, Scheduler};
 
-impl Scheduler {
-    /// Bug-R5 (fix)：返回 `Result<(), String>` 让上层 reload() 可在异常时回滚。
+/// 点位热重载计划：`prepare` 的全部产出，尚未产生任何运行态副作用。
+///
+/// 持有调度器的 reload 信号量（`_permit`）：从 prepare 到 commit 期间独占重载；
+/// 计划被丢弃（如落盘失败）时信号量随 Drop 自动释放，无需显式解锁。
+pub(crate) struct PointsReloadPlan {
+    #[allow(dead_code)]
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    new_points: Vec<PointConfig>,
+    /// 需要停止并重建的组：(组键, 总线名, 新点位)
+    to_rebuild: Vec<(String, String, Vec<PointConfig>)>,
+    /// 需要停止且不再重建的组键
+    to_stop: Vec<String>,
+    /// 无组变化：commit 只需替换 points
+    skip: bool,
+}
+
+impl PointsReloadPlan {
+    /// 释放 prepare 阶段占用的 reload 信号量。
     ///
-    /// 旧 `()` 返回类型隐藏错误——若内部 spawn panic（被 supervision 吸收但不传
-    /// 出）或 bus task join 超时，外部 reload() 收到"成功"继续走 device_states 清理，
-    /// 而 collectors / points 已被部分替换 → 数据采集路由处于不一致状态。
-    pub(crate) async fn reload_points_incremental(
+    /// 仅供**回滚路径**使用：总线交接失败后要按原配置重建采集组，
+    /// 而重建入口会再次申请同一信号量，不先释放会自锁。
+    pub(crate) fn release_permit(&mut self) {
+        self._permit = None;
+    }
+}
+
+impl Scheduler {
+    /// 阶段 1：计算点位分组差异并校验，**零副作用**（只读快照 + 申请 reload 信号量）。
+    ///
+    /// `available_buses` 是本次重载后可用的总线集合（调用方在总线 prepare 阶段
+    /// 已算好，含未变更总线）。若某组点位引用的总线没有 collector，直接返回 Err——
+    /// 否则 commit 阶段 `spawn_collector_task` 只 warn 后整组静默消失。
+    pub(crate) async fn prepare_points_reload(
         self: &Arc<Self>,
         new_points: Vec<PointConfig>,
-        force_buses: &std::collections::HashSet<String>,
-    ) -> Result<(), String> {
+        force_buses: &HashSet<String>,
+        available_buses: &HashSet<String>,
+    ) -> Result<PointsReloadPlan, String> {
         // Bug r09-RLO1 (fix): 入口加 Semaphore 串行化——防止并发 reload 互相覆盖。
-        // acquire_owned 在 permit drop 时自动释放，await 期间不阻塞后续 reload 排队。
-        let _permit = self.reload_lock.clone().acquire_owned().await;
+        // acquire_owned 在 permit drop 时自动释放；permit 随计划一起进入 commit，
+        // 保证「prepare 到 commit」之间不会被另一次重载插入。
+        let permit = self
+            .reload_lock
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "scheduler reload lock closed".to_string())?;
 
         // Bug-R5 (fix) 测试夹具入口：单测可通过 `Scheduler::fail_reload_injector`
-        // 强制让 reload_points_incremental 返回 Err，验证 reload() 的回滚路径。
-        // 注入器是**实例字段**（非全局 static），并行测试互不影响；
-        // 生产构建（cfg(test) 不编译）下该字段不存在。
+        // 强制让点位重载在 prepare 阶段返回 Err。注入发生在任何运行态改动之前，
+        // 因此失败路径天然保持 collectors / points / 采集组全部原样。
         #[cfg(test)]
         if let Some(err) = self.fail_reload_injector.lock().clone() {
             tracing::warn!("Bug-R5 test fail-injector active, returning Err({})", err);
@@ -39,7 +79,7 @@ impl Scheduler {
         let started_at = std::time::Instant::now();
         let old_points = self.points.lock().clone();
         tracing::info!(
-            "reload_points_incremental: {} -> {} points",
+            "prepare_points_reload: {} -> {} points",
             old_points.len(),
             new_points.len()
         );
@@ -66,10 +106,21 @@ impl Scheduler {
             }
         }
 
+        // 1.1 校验：每组点位引用的总线都必须有 collector 可用。
+        //     旧实现到 spawn 阶段才 `warn!("no collector for bus")` 后 return，
+        //     组会被静默丢弃（配置已新、运行态少一组），正是 ROI-12 要消除的中间态。
+        for (key, (bus_name, _)) in &new_groups {
+            if !available_buses.contains(bus_name) {
+                return Err(format!(
+                    "采集组 {} 引用的总线 {} 没有可用 collector，热重载已中止",
+                    key, bus_name
+                ));
+            }
+        }
+
         // 2. 对比旧组（从当前 handles 键 + 旧 points 推断），决定哪些需要重建
-        let old_keys: std::collections::HashSet<String> =
-            self.handles.lock().keys().cloned().collect();
-        let new_keys: std::collections::HashSet<String> = new_groups.keys().cloned().collect();
+        let old_keys: HashSet<String> = self.handles.lock().keys().cloned().collect();
+        let new_keys: HashSet<String> = new_groups.keys().cloned().collect();
 
         // 需要重建的组：新增的 或 点位内容变化的
         let mut to_rebuild: Vec<(String, String, Vec<PointConfig>)> = Vec::new();
@@ -105,18 +156,52 @@ impl Scheduler {
             .cloned()
             .collect();
 
-        if to_rebuild.is_empty() && to_stop.is_empty() {
-            self.metrics.inc_config_reload();
+        let skip = to_rebuild.is_empty() && to_stop.is_empty();
+        if skip {
             tracing::info!(
-                "reload_points_incremental: no group changes, skipping ({} ms)",
+                "prepare_points_reload: no group changes ({} ms)",
                 started_at.elapsed().as_millis()
             );
-            *self.points.lock() = new_points;
-            return Ok(());
+        } else {
+            tracing::info!(
+                "prepare_points_reload: rebuild {} groups, stop {} groups ({} ms)",
+                to_rebuild.len(),
+                to_stop.len(),
+                started_at.elapsed().as_millis()
+            );
         }
 
+        Ok(PointsReloadPlan {
+            _permit: Some(permit),
+            new_points,
+            to_rebuild,
+            to_stop,
+            skip,
+        })
+    }
+
+    /// 阶段 2：提交点位热重载（纯内存交换，不再返回错误）。
+    ///
+    /// 调用方必须已完成落盘；本阶段停旧组、替换 points、起新组。
+    /// 单组优雅退出超时（3s）后 abort 属于受控降级，不影响「其余组按新配置运行」。
+    pub(crate) async fn commit_points_reload(self: &Arc<Self>, plan: PointsReloadPlan) {
+        let PointsReloadPlan {
+            _permit,
+            new_points,
+            to_rebuild,
+            to_stop,
+            skip,
+        } = plan;
+
+        if skip {
+            self.metrics.inc_config_reload();
+            *self.points.lock() = new_points;
+            return;
+        }
+
+        let started_at = std::time::Instant::now();
         tracing::info!(
-            "reload_points_incremental: rebuild {} groups, stop {} groups",
+            "commit_points_reload: rebuild {} groups, stop {} groups",
             to_rebuild.len(),
             to_stop.len()
         );
@@ -160,10 +245,9 @@ impl Scheduler {
         *self.points.lock() = new_points;
 
         // 5. 清理已移除点位的 device_states，并按新配置刷新采集间隔
-        let new_ids: std::collections::HashSet<String> =
-            self.points.lock().iter().map(|p| p.id.clone()).collect();
+        let new_ids: HashSet<String> = self.points.lock().iter().map(|p| p.id.clone()).collect();
         // ROI-08：同步裁剪已移除设备的在线状态，避免 `gateway_device_online` 残留。
-        let active_devices: std::collections::HashSet<String> = self
+        let active_devices: HashSet<String> = self
             .points
             .lock()
             .iter()
@@ -202,7 +286,7 @@ impl Scheduler {
         // 6. 重建变更组
         self.metrics.inc_config_reload();
         tracing::info!(
-            "reload_points_incremental: rebuilding {} groups, stopped {} groups ({} ms into reload)",
+            "commit_points_reload: rebuilding {} groups, stopped {} groups ({} ms into reload)",
             to_rebuild.len(),
             to_stop.len(),
             started_at.elapsed().as_millis()
@@ -212,6 +296,22 @@ impl Scheduler {
             let _ = key; // key 仅用于日志/调试；spawn 内部按 group_key(protocol,bus) 生成同一键
             self.spawn_collector_task(&bus_name, pts);
         }
+    }
+
+    /// 兼容入口：prepare + commit（自愈 / 测试 / 暂停恢复等单飞场景）。
+    ///
+    /// 生产配置写回路径不再直接调用本函数，而是由 runtime 把 prepare 与 commit
+    /// 插入「落盘」两侧，实现磁盘与运行态的原子切换。
+    pub(crate) async fn reload_points_incremental(
+        self: &Arc<Self>,
+        new_points: Vec<PointConfig>,
+        force_buses: &HashSet<String>,
+    ) -> Result<(), String> {
+        let available_buses: HashSet<String> = self.collectors.lock().keys().cloned().collect();
+        let plan = self
+            .prepare_points_reload(new_points, force_buses, &available_buses)
+            .await?;
+        self.commit_points_reload(plan).await;
         Ok(())
     }
 }

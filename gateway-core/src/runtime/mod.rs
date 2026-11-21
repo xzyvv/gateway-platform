@@ -5,7 +5,7 @@
 
 mod gateway;
 
-pub use gateway::{GatewayComponents, GatewayRuntime};
+pub use gateway::{ConfigApplyError, GatewayComponents, GatewayRuntime};
 
 #[cfg(test)]
 pub use gateway::{gateway_runtime_with_fake_bus_for_test, gateway_runtime_without_buses_for_test};

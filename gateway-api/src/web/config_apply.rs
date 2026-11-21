@@ -3,16 +3,18 @@
 //! web 有 10+ 个写端点都要做「保存 config → 更新内存 → 展开设备模板 → 热重载」，
 //! 历史实现散落在各 handler 中且顺序不一。本模块集中这几步，消除重复。
 //!
-//! # 统一顺序（D-06 / E 批）
-//! 所有配置写回只走 [`persist_then_apply`]：expand → **save（落盘）** → reload → store → notify。
+//! # 统一顺序（D-06 / E 批 / ROI-12）
+//! 所有配置写回只走 [`persist_then_apply`]：expand → **prepare（零副作用）** →
+//! save（落盘）→ commit（内存交换）→ store → notify。
 //!
-//! 落盘前置（E 批）：先写盘，成功后才热重载运行态、替换内存快照、通知北向。
-//! 这样「保存」是原子的——写盘失败时内存/运行态/磁盘都还是旧配置，接口直接报错。
-//! 旧顺序（reload → store → notify → save）在写盘失败时会出现「内存与运行态是新配置、
-//! 磁盘是旧配置」，而接口只回 500；现场重启一次配置就悄悄回退，无从察觉。
+//! 事务式三阶段（ROI-12）：prepare 负责校验/预构建（新总线、新 MQTT 连接、点位分组差异），
+//! 任何失败都发生在写盘之前；落盘严格位于 prepare 与 commit 之间，因此不会出现
+//! 「磁盘已新、运行态仍旧」。落盘失败时计划直接丢弃（预建资源自动释放），
+//! 磁盘与运行态都保持旧配置。
 //!
-//! 落盘成功但热重载被拒时，回写旧配置把磁盘一起退回（保持「整体不生效」）。回写
-//! 也失败才退化为「磁盘已新、运行态仍旧」，届时错误消息里明确告知需重启生效。
+//! 唯一仍可能「已落盘但未生效」的窗口是 commit 阶段的串口重新打开失败；
+//! 此时运行态已自愈回滚，本模块再用磁盘原始字节把磁盘退回（保持「整体不生效」）。
+//! 回写也失败才退化为「磁盘已新、运行态仍旧」，届时错误消息里明确告知需重启生效。
 //!
 //! 历史上并存 `save_then_reload`（先写盘后热更）与 `save_and_store`（纯元数据落盘）
 //! 两套路径；前者与本路径的 `expand_points` 口径存在漂移温床（现场表现为
@@ -33,6 +35,7 @@ use crate::web::error_codes as codes;
 use crate::web::types::AppState;
 use gateway_core::config::{reload_scope, GatewayConfig, PointConfig, ReloadScope};
 use gateway_core::north::server::ActivePointSet;
+use gateway_core::runtime::ConfigApplyError;
 
 /// 一次配置变更的热更新结果。
 ///
@@ -497,12 +500,12 @@ pub(crate) fn ensure_system_secrets_allowed(
     Ok(())
 }
 
-/// 整份替换路径（A5 / E 批）：expand → save → reload → store → notify，
+/// 整份替换路径（A5 / E 批 / ROI-12）：expand → prepare → save → commit → store → notify，
 /// 返回 `(热重载说明列表, 实际生效配置)`。
 ///
-/// 落盘前置：写盘失败直接返回 500，内存/运行态/磁盘保持旧配置（整体不生效）。
-/// 落盘成功而热重载被拒时，回写旧配置让磁盘一起退回；回写也失败才退化为
-/// 「磁盘已新、运行态仍旧」，并在错误消息里说明需重启生效。
+/// 事务式顺序：prepare 阶段零副作用且可失败（校验/预构建失败直接返回，磁盘与运行态均未改）；
+/// 落盘成功后 commit 做内存交换。commit 阶段（仅串口重新打开）失败时回写旧配置让磁盘一起退回；
+/// 回写也失败才退化为「磁盘已新、运行态仍旧」，并在错误消息里说明需重启生效。
 ///
 /// 返回的第二个元素是**还原脱敏占位后的真实配置**（即真正落盘/生效的那份）。
 /// 调用方（版本快照 / 变更判定 / 审计）必须用它，绝不能再用入参 `new`：
@@ -558,25 +561,55 @@ async fn persist_then_apply_inner(
     // 活跃点位集在 reload 前按配置口径算好（expanded 随后会被 move 进 reload_config）。
     let active_points = build_active_points(&expanded, &new);
 
-    // ① 落盘前置：先抓一份磁盘原始字节，供 ② 失败时做**字节级**回滚。
+    // ① 抓一份磁盘原始字节：仅 commit 阶段（串口交接）失败时才需要字节级回滚。
     // 不能只靠 `save(old)` 回写：save 会重新序列化并重新加密 secrets，
     // 语义相同但磁盘字节必然变化（同一明文 token 每次密文不同），
     // 会让"本次未保存"在字节层面不成立。
     let disk_before = std::fs::read(state.config.config_loader.path()).ok();
-    // 写盘失败则整体不生效，运行态一行都没动。
-    state.config.config_loader.save(&new).map_err(|e| {
-        tracing::error!("config save failed, runtime untouched: {}", e);
-        ApiError::internal(format!("save config failed: {}", e))
-    })?;
 
-    // ② 热重载：被拒时把磁盘退回旧配置，保持「要么整体生效、要么整体不生效」。
+    // ② 事务式热重载：prepare（可失败，零副作用）→ 落盘 → commit（内存交换）。
+    //    旧实现先落盘再 reload，失败后靠磁盘字节回滚；若回滚本身失败或进程中断，
+    //    就会出现「磁盘已新、运行态仍旧」的中间态。现在落盘被夹在
+    //    prepare 与 commit 之间：prepare 失败不写盘，写盘失败运行态零改动。
     record_reload_attempt(state);
-    let notes = match state.north.gateway.reload_config(old, &new, expanded).await {
+    let save_state = state.clone();
+    let save_config = new.clone();
+    let notes = match state
+        .north
+        .gateway
+        .apply_config_transaction(
+            old,
+            &new,
+            expanded,
+            Box::new(move || {
+                save_state
+                    .config
+                    .config_loader
+                    .save(&save_config)
+                    .map_err(|e| e.to_string())
+            }),
+        )
+        .await
+    {
         Ok(notes) => {
             record_reload_success(state);
             notes
         }
-        Err(e) => {
+        Err(ConfigApplyError::Persist(msg)) => {
+            // 落盘失败：运行态与磁盘都保持旧配置。
+            tracing::error!("config save failed, runtime untouched: {}", msg);
+            let err = ApiError::internal(format!("save config failed: {}", msg));
+            record_reload_rejected(state, &err);
+            return Err(err);
+        }
+        Err(ConfigApplyError::Prepare(e)) => {
+            // prepare 阶段被拒发生在落盘之前：磁盘仍是旧配置，无需回滚。
+            let err: ApiError = e.into();
+            record_reload_rejected(state, &err);
+            return Err(err);
+        }
+        Err(ConfigApplyError::Commit(e)) => {
+            // commit 阶段（串口交接）失败：运行态已自愈回滚，但磁盘已是新配置 → 回滚磁盘。
             let err: ApiError = e.into();
             let err = rollback_saved_config(state, old, disk_before.as_deref(), err);
             record_reload_rejected(state, &err);

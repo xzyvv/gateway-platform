@@ -1,10 +1,10 @@
 //! 配置热更新**原子性**测试。
 //!
-//! 所有配置写回都走唯一路径 `persist_then_apply`（expand → save → reload → store → notify）：
-//! 先原子落盘，成功后才热重载运行态并替换内存快照。因此任何前置校验失败或**落盘失败**
-//! 时，内存与磁盘都必须**保持原样**，不能出现「半新半旧」。
+//! 所有配置写回都走唯一路径 `persist_then_apply`（expand → prepare → save → commit → store → notify）：
+//! prepare 阶段零副作用，落盘严格位于 prepare 与 commit 之间，因此任何前置校验失败、prepare
+//! 被拒或**落盘失败**时，内存与磁盘都必须**保持原样**，不能出现「半新半旧」。
 //!
-//! 落盘成功但热重载被拒时，链路会把旧配置回写磁盘（`rollback_saved_config`），
+//! commit 阶段（仅串口重新打开）失败时，链路会把旧配置回写磁盘（`rollback_saved_config`），
 //! 三者同样回到「本次未保存」——本文件的两条用例正是在锁这条一致性。
 //!
 //! 覆盖三条此前无测试的路径：

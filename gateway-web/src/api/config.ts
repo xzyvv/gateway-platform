@@ -55,12 +55,11 @@ function notifyRestartRequired(result: ConfigReloadResult | undefined): void {
 }
 
 /**
- * 后端 `notes` 是「本次热重载有分节未成功」的证据，例如
- * `mqtt reload failed (kept old): new mqtt client failed to connect within 10s`。
+ * 后端 `notes` 用于说明本次在线生效的分节，或极少数「已保存但该项未生效」的提示。
  *
- * 此前 notes 被完全丢弃：用户点「保存」后只看到「已保存并热重载」，
- * 但 MQTT 其实还连不上——用户以为配置生效了，现场排查方向被带偏。
- * 这里把 notes 显式提示出来，并说明旧配置仍在运行。
+ * 注意（ROI-12）：MQTT 连接失败等可预判问题现在会在落盘前拒绝整次保存
+ * （接口直接报错），不再以 `mqtt reload failed (kept old)` 的形式出现在 notes 里；
+ * 这里仍保留通用处理，避免未来新增的 notes 被静默丢弃。
  */
 function notifyReloadNotes(result: ConfigReloadResult | undefined): void {
   const notes = (result?.notes ?? []).filter(Boolean)

@@ -47,6 +47,14 @@ impl ProtocolRegistry {
         self.factories.insert(protocol.to_string(), factory);
     }
 
+    /// 协议是否已注册（供热重载 prepare 阶段提前判定，避免构建到一半才发现）。
+    ///
+    /// 与 [`ProtocolRegistry::create`] 返回 `None` 的语义一致：协议名拼错，
+    /// 或该协议被当前发行 feature（SKU）裁剪。
+    pub fn supports(&self, protocol: &str) -> bool {
+        self.factories.contains_key(protocol)
+    }
+
     /// 根据协议名创建采集器
     ///
     /// 返回 None 表示协议未注册：协议名拼错，或该协议被当前发行 feature（SKU）裁剪。

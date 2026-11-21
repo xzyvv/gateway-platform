@@ -131,15 +131,20 @@ pub trait DataQueueTrait: Send + Sync {
 
 /// GatewayRuntimeTrait（仅包含 web handler 实际调用的方法）
 pub trait GatewayRuntimeTrait: Send + Sync {
-    /// 热重载配置（应用增量变更），返回应用说明列表；采集组重建失败时返回 `Err`
-    fn reload_config<'a>(
+    /// ROI-12：事务式热重载——prepare（可失败，零副作用）→ persist（落盘）
+    /// → commit（内存交换）。
+    ///
+    /// `persist` 由契约层提供，保证「落盘」严格位于 prepare 与 commit 之间：
+    /// prepare 失败时不会写盘，persist 失败时运行态零改动。
+    fn apply_config_transaction<'a>(
         &'a self,
         old: &'a GatewayConfig,
         new: &'a GatewayConfig,
         expanded_points: Vec<PointConfig>,
+        persist: Box<dyn FnOnce() -> Result<(), String> + Send + 'a>,
     ) -> Pin<
         Box<
-            dyn Future<Output = gateway_core::engine::error::GatewayResult<Vec<String>>>
+            dyn Future<Output = Result<Vec<String>, gateway_core::runtime::ConfigApplyError>>
                 + Send
                 + 'a,
         >,
@@ -348,23 +353,25 @@ impl DataQueueTrait for DataQueue {
 }
 
 impl GatewayRuntimeTrait for GatewayRuntime {
-    fn reload_config<'a>(
+    fn apply_config_transaction<'a>(
         &'a self,
         old: &'a GatewayConfig,
         new: &'a GatewayConfig,
         expanded_points: Vec<PointConfig>,
+        persist: Box<dyn FnOnce() -> Result<(), String> + Send + 'a>,
     ) -> Pin<
         Box<
-            dyn Future<Output = gateway_core::engine::error::GatewayResult<Vec<String>>>
+            dyn Future<Output = Result<Vec<String>, gateway_core::runtime::ConfigApplyError>>
                 + Send
                 + 'a,
         >,
     > {
-        Box::pin(GatewayRuntime::reload_config(
+        Box::pin(GatewayRuntime::apply_config_transaction(
             self,
             old,
             new,
             expanded_points,
+            persist,
         ))
     }
     fn reset_serial_buses<'a>(

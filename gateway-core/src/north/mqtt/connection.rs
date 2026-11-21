@@ -306,9 +306,11 @@ impl MqttClient {
         }
     }
 
-    /// 停止客户端并等待后台 task 退出（最多 5 秒）
-    pub async fn stop(&self) {
-        // P3: 先关闭 outbox 写入器通道，触发 flush 并退出
+    /// 只发出关停信号，不等待后台 task 退出。
+    ///
+    /// 供热重载「prepare 成功、落盘失败」的回归路径使用：预连客户端被丢弃时
+    /// 无法 await，必须至少让它自行退出，避免连接/任务泄漏。
+    pub fn request_stop(&self) {
         self.outbox_cmd_tx.store(None);
         // r48-MQTT1：先置位关停标志再唤醒。若此刻事件循环正阻塞在 poll()、
         // 发布循环正阻塞在 publish_batch()（PubAck 超时最长 10s），
@@ -317,6 +319,12 @@ impl MqttClient {
         self.stopping
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.shutdown.notify_waiters();
+    }
+
+    /// 停止客户端并等待后台 task 退出（最多 5 秒）
+    pub async fn stop(&self) {
+        // P3：先关闭 outbox 写入器通道，触发 flush 并退出
+        self.request_stop();
         let eventloop_handle = self.eventloop_handle.lock().take();
         let publish_handle = self.publish_handle.lock().take();
         let outbox_handle = self.outbox_writer_handle.lock().take();

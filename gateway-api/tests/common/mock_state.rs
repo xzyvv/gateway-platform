@@ -310,35 +310,42 @@ impl MockGateway {
 }
 
 impl GatewayRuntimeTrait for MockGateway {
-    fn reload_config<'a>(
+    fn apply_config_transaction<'a>(
         &'a self,
         old: &'a GatewayConfig,
         new: &'a GatewayConfig,
         _expanded_points: Vec<PointConfig>,
+        persist: Box<dyn FnOnce() -> Result<(), String> + Send + 'a>,
     ) -> Pin<
         Box<
-            dyn Future<Output = gateway_core::engine::error::GatewayResult<Vec<String>>>
+            dyn Future<Output = Result<Vec<String>, gateway_core::runtime::ConfigApplyError>>
                 + Send
                 + 'a,
         >,
     > {
-        // 失败注入优先：真实实现在重建总线/采集器失败时同样不会应用任何分节
-        if let Some(msg) = self.reload_error.lock().take() {
-            return Box::pin(
-                async move { Err(gateway_core::engine::error::GatewayError::Config(msg)) },
-            );
-        }
+        // 失败注入优先：模拟真实实现 prepare 阶段被拒（磁盘与运行态都不变）
+        let injected = self.reload_error.lock().take();
         // 记录本次热重载的分节范围，供测试断言「写路径确实触发了在线热重载」
         let scope = gateway_core::config::reload_scope(old, new);
-        self.reload_scopes.lock().push(scope);
         // 真实实现里规则集随配置热重载（core 虚拟点位引擎 ArcSwap 替换）
         let ids: std::collections::HashSet<String> = new
             .virtual_points
             .as_ref()
             .map(|vps| vps.iter().map(|v| v.id.clone()).collect())
             .unwrap_or_default();
-        *self.virtual_point_ids.lock() = ids;
-        Box::pin(async { Ok(Vec::new()) })
+        if injected.is_none() {
+            self.reload_scopes.lock().push(scope);
+            *self.virtual_point_ids.lock() = ids;
+        }
+        Box::pin(async move {
+            if let Some(msg) = injected {
+                return Err(gateway_core::runtime::ConfigApplyError::Prepare(
+                    gateway_core::engine::error::GatewayError::Config(msg),
+                ));
+            }
+            persist().map_err(gateway_core::runtime::ConfigApplyError::Persist)?;
+            Ok(Vec::new())
+        })
     }
     fn reset_serial_buses<'a>(
         &'a self,
