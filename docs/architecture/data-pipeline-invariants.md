@@ -34,8 +34,8 @@
 | I-04 | `DataPoint::good` 构造的 Good 点必须满足 `timestamp == source_ts` 且 `stale_count == 0`。 | `gateway-core/src/engine/model.rs:241-253` | 【无（缺口）】 | 诊断时无法按该构造路径依赖「采样时刻=上送时刻」这一简化假设。 |
 | I-05 | 协议批量构造成功点时 `timestamp` 与 `source_ts` 是两次 `DataPoint::now()` 调用，允许相差数毫秒，不保证严格相等。 | `gateway-core/src/south/protocol/modbus/batch.rs:134-135`、`gateway-core/src/south/protocol/modbus/collector.rs:296-297` | 【无（缺口）】 | 若有下游按 `source_ts == timestamp` 去重或判定，会漏掉部分点。 |
 | I-06 | `DataPoint::failed` 只有在存在 last_good 时 `raw_type` 才为 `last_good` 且 `value` 复用该值；从未成功采集时 `raw_type` 必须为 `none`、`value=0`、`stale_count=0`。 | `gateway-core/src/engine/model.rs:261-298` | 【有守护】`gateway-core/src/engine/model.rs:370-397` | 把 0.0 当真实读数；平台无法识别「这个点从未采到过」。 |
-| I-07 | 调度器 `Err` 路径的失败点必须满足：`source_ts` 为 last_good 的原始采集时刻，`stale_count` 随连续失败递增，`quality` 由设备状态递进得出。 | `gateway-core/src/south/scheduler/results.rs:74-92`、`gateway-core/src/south/scheduler/results.rs:112-121`、`gateway-core/src/engine/model.rs:293-295` | 【有守护】`gateway-core/src/engine/model.rs:377-379`（`source_ts`/`stale_count`）、`gateway-core/src/south/scheduler/device_state/tests.rs:19-62`（质量递进与 stale 计数） | 失败点时间戳变成本轮时间，平台无法判断值已经陈旧了多久。 |
-| I-08 | 批量采集失败以 `Ok(DataPoint{quality: Bad})` 返回时，不经过 `DataPoint::failed` 的复用逻辑：`raw_type` 为 `none` 或 `<TYPE>_decode_err`，`stale_count=0`，`source_ts=0`，`value=0`。 | `gateway-core/src/south/protocol/modbus/collector.rs:305-318`、`gateway-core/src/south/protocol/modbus/collector.rs:363-377`、`gateway-core/src/south/protocol/modbus/batch.rs:105-138`、`gateway-core/src/south/scheduler/results.rs:48-73` | 【无（缺口）】 | 同一条「失败」在两条路径上字段语义不同：一条带 last_good，另一条是 0 值且 `source_ts=0`（1970），现场极易误读。 |
+| I-07 | 调度器 `Err` 路径的失败点必须满足：`source_ts` 为 last_good 的原始采集时刻，`stale_count` 随连续失败递增，`quality` 由设备状态递进得出。 | `gateway-core/src/south/scheduler/results.rs:115-134`、`:153-161`、`gateway-core/src/engine/model.rs:293-295` | 【有守护】`gateway-core/src/engine/model.rs:377-379`（`source_ts`/`stale_count`）、`gateway-core/src/south/scheduler/device_state/tests.rs:19-62`（质量递进与 stale 计数） | 失败点时间戳变成本轮时间，平台无法判断值已经陈旧了多久。 |
+| I-08 | 采集失败以 `Ok(DataPoint{quality: Bad})` 返回时，必须与 `Err` 路径同口径：复用 last_good 值与采集时刻（`raw_type=last_good`）；从未成功才保持 `none`/0。不得再上送 value=0、source_ts=0。 | `gateway-core/src/south/scheduler/results.rs:26-54`（统一构造）、`:106-115`（接入两种降级路径） | 【有守护】`gateway-core/src/south/scheduler/tests.rs:834-911`（契约）、`:915-977`（经 `handle_results` 到上报队列的端到端接线） | 同一条「失败」在两条路径上字段语义不同：一条带 last_good，另一条是 0 值且 `source_ts=0`（1970），现场极易误读。 |
 | I-09 | `Ok` 且 `quality != Good` 的结果必须计入采集失败指标，不能按 `result.is_ok()` 判定成功。 | `gateway-core/src/south/scheduler/spawning.rs:216-235` | 【有守护】`gateway-core/src/south/scheduler/tests.rs:140-210` | Modbus 整条总线故障但 `collect_failures` 为 0，监控显示零故障。 |
 | I-10 | `quality_reason` 不是统一的 `<场景>:<稳定错误码>` 格式：成功为空或 `non_finite_*`，解码失败为 `modbus_decode_err`（无冒号），质量规则为 `quality_rule:<name>`，虚拟点为 `virtual_point_error`。 | `gateway-core/src/engine/model.rs:158-161`、`gateway-core/src/south/protocol/modbus/batch.rs:129-133`、`gateway-core/src/pipeline/quality_rules.rs:117-120`、`gateway-core/src/pipeline/virtual_point.rs:342-356` | 【无（缺口）】各测试只断言具体字面值，没有格式契约 | 按冒号切分统计错因的脚本会把解码失败、换算降级归入未知分类。 |
 
@@ -118,7 +118,7 @@
 | I-53 | 非 Good 点不得进入边缘节点、convert、质量规则、虚拟点缓存；必须原样透传到广播/队列/北向。 | `gateway-core/src/pipeline/mod.rs:294-299`、`gateway-core/src/pipeline/edge.rs:128-130`、`gateway-core/src/pipeline/convert.rs:193-196`、`gateway-core/src/pipeline/quality_rules.rs:69-71`、`gateway-core/src/pipeline/virtual_point.rs:142-145` | 【有守护】`gateway-core/src/pipeline/edge/tests.rs:61-71`、`gateway-core/src/pipeline/convert.rs:458-473`、`gateway-core/src/pipeline/quality_rules.rs:277-295` | 故障样本被换算或质量规则「洗白」，平台丢失真实故障原因。 |
 | I-54 | 上游已判定的非 Good 质量与原因不得被后续阶段覆盖；convert 与质量规则只允许修改 Good 点。 | `gateway-core/src/pipeline/convert.rs:193-196`、`gateway-core/src/pipeline/quality_rules.rs:68-71` | 【有守护】`gateway-core/src/pipeline/convert.rs:458-473`、`gateway-core/src/pipeline/quality_rules.rs:277-295` | 第一个失败原因被第二个规则覆盖，现场按 reason 排查时指向错误模块。 |
 | I-55 | `value_text` 必须由 pipeline 的 convert 在入队前固化；北向优先读持久化值，缺失时才按当前规则回查，保证报文标签与历史查询同源。 | `gateway-core/src/pipeline/mod.rs:312`、`gateway-core/src/north/mqtt/payload.rs:105-127`、`:196-207` | 【有守护】`gateway-core/src/north/mqtt/payload/tests.rs:247-330` | 历史查询显示「运行」，MQTT 报文显示「故障」（或反之），同一时刻两种标签。 |
-| I-56 | 时间语义必须一致：`timestamp`=上送/产出时刻；`source_ts`=原始采集时刻；聚合与虚拟点 `source_ts=timestamp`；`Err` 路径失败点 `source_ts=last_good` 时刻；`Ok+Bad` 路径 `source_ts=0`。 | `gateway-core/src/engine/model.rs:293-295`、`gateway-core/src/pipeline/nodes.rs:28-43`、`gateway-core/src/pipeline/virtual_point.rs:326-340`、`gateway-core/src/south/protocol/modbus/batch.rs:134-135` | 【无（缺口）】仅 `gateway-core/src/engine/model.rs:377` 断言 Err 路径 | 平台把补发数据当作实时数据，或把 1970 年时间戳渲染成异常曲线。 |
+| I-56 | 时间语义必须一致：`timestamp`=上送/产出时刻；`source_ts`=原始采集时刻；聚合与虚拟点 `source_ts=timestamp`；失败点（`Err` 与 `Ok+Bad` 两条路径）`source_ts` 均为 last_good 时刻，无成功历史时为 0 / `none`。 | `gateway-core/src/engine/model.rs:293-295`、`gateway-core/src/pipeline/nodes.rs:28-43`、`gateway-core/src/pipeline/virtual_point.rs:326-340`、`gateway-core/src/south/scheduler/results.rs:26-54` | 【有守护】`gateway-core/src/south/scheduler/tests.rs:834-911`、`:915-977`（两条失败路径 + 上报队列） | 平台把补发数据当作实时数据，或把 1970 年时间戳渲染成异常曲线。 |
 | I-57 | 一条采集批在「管道 → DataQueue → MQTT」链路上必须恰好投递一次，不得因 connector 二次入队而重复。 | `gateway-core/src/north/mqtt/mod.rs:831-845` | 【有守护】`gateway-core/tests/north_single_delivery.rs:123-198` | 同一采样重复计费/重复入库，历史曲线出现重复点。 |
 | I-58 | 采集失败或非 Good 的批次必须至少有一项可观测计数（`collect_failures` / `pipeline_dropped` / `persist_dropped`），不得静默消失。 | `gateway-core/src/south/scheduler/spawning.rs:216-235`、`gateway-core/src/pipeline/mod.rs:161-181`、`gateway-core/src/queue/mod.rs:306-321` | 【有守护】`gateway-core/src/south/scheduler/tests.rs:140-210` | 全链路「看起来正常」但北向无数据，排障只能靠逐层加日志。 |
 
@@ -133,7 +133,6 @@
 | §1 采集与数据点 | I-02 | 无断言 `raw_value`/`raw_type` 与协议类型的对应关系 |
 | §1 采集与数据点 | I-04 | 无断言 `good()` 的 `timestamp == source_ts`、`stale_count == 0` |
 | §1 采集与数据点 | I-05 | 无断言协议构造器两次 `now()` 允许的时间差 |
-| §1 采集与数据点 | I-08 | 无断言 `Ok+Bad` 路径的 `stale_count=0`、`source_ts=0`、不复用 last_good |
 | §1 采集与数据点 | I-10 | 无 `quality_reason` 格式契约 |
 | §2 换算与质量 | I-12 | 无公式失败回退 `scale*raw+offset` 的测试 |
 | §2 换算与质量 | I-19 | 无 rate 上值表容量/TTL 清理测试 |
@@ -147,10 +146,9 @@
 | §4 队列入队 | I-43 | 无 micro-batch 残留 flush 的测试 |
 | §5 北向分发 | I-48 | 无「顶层 ts=构建时刻」契约测试 |
 | §6 跨阶段 | I-52 | 无阶段顺序端到端断言 |
-| §6 跨阶段 | I-56 | 无统一时间语义（尤其 `Ok+Bad` 的 `source_ts=0`）测试 |
 
 最值得优先补测的三条：
 
-1. I-08：失败点的两条构造路径字段语义分叉最直接导致现场「值为 0 / 时间戳为 1970」，且与 I-56 相互放大。
-2. I-52：阶段顺序一旦换序，过滤口径与虚拟点输入都会变，但现象分散到各下游，最难定位。
-3. I-56：统一时间语义（尤其 `Ok+Bad` 的 `source_ts=0`）仍未断言，补上可直接消除「1970 曲线」的归因歧义。
+1. I-52：阶段顺序一旦换序，过滤口径与虚拟点输入都会变，但现象分散到各下游，最难定位。
+2. I-10：`quality_reason` 仍未统一为 `<场景>:<稳定错误码>`，按冒号统计错因的脚本会把部分失败归入未知，且与新增的 `opcua_status_*` 规则并存。
+3. I-35：失败点「也落库」缺少端到端断言，I-08/I-56 的口径修正目前只验证到上报队列之前。
