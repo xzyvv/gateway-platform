@@ -64,6 +64,7 @@ pub use device_state::DeviceState;
 pub use status::DeviceStatus;
 pub use timeline::{ScheduleTimeline, Timeline, TimelineGroup, TimelineOverlap, TimelineSample};
 
+mod breaker;
 mod device_state;
 mod reload;
 mod results;
@@ -81,6 +82,9 @@ pub struct Scheduler {
     points: parking_lot::Mutex<Vec<PointConfig>>,
     pipeline: Arc<ProcessingPipeline>,
     device_states: Mutex<HashMap<String, DeviceState>>,
+    /// ROI-10（G-05）：按「组键 + 设备」维护从站级熔断状态。
+    /// 与 `device_states`（逐点退避）互补：熔断决定「还要不要试」，退避决定「多久再试」。
+    breakers: Mutex<HashMap<String, breaker::DeviceBreaker>>,
     /// 关闭信号：watch channel 支持反复 set（Notify 只能 notify_waiters 一次）
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
@@ -139,6 +143,7 @@ impl Scheduler {
             points: parking_lot::Mutex::new(points),
             pipeline,
             device_states: Mutex::new(HashMap::new()),
+            breakers: Mutex::new(HashMap::new()),
             shutdown_tx,
             shutdown_rx,
             handles: Mutex::new(HashMap::new()),

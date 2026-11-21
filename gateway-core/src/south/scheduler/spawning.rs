@@ -53,6 +53,14 @@ fn point_due(
     }
 }
 
+/// ROI-10：设备熔断键（组键 + 设备/总线）。
+///
+/// 带上组键，避免不同总线上的同名 `device_id` 共用熔断状态。
+#[inline]
+fn breaker_key(group: &str, p: &PointConfig) -> String {
+    format!("{group}\u{1f}{}", p.device_id.as_deref().unwrap_or(&p.bus))
+}
+
 impl Scheduler {
     /// 统一采集任务孵化（所有协议：modbus/dlt645/cjt188/gpio/opcua/iec104/bacnet/s7comm/...）
     ///
@@ -153,8 +161,15 @@ impl Scheduler {
                     let (due_idx, all_due) = {
                         let states = self_arc.device_states.lock();
                         let mut last = last_attempt.lock().unwrap_or_else(|e| e.into_inner());
+                        // ROI-10：熔断中的设备本轮直接跳过，不占用总线、不刷失败日志。
+                        // 跳过时不更新 `last_attempt`，冷却期满后可立刻探测。
+                        let mut breakers = self_arc.breakers.lock();
                         let mut due = Vec::with_capacity(points.len());
                         for (i, p) in points.iter().enumerate() {
+                            let bkey = breaker_key(&record_key, p);
+                            if !breakers.entry(bkey).or_default().allow(start) {
+                                continue;
+                            }
                             // 未初始化（新点 / 重载后首轮）或没有状态时一律视为到期
                             let backoff = states
                                 .get(&p.id)
@@ -212,6 +227,8 @@ impl Scheduler {
                         );
                     }
                     let elapsed_us = start.elapsed().as_micros() as u64;
+                    // ROI-10：按设备汇总本轮成败，驱动从站级熔断状态机。
+                    let mut device_outcomes: HashMap<String, bool> = HashMap::new();
                     for (point, result) in read_points.iter().zip(all_results.iter()) {
                         // 成功判定必须同时看错误和质量码：modbus `read_batch` 把失败
                         // 回填成 `Ok(DataPoint{quality:Bad})`（见 protocol/modbus/mod.rs），
@@ -224,6 +241,11 @@ impl Scheduler {
                             Err(e) => Some(e.error_code()),
                         };
                         let success = error.is_none();
+                        // 设备本轮只要有一个点成功，就不算整轮失败（避免单点偶发误熔断）
+                        let outcome = device_outcomes
+                            .entry(breaker_key(&record_key, point))
+                            .or_insert(false);
+                        *outcome = *outcome || success;
                         // 同时累计总线 / 点位维度，供运维报表与健康评分使用
                         self_arc.metrics.record_collect_scoped(
                             &point.bus,
@@ -238,6 +260,34 @@ impl Scheduler {
                         // 且发布位于「每点每轮」热路径，每次都要 clone 一次 point.id
                         // 构造事件再被立即丢弃——纯开销。采集结果已由上面的
                         // record_collect_scoped 记入指标（成功/失败/耗时），语义完整。
+                    }
+                    // ROI-10：一轮结束后更新熔断状态；打开/关闭都记一条日志，
+                    // 现场可直接看到「某台从站被暂时跳过」及其冷却时长。
+                    if !device_outcomes.is_empty() {
+                        let now = std::time::Instant::now();
+                        let mut breakers = self_arc.breakers.lock();
+                        for (bkey, any_success) in device_outcomes {
+                            if let Some(b) = breakers.get_mut(&bkey) {
+                                match b.record_round(any_success, now) {
+                                    Some(super::breaker::BreakerEvent::Opened { cooldown }) => {
+                                        tracing::warn!(
+                                            "device breaker opened: {}({}), skip {}s",
+                                            record_bus,
+                                            bkey.rsplit('\u{1f}').next().unwrap_or(""),
+                                            cooldown.as_secs()
+                                        );
+                                    }
+                                    Some(super::breaker::BreakerEvent::Closed) => {
+                                        tracing::info!(
+                                            "device breaker closed: {}({}), resuming normal polling",
+                                            record_bus,
+                                            bkey.rsplit('\u{1f}').next().unwrap_or("")
+                                        );
+                                    }
+                                    None => {}
+                                }
+                            }
+                        }
                     }
                     self_arc.handle_results(read_points, all_results).await;
                     self_arc.timeline.record(
