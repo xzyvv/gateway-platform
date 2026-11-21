@@ -134,6 +134,7 @@ sudo systemctl start gateway
       "data_type": "u16",
       "register_count": 1,
       "interval": 1,
+      "timeout_ms": 2000,
       "scale": 0.1,
       "pt_ratio": 100,
       "unit": "V"
@@ -153,6 +154,9 @@ sudo systemctl start gateway
   }
 }
 ```
+
+> `points[].timeout_ms`（1~600000）是**单点读超时**，省略或 `null` 时沿用所属总线的
+> `timeout_ms`。慢表可单独放大，不会拖慢同总线上的其它点位；写路径仍使用总线超时。
 
 > `web.listen_addr` 默认回环（仅本机可访问）。要开放车间 LAN 需改成 `0.0.0.0:8080`，
 > **但必须同时设置 `web.password_hash`**，否则触发 fail-closed 拒绝启动。
