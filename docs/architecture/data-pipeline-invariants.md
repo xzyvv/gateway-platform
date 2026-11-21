@@ -30,14 +30,33 @@
 |---|---|---|---|---|
 | I-01 | 成功点的 `value` 必须等于 `convert_value(point, raw)`：先公式（存在则用公式，否则 `scale*raw+offset`），再按单位乘 CT/PT。 | `gateway-core/src/south/protocol/modbus/batch.rs:100-103`、`gateway-core/src/south/protocol/common/decode.rs:184-215` | 【有守护】`gateway-core/src/south/protocol/common/decode/tests.rs:161-237` | 上报工程量整体偏大/偏小，换算类故障与采集类故障无法区分。 |
 | I-02 | 成功点的 `raw_value` 必须是协议直接解析出的原始值，`raw_type` 必须是协议数据类型（如 `u16`/`bool`/`f32`），二者不得被换算覆盖。 | `gateway-core/src/south/protocol/modbus/batch.rs:122-138`、`gateway-core/src/engine/model.rs:143-178` | 【无（缺口）】没有断言 `raw_type`/`raw_value` 与协议类型的对应关系 | 报文里只有工程量，无法核对原始码值；现场无法区分「协议解析错」与「换算错」。 |
-| I-03 | `DataPoint::good` 遇到 NaN/±Inf 必须把对应字段清零，并把质量降为 `Uncertain`；`value` 非法时 reason 为 `non_finite_value`，仅 `raw_value` 非法时为 `non_finite_raw_value`。 | `gateway-core/src/engine/model.rs:213-240` | 【有守护】`gateway-core/src/engine/model.rs:400-435` | NaN 进入 MQTT payload（序列化为 null）或 SQLite REAL 列，下游拒收或比较异常。 |
+| I-03 | `DataPoint::good` 遇到 NaN/±Inf 必须把对应字段清零，并把质量降为 `Uncertain`；`value` 非法时 reason 为 `value:NON_FINITE`，仅 `raw_value` 非法时为 `value:NON_FINITE_RAW`。 | `gateway-core/src/engine/model.rs:213-240` | 【有守护】`gateway-core/src/engine/model.rs:400-435` | NaN 进入 MQTT payload（序列化为 null）或 SQLite REAL 列，下游拒收或比较异常。 |
 | I-04 | `DataPoint::good` 构造的 Good 点必须满足 `timestamp == source_ts` 且 `stale_count == 0`。 | `gateway-core/src/engine/model.rs:241-253` | 【无（缺口）】 | 诊断时无法按该构造路径依赖「采样时刻=上送时刻」这一简化假设。 |
 | I-05 | 协议批量构造成功点时 `timestamp` 与 `source_ts` 是两次 `DataPoint::now()` 调用，允许相差数毫秒，不保证严格相等。 | `gateway-core/src/south/protocol/modbus/batch.rs:134-135`、`gateway-core/src/south/protocol/modbus/collector.rs:296-297` | 【无（缺口）】 | 若有下游按 `source_ts == timestamp` 去重或判定，会漏掉部分点。 |
 | I-06 | `DataPoint::failed` 只有在存在 last_good 时 `raw_type` 才为 `last_good` 且 `value` 复用该值；从未成功采集时 `raw_type` 必须为 `none`、`value=0`、`stale_count=0`。 | `gateway-core/src/engine/model.rs:261-298` | 【有守护】`gateway-core/src/engine/model.rs:370-397` | 把 0.0 当真实读数；平台无法识别「这个点从未采到过」。 |
 | I-07 | 调度器 `Err` 路径的失败点必须满足：`source_ts` 为 last_good 的原始采集时刻，`stale_count` 随连续失败递增，`quality` 由设备状态递进得出。 | `gateway-core/src/south/scheduler/results.rs:115-134`、`:153-161`、`gateway-core/src/engine/model.rs:293-295` | 【有守护】`gateway-core/src/engine/model.rs:377-379`（`source_ts`/`stale_count`）、`gateway-core/src/south/scheduler/device_state/tests.rs:19-62`（质量递进与 stale 计数） | 失败点时间戳变成本轮时间，平台无法判断值已经陈旧了多久。 |
 | I-08 | 采集失败以 `Ok(DataPoint{quality: Bad})` 返回时，必须与 `Err` 路径同口径：复用 last_good 值与采集时刻（`raw_type=last_good`）；从未成功才保持 `none`/0。不得再上送 value=0、source_ts=0。 | `gateway-core/src/south/scheduler/results.rs:26-54`（统一构造）、`:106-115`（接入两种降级路径） | 【有守护】`gateway-core/src/south/scheduler/tests.rs:834-911`（契约）、`:915-977`（经 `handle_results` 到上报队列的端到端接线） | 同一条「失败」在两条路径上字段语义不同：一条带 last_good，另一条是 0 值且 `source_ts=0`（1970），现场极易误读。 |
 | I-09 | `Ok` 且 `quality != Good` 的结果必须计入采集失败指标，不能按 `result.is_ok()` 判定成功。 | `gateway-core/src/south/scheduler/spawning.rs:216-235` | 【有守护】`gateway-core/src/south/scheduler/tests.rs:140-210` | Modbus 整条总线故障但 `collect_failures` 为 0，监控显示零故障。 |
-| I-10 | `quality_reason` 不是统一的 `<场景>:<稳定错误码>` 格式：成功为空或 `non_finite_*`，解码失败为 `modbus_decode_err`（无冒号），质量规则为 `quality_rule:<name>`，虚拟点为 `virtual_point_error`。 | `gateway-core/src/engine/model.rs:158-161`、`gateway-core/src/south/protocol/modbus/batch.rs:129-133`、`gateway-core/src/pipeline/quality_rules.rs:117-120`、`gateway-core/src/pipeline/virtual_point.rs:342-356` | 【无（缺口）】各测试只断言具体字面值，没有格式契约 | 按冒号切分统计错因的脚本会把解码失败、换算降级归入未知分类。 |
+| I-10 | 所有非空 `quality_reason` 统一为 `<场景>:<稳定码>`（成功为空串）：`collect_failed:<CODE>`、`modbus_decode:DECODE`、`value:NON_FINITE[_RAW]`、`convert:NON_FINITE`、`quality_rule:<规则名>`、`virtual_point:ERROR`、`aggregate:EMPTY_WINDOW`、`opcua_status_<Status>:OTHER`。 | `gateway-core/src/south/protocol/mod.rs:224-226`、`gateway-core/src/engine/model.rs:223`、`gateway-core/src/south/protocol/modbus/batch.rs:129-133`、`gateway-core/src/pipeline/convert.rs:214`、`gateway-core/src/pipeline/virtual_point.rs:351`、`gateway-core/src/pipeline/nodes.rs:54`、`gateway-core/src/pipeline/quality_rules.rs:119` | 【有守护】`gateway-core/src/engine/model.rs` 的 `quality_reason_follows_scene_code_contract`（校验公共构造函数 + 扫描各阶段赋值字面量） | 按冒号切分统计错因的脚本会把解码失败、换算降级归入未知分类。 |
+
+### 质量原因编码表（I-10 决策）
+
+约定：`<场景>:<码>`，场景固定小写标识；成功时为空串。码尽量复用跨协议错误码
+（`TIMEOUT` / `NO_REPLY` / `CRC` / `DECODE` / `IO` / `CONFIG` / `OTHER`）。
+
+| 场景 | 码 | 产生位置 | 说明 |
+|---|---|---|---|
+| `collect_failed` | 跨协议错误码 | `CollectorError::quality_reason("collect_failed")` | 调度器采集失败的默认场景 |
+| `modbus_read_failed` / `modbus_write_failed` | 跨协议错误码 | Modbus 读写路径 | 协议级失败场景 |
+| `modbus_decode` | `DECODE` | `modbus/batch.rs` | Modbus 批量解码失败 |
+| `value` | `NON_FINITE` / `NON_FINITE_RAW` | `DataPoint::good` | 非有限值降级（`value` 优先于 `raw_value`） |
+| `convert` | `NON_FINITE` | `pipeline/convert.rs` | 线性换算结果非有限 |
+| `quality_rule` | 规则名 | `pipeline/quality_rules.rs` | 第二段为用户配置的规则名（例外，但场景固定） |
+| `virtual_point` | `ERROR` | `pipeline/virtual_point.rs` | 公式缺失依赖/循环引用等求值失败 |
+| `aggregate` | `EMPTY_WINDOW` | `pipeline/nodes.rs` | 聚合窗口内无样本 |
+| `opcua_status_<Status>` | `OTHER` | OPC UA 读路径 | 场景内嵌原始 StatusCode，便于北向分类 |
+
+新增原因时必须带冒号场景前缀，`quality_reason_follows_scene_code_contract` 会扫描源码字面量拦截遗漏。
 
 ---
 
@@ -50,7 +69,7 @@
 | I-13 | 换算结果非有限时必须回退为 `raw`（不是 0、不是 `Uncertain`）。 | `gateway-core/src/south/protocol/common/decode.rs:216-237` | 【有守护】`gateway-core/src/south/protocol/common/decode/tests.rs:264-291` | 极端变比或公式错误时该点上报原始寄存器值，量纲与同设备其它点不一致。 |
 | I-14 | CT/PT 生效范围必须由 `unit` 决定：电压只 PT、电流只 CT、功率/电量/空/未知单位 Both、功率因数 None；读写两侧共用同一判定。 | `gateway-core/src/config/point.rs:394-415`、`gateway-core/src/south/protocol/common/decode.rs:203-215`、`gateway-core/src/south/protocol/common/decode.rs:271-291` | 【有守护】`gateway-core/src/south/protocol/common/decode/tests.rs:182-231`、`:295-356` | 电压点误填 CT 后被放大 30 倍；或写入侧不还原。 |
 | I-15 | 反向换算必须与读路径对偶：先除变比，再 `(v-offset)/scale`；`scale=0` 时不反解；公式不反推。 | `gateway-core/src/south/protocol/common/decode.rs:241-292` | 【有守护】`gateway-core/src/south/protocol/common/decode/tests.rs:295-356` | 下发值与回读值长期对不上，形成「写成功、读不符」。 |
-| I-16 | convert 模板只作用于 Good 点：linear 结果非有限时降级 `Uncertain` 并置 reason `convert_non_finite`；enum 只写 `value_text`，不得改 `value`。 | `gateway-core/src/pipeline/convert.rs:186-237` | 【有守护】`gateway-core/src/pipeline/convert.rs:458-473`、`:553-575` | 坏值继续上行；枚举点数值被文本覆盖后无法参与阈值/报警。 |
+| I-16 | convert 模板只作用于 Good 点：linear 结果非有限时降级 `Uncertain` 并置 reason `convert:NON_FINITE`；enum 只写 `value_text`，不得改 `value`。 | `gateway-core/src/pipeline/convert.rs:186-237` | 【有守护】`gateway-core/src/pipeline/convert.rs:458-473`、`:553-575` | 坏值继续上行；枚举点数值被文本覆盖后无法参与阈值/报警。 |
 | I-17 | 同一 point 的多条 convert 规则必须按配置顺序应用（例如 linear 先算、enum 后查表）。 | `gateway-core/src/pipeline/convert.rs:51-65`、`:197-201` | 【有守护】`gateway-core/src/pipeline/convert.rs:381-420` | enum 用换算前的值查表，命中错误标签。 |
 | I-18 | 质量规则只作用于 Good 点，按规则列表顺序首个命中即生效并终止；命中原因固定为 `quality_rule:<name>`。 | `gateway-core/src/pipeline/quality_rules.rs:68-123` | 【有守护】`gateway-core/src/pipeline/quality_rules.rs:208-300` | 已判 Bad/Uncertain 的点被「洗白」；多个规则叠加改写原始故障原因。 |
 | I-19 | rate 规则必须与同 `point_id` 的上一次采样值比较，首样本永不命中；上值表上限 4096 点、TTL 1 小时，超限先按时间淘汰、仍超则整体清空。 | `gateway-core/src/pipeline/quality_rules.rs:27-31`、`:84-106`、`:150-158` | 【有守护】上一采样比较 `:239-258`；【无（缺口）】容量/TTL 清理 | 点位数逼近上限时短时丢失历史基准，rate 规则在部分点上静默失效。 |
@@ -133,7 +152,7 @@
 | §1 采集与数据点 | I-02 | 无断言 `raw_value`/`raw_type` 与协议类型的对应关系 |
 | §1 采集与数据点 | I-04 | 无断言 `good()` 的 `timestamp == source_ts`、`stale_count == 0` |
 | §1 采集与数据点 | I-05 | 无断言协议构造器两次 `now()` 允许的时间差 |
-| §1 采集与数据点 | I-10 | 无 `quality_reason` 格式契约 |
+| §1 采集与数据点 | I-10 | 已补 `<场景>:<码>` 契约测试与编码表（ROI-27 第二批） |
 | §2 换算与质量 | I-12 | 无公式失败回退 `scale*raw+offset` 的测试 |
 | §2 换算与质量 | I-19 | 无 rate 上值表容量/TTL 清理测试 |
 | §2 换算与质量 | I-20 | 无「质量规则不得产出 Stale」测试 |
@@ -149,6 +168,6 @@
 
 最值得优先补测的三条：
 
-1. I-10：`quality_reason` 仍未统一为 `<场景>:<稳定错误码>`，按冒号统计错因的脚本会把部分失败归入未知，且与新增的 `opcua_status_*` 规则并存。**这条是质量口径缺陷，需要先定编码表再补断言**（ROI-27 下一批）。
+1. I-10 → 已补（ROI-27 第二批）：原因统一为 `<场景>:<码>` 并加源码字面量契约测试；新增原因必须遵守编码表。
 2. I-52 → 已补（ROI-27 第一批）；质量规则段仍可单独加断言。
 3. I-35 → 已补（ROI-27 第一批）；剩余可补 I-40（`persist_failed` 与 SQLite 写失败）与 I-43（micro-batch 残留 flush）。

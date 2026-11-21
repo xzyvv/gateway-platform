@@ -31,12 +31,12 @@
 | ROI-25 | ✅ 已完成 | `608418f` | 读路径设备明确拒绝统一 `DeviceRejected`：MC 读结束码、S7 读 PDU/逐项返回码、OPC UA Bad/Uncertain 无值；IEC101 已在 ROI-22 完成；补 4 个测试 |
 | ROI-20 | ✅ 已完成 | `17741dc` | 串口在途写被 reload 取消：`BusTransaction.frame_sent` + `TxnResponder` Drop 回送 `WriteUncertain`（5102），不再按 5101 可重试；补 2 个并发测试（写→5102、读→BusClosed） |
 | ROI-26 | ✅ 已完成 | `a6d2949` | 应答归属校验统一：MC 3E/4E 校验网络号/PC 号/模块 I/O/站号回显；S7 读（单点/多 item）与写（单点/批量）校验 PDU reference；OPC UA 由协议栈配对无额外标识；补 4 个测试 |
-| ROI-27 | 🚧 进行中 | `386f0ea`（第一批） | 第一批已补 I-22 / I-35 / I-52：管道端到端用例锁定「死区在换算之前」「失败点必入队」「边缘→换算→虚拟点」；剩余 I-10（需先定质量原因编码表）与 UA/IEC 缺口待下一批 |
+| ROI-27 | 🚧 进行中 | `386f0ea`（第一批）、`6de8608`（第二批） | 第一批补 I-22 / I-35 / I-52；第二批补 I-10（质量原因统一 `<场景>:<码>` + 编码表 + 源码字面量契约测试）；剩余 OPC UA（UA-R2/R3/R8）与 IEC101（R10 需先修代码）待下一批 |
 | ROI-18 | ✅ 已完成 | `1084318` | 新增重载与在途事务并发语义审计文档：锁不互斥、reload 不调 `abort_all`、串口/TCP 两类在途写结局与重复写窗口，附对 ROI-12 的输入 |
 | ROI-17 | ✅ 已完成 | `c91ec95` | 新增数据处理链路不变量清单：58 条可判定不变量，标出 16 条测试缺口（13 完全无 + 3 部分；I-08/I-28/I-49/I-56 已由 ROI-19/24/23 补齐） |
 | ROI-16 | ✅ 已完成 | `05dd36f` | 新增 6 个次要协议族不变量清单：46 条已守护、37 条缺口（ROI-21 补齐 UA-R4/R7 并关闭 UA-E2）；优先补测 OPC UA 与 IEC101 |
 
-> 验证：`cargo test -p gateway-core --lib` 1793 passed、`cargo test -p gateway-api --lib` 311 passed、
+> 验证：`cargo test -p gateway-core --lib` 1794 passed、`cargo test -p gateway-api --lib` 311 passed、
 > `cargo test -p gateway-core --test virtual_point_pipeline` 2 passed、`cargo clippy --all-targets -- -D warnings` 通过、
 > `cargo fmt --check` 通过、`vue-tsc --noEmit` 通过、前端 `vitest` 2419 passed。
 
@@ -289,7 +289,7 @@
 - **依赖**：无；可参考 ROI-22 在 IEC101 上已验证的「链路/公共地址 + 否定确认」范式（`f7f4fdb` / `d8d85bc`）。
 
 #### ROI-27 把三份文档里的测试缺口补成守护用例
-- **现状**：🚧 进行中（第一批 `386f0ea` 已提交）。已补 3 条：I-52「边缘→换算→虚拟点」顺序、I-22「死区作用于换算之前」、I-35「失败点必入队」，用例在 `gateway-core/src/pipeline/mod.rs`（`stage_order_is_edge_then_convert_then_virtual` / `failed_points_reach_queue`）。I-10 需先定 `quality_reason` 编码表，与 UA/IEC101 剩余项留待下一批。
+- **现状**：🚧 进行中。第一批 `386f0ea` 补 I-52「边缘→换算→虚拟点」、I-22「死区作用于换算之前」、I-35「失败点必入队」；第二批 `6de8608` 补 I-10：`quality_reason` 统一为 `<场景>:<码>`（`value:NON_FINITE` / `convert:NON_FINITE` / `virtual_point:ERROR` / `aggregate:EMPTY_WINDOW` / `modbus_decode:DECODE`），并加源码字面量契约测试 `quality_reason_follows_scene_code_contract`。剩余 UA/IEC101 缺口待下一批。
 - **现在的毛病**：数据链路 16 条不变量（13 条完全无守护 + 3 条部分守护）、协议族 30 条不变量**只靠代码约定维持**，没有自动化断言。清单已经把它们列出来了，但没有一条变成用例。
 - **现场会看到什么**：**本身不直接产生故障**，但下一次改 pipeline / 换算 / 协议写路径时，没有回归网兜底 —— 同一个坑换个协议再踩一次。
 - **工作量**：**中**。按 ROI-17 的缺口汇总表与 ROI-16 的逐族表格逐条补断言，优先级 I-52 / I-10 / I-35 → OPC UA 剩余缺口（UA-R2/R3/R8）→ IEC101 的 R10/R4。约 3~5 天（可拆多批）。
