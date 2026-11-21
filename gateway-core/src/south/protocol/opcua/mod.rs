@@ -151,6 +151,78 @@ fn rejected_status(dv: &DataValue) -> Option<CollectorError> {
     }
 }
 
+/// UA-R3 / UA-R8：把服务端返回的 `DataValue` 按**请求下标**回填。
+///
+/// 结果数不足时只对缺失的下标逐点报 `InvalidFrame`，不得错位挂到其它点位上。
+/// 抽成纯函数是为了让单测能直接覆盖「短结果」与「顺序对应」两种场景。
+fn fill_batch_results(
+    points: &[PointConfig],
+    parse_ok: &[bool],
+    parse_errors: &[String],
+    data_values: &[DataValue],
+    now: i64,
+    mut set: impl FnMut(usize, CollectorResult<DataPoint>),
+) {
+    let mut err_idx = 0;
+    for (i, p) in points.iter().enumerate() {
+        if !parse_ok[i] {
+            let msg = parse_errors
+                .get(err_idx)
+                .cloned()
+                .unwrap_or_else(|| "invalid node id".into());
+            err_idx += 1;
+            set(i, Err(CollectorError::InvalidFrame(msg)));
+            continue;
+        }
+
+        if i >= data_values.len() {
+            set(
+                i,
+                Err(CollectorError::InvalidFrame(
+                    "OPC UA batch read returned fewer results than expected".into(),
+                )),
+            );
+            continue;
+        }
+
+        let dv = &data_values[i];
+        let value = match extract_value(dv) {
+            Ok(v) => v,
+            Err(e) => {
+                // ROI-25：Bad 状态且无值 = 服务端明确拒绝该点位
+                set(i, Err(rejected_status(dv).unwrap_or(e)));
+                continue;
+            }
+        };
+
+        // UA-E2: 与单点路径同口径——Bad / Uncertain 必须带可辨识原因。
+        let (quality, quality_reason) = quality_from_status(dv.status.as_ref());
+
+        let source_ts = dv
+            .source_timestamp
+            .as_ref()
+            .map(|t| t.as_chrono().timestamp_millis())
+            .unwrap_or(0);
+
+        set(
+            i,
+            Ok(DataPoint {
+                point_id: p.id.clone(),
+                device_id: p.device_id.clone().unwrap_or_default(),
+                value,
+                raw_value: value,
+                raw_type: "opcua".into(),
+                quality,
+                quality_reason,
+                timestamp: now,
+                source_ts,
+                stale_count: 0,
+                value_text: None,
+            }),
+        );
+    }
+}
+
 /// OPC UA Client 采集器
 pub struct OpcUaCollector {
     endpoint: String,
@@ -452,64 +524,7 @@ impl OpcUaCollector {
         self.record_read_ok();
 
         let now = chrono::Utc::now().timestamp_millis();
-        let mut err_idx = 0;
-        for (i, p) in points.iter().enumerate() {
-            if !parse_ok[i] {
-                let msg = parse_errors
-                    .get(err_idx)
-                    .cloned()
-                    .unwrap_or_else(|| "invalid node id".into());
-                err_idx += 1;
-                set(i, Err(CollectorError::InvalidFrame(msg)));
-                continue;
-            }
-
-            if i >= data_values.len() {
-                set(
-                    i,
-                    Err(CollectorError::InvalidFrame(
-                        "OPC UA batch read returned fewer results than expected".into(),
-                    )),
-                );
-                continue;
-            }
-
-            let dv = &data_values[i];
-            let value = match extract_value(dv) {
-                Ok(v) => v,
-                Err(e) => {
-                    // ROI-25：Bad 状态且无值 = 服务端明确拒绝该点位
-                    set(i, Err(rejected_status(dv).unwrap_or(e)));
-                    continue;
-                }
-            };
-
-            // UA-E2: 与单点路径同口径——Bad / Uncertain 必须带可辨识原因。
-            let (quality, quality_reason) = quality_from_status(dv.status.as_ref());
-
-            let source_ts = dv
-                .source_timestamp
-                .as_ref()
-                .map(|t| t.as_chrono().timestamp_millis())
-                .unwrap_or(0);
-
-            set(
-                i,
-                Ok(DataPoint {
-                    point_id: p.id.clone(),
-                    device_id: p.device_id.clone().unwrap_or_default(),
-                    value,
-                    raw_value: value,
-                    raw_type: "opcua".into(),
-                    quality,
-                    quality_reason,
-                    timestamp: now,
-                    source_ts,
-                    stale_count: 0,
-                    value_text: None,
-                }),
-            );
-        }
+        fill_batch_results(points, &parse_ok, &parse_errors, &data_values, now, set);
 
         let mut guard = slots.lock().unwrap_or_else(|e| e.into_inner());
         guard

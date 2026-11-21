@@ -441,3 +441,120 @@ async fn ua_e2_bad_point_does_not_trip_session_teardown() {
         );
     }
 }
+
+// ============================================================
+// ROI-27：UA-R3 / UA-R8 批量回填不变量
+// ============================================================
+
+fn batch_point(id: &str) -> PointConfig {
+    PointConfig {
+        id: id.into(),
+        device_id: Some("dev".into()),
+        ..PointConfig::default()
+    }
+}
+
+fn double_value(v: f64) -> DataValue {
+    DataValue {
+        value: Some(opcua::types::Variant::Double(v)),
+        ..Default::default()
+    }
+}
+
+/// UA-R3：服务端少返回结果时，只有缺失的下标报 `InvalidFrame`，
+/// 已返回的点位仍拿到自己的值，不得整体失败或错位。
+#[test]
+fn ua_r3_short_batch_marks_only_missing_index() {
+    let points = vec![batch_point("p1"), batch_point("p2"), batch_point("p3")];
+    let mut out: Vec<Option<CollectorResult<DataPoint>>> = points.iter().map(|_| None).collect();
+    fill_batch_results(
+        &points,
+        &[true, true, true],
+        &[],
+        &[double_value(1.5), double_value(2.5)],
+        100,
+        |i, r| out[i] = Some(r),
+    );
+
+    let p1 = out[0].take().expect("p1 必须有结果").expect("p1 应成功");
+    assert_eq!(p1.point_id, "p1");
+    assert!((p1.value - 1.5).abs() < 1e-9);
+    let p2 = out[1].take().expect("p2 必须有结果").expect("p2 应成功");
+    assert!((p2.value - 2.5).abs() < 1e-9);
+
+    match out[2].take().expect("p3 必须有结果") {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("fewer results"), "原因需可辨识: {msg}");
+        }
+        other => panic!("缺失下标必须报 InvalidFrame，实际 {other:?}"),
+    }
+}
+
+/// UA-R8：返回顺序必须与请求下标一一对应，不得因某点解析失败而整体前移。
+#[test]
+fn ua_r8_batch_values_keep_request_order() {
+    let points = vec![batch_point("p1"), batch_point("p2"), batch_point("p3")];
+    let mut out: Vec<Option<CollectorResult<DataPoint>>> = points.iter().map(|_| None).collect();
+    // 第 2 个点地址解析失败（parse_ok=false），但服务端仍按原下标返回 3 个值
+    fill_batch_results(
+        &points,
+        &[true, false, true],
+        &["bad node id".into()],
+        &[double_value(10.0), double_value(20.0), double_value(30.0)],
+        200,
+        |i, r| out[i] = Some(r),
+    );
+
+    let p1 = out[0].take().unwrap().expect("p1 成功");
+    assert!((p1.value - 10.0).abs() < 1e-9, "p1 不得拿到后面的值");
+    assert!(matches!(
+        out[1].take().unwrap(),
+        Err(CollectorError::InvalidFrame(msg)) if msg.contains("bad node id")
+    ));
+    let p3 = out[2].take().unwrap().expect("p3 成功");
+    assert!((p3.value - 30.0).abs() < 1e-9, "p3 必须保持第三个下标的值");
+}
+
+/// UA-R2：生产路径不显式 connect，首次 read 必须先惰性建链再发请求。
+#[cfg(feature = "opcua-server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ua_r2_read_connects_lazily_before_first_read() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定本地端口");
+    let port = listener.local_addr().expect("取本地端口").port();
+    let endpoint = format!("opc.tcp://127.0.0.1:{port}/");
+    let (server, _handle) = ServerBuilder::new_anonymous("gw-opcua-ua-r2-test")
+        .application_uri("urn:gateway:opcua-ua-r2-test-server")
+        .create_sample_keypair(true)
+        .trust_client_certs(true)
+        .discovery_urls(vec![endpoint.clone()])
+        .diagnostics_enabled(true)
+        .build()
+        .expect("构建测试服务端");
+    tokio::spawn(server.run_with(listener));
+
+    let collector = OpcUaCollector::new(endpoint, "bus_opcua_ua_r2".into());
+    assert!(
+        !collector.connected.load(Ordering::Relaxed),
+        "前提：构造后未建链"
+    );
+
+    let point: PointConfig = serde_json::from_value(serde_json::json!({
+        "id": "ua_r2",
+        "bus": "bus_opcua_ua_r2",
+        "protocol": "opcua",
+        "address": "ns=2;i=999999",
+        "interval": 1
+    }))
+    .expect("构造点位配置");
+
+    // 节点不存在，但 read 入口必须先完成建链；不能因未连接就跳过建链
+    let _ = tokio::time::timeout(Duration::from_secs(10), collector.read(&point))
+        .await
+        .expect("read 超时");
+    assert!(
+        collector.connected.load(Ordering::Relaxed),
+        "read 入口必须先惰性建链"
+    );
+}
