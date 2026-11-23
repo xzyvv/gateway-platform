@@ -207,14 +207,18 @@ fn point_data_type(index: u8) -> crate::engine::model::PointDataType {
 }
 
 /// 3E 响应头校验 + 帧体长度推导（生产 `read_response_3e` 同一条路径）。
+///
+/// ROI-26 起 3E 头会回显站号，校验需要「本次请求的站号」，
+/// 因此这里与生产同签名地把 `station` 透传下去（fuzz 侧自行给值）。
 #[cfg(feature = "mc")]
-pub fn mc_parse_response_header_3e(head: &[u8]) -> Result<usize, String> {
-    crate::south::protocol::mc::frames::parse_response_header_3e(head).map_err(|e| e.to_string())
+pub fn mc_parse_response_header_3e(head: &[u8], station: u8) -> Result<usize, String> {
+    crate::south::protocol::mc::frames::parse_response_header_3e(head, station)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(feature = "mc")]
-pub fn mc_parse_response_header_4e(head: &[u8], serial: u16) -> Result<usize, String> {
-    crate::south::protocol::mc::frames::parse_response_header_4e(head, serial)
+pub fn mc_parse_response_header_4e(head: &[u8], serial: u16, station: u8) -> Result<usize, String> {
+    crate::south::protocol::mc::frames::parse_response_header_4e(head, serial, station)
         .map_err(|e| e.to_string())
 }
 

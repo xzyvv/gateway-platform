@@ -525,6 +525,11 @@ pub(crate) fn asdu_cot(asdu: &[u8]) -> Option<u16> {
 ///
 /// 返回 `None` 表示 ASDU 头部不足（公共地址字段被截断）——调用方应视为解码失败，
 /// 而不是默认为本站数据。
+///
+/// 门控说明：调用方只有 IEC101（`iec101`），本模块却同时被 IEC104 引入；
+/// 仅开 IEC104 的构建（如 `sku-standard`）下本函数没有调用方，
+/// 按调用方 feature 门控，避免 CI dead_code 门禁报错。
+#[cfg(feature = "iec101")]
 pub(crate) fn asdu_common_addr(asdu: &[u8], addr_len: u8) -> Option<u16> {
     let ca = ca_len(addr_len);
     if asdu.len() < 4 + ca {

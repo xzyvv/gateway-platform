@@ -145,6 +145,11 @@ pub struct BusManager {
     ///
     /// 在 `spawn_with` 时按 `BusConfig` 快照一次，使「等应答」与「总线重试」
     /// 引用同一套超时 / 重试参数，避免两处硬编码漂移（原 #107）。
+    ///
+    /// 门控说明：只有 dlt645 / cjt188 用它推导 group_timeout 下限（见
+    /// [`BusManager::reply_deadline`]），协议裁剪构建下无调用方；按 feature 门控，
+    /// `test` 保留给单测直接断言该数值关系（CI dead_code 门禁）。
+    #[cfg(any(feature = "dlt645", feature = "cjt188", test))]
     reply_budget: Duration,
     /// 读路径可用的最大并发在途事务数（见 [`BusManager::max_concurrency`]）。
     /// Modbus TCP 取自 `BusConfig.tcp_concurrent`（默认 8）；串口总线恒为 1。
@@ -214,6 +219,7 @@ impl BusManager {
         let retry_count = bus.retry_count.unwrap_or(DEFAULT_RETRY_COUNT);
         let retry_delay =
             Duration::from_millis(bus.retry_delay_ms.unwrap_or(DEFAULT_RETRY_DELAY_MS));
+        #[cfg(any(feature = "dlt645", feature = "cjt188", test))]
         let reply_budget = bus_retry_budget(
             Duration::from_millis(bus.timeout_ms),
             retry_count,
@@ -251,6 +257,7 @@ impl BusManager {
             name,
             tcp_addr,
             timeout_ms,
+            #[cfg(any(feature = "dlt645", feature = "cjt188", test))]
             reply_budget,
             max_inflight,
             retry_count,
@@ -634,6 +641,10 @@ impl BusManager {
     /// 必须 ≥ [`bus_retry_budget`]，否则重试成功的应答还没回传就被判超时丢弃
     /// （原 #107 静默丢数）。`spawn_with` 时已把重试参数快照进 `reply_budget`，
     /// 这里只做纯加法，便于测试以纯函数断言数值关系。
+    ///
+    /// 门控说明：调用方是 dlt645 / cjt188 的 group_timeout 下限推导，
+    /// 协议裁剪构建下无调用方（CI dead_code 门禁）。
+    #[cfg(any(feature = "dlt645", feature = "cjt188", test))]
     pub(crate) fn reply_deadline(&self) -> Duration {
         self.reply_budget.saturating_add(REPLY_MARGIN)
     }

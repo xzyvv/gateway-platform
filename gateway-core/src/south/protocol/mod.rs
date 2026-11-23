@@ -349,6 +349,20 @@ pub(crate) fn mark_write_uncertain_with(
 }
 
 /// 判据只有一条：写已发出但无法证明其未生效 → WriteUncertain。
+///
+/// 门控说明：调用方 `mark_write_uncertain` / `mark_write_uncertain_with` /
+/// `mark_write_uncertain_counted` 分别按协议 feature 门控，这里取三者并集，
+/// 避免协议裁剪构建（全部协议关闭）下出现无调用方的死符号（CI dead_code 门禁）。
+#[cfg(any(
+    feature = "modbus",
+    feature = "dlt645",
+    feature = "cjt188",
+    feature = "s7comm",
+    feature = "fins",
+    feature = "mc",
+    feature = "iec104",
+    feature = "bacnet"
+))]
 fn classify_write_uncertain(
     metrics: Option<&crate::engine::metrics::Metrics>,
     e: CollectorError,

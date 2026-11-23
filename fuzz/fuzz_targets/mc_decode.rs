@@ -12,15 +12,23 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // 1) 3E / 4E 响应头：长度域（head[7..9] / head[9..11]）完全由对端控制
-    let _ = api::mc_parse_response_header_3e(data);
+    // 站号回显字节的位置：3E 在 head[6]，4E 在 head[8]
+    // （见 frames.rs 的 check_qna_echo 字段布局：[网络号, PC, I/O 高, I/O 低, 站号]）
+    let station_3e = data.get(6).copied().unwrap_or(0);
+    let station_4e = data.get(8).copied().unwrap_or(0);
+    let _ = api::mc_parse_response_header_3e(data, station_3e);
+    // 站号不匹配分支（别站应答，真实串包场景）
+    let _ = api::mc_parse_response_header_3e(data, station_3e ^ 0xFF);
     let serial = if data.len() >= 2 {
         u16::from_le_bytes([data[0], data[1]])
     } else {
         0
     };
-    let _ = api::mc_parse_response_header_4e(data, serial);
+    let _ = api::mc_parse_response_header_4e(data, serial, station_4e);
     // 序列号不匹配分支（真实串包场景）
-    let _ = api::mc_parse_response_header_4e(data, serial.wrapping_add(1));
+    let _ = api::mc_parse_response_header_4e(data, serial.wrapping_add(1), station_4e);
+    // 站号不匹配分支（4E 独有：站号回显在固定头之后）
+    let _ = api::mc_parse_response_header_4e(data, serial, station_4e ^ 0xFF);
 
     // 2) 1E 响应头：数据长度由请求点数推导，取边界点数
     if data.len() >= 2 {
