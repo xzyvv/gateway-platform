@@ -129,7 +129,8 @@ test('点位新增与删除：POST / DELETE 各走通一次并给出成功提示
   // 回归点：pointFormRef 曾被漏在 PointList 的解构列表之外，
   // 导致 validate() 拿到 undefined 而静默 return —— 点「创建」永远无反应。
   await dialog.getByRole('button', { name: '创建' }).click()
-  await expect(page.getByText('点位创建成功')).toBeVisible()
+  // 提示文案已统一为「已X」口径（85bd2fe），与 usePoints/form.ts 的成功提示保持一致
+  await expect(page.getByText('已创建点位')).toBeVisible()
   expect(created.body).toMatchObject({ id: 'p2', address: '40002', interval: expect.any(Number) })
 
   // 删除走行内「更多」下拉 + 确认框
@@ -138,7 +139,8 @@ test('点位新增与删除：POST / DELETE 各走通一次并给出成功提示
   await page.getByRole('menuitem', { name: '删除' }).click()
   await page.getByRole('dialog').getByRole('button', { name: '删除' }).click()
 
-  await expect(page.getByText('删除成功')).toBeVisible()
+  // exact 匹配：避免命中页面上的「已删除点位」（回收站入口）
+  await expect(page.getByText('已删除', { exact: true })).toBeVisible()
   expect(deleted).toBe(true)
 })
 
