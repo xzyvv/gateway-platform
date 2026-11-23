@@ -172,7 +172,7 @@ impl Collector for FinsCollector {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .iter_mut()
-                .map(|s| s.take().unwrap_or_else(|| Err(CollectorError::NoReply)))
+                .map(|s| s.take().unwrap_or(Err(CollectorError::NoReply)))
                 .collect();
             out
         })
