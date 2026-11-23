@@ -96,10 +96,11 @@
 - **证据**：[config/bus.rs](../gateway-core/src/config/bus.rs#L43-L46)（`timeout_ms` 在 BusConfig）；[scheduler/spawning.rs](../gateway-core/src/south/scheduler/spawning.rs#L104-L106)（`batch_timeout_budget(points.len())`）。
 - **现场后果**：现场常见「一个老设备特别慢」，工程师只能**把整条总线的超时调大**，代价是所有从站的故障发现变慢。配合 R-3，坏点反复占用放大后的超时窗口。
 
-#### C-1 ★★☆ 热重载非原子：运行态可能半新半旧，磁盘却已回滚
+#### C-1 ★★☆ 热重载非原子：运行态可能半新半旧，磁盘却已回滚 ✅ 已修复（ROI-12）
 - **现象**：`reload_config` 按分节增量应用（buses / points / mqtt / ntp / convert / virtual_points），任一节失败时返回 Err，**已应用的分节不会回退**；Web 层只做**磁盘字节级回滚**，运行态不回滚。
 - **证据**：[runtime/gateway.rs](../gateway-core/src/runtime/gateway.rs) `reload_config`（注释明写部分替换语义）；[web/config_apply.rs](../gateway-api/src/web/config_apply.rs) `persist_then_apply_inner`（reload 失败 → `rollback_saved_config` 字节回滚 → `store`）。
 - **现场后果**：磁盘是旧配置、内存是新配置（或反之）。重启后行为改变，不重启行为也变 —— 最难查的一类「偶发」。
+- **修复（2026-11，`244a82c`）**：保存链路改为 prepare（零副作用）→ 落盘 → commit（内存交换）；缺 collector / 协议未注册 / MQTT 连不上都在落盘前拒绝整次保存，串口交接失败自愈回滚。语义见 [config-reload-matrix.md](config-reload-matrix.md)。
 
 #### C-2 ★★☆ 配置文件改动不触发重载（无文件监听）
 - **现象**：reload 触发路径只有 Web 保存与自愈流程；改磁盘上的 `config.json` 不会生效。

@@ -14,21 +14,25 @@ BusManager → FrameBuffer 帧提取
     │
     ▼
 Collector 协议解析 → DataPoint
-    │
+    │  其中 decode.rs::convert_value 完成工程量换算：
+    │    raw →(formula 或 scale/offset)→ 二次侧 →(×CT×PT，按单位门控)→ 一次侧
     ▼  (mpsc 通道，背压)
 ProcessingPipeline
-    │
     ├─→ EdgeProcessor (死区/变化/聚合)
-    ├─→ 公式计算 (scale/offset/CT/PT)
+    ├─→ ConvertEngine (raw/linear/enum 模板，非工程量换算)
+    ├─→ quality_rules (range/rate/nan) + 虚拟点位求值
     │
     ├─→ DataQueue (SQLite WAL) ──MQTT QoS1 ACK──> broker
     ├─→ RealtimeBus (broadcast) ──WS──> 前端实时页
     └─→ NorthDispatcher ──┬──> MQTT
                             ├──> Webhook (HTTP)
-                            └─→ OPC UA Server / Modbus Server
+                            └─→ OPC UA Server / Modbus Server（经 server adapter 喂数）
 ```
 
-> 上图「公式计算」即工程量换算：`raw →(formula 或 scale/offset)→ 二次侧 →(×CT×PT，按单位门控)→ 一次侧`。
+> **工程量换算在采集侧，不在管道**：`convert_value()`（`south/protocol/common/decode.rs`）在协议解码时完成
+> `raw →(公式或 scale/offset)→ 工程量 →(×CT×PT，按单位门控)→ 一次侧`，公式求值复用 `engine/formula.rs` 的 evalexpr。
+> pipeline 里的 `ConvertEngine` 是另一套 `raw`/`linear`/`enum` 通用模板（按 `convert_rules` 命中），两者刻意分离——
+> 旧图把「公式计算 (scale/offset/CT/PT)」画在 pipeline 内是错的。
 > 顺序、单位门控表与写路径反算规则见 [`../点位配置与换算.md`](../点位配置与换算.md)。
 
 ### 7.1 点位归属（`DataPoint.device_id`）
@@ -126,7 +130,7 @@ Prometheus 暴露（`gateway_core::engine::metrics::sim_consumer`）：
 |---|---|---|
 | `synchronous=FULL` | 断电后不丢已提交数据 | `queue/storage/sqlite/db_init.rs` |
 | 启动时 `PRAGMA integrity_check` + 自动从备份恢复 | SQLite 文件逻辑损坏 | `queue/storage/sqlite/db_init.rs` |
-| 备份一致性（先 checkpoint 再拷贝） | 备份不漏掉 `-wal` 中已提交的行 | `queue/storage/sqlite/wal.rs` |
+| 备份一致性（SQLite 在线备份 API + 临时文件原子 rename） | 跨 WAL 一致快照，自动纳入 `-wal` 中已提交未 checkpoint 的行；避免旧「checkpoint 在锁内、copy 在锁外」的撕裂与非原子覆盖 | `queue/storage/sqlite/wal.rs::backup_db_online`（定时备份与启动备份共用） |
 | `disk_full` 标志 + 退避 | 磁盘满时退避，避免 CPU 空转 | 队列写入路径 |
 | 看门狗超时前冲刷 | 重启时未持久化数据 | `platform/watchdog_flush.rs` |
 | FIFO 按 `storage_days` 截断 | 超出保留期的数据按最旧优先丢弃 | 队列保留策略（配额见 `domain/license.rs` 的 `Quota.storage_days`） |

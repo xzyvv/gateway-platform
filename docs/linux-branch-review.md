@@ -589,6 +589,10 @@ assets / virtual_points / find-replace / uplink / auth。
 > 落盘失败时整次保存不生效，接口直接报错，不再出现「运行态已改、磁盘未改」的
 > 半新半旧状态；函数也据此改名为 `persist_then_apply`（原名 `reload_then_save`
 > 与顺序相反，容易误导）。本文档下列「后果」描述的是当时的行为。
+>
+> ROI-12 再进一步：顺序细化为 **prepare（零副作用校验/预构建）→ 落盘 → commit（内存交换）**，
+> prepare 失败时根本不写盘；commit 阶段（仅串口重新打开）失败会自愈回滚运行态并回滚磁盘。
+> 详见 [config-reload-matrix.md](config-reload-matrix.md)。
 
 **修复**：
 - `gateway.service` 的 `ReadWritePaths` 增加 `/etc/gateway`；

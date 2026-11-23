@@ -72,14 +72,16 @@ gateway-web/src/
 按职责分模块」。拆分只改结构不改行为，既有 spec 必须原地继续通过。
 
 **约定已 lint 化（O-8）**：`eslint.config.js` 的 `max-lines`（800 行）把它变成机器断言。
-存量超限文件登记在 `LINE_BUDGET_EXEMPT` 清单里豁免，**新文件超限即 warning**——
-CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。拆到 800 行以内后请把对应行从清单删掉，
-否则它会一直享受豁免。测试文件（`*.spec.ts`）与自动生成的 `ep-icons-compact.ts` 不纳入。
-后端同规但采用「有硬上限」的棘轮：`scripts/deploy_lint.ps1` 的 C24 段扫描
-`gateway-core` / `gateway-api` / `gatewayd` 的 `src/**/*.rs`，基线在
-[`scripts/line_budget_frozen.txt`](../../scripts/line_budget_frozen.txt)。基线每行带单文件行数上限，
-取「登记时当前行数 + 100 行余量」：未登记的新文件 > 800 行、或已登记文件超过该上限，
-都直接判 FAIL（不再只是 WARN），所以存量不能悄悄长。
+未登记文件超限即 warning——CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。
+存量超限文件登记在**冻结账本**
+[`scripts/line_budget_frozen.txt`](../../scripts/line_budget_frozen.txt)（与后端共用同一份，
+前端条目写 `gateway-web/src/...`，格式同为 `路径<TAB>行数上限`），
+账本里的条目带**单文件硬上限**，超出即 lint error——存量不能悄悄长回去；
+拆到 800 行以内后请把对应行从账本删掉。测试文件（`*.spec.ts` / `*.test.ts`）与
+自动生成物（`src/api/generated/`、`src/utils/ep-icons-compact.ts`）不纳入。
+仓库级门禁 `scripts/deploy_lint.ps1` 的 C24 段现在**同时扫描前端**
+（`gateway-web/src`）与三个后端 crate（`gateway-core` / `gateway-api` / `gatewayd`），
+同一份账本、同一套规则：未登记的新文件 > 800 行、或已登记文件超过其上限，都直接判 FAIL。
 
 **为什么是 800 而不是 500**：500 行的阈值把「正常但偏大」的模块也逼成巨型文件，
 于是每次加功能都要先拆文件，拆分本身又制造新文件与新 PR —— 门禁从「防失控」
@@ -97,7 +99,7 @@ CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。拆到 800 行以内�
 ### 3.5 E2E 冒烟（Playwright）
 
 - 运行：`npm run e2e` 一条命令，webServer 自动编排**空配置 gatewayd**（`scripts/e2e/start-gateway.mjs`：临时目录写配置 + /health/live 轮询 + 退出清理）与 **vite dev server :5199**，测试结束自动回收；
-- 范围刻意克制：仅 chromium、串行（workers=1）、retries=0、6 条只读核心链路（栈健康 / 登录 / 路由巡游 / 暗色持久化 / 404 与降级页 / 登出），不做写操作、不碰串口 / MQTT / OTA；
+- 范围（DOC-F1 修订，2026-11-23）：仅 chromium、串行（workers=1）、retries=0；用例已扩展为 4 个 spec（`smoke` / `routes-deep` / `write-flows` / `debug-paths`），覆盖只读冒烟（栈健康 / 登录 / 路由巡游 / 暗色持久化 / 404 与降级页 / 登出）+ 写链路（配置保存 / 点位增删 / 点位读写 / 协议调试台能力门控）。写操作均针对 E2E 隔离网关，不碰真实串口 / MQTT / OTA。精确用例数见 `e2e/*.spec.ts` 现场统计；
 - 用例约定：禁止固定 sleep，只用 web-first 断言；定位优先 role / placeholder / 可见文本；浏览器形态下登录页不再触发局域网扫描（`isTauri()` 为 false 时直接跳过 discovery），`e2e/helpers.ts::stubLanDiscovery` 仍拦截 `/health/live` 作为兜底；
 - CI：`.github/workflows/ci.yml` 的 `e2e` job（ubuntu）为**强制门禁**——用例失败即阻塞合并；失败报告 / trace 见 Actions artifact `e2e-playwright-report`（`if: always()` 上传，失败时也能取到现场）。
 

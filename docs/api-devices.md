@@ -54,7 +54,7 @@
 ### 1.2 鉴权
 
 - 请求头二选一：`Authorization: Bearer <token>` 或 `X-API-Token: <token>`
-  （`middleware.rs::extract_token_from_headers`）。
+  （`middleware/auth.rs::extract_token_from_headers`，经 `middleware/mod.rs` re-export）。
 - **读端点**（本文档全部 `GET`）：`allow_anon_read=true` 时匿名可读，否则要求 token；
   配置缺 `web` 节时按 **fail-closed** 处理（`allow_anon_read()` 默认 false）。
 - **写端点**（`POST` / `PUT` / `DELETE`）：**始终**要求 token（`require_auth`）。

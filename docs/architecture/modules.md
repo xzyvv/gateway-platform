@@ -26,7 +26,25 @@
 12. **调度器** — `Scheduler` 按协议 + 总线分组启动定时任务
 13. **Web Server** — axum 监听 `web.listen_addr`（默认 `127.0.0.1:8080`；设为 `0.0.0.0:8080` 时须先设置 `password_hash`，否则 fail-closed 拒绝启动）；同一阶段还启动报警引擎、MQTT 透传、蜂窝模块与计划任务执行器
 
-停机：捕获 SIGTERM/SIGINT → drain 队列 → 停止调度器 → 关闭 MQTT → 退出。
+停机：捕获 SIGTERM/SIGINT → 进入 `graceful_shutdown`（`gatewayd/src/bootstrap/helpers/shutdown.rs`）。
+顺序与启动相反且更细，**控制面先静默、看门狗最后解除**，全程由外层 `tokio::time::timeout(80s)`
+兜底（命中则 `shutdown_forced_total+1` 并强制退出，日志明确提示可能丢未发数据）。`graceful_shutdown_inner` 依次为：
+
+1. **Web 优雅停机**（停机序第一步）— `sig.shutdown()` 停止接受新连接并等在飞请求结束，再 await run 句柄；避免 80s 窗口内 HTTP 仍接受写请求、与后续拆解并发。
+2. **API Key 调用统计落盘** — Web 已停、鉴权热路径不再增量，强制刷新最后一个周期。
+3. **自愈执行器** — 先 `cancel` 再 await（35s，配置重载等动作可能重 IO）。
+4. **调度器** — `scheduler.stop()`。
+5. **管道** — `pipeline.shutdown()` + 500ms 冲刷。
+6. **关闭北向专用队列发送端** — `pipeline.close_north_feed()`，让 `NorthDispatcher` 消费完积压后自然退出；必须在 drain 之前，确保最后一批已 fan-out。
+7. **北向 fan-out** — `shutdown_token()` 触发后 await run 循环真正退出（5s，超时只告警不 abort）。
+8. **蜂窝 / 健康监控** — `cell.stop()`，health 句柄 `abort()`。
+9. **队列排空** — 先同步冲刷 fallback 缓冲（`flush_fallback_sync`，纯内存最多 5000 点，异步路径此刻可能已失效），再 `drain_and_wait()`（30s；超时仅告警，未发数据落 SQLite 下次启动 replay）。
+10. **北向 run 循环** — 按通道表顺序「发信号 → await 退出」（webhook → HA → 报警 → 透传），须在 mqtt.stop 之前停干净。
+11. **北向 Server** — OPC UA / Modbus / 透传并行 `stop()`（整组 3s；旧实现串行 N×3s 与 80s 宽限失配）。
+12. **MQTT** — `mqtt.stop()`（5s）。
+13. **解除硬件看门狗** — `stop_platform_watchdog()` 置于**最后**：停机期间看门狗继续保护进程（写卡死即整机复位），全部资源释放后才写 magic char 'V' 解除 armed。
+
+> 启动期由 `StartupCleanupGuard`（`bootstrap/mod.rs`）包裹：任一步 `?` 提前返回都在 Drop 中统一 `stop_platform_watchdog()` + `shutdown_logging()`；两个动作均幂等，与正常停机路径不冲突。
 
 ### 6.2 配置层（config/）
 
@@ -34,7 +52,7 @@
 |---|---|
 | `loader.rs` | `ConfigLoader`：读取/解析 JSON，失败返回错误（不静默） |
 | `migrate.rs` | 配置 Schema 版本迁移（v0→v1 逐步升级） |
-| `validate.rs` | 字段校验函数 + `validate_all` / `validate_slave_ids` / `validate_cycle_conflict` |
+| `validate/`（`validate.rs` 已拆为目录） | 字段校验函数 + `validate_all` / `validate_slave_ids` / `validate_cycle_conflict`；`field.rs` 字段规则、`gate.rs` + `gate/` 校验门禁、`report.rs` + `report/` 校验报告 |
 | `schema.rs` | `schemars` 派生的 JSON Schema（结构层校验，先于 migrate） |
 | `compat.rs` | S6 向后兼容回归：旧配置可加载 + Schema 字段契约不收缩（crate 内单测） |
 | `shard.rs` | 配置分片：`include` 机制多文件加载合并 |
@@ -73,17 +91,25 @@ ProcessingPipeline (mpsc 通道，背压)
 
 ### 6.4 数据处理管道（pipeline/）
 
-采集与处理解耦，采集侧通过 mpsc 发送 `CollectedBatch`，处理侧独立消费：
+采集与处理解耦，采集侧通过 mpsc 发送 `CollectedBatch`，处理侧独立消费。真实处理链（`pipeline/mod.rs`）：
 
-1. **EdgeProcessor**（`edge.rs`）— 死区过滤、变化上传、时间窗口聚合（last/avg/max/min/sum）
-2. **公式计算**（`formula.rs`）— evalexpr 求值，scale+offset+CT/PT 变比
-3. **入队** → `DataQueue`（SQLite WAL）
-4. **实时广播** → `RealtimeBus`（broadcast channel）→ WebSocket 实时页；北向另行投递 `NorthFeed`（独立无损 mpsc 队列，不与广播总线共用，满时背压不丢帧）
+1. **EdgeProcessor**（`edge.rs` + `edge/`）— 死区过滤、变化上传、时间窗口聚合（last/avg/max/min/sum）
+2. **协议转换模板**（`convert.rs` 的 `ConvertEngine`）— `raw` 直通 / `linear`（`value*scale+offset`）/ `enum`（映射文本到 `value_text`）三档免代码模板，按 `convert_rules` 配置命中，ArcSwap 原子热更；**不是**工程量换算（那是南向 `decode.rs`，见下）
+3. **数据质量规则**（`quality_rules.rs`）— range / rate / nan 规则（`stale` 由调度器连续失败/超时负责，此处不重复）
+4. **虚拟点位**（`virtual_point.rs` + `vformula.rs`）— 刷新实时值缓存后求派生量，与普通点一同广播/入队/上送
+5. **入队** → `DataQueue`（SQLite WAL）
+6. **实时广播** → `RealtimeBus`（broadcast channel）→ WebSocket 实时页；北向另行投递 `NorthFeed`（独立无损 mpsc 队列，不与广播总线共用，满时背压不丢帧）
+
+> **工程量换算的位置**（易错）：`raw →(公式或 scale/offset)→ 工程量 →(×CT×PT，按单位门控)→ 一次侧` 在**南向协议解码阶段**
+> `south/protocol/common/decode.rs::convert_value()` 完成（公式求值复用 `engine/formula.rs` 的 evalexpr），
+> 不在 pipeline。pipeline 的 `ConvertEngine` 是另一套 raw/linear/enum 通用模板，两者刻意分离。
+> 顺序、单位门控与写路径反算见 [`../点位配置与换算.md`](../点位配置与换算.md)。
 
 **透传模式**：跳过边缘聚合+队列，直接 MQTT 直发（由 MQTT connector 实现），适用于低延迟、可接受断网丢失的点位。
 
 **虚拟点位公式**（`vformula.rs`）是另一套自研递归下降引擎（多变量、可调函数、可引用其它点位），
-与 `formula.rs` 的 evalexpr 刻意不合并。它在浏览器端有一份**等价实现**
+与 `engine/formula.rs` 的 evalexpr（点位级工程量换算）刻意不合并，避免把点位换算的白名单边界撑破。
+它在浏览器端有一份**等价实现**
 （`gateway-web/src/utils/formulaEngine.ts`）用于表单预演与语法校验，
 两侧语义由**同一份用例契约**钉住：[shared/formula_cases.json](../../shared/formula_cases.json)。
 Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同一个文件——
@@ -103,7 +129,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | 子模块 | 职责 |
 |---|---|
 | `mqtt/` | `MqttClient` 连接 broker，`outbox` 离线队列，`publish` 批量/透传 |
-| `webhook.rs` | HTTP POST 回调上报（单文件实现，非目录） |
+| `webhook/` | HTTP POST 回调上报（已拆为目录：`mod.rs` 入口、`client.rs` 发送/replay/flush 主循环、`retry.rs` 重试分类与退避、同目录测试文件）；数据先持久化到 outbox 再异步 POST，进程重启 replay 未确认消息 |
 | `dispatch.rs` | `NorthDispatcher`：消费北向专用无损队列 `NorthFeed`，按注册顺序分发到各 `NorthConnector`（MQTT / Webhook / server adapters，单测在 `dispatch/tests.rs`） |
 | `outbox_monitor.rs` | MQTT outbox 积压/失败率监控（暴露为指标与状态接口） |
 | `server/registry.rs` | Server 注册表：按配置装配被动服务端（`NorthServerContext` / `NorthServerRegistry`） |
@@ -135,14 +161,16 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 - **前缀归属硬约束**：一个 URL 前缀（`/api/<seg>`）只能有一个 `routes.rs` 注册点；脚本的 `check_prefix_ownership` 会在 CI 拦下「同一前缀被多个子域注册」（历史上 `/api/devices*` 曾被 config / device_ops / devices 三个子域重复注册）。handler 可以留在原处，路由入口必须唯一
 - **`/api/points` 下不允许静态段**：matchit 静态段优先于 `:id` 且不回落，任何 `/api/points/<static>` 都会让同名 id 的点位失去 PUT/DELETE（405）。点位工具与回收站因此各自独立前缀：`/api/point-tools/*`（批量写/虚拟点位/偏移/克隆/查找替换）、`/api/point-trash/*`。新增点位子功能时按此规则挑前缀，不要挂到 `/api/points` 下
 
-**文件拆分**：`types.rs`（AppState + DTO + ApiResponse）、`error.rs`（ApiError + IntoResponse 转换）、`middleware.rs`（鉴权 + 限流）
+**文件拆分**：`types.rs`（AppState + DTO + ApiResponse）、`error.rs`（ApiError + IntoResponse 转换）、
+`middleware/`（原单文件 `middleware.rs` 约 1.4k 行已按职责拆分：`mod.rs` 统一 re-export 保持 `web::middleware::*` 对外路径不变，
+子模块 `auth.rs` + `auth/`（鉴权）、`rate_limit.rs`（限流）、`request_id.rs`（请求 ID）、`envelope.rs`（统一信封）、`category.rs`（请求分类标记））
 
 ### 6.8 平台服务（platform/）
 
 | 模块 | 职责 |
 |---|---|
 | `ntp.rs` | NTP 时间同步 |
-| `ota/` | A/B 分区 OTA 升级，Ed25519 签名验签，升级失败自动回滚 |
+| `ota/` | A/B 分区 OTA 升级，HMAC-SHA256 固件签名验签（`crypto.rs`，密钥来自 `WebConfig::ota_signing_key`，未配置时兼容 CRC32-only），升级失败自动回滚 |
 | `gpio.rs` | Linux GPIO 控制（gpiod） |
 | `cellular/` | 蜂窝网络状态查询（含 manager/modem/stub） |
 | `hardware_watchdog.rs` | 软件+硬件看门狗 |
@@ -162,7 +190,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | `bus.rs` | 实时广播总线契约（`RealtimeBus` / `BusConsumerKind` / `LaggedCounts`），由 `pipeline/` 重导出 |
 | `ports.rs` | 基础设施端口（Ports）契约：`AlarmPublisher`（报警上报）、`DiskHealthSink`（磁盘健康），实现分别在 `north/mqtt/` 与 `queue/` |
 | `codec/` | 通用编解码工具：`crc.rs`（CRC 校验）、`encoding.rs`（base64 / 十六进制编码） |
-| `formula.rs` | 点位级换算公式求值（与 `pipeline/vformula.rs` 的递归下降引擎区分） |
+| `formula.rs` | 点位级换算公式求值（evalexpr；原在 `pipeline::formula`，现已上提至中立的 `engine`，供南向 `decode.rs` 与处理层共用；与 `pipeline/vformula.rs` 的递归下降引擎区分） |
 | `model.rs` | 公共领域模型（`DataPoint` 等） |
 | `monitor/` | 监控与可观测性子模块（见下） |
 
@@ -218,7 +246,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | 概念 | 配置（config/） | 运行时实现 |
 |---|---|---|
 | ntp | `config/ntp.rs`（`NtpConfig`） | `platform/ntp.rs`（`NtpManager`） |
-| webhook | `config/webhook.rs`（`WebhookConfig`） | `north/webhook.rs`（HTTP POST 上报） |
+| webhook | `config/webhook.rs`（`WebhookConfig`） | `north/webhook/`（HTTP POST 上报，已拆为目录） |
 | cellular | `config/cellular.rs`（`CellularConfig`） | `platform/cellular/`（拨号与状态查询） |
 | mqtt | `config/mqtt.rs`（`MqttConfig`） | `north/mqtt/`（`MqttClient`） |
 | opcua | `config/opcua.rs`（`OpcuaConfig`） | `south/protocol/opcua/`（采集）+ `north/server_adapters/opcua_adapter.rs`（被动暴露） |

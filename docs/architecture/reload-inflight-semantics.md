@@ -184,7 +184,7 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 
 - `docs/config-reload-matrix.md` 回答「哪些配置项立即生效、哪些要重启」，不涉及在途事务；本文只补齐并发语义，不改变其分节归类结论。
 - `docs/architecture/read-write-invariants.md` 的 B-01 / B-04 / TCP-06 / TCP-07 给出「写不重发」「调用方已放弃不得下发」「断链/写超时作废」的基准；本文的增量结论是：**reload 不是 `abort_all` 的触发源，也不遵守这些边界**。
-- 注意一处文档与代码的表述冲突：`docs/config-reload-matrix.md:50` 写「落盘失败返回 500，但内存已是新配置」，而现行代码是**先落盘再热重载**，落盘失败时运行态未动（`gateway-api/src/web/config_apply.rs:565-570`）。该文档不在本次改动范围内，已列入待确认项。
+- 注意一处文档与代码的表述冲突：`docs/config-reload-matrix.md:50` 写「落盘失败返回 500，但内存已是新配置」，而现行代码是**先落盘再热重载**，落盘失败时运行态未动（`gateway-api/src/web/config_apply.rs:565-570`）。该文档不在本次改动范围内，已列入待确认项。（已确认并随 ROI-12 更新：见 §9.1 落盘顺序一行。）
 
 ---
 

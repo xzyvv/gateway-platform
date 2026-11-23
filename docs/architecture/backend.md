@@ -47,7 +47,7 @@
 
 | 技术 | 版本 | 用途 |
 |---|---|---|
-| **evalexpr** | ^11 | 公式表达式求值，点位公式计算（`pipeline/formula.rs`） |
+| **evalexpr** | ^11 | 公式表达式求值，点位级工程量换算公式（`engine/formula.rs`，由南向 `decode.rs::convert_value()` 调用） |
 
 ### 4.6 南向采集
 
@@ -78,11 +78,12 @@ gateway-core/src/      # 引擎库（lib）
 ├── domain/          # 中立领域常量（VALID_PROTOCOLS）
 ├── engine/          # 引擎基础设施：日志/指标/事件总线/健康监控/告警/审计/优雅停机
 │   ├── codec/       # crc.rs 校验 + encoding.rs 二进制编解码
-│   ├── formula.rs   # 点位级换算公式（与 pipeline/vformula 区分）
+│   ├── formula.rs   # 点位级工程量换算公式（evalexpr；原在 pipeline::formula，上提至中立 engine 层）
 │   └── model.rs     # 公共领域模型（DataPoint 等）
-├── license/         # Ed25519 离线验签 + 机器指纹
-├── north/           # 北向：MQTT / webhook.rs / dispatch.rs（RealtimeBus 分发）/ server/（被动服务端）/ server_adapters/（数据推送适配器）
-├── pipeline/        # 处理管道：边缘过滤 → 公式 → 入队 → 实时广播
+├── license/         # Ed25519 离线验签 + 机器指纹（授权许可，与 OTA 的 HMAC-SHA256 不同）
+├── north/           # 北向：MQTT / webhook/（HTTP 回调，已拆目录）/ dispatch.rs（RealtimeBus 分发）/ server/（被动服务端）/ server_adapters/（数据推送适配器）
+├── pipeline/        # 处理管道：边缘过滤 → ConvertEngine(raw/linear/enum) → 质量规则/虚拟点位 → 入队 → 实时广播
+│                    # 注：工程量换算（CT/PT/scale+offset）在南向 decode.rs，不在此层
 ├── platform/        # 平台/系统集成层：NTP 客户端 / OTA / GPIO / 蜂窝 / 看门狗（含 watchdog_flush.rs 队列落盘冲刷）
 ├── queue/           # 断点续传队列（SQLite WAL）
 ├── south/           # 南向：总线管理 / 协议栈 / 调度器
@@ -93,7 +94,7 @@ gateway-core/src/      # 引擎库（lib）
 ├── runtime/         # 运行时组件聚合（GatewayRuntime 热更新入口）
 └── shared/          # 跨层共享工具：clock / cron / paths / sqlite_maintenance
 
-gateway-api/src/web/   # Web API 面（axum + tower，原 gateway-core/src/web）：types.rs / error.rs / middleware.rs / api/
+gateway-api/src/web/   # Web API 面（axum + tower，原 gateway-core/src/web）：types.rs / error.rs / middleware/（鉴权/限流/请求ID/信封，已拆目录）/ api/
 gatewayd/src/          # bin：main.rs 入口（#[tokio::main]）+ bootstrap/ 13 步启动流程
 ```
 

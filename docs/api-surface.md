@@ -6,7 +6,7 @@
 
 **数据来源**：`gateway-api/src/web/mod.rs`（health 探针）+ `gateway-api/src/web/api/*/routes.rs`（各业务子域）。
 
-**统计**：16 个路由组 / 146 条唯一路径 / 175 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
+**统计**：16 个路由组 / 147 条唯一路径 / 176 个「方法 + 路径」端点（其中 WebSocket 端点 2 个）。
 
 **鉴权说明**：`token` = 始终需要 `Authorization: Bearer <token>`；`token（allow_anon_read=true 时可匿名）` = 匿名只读开关打开时可不带 token；
 `admin / exec scope` = 需要管理员或 `exec` scope 的 API 密钥；`无` = 公开端点。
@@ -121,7 +121,7 @@
 
 ## `diagnostics` — 诊断（含日志流 / exec）
 
-入口函数：`diagnostics_routes`；端点数：13
+入口函数：`diagnostics_routes`；端点数：14
 
 | 方法 | 路径 | 鉴权 | 处理器 |
 |---|---|---|---|
@@ -130,6 +130,7 @@
 | GET | `/api/diagnostics/modbus-errors` | token（`allow_anon_read=true` 时可匿名） | `list_modbus_errors` |
 | GET | `/api/diagnostics/modbus-errors/issues` | token（`allow_anon_read=true` 时可匿名） | `list_common_issues` |
 | GET | `/api/diagnostics/stats` | token（`allow_anon_read=true` 时可匿名） | `get_stats_report` |
+| GET | `/api/diagnostics/schedule-optimize` | token（`allow_anon_read=true` 时可匿名） | `get_schedule_optimize` |
 | GET | `/api/diagnostics/schedule-timeline` | token（`allow_anon_read=true` 时可匿名） | `get_schedule_timeline` |
 | GET | `/api/diagnostics/logs/download` | token（`allow_anon_read=true` 时可匿名） | `download_logs` |
 | GET | `/api/diagnostics/logs/archives` | token（`allow_anon_read=true` 时可匿名） | `list_log_archives` |
