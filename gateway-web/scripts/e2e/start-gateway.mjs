@@ -113,6 +113,13 @@ const isolatedEnv = {
   // 看门狗 abort 前的状态快照：不指定会落到 /var/lib/gateway，CI 非 root 不可写，
   // 触发 abort 时快照丢失（日志里只剩 Permission denied，无法审计上次退出原因）。
   GATEWAY_WATCHDOG_STATE: join(workDir, 'watchdog_state.json'),
+  // 看门狗超时（毫秒）。设备默认 15s 是对的：systemd 会拉起重启，越快越好。
+  // 但 E2E 里**没有 supervisor 拉起进程**，abort 无法自愈，只会让网关直接消失，
+  // 把「失败的那一条用例」放大成「后面所有用例全部 502/超时」——信号全毁。
+  // 2 核 runner 上 vite dev + chromium 与网关抢 CPU，实测能把网关的 tokio
+  // worker 饿死十几秒（硬件看门狗超时 → abort → 后续用例连环失败）。
+  // 这里放宽到 60s：真卡死仍会被发现（并打印线程现场），瞬时饥饿不再误杀。
+  GATEWAY_WATCHDOG_TIMEOUT_MS: process.env.GATEWAY_WATCHDOG_TIMEOUT_MS ?? '60000',
 }
 
 const child = spawn(binary, {

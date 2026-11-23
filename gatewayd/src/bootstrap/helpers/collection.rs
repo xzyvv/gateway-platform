@@ -240,6 +240,13 @@ pub(crate) const WATCHDOG_DEVICE_CANDIDATES: &[&str] = &[
     "/dev/softdog",
 ];
 
+/// 软件看门狗默认超时（毫秒）。
+///
+/// 可用 `GATEWAY_WATCHDOG_TIMEOUT_MS` 覆盖；0 = 关闭看门狗。
+/// 设备上由 systemd 拉起重启，15s 足以判定「运行时整体卡死」且重启代价可接受。
+#[cfg(target_os = "linux")]
+const WATCHDOG_TIMEOUT_MS_DEFAULT: u64 = 15_000;
+
 /// 从候选列表中选出第一个存在的设备路径（**纯函数**）。
 ///
 /// - `exists`：给定路径是否存在（调用方注入，便于跨平台单测）
@@ -294,43 +301,58 @@ pub(crate) async fn init_collection_chain(
     // ===== Step 3: Watchdog =====
     #[cfg(target_os = "linux")]
     {
-        let watchdog_hw = pick_watchdog_device();
-        let watchdog = Watchdog::start(Duration::from_secs(15), watchdog_hw.as_deref());
-        // P0 修复：原实现为 `let _watchdog = Watchdog::start(...)`，该绑定随本块
-        // 结束即被 drop；而 `Watchdog` 没有 `Drop` 实现，其监控线程仍持有 Arc 存活，
-        // 此后**全进程再无任何 `kick()` 调用**（其余 kick 属另一套 Heartbeat）→
-        // 15s 后监控线程必然执行 `std::process::abort()`，进程被 systemd 反复拉起，
-        // 形成启动-崩溃循环（仅 Linux 触发，故 Windows 开发机上从未暴露）。
+        // 看门狗超时可用 `GATEWAY_WATCHDOG_TIMEOUT_MS` 覆盖（0 = 关闭）。
         //
-        // 现将句柄移入常驻 task 周期喂狗：只要 tokio 运行时仍在正常调度，进程即存活；
-        // 若运行时整体卡死（死锁/调度饥饿），本 task 不再被调度，看门狗仍会在 15s 后
-        // 按设计 abort —— 保留了它作为"整机兜底"的能力，同时不再误杀正常进程。
-        //
-        // r15-WD6 (fix): 原用裸 `tokio::spawn` —— task panic 会被 tokio 静默吞掉
-        // （JoinHandle 被丢弃），表现为「喂狗循环莫名停止」且日志无任何线索，
-        // 15s 后整机被硬件看门狗复位。改用 `spawn_catch_unwind`（同文件
-        // `spawn_software_watchdog` 的做法）：panic 会被记录 error 日志并计入
-        // `task_panic_total` 指标。
-        gateway_core::engine::supervision::spawn_catch_unwind("hw_watchdog_kick", async move {
-            // 5s 周期，为 15s 超时留出 3 倍余量，避免调度抖动导致误触发
-            let mut ticker = tokio::time::interval(Duration::from_secs(5));
-            loop {
-                ticker.tick().await;
-                // r15-WD3: 优雅停机会调用 `stop_platform_watchdog()` 解除
-                // 硬件看门狗 armed 状态；此时本喂狗循环必须退出，否则会继续
-                // 向已解除的设备写心跳，把看门狗重新 arm 起来（等于没解除）。
-                if !watchdog.is_running() {
-                    info!("watchdog stopped: kick loop exiting");
-                    break;
+        // 默认 15s：设备上由 systemd 拉起重启，运行时整体卡死时越快 abort 越好。
+        // 但 abort 的价值完全依赖「有 supervisor 拉起」这一前提——CI / 容器 /
+        // k8s 里没有 supervisor 时，abort 只会让进程**直接消失且无法自愈**，
+        // 一次瞬时卡顿就变成整轮测试/作业报废。此时应显式调大或关闭。
+        let timeout_ms = std::env::var("GATEWAY_WATCHDOG_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(WATCHDOG_TIMEOUT_MS_DEFAULT);
+        if timeout_ms == 0 {
+            info!("platform watchdog disabled (GATEWAY_WATCHDOG_TIMEOUT_MS=0)");
+        } else {
+            let watchdog_hw = pick_watchdog_device();
+            let watchdog =
+                Watchdog::start(Duration::from_millis(timeout_ms), watchdog_hw.as_deref());
+            // P0 修复：原实现为 `let _watchdog = Watchdog::start(...)`，该绑定随本块
+            // 结束即被 drop；而 `Watchdog` 没有 `Drop` 实现，其监控线程仍持有 Arc 存活，
+            // 此后**全进程再无任何 `kick()` 调用**（其余 kick 属另一套 Heartbeat）→
+            // 15s 后监控线程必然执行 `std::process::abort()`，进程被 systemd 反复拉起，
+            // 形成启动-崩溃循环（仅 Linux 触发，故 Windows 开发机上从未暴露）。
+            //
+            // 现将句柄移入常驻 task 周期喂狗：只要 tokio 运行时仍在正常调度，进程即存活；
+            // 若运行时整体卡死（死锁/调度饥饿），本 task 不再被调度，看门狗仍会在超时后
+            // 按设计 abort —— 保留了它作为"整机兜底"的能力，同时不再误杀正常进程。
+            //
+            // r15-WD6 (fix): 原用裸 `tokio::spawn` —— task panic 会被 tokio 静默吞掉
+            // （JoinHandle 被丢弃），表现为「喂狗循环莫名停止」且日志无任何线索，
+            // 超时后整机被硬件看门狗复位。改用 `spawn_catch_unwind`（同文件
+            // `spawn_software_watchdog` 的做法）：panic 会被记录 error 日志并计入
+            // `task_panic_total` 指标。
+            gateway_core::engine::supervision::spawn_catch_unwind("hw_watchdog_kick", async move {
+                // 5s 周期，为 15s 超时留出 3 倍余量，避免调度抖动导致误触发
+                let mut ticker = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    ticker.tick().await;
+                    // r15-WD3: 优雅停机会调用 `stop_platform_watchdog()` 解除
+                    // 硬件看门狗 armed 状态；此时本喂狗循环必须退出，否则会继续
+                    // 向已解除的设备写心跳，把看门狗重新 arm 起来（等于没解除）。
+                    if !watchdog.is_running() {
+                        info!("watchdog stopped: kick loop exiting");
+                        break;
+                    }
+                    watchdog.kick();
                 }
-                watchdog.kick();
+            });
+            match watchdog_hw.as_deref() {
+                Some(dev) => info!("watchdog started (device={}, periodic kick every 5s)", dev),
+                None => info!(
+                    "watchdog started (no hardware watchdog device found, periodic kick every 5s)"
+                ),
             }
-        });
-        match watchdog_hw.as_deref() {
-            Some(dev) => info!("watchdog started (device={}, periodic kick every 5s)", dev),
-            None => info!(
-                "watchdog started (no hardware watchdog device found, periodic kick every 5s)"
-            ),
         }
     }
     #[cfg(not(target_os = "linux"))]

@@ -240,6 +240,11 @@ impl Watchdog {
                             elapsed,
                             timeout_ms
                         );
+                        // 运行时整体停摆时，日志里看不到「停在哪」——
+                        // 只有一句 timeout，现场无法定位。这里先把每个线程的瞬时
+                        // 状态（线程名 / 进程状态 / 内核阻塞点）打出来，
+                        // 再执行 abort（abort 后这些信息就永远拿不到了）。
+                        dump_thread_states();
                         // S2: abort 前先执行 flush 回调，尽量减少数据丢失
                         if let Some(cb) = FLUSH_CALLBACK.get() {
                             tracing::warn!("running flush callback before abort (3s timeout)...");
@@ -384,6 +389,52 @@ pub fn kick_platform_watchdog() {
         }
         HwWriteOutcome::NoDevice => {
             tracing::debug!("OTA: no hardware watchdog device, kick skipped")
+        }
+    }
+}
+
+/// abort 前 dump 全部线程的瞬时状态（定位运行时停摆的现场）。
+///
+/// 看门狗超时 = 「喂狗 task 连续 >timeout 没被调度」，即 tokio 运行时整体
+/// 停摆。但日志里只有一句 timeout，**停在哪**完全看不到：
+/// - 是所有 worker 阻塞在某个互斥锁（wchan=futex_wait）？
+/// - 还是 worker 在等磁盘 I/O（wchan=…/fsync…）？
+/// - 还是 worker 其实空闲、只是定时器没触发（wchan=ep_poll + 无 futex）？
+///
+/// 这三种情况的处置完全不同，必须在 abort 前抓现场（abort 后信息即丢失）。
+///
+/// 数据来源：Linux `/proc/self/task/<tid>/` 下的 `comm`（线程名）、
+/// `stat`（第 3 字段=进程状态）、`wchan`（内核阻塞点）。
+/// 非 Linux 或 `/proc` 不可读时静默跳过——诊断信息不能反过来影响主流程。
+pub fn dump_thread_states() {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(dir) = std::fs::read_dir("/proc/self/task") else {
+            tracing::warn!("watchdog: cannot read /proc/self/task — thread state dump skipped");
+            return;
+        };
+        let mut rows: Vec<String> = Vec::new();
+        for entry in dir.flatten() {
+            let tid = entry.file_name().to_string_lossy().to_string();
+            let base = format!("/proc/self/task/{tid}");
+            let comm = std::fs::read_to_string(format!("{base}/comm")).unwrap_or_default();
+            let stat = std::fs::read_to_string(format!("{base}/stat")).unwrap_or_default();
+            let wchan = std::fs::read_to_string(format!("{base}/wchan")).unwrap_or_default();
+            // stat 形如 `pid (comm) S ...`：`)` 之后的第一个字符即进程状态。
+            let state = stat
+                .rsplit_once(") ")
+                .and_then(|(_, rest)| rest.chars().next())
+                .unwrap_or('?');
+            rows.push(format!(
+                "tid={tid} comm={} state={state} wchan={}",
+                comm.trim(),
+                wchan.trim()
+            ));
+        }
+        rows.sort();
+        tracing::error!("watchdog: thread state dump ({} threads):", rows.len());
+        for row in rows {
+            tracing::error!("watchdog: thread state {}", row);
         }
     }
 }
