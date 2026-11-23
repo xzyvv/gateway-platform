@@ -134,7 +134,9 @@ pub struct PointConfig {
     /// ROI-11：慢设备可单独放大，避免为了它把整条总线的超时全调大。
     /// 串口物理帧传输时间仍是下限，配置过小不会低于该值。
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[validate(custom(function = "validate_optional_point_timeout"))]
+    #[ts(optional)]
     #[ts(type = "number")]
     pub timeout_ms: Option<u64>,
 

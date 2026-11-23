@@ -50,6 +50,14 @@ export interface DeviceStatView {
   successRate: number | null
   avgLatency: number | null
   dataPoints: number
+  /** DD-52：窗口内实际落库的样本数（管线过滤后的真实值，后端队列统计下发） */
+  storedPoints: number
+  /** DD-12：丢包率 / 当前周期 / 建议周期 / 评级 / 建议均由后端计算下发 */
+  lossRate: number | null
+  currentPeriodMs: number | null
+  suggestedPeriodMs: number | null
+  health: 'excellent' | 'good' | 'fair' | 'poor' | 'unknown'
+  suggestion: string
 }
 
 export interface BusStatView {
@@ -84,6 +92,8 @@ export interface StatsSummaryView {
   successRate: number | null
   avgLatency: number | null
   totalDataPoints: number
+  /** DD-52：窗口内实际落库的样本总数（真实压缩率分子） */
+  totalStoredPoints: number
 }
 
 export interface StatsReportView {

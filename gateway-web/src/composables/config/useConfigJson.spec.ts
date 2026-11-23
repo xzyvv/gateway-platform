@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { nextTick, reactive, ref } from 'vue'
 import { useConfigJson } from './useConfigJson'
-import { createSeedConfig, type ConfigForm } from '@/utils/configDefaults'
+import { createSeedConfig, unknownTopKeys, KNOWN_GATEWAY_TOP_KEYS, type ConfigForm } from '@/utils/configDefaults'
 
 /**
  * 「原始 JSON」标签页的契约。
@@ -80,6 +80,23 @@ describe('useConfigJson · 解析成功', () => {
     expect(parseError.value).toBe(false)
     expect(onUnknownTopKeys).toHaveBeenCalledTimes(1)
     expect(onUnknownTopKeys.mock.calls[0]![1]).toBe('原始 JSON')
+  })
+
+  it('convert_rules 是后端合法顶层节：不再被误报为未知键，且导入后保留', () => {
+    const { config, syncRawToConfig, rawText } = setup()
+    rawText.value = JSON.stringify({
+      schema_version: 1,
+      buses: [],
+      points: [],
+      convert_rules: [{ id: 'r1' }],
+    })
+    syncRawToConfig()
+
+    // 后端 GatewayConfig 有该字段，不能提示「未识别 / 后端将忽略」
+    expect(KNOWN_GATEWAY_TOP_KEYS.has('convert_rules')).toBe(true)
+    expect(unknownTopKeys({ schema_version: 1, convert_rules: [] })).toEqual([])
+    // 整段导入后该节必须原样保留，否则保存回写会丢掉全部转换规则
+    expect((config as Record<string, unknown>).convert_rules).toEqual([{ id: 'r1' }])
   })
 
   it('buses 为旧 map 形态时归零为空数组（后端只接受数组）', () => {

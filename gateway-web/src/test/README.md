@@ -1,7 +1,13 @@
 # 测试约定
 
 > 路径：`src/test/setup.ts`（全局初始化）
-> 当前：35 个 .spec.ts 文件，266 个用例；另有 `e2e/` 下 6 条 Playwright 冒烟（见文末）
+> 规模（DOC-F1：不再写死静态数字，避免随补测再次过时）：单测 `.spec.ts` **约 250+ 个**、与源码 co-locate；`e2e/` 下另有若干 Playwright 用例（见文末）。
+> 需要精确数字时现场实测：
+> ```bash
+> find src -name '*.spec.ts' | wc -l          # 单测文件数
+> npm run test -- --reporter=dot 2>&1 | tail  # 单测用例通过数
+> grep -rhcE '^\s*(test|it)(\.|\()' e2e/*.ts | awk '{s+=$1} END{print s}'  # e2e 用例数
+> ```
 
 ## 测试分布
 
@@ -97,7 +103,7 @@ describe('TargetComp.vue', () => {
 
 ## E2E（Playwright）
 
-浏览器级冒烟独立放在 `e2e/`，不参与 vitest 与覆盖率统计：`npm run e2e` 一条命令自动编排空配置 gatewayd 与 vite dev server，跑 6 条只读核心链路（栈健康 / 登录 / 路由巡游 / 暗色 / 404 / 登出）。用例约定与 CI 门禁状态见 [`docs/architecture/frontend.md`](../../../docs/architecture/frontend.md) 3.5 节。
+浏览器级用例独立放在 `e2e/`，不参与 vitest 与覆盖率统计：`npm run e2e` 一条命令自动编排空配置 gatewayd 与 vite dev server。当前分 4 个 spec 文件（`smoke` / `routes-deep` / `write-flows` / `debug-paths`，共 20+ 条用例），已不止早期的 6 条只读冒烟。用例约定与 CI 门禁状态见 [`docs/architecture/frontend.md`](../../../docs/architecture/frontend.md) 3.5 节（注：该文档 3.5 节仍写「6 条只读链路」，为 DOC-F1 待同步项）。
 
 ## 已知排除
 

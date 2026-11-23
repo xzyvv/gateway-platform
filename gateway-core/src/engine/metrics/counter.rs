@@ -49,6 +49,25 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// DD-23：一条上行记录渲染时命中了「查不到值」的模板变量（内容是错的）。
+    pub fn inc_mqtt_template_missing_vars(&self) {
+        self.mqtt
+            .template_missing_vars
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// DD-23：一条上行记录因模板渲染为空串被丢弃（从未到达平台）。
+    pub fn inc_mqtt_payload_empty_line_dropped(&self) {
+        self.mqtt
+            .payload_empty_lines_dropped
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// DD-62：诊断日志 WS 丢行（广播 Lagged 或发送队列满）。
+    pub fn add_log_ws_dropped(&self, n: u64) {
+        self.log_ws_dropped.fetch_add(n, Ordering::Relaxed);
+    }
+
     /// 记录一次后台任务 panic（由 supervisor 调用）
     pub fn inc_task_panic(&self, _task_name: &str) {
         self.lifecycle.task_panics.fetch_add(1, Ordering::Relaxed);

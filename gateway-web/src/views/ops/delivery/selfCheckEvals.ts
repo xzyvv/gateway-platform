@@ -287,12 +287,16 @@ export function evalWatchdog(services: ServiceInfo[]): CheckItem {
     }
   }
   const unknown = services.filter((s) => s.status === 'Unknown')
-  const restarts = services.reduce((sum, s) => sum + s.restarts, 0)
+  const anomalies = services.reduce(
+    (sum, s) =>
+      sum + s.panic_count + s.publish_fail_count + s.collect_fail_count + s.heartbeat_stall_count,
+    0,
+  )
   return {
     id: 'watchdog',
     title,
     level: 'pass',
-    detail: `${services.length} 个服务运行正常，累计重启 ${restarts} 次${
+    detail: `${services.length} 个服务运行正常，累计异常 ${anomalies} 次${
       unknown.length > 0 ? `（${unknown.length} 个未启用/平台不支持）` : ''
     }`,
   }

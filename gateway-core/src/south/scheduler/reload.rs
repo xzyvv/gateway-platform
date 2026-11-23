@@ -283,6 +283,10 @@ impl Scheduler {
             }
         }
 
+        // DD-16：设备状态清理后，同步淘汰管线内部的死区/变化上传基线与质量边沿；
+        // 否则点位删除后这些表只增不减，长期运行内存缓慢上升。
+        self.pipeline.prune_state(&new_ids);
+
         // 6. 重建变更组
         self.metrics.inc_config_reload();
         tracing::info!(
@@ -292,9 +296,9 @@ impl Scheduler {
             started_at.elapsed().as_millis()
         );
         for (key, bus_name, pts) in to_rebuild {
-            // 所有协议（含 GPIO）统一走 spawn_collector_task（内部用同一 group_key）
-            let _ = key; // key 仅用于日志/调试；spawn 内部按 group_key(protocol,bus) 生成同一键
-            self.spawn_collector_task(&bus_name, pts);
+            // 所有协议（含 GPIO）统一走 spawn_collector_task；组键由计划显式传入，
+            // 不再让 spawn 按 points.first() 重新推导（DD-08）。
+            self.spawn_collector_task(&key, &bus_name, pts);
         }
     }
 

@@ -326,7 +326,7 @@ fn devices_write_cannot_reach_bus_intrusive_tools() {
 }
 
 #[test]
-fn config_write_covers_convert_rules_and_north_dead_letters() {
+fn config_write_covers_convert_rules_but_not_north_dead_letters() {
     let config = vec!["config:write".to_string()];
     // protocol-convert 规则写会持久化到 config.json
     assert!(key_can_write(&config, "/api/protocol-tools/convert/rules"));
@@ -334,11 +334,15 @@ fn config_write_covers_convert_rules_and_north_dead_letters() {
         &config,
         "/api/protocol-tools/convert/rules/cv-1/toggle"
     ));
-    // 死信重投 / 清理属北向通道运维
-    assert!(key_can_write(
+    // DD-63：死信重投 / 清理属系统域，config:write 不得执行（只有主 token/admin 可）
+    assert!(!key_can_write(
         &config,
         "/api/north/dead-letters/dl-1/replay"
     ));
+    assert!(!key_can_write(&config, "/api/north/dead-letters"));
+    // admin / * 仍可执行
+    let admin = vec!["admin".to_string()];
+    assert!(key_can_write(&admin, "/api/north/dead-letters/dl-1/replay"));
     // 反向：point 域密钥不得清空死信（破坏性、不可逆）
     let points = vec!["points:write".to_string()];
     assert!(!key_can_write(&points, "/api/north/dead-letters"));

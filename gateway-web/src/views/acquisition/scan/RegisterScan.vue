@@ -70,13 +70,16 @@
       <template #header>
         <SectionHeader title="扫描结果" icon="Loading">
           <template #extra>
-            <el-tag size="small" :type="currentScan.status === 'done' ? 'success' : 'warning'" effect="dark" round>
-              {{ currentScan.status === 'done' ? '完成' : '扫描中...' }}
+            <el-tag size="small" :type="scanStatus.type" effect="dark" round>
+              {{ scanStatus.text }}
             </el-tag>
           </template>
         </SectionHeader>
       </template>
-      <el-progress :percentage="currentScan.progress" :status="currentScan.status === 'done' ? 'success' : ''" />
+      <el-progress
+        :percentage="currentScan.progress"
+        :status="currentScan.status === 'failed' ? 'exception' : currentScan.status === 'done' ? 'success' : ''"
+      />
       <div class="scan-stats" aria-live="polite">
         <el-tag type="info">总数 {{ currentScan.total }}</el-tag>
         <el-tag type="success">响应 {{ currentScan.responded }}</el-tag>
@@ -121,7 +124,7 @@
  *
  * 本文件只保留参数表单、结果概要卡片、建议弹窗与历史表的布局与事件接线。
  */
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { FormInstance } from 'element-plus'
 import { VideoPlay } from '@element-plus/icons-vue'
 import { useRegisterScan } from '@/composables/acquisition/useRegisterScan'
@@ -157,6 +160,16 @@ const {
   exportScan,
   viewSuggestions,
 } = useRegisterScan(formRef)
+
+/** DD-02：failed / aborted 也是终态，不能一律显示「扫描中...」。 */
+const scanStatus = computed(() => {
+  switch (currentScan.value?.status) {
+    case 'done': return { type: 'success' as const, text: '完成' }
+    case 'failed': return { type: 'danger' as const, text: '失败' }
+    case 'aborted': return { type: 'info' as const, text: '已中止' }
+    default: return { type: 'warning' as const, text: '扫描中...' }
+  }
+})
 </script>
 
 <style scoped>

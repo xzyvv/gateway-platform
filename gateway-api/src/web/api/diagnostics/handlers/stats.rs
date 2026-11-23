@@ -39,6 +39,19 @@ pub struct DeviceStat {
     /// 平均延迟（ms）；窗口内无采集为 null
     pub avg_latency_ms: Option<i32>,
     pub data_points: i32,
+    /// DD-52：窗口内**实际落库**的样本数（死区 / 变化上传等管线过滤后的真实值）。
+    /// 由队列存储按点位统计下发，前端据此计算真实压缩率，不再用配置比例估算。
+    pub stored_points: i32,
+    /// DD-12：丢包率（% = 100 − 成功率）；窗口内无采集为 null
+    pub loss_rate: Option<f64>,
+    /// DD-12：该设备点位中最短的采集周期（ms）；无点位为 null
+    pub current_period_ms: Option<i64>,
+    /// DD-12：后端按成功率给出的建议采集周期（ms）；无周期为 null
+    pub suggested_period_ms: Option<i64>,
+    /// DD-12：通信健康评级 excellent / good / fair / poor / unknown
+    pub health: String,
+    /// DD-12：健康评级对应的中文建议（后端单一口径，前端不再自行计算）
+    pub suggestion: String,
 }
 
 /// 单总线统计
@@ -81,6 +94,8 @@ pub struct StatsSummary {
     pub success_rate: Option<f64>,
     pub avg_latency_ms: Option<i32>,
     pub total_data_points: i32,
+    /// DD-52：窗口内实际落库的样本总数（真实压缩率分子）
+    pub total_stored_points: i32,
 }
 
 /// 采集统计报表
@@ -158,6 +173,58 @@ fn device_point_ids(
     ids
 }
 
+/// DD-12：通信健康评级与建议周期的**唯一实现**，由后端下发。
+///
+/// 前端 `healthVerdict.ts` 曾维护同一套阈值（98/93/80）与「优秀则周期减半」的
+/// 建议算法，两边口径迟早漂移。现在页面只渲染本函数给出的结果。
+fn health_from_rate(rate: Option<f64>) -> &'static str {
+    match rate {
+        None => "unknown",
+        Some(r) if r >= 98.0 => "excellent",
+        Some(r) if r >= 93.0 => "good",
+        Some(r) if r >= 80.0 => "fair",
+        _ => "poor",
+    }
+}
+
+fn suggested_period(current_ms: Option<i64>, health: &str) -> Option<i64> {
+    let current = current_ms?;
+    Some(match health {
+        "excellent" => (current / 2).max(500),
+        "good" => current,
+        "fair" => current.saturating_mul(2),
+        "poor" => current.saturating_mul(3),
+        _ => current,
+    })
+}
+
+fn suggestion_text(health: &str, current: Option<i64>, suggested: Option<i64>) -> String {
+    let (Some(current), Some(suggested)) = (current, suggested) else {
+        return "窗口内无采集，暂无法评估".to_string();
+    };
+    match health {
+        "excellent" => format!("成功率很高，可尝试缩短至 {suggested}ms（当前 {current}ms）"),
+        "good" => format!("成功率正常，维持 {current}ms"),
+        "fair" => format!("成功率偏低，建议放宽至 {suggested}ms"),
+        "poor" => format!("成功率过低，建议放宽至 {suggested}ms 并排查链路"),
+        _ => "窗口内无采集，暂无法评估".to_string(),
+    }
+}
+
+/// 设备点位中最短的采集周期（ms）。
+fn min_interval_ms(
+    ids: &[String],
+    cfg_points: &[PointConfig],
+    expanded: &[PointConfig],
+) -> Option<i64> {
+    cfg_points
+        .iter()
+        .chain(expanded.iter())
+        .filter(|p| ids.iter().any(|id| id == &p.id))
+        .map(|p| (p.interval.max(1) as i64) * 1000)
+        .min()
+}
+
 fn sum_points(ids: &[String], snapshot: &HashMap<String, ScopeStats>) -> ScopeStats {
     let mut acc = ScopeStats::default();
     for id in ids {
@@ -214,12 +281,22 @@ fn build_error_dist(metrics: &Metrics) -> Vec<ErrorDistItem> {
         .collect()
 }
 
+/// 设备/全量点位在窗口内的实际落库样本数（DD-52）。
+///
+/// `stored_by_point` 由队列存储按点位统计；缺失的点位按 0 计（窗口内未落库）。
+fn sum_stored(ids: &[String], stored_by_point: &HashMap<String, i64>) -> i64 {
+    ids.iter()
+        .filter_map(|id| stored_by_point.get(id))
+        .fold(0i64, |acc, n| acc.saturating_add(*n))
+}
+
 fn generate_report(
     period: &str,
     days: i64,
     cfg: &GatewayConfig,
     expanded: &[PointConfig],
     metrics: &Metrics,
+    stored_by_point: &HashMap<String, i64>,
 ) -> StatsReport {
     let now = now_ms();
     let start = now - days * 86_400_000;
@@ -244,6 +321,10 @@ fn generate_report(
                 *bus_device_counts.entry(bus).or_insert(0) += 1;
             }
             let s = sum_points(&ids, &point_snapshot);
+            let rate = s.success_rate();
+            let current_period_ms = min_interval_ms(&ids, &cfg.points, expanded);
+            let health = health_from_rate(rate);
+            let suggested = suggested_period(current_period_ms, health);
             DeviceStat {
                 device_id: if d.id.is_empty() {
                     d.name.clone()
@@ -255,9 +336,15 @@ fn generate_report(
                 total_reads: clamp_i32(s.total),
                 success: clamp_i32(s.success),
                 failed: clamp_i32(s.failed),
-                success_rate: s.success_rate(),
+                success_rate: rate,
                 avg_latency_ms: s.avg_latency_ms().map(|v| v.round() as i32),
                 data_points: clamp_i32(s.success),
+                stored_points: clamp_i32(sum_stored(&ids, stored_by_point).max(0) as u64),
+                loss_rate: rate.map(|r| ((100.0 - r) * 10.0).round() / 10.0),
+                current_period_ms,
+                suggested_period_ms: suggested,
+                health: health.to_string(),
+                suggestion: suggestion_text(health, current_period_ms, suggested),
             }
         })
         .collect();
@@ -308,6 +395,7 @@ fn generate_report(
             success_rate: overall.success_rate(),
             avg_latency_ms: overall.avg_latency_ms().map(|v| v.round() as i32),
             total_data_points: clamp_i32(overall.success),
+            total_stored_points: clamp_i32(sum_stored(&all_ids, stored_by_point).max(0) as u64),
         },
     }
 }
@@ -345,11 +433,25 @@ pub(crate) async fn get_stats_report(
         .and_then(|d| state.config.templates.expand_devices(d).ok())
         .unwrap_or_default();
 
+    // DD-52：实际落库样本数来自队列存储（真实压缩结果）。统计失败时降级为
+    // 空表（stored_points=0）并 warn，不阻断报表其余字段；前端会据此显示
+    // 「存储量为 0」而不是用配置比例编造。
+    let now = now_ms();
+    let start = now - days * 86_400_000;
+    let stored_by_point = match state.south.queue.stored_counts(start, now).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("stats report: stored_counts query failed: {}", e);
+            HashMap::new()
+        }
+    };
+
     Ok(Json(ApiResponse::ok(generate_report(
         period,
         days,
         &cfg,
         &expanded,
         &state.platform.metrics,
+        &stored_by_point,
     ))))
 }

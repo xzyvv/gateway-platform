@@ -4,6 +4,7 @@
  */
 
 import { extractErrorMessage } from './errorHandler'
+import { hexToBytes } from './hexCodec'
 import { decodeCjt188St, decodeDlt645Err } from './meterErrorCodes'
 
 export interface ParsedField {
@@ -18,16 +19,6 @@ export interface ParseResult {
   error?: string
   fields: ParsedField[]
   rawHex: string
-}
-
-function hexToBytes(hex: string): number[] {
-  const clean = hex.replace(/\s+/g, '').replace(/0x/gi, '')
-  if (clean.length % 2 !== 0) throw new Error('HEX 长度必须为偶数')
-  const bytes: number[] = []
-  for (let i = 0; i < clean.length; i += 2) {
-    bytes.push(parseInt(clean.slice(i, i + 2), 16))
-  }
-  return bytes
 }
 
 function crc16Modbus(data: number[]): number {
@@ -205,20 +196,20 @@ export function parseCJT188(hex: string): ParseResult {
   const fields: ParsedField[] = []
   try {
     const bytes = hexToBytes(hex)
-    if (bytes.length < 11) return { protocol: 'cjt188', valid: false, error: '帧长度不足', fields, rawHex: hex }
+    // 最小帧长：68 + 地址(7) + C + L + DATA(0) + CS + 16 = 12
+    if (bytes.length < 12) return { protocol: 'cjt188', valid: false, error: '帧长度不足', fields, rawHex: hex }
 
     if (bytes[0]! !== 0x68) return { protocol: 'cjt188', valid: false, error: '帧头错误（应为 0x68）', fields, rawHex: hex }
 
-    const meterType = bytes[1]!
-    const typeMap: Record<number, string> = { 0x10: '冷水表', 0x11: '热水表', 0x12: '直饮水表', 0x20: '热量表' }
-    fields.push({ name: '仪表类型', value: `0x${meterType.toString(16).padStart(2, '0')}`, desc: typeMap[meterType]! || '未知' })
-
-    // 地址域 7 字节
-    const addrBytes = bytes.slice(2, 9).reverse()
+    // DD-01：帧结构以后端规范为单一真源 —— `68 + ADDR(7) + C + L + DATA + CS + 16`。
+    // 旧前端多假定了 1 字节「仪表类型」，导致地址/控制码/数据区整体偏移 1 字节，
+    // 好帧也可能被读成坏帧、坏帧被读成「通过」。
+    // 地址域 7 字节（低字节在前，末字节为厂商代码）
+    const addrBytes = bytes.slice(1, 8).reverse()
     const addr = addrBytes.map((b) => b.toString(16).padStart(2, '0')).join('')
-    fields.push({ name: '仪表地址', value: addr })
+    fields.push({ name: '仪表地址', value: addr, desc: '7 字节，低字节在前（末字节为厂商代码）' })
 
-    const ctrl = bytes[9]!
+    const ctrl = bytes[8]!
     // D7 = 传送方向（0 主站发出 / 1 从站应答）；D6 = 通讯正常(0) / 异常(1)
     const isResponse = (ctrl & 0x80) !== 0
     const isAbnormal = (ctrl & 0x40) !== 0
@@ -228,49 +219,54 @@ export function parseCJT188(hex: string): ParseResult {
       desc: isResponse ? (isAbnormal ? '从站异常应答帧' : '从站正常应答帧') : '主站请求帧',
     })
 
-    const dataLen = bytes[10]!
+    const dataLen = bytes[9]!
     fields.push({ name: '数据长度', value: `${dataLen}` })
 
-    if (bytes.length >= 11 + dataLen + 2) {
-      const data = bytes.slice(11, 11 + dataLen)
-
-      // 异常应答帧：数据域 = SER(1B) + 状态ST(2B)，L=03H
-      // 正常应答帧：数据域末尾 2 字节也是状态 ST（读计量数据时）
-      let stBytes: number[] | null = null
-      if (isResponse && isAbnormal && dataLen >= 3) {
-        stBytes = data.slice(dataLen - 2)
-        fields.push({ name: '序列号 SER', value: `0x${data[0]!.toString(16).padStart(2, '0')}` })
-      } else if (isResponse && !isAbnormal && dataLen >= 2) {
-        // 正常应答的状态 ST 在数据域末尾（具体位置随数据标识不同，
-        // 此处取末尾两字节作为尽力解读）
-        stBytes = data.slice(dataLen - 2)
-      }
-
-      if (stBytes) {
-        const { bits, diagnostics } = decodeCjt188St(stBytes)
-        fields.push({
-          name: '状态 ST',
-          value: stBytes.map((b) => b.toString(16).padStart(2, '0')).join(' '),
-          desc: '第1字节位标志 + 第2字节诊断码 JD',
-        })
-        for (const b of bits) {
-          fields.push({ name: `ST bit${b.bit}`, value: b.name, desc: b.meaning })
-        }
-        for (const d of diagnostics) {
-          fields.push({ name: `诊断码 JD ${d.code}`, value: d.name, desc: d.meaning })
-        }
-        if (!bits.length && !diagnostics.length) {
-          fields.push({ name: '状态解读', value: '阀门/电池正常，诊断信息码正常' })
-        }
-      }
-
-      const checksum = bytes.reduce((s, b, i) => i < bytes.length - 2 ? s + b : s, 0) & 0xFF
-      const csReceived = bytes[bytes.length - 2]!
-      fields.push({ name: '校验和', value: checksum === csReceived ? '通过' : '失败' })
-      if (bytes[bytes.length - 1]! === 0x16) fields.push({ name: '帧尾', value: '0x16 正确' })
+    if (bytes.length < 10 + dataLen + 2) {
+      // DD-01：长度不够就如实判失败，不再一路走到 `valid: true`。
+      return { protocol: 'cjt188', valid: false, error: `帧长度不足：声明数据 ${dataLen} 字节，实际 ${bytes.length} 字节`, fields, rawHex: hex }
     }
 
-    return { protocol: 'cjt188', valid: true, fields, rawHex: hex }
+    const data = bytes.slice(10, 10 + dataLen)
+
+    // 异常应答帧：数据域 = SER(1B) + 状态ST(2B)，L=03H
+    // 正常应答帧：数据域末尾 2 字节也是状态 ST（读计量数据时）
+    let stBytes: number[] | null = null
+    if (isResponse && isAbnormal && dataLen >= 3) {
+      stBytes = data.slice(dataLen - 2)
+      fields.push({ name: '序列号 SER', value: `0x${data[0]!.toString(16).padStart(2, '0')}` })
+    } else if (isResponse && !isAbnormal && dataLen >= 2) {
+      // 正常应答的状态 ST 在数据域末尾（具体位置随数据标识不同，
+      // 此处取末尾两字节作为尽力解读）
+      stBytes = data.slice(dataLen - 2)
+    }
+
+    if (stBytes) {
+      const { bits, diagnostics } = decodeCjt188St(stBytes)
+      fields.push({
+        name: '状态 ST',
+        value: stBytes.map((b) => b.toString(16).padStart(2, '0')).join(' '),
+        desc: '第1字节位标志 + 第2字节诊断码 JD',
+      })
+      for (const b of bits) {
+        fields.push({ name: `ST bit${b.bit}`, value: b.name, desc: b.meaning })
+      }
+      for (const d of diagnostics) {
+        fields.push({ name: `诊断码 JD ${d.code}`, value: d.name, desc: d.meaning })
+      }
+      if (!bits.length && !diagnostics.length) {
+        fields.push({ name: '状态解读', value: '阀门/电池正常，诊断信息码正常' })
+      }
+    }
+
+    const checksum = bytes.reduce((s, b, i) => i < bytes.length - 2 ? s + b : s, 0) & 0xFF
+    const csReceived = bytes[bytes.length - 2]!
+    const csOk = checksum === csReceived
+    fields.push({ name: '校验和', value: csOk ? '通过' : '失败', desc: csOk ? undefined : `收到: 0x${csReceived.toString(16).padStart(2, '0')} 计算: 0x${checksum.toString(16).padStart(2, '0')}` })
+    const tailOk = bytes[bytes.length - 1]! === 0x16
+    fields.push({ name: '帧尾', value: tailOk ? '0x16 正确' : '错误', desc: tailOk ? undefined : '应为 0x16' })
+
+    return { protocol: 'cjt188', valid: csOk && tailOk, fields, rawHex: hex }
   } catch (e) {
     return { protocol: 'cjt188', valid: false, error: extractErrorMessage(e, '解析失败'), fields, rawHex: hex }
   }
@@ -316,8 +312,12 @@ export function parseFrame(protocol: ParseProtocol, hex: string): ParseResult {
 
 export const sampleFrames = {
   'modbus-rtu': '01 03 00 00 00 0A C5 CD',
-  'dlt645': '68 AA AA AA AA AA AA 68 11 04 33 33 33 33 0E 16',
-  'cjt188': '68 10 AA AA AA AA AA AA AA 01 03 00 00 00 16',
+  // DD-28：CS 修正为 0xAD（= 0x68+6×0xAA+0x68+0x11+0x04+4×0x33 & 0xFF）；
+  // 旧值 0x0E 会让内置示例在解析页显示「校验失败」，被误认为解析器故障。
+  'dlt645': '68 AA AA AA AA AA AA 68 11 04 33 33 33 33 AD 16',
+  // DD-01：与后端 `build_68_frame` 同口径 —— 68 + ADDR(7) + C + L + DATA + CS + 16，
+  // 没有独立的「仪表类型」字节。
+  'cjt188': '68 AA AA AA AA AA AA AA 01 03 00 00 00 12 16',
 }
 
 /**
@@ -325,11 +325,11 @@ export const sampleFrames = {
  *
  * - DLT645：`68 ... 68 D1 01 ERR CS 16`，控制码 D1H 的 D6 位=1（异常应答），
  *   L=01H，数据域为 ERR 位标志。这里取 ERR=0x05（bit0 其他错误 + bit2 密码错/未授权）
- * - CJT188：`68 10 ... C1 03 SER ST0 ST1 CS 16`，控制码 C1H 的 D6 位=1，
+ * - CJT188：`68 ADDR(7) C1 03 SER ST0 ST1 CS 16`，控制码 C1H 的 D6 位=1，
  *   L=03H，数据域 = SER(0x01) + ST(00 04)，ST 第一字节=0x00（阀门/电池正常），
  *   第二字节 JD=0x04（电池电压低于 3.3V，必须更换电池）
  */
 export const sampleErrorFrames = {
   'dlt645': '68 AA AA AA AA AA AA 68 D1 01 05 A3 16',
-  'cjt188': '68 10 AA AA AA AA AA AA AA C1 03 01 00 04 E7 16',
+  'cjt188': '68 AA AA AA AA AA AA AA C1 03 01 00 04 D7 16',
 }

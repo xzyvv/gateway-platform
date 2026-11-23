@@ -4,4 +4,9 @@ import type { ConvertEnumItem } from "./ConvertEnumItem";
 /**
  * 转换规则（Web 契约；last_* 字段来自运行时记账，不落盘）
  */
-export type ConvertRule = { id: string, name: string, source_proto: string, source_point_id: string, source_point_name: string, target_proto: string, target_tag: string, transform: string, scale: number | null, offset: number | null, enum_map: Array<ConvertEnumItem> | null, enabled: boolean, last_converted_at_ms: number, last_value: string | null, created_at_ms: number, };
+export type ConvertRule = { id: string, name: string, source_proto: string, source_point_id: string, source_point_name: string, target_proto: string, target_tag: string, transform: string, scale: number | null, offset: number | null, enum_map: Array<ConvertEnumItem> | null, enabled: boolean, last_converted_at_ms: number, last_value: string | null, 
+/**
+ * DD-15：运行期编译失败导致「当前不生效」的原因；`None` 表示正常生效。
+ * 规则本身仍保留在配置中（与虚拟点位错误口径一致），仅做可见标注。
+ */
+error: string | null, created_at_ms: number, };

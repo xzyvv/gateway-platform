@@ -1,7 +1,7 @@
 # 行数预算基线（O-8）
 #
 # 约定：单文件超过 800 行即视为巨型文件，必须拆分（前端见 docs/architecture/frontend.md）。
-# 本文件登记「历史上已经超限」的后端 Rust 文件，C24 按下面的规则判：
+# 本文件登记「历史上已经超限」的文件，C24 按下面的规则判：
 #   - 未登记的新文件 > 800 行 → FAIL，请拆分后再提交；确属必要的才登记。
 #   - 已登记文件**有硬上限**：上限 = 登记时的当前行数 + 100 行余量，超过上限 → FAIL。
 #     这 100 行余量是给正常功能迭代留的预算，不是继续膨胀的空间；
@@ -9,9 +9,22 @@
 #     不会被静默绕过）。不想拆又不想改账本，是没有第三条路的。
 #   - 文件拆到 ≤800 行后，C24 会提示「可从基线移除」，请删掉对应行。
 #   - 文件改名/搬迁 → 请同步改这里的路径，否则 C24 会报「基线条目失效」。
-#   - 测试文件（*tests.rs / */tests/*）不计入，测试本来就该长。
+#   - 测试文件（*tests.rs / */tests/* / *.spec.ts / *.test.ts）不计入，测试本来就该长。
+#
+# 覆盖范围（DD-58）：后端三个 crate（gateway-core / gateway-api / gatewayd）
+# **与前端 gateway-web/src 使用同一份账本、同一套规则**。
+#   - 后端条目：gateway-core/... 、gateway-api/... 、gatewayd/...
+#   - 前端条目：gateway-web/src/...（当前为空——前端存量巨型文件已按 §3.3 拆完）
+# 前端自动生成物（gateway-web/src/api/generated/、src/utils/ep-icons-compact.ts）
+# 不计入扫描，也不登记——生成物不靠人拆。
 #
 # 格式：<仓库相对路径><TAB><行数上限>，一行一个，# 开头为注释。
+#
+# `gateway-core/src/runtime/gateway.rs` 与 `gateway-core/src/south/bus/serial_task.rs`
+# 是本轮（ROI-49）补登记的**存量超限文件**：在基线建立之后它们各自涨过了 800 行，
+# 却没有同步登记，导致 C24 一直判「新增巨型文件」FAIL。这里按规则补登记并给硬上限
+# （登记时行数 + 100），存量从此不得再悄悄长；真正拆分另立任务（见
+# docs/audit-2026-11/04-ROI推荐清单.md 的剩余批次）。
 gateway-api/src/web/api/system/handlers/status.rs	1013
 gateway-api/src/web/heal.rs	962
 gateway-api/src/web/middleware/rate_limit.rs	963
@@ -20,5 +33,7 @@ gateway-core/src/north/mqtt/outbox.rs	1126
 gateway-core/src/north/webhook/client.rs	1025
 gateway-core/src/queue/core/task.rs	944
 gateway-core/src/queue/storage/sqlite/limit.rs	963
+gateway-core/src/runtime/gateway.rs	1112
+gateway-core/src/south/bus/serial_task.rs	905
 gateway-core/src/south/protocol/opcua/mod.rs	936
 gatewayd/src/bootstrap/helpers/assemble.rs	1010

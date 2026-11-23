@@ -207,7 +207,10 @@ const serviceColumns: ColumnDef<ServiceInfo>[] = [
     cell: (row) => (row.cpu ? row.cpu.toFixed(1) : '-'),
   },
   { key: 'mem', title: '内存(MB)', width: 100, align: 'right' },
-  { key: 'restarts', title: '重启次数', width: 90, align: 'right' },
+  { key: 'panic_count', title: '任务panic', width: 90, align: 'right' },
+  { key: 'publish_fail_count', title: '发布失败', width: 90, align: 'right' },
+  { key: 'collect_fail_count', title: '采集失败', width: 90, align: 'right' },
+  { key: 'heartbeat_stall_count', title: '心跳停顿', width: 90, align: 'right' },
   actionColumn<ServiceInfo>({
     width: 100,
     cell: (row) =>

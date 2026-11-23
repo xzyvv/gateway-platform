@@ -5,6 +5,17 @@
     <span class="progress-text">已完成 {{ doneCount }} / {{ total }}</span>
   </div>
 
+  <!-- DD-03：终态提示。aborted / failed / stopped 不能只显示「一致 N」让人误以为已跑完 -->
+  <el-alert
+    v-if="terminal && terminal !== 'completed' && !playing"
+    :type="terminal === 'aborted' || terminal === 'stopped' ? 'warning' : 'error'"
+    :title="terminalTitle"
+    :description="terminalDescription"
+    show-icon
+    :closable="false"
+    class="terminal-alert"
+  />
+
   <!-- 回放结果汇总 -->
   <div v-if="result" class="summary" aria-live="polite">
     <el-tag type="info" size="small">共 {{ result.total }} 帧</el-tag>
@@ -32,10 +43,11 @@
  * - percentage：进度百分比
  * - result：回放汇总结果（null 表示尚未执行）
  */
+import { computed } from 'vue'
 import type { ReplayExecuteResult } from '@/api/protocolTools'
 import { formatElapsed } from '@/utils/format'
 
-defineProps<{
+const props = defineProps<{
   /** 回放进行中 */
   playing: boolean
   /** 已收到逐帧结果数 */
@@ -46,11 +58,34 @@ defineProps<{
   percentage: number
   /** 回放汇总结果 */
   result: ReplayExecuteResult | null
+  /** DD-03：服务端/用户给出的终态，空串表示尚未执行 */
+  terminal?: '' | 'completed' | 'aborted' | 'failed' | 'stopped'
+  /** 终态附加说明（失败原因等） */
+  terminalError?: string
 }>()
+
+const terminalTitle = computed(() => {
+  switch (props.terminal) {
+    case 'aborted': return '回放未跑完（服务端已中止）'
+    case 'failed': return '回放失败'
+    case 'stopped': return '回放已停止'
+    default: return ''
+  }
+})
+
+const terminalDescription = computed(() => {
+  const done = props.result?.total ?? props.doneCount
+  const planned = props.result?.planned || props.total
+  const base = planned > 0 ? `已执行 ${done} / ${planned} 帧` : `已执行 ${done} 帧`
+  if (props.terminal === 'aborted') return `${base}（达到单次回放时长上限）。下面只统计已执行部分，未跑完的帧未验证。`
+  if (props.terminal === 'stopped') return `${base}（由用户停止）。未跑完的帧未验证。`
+  return props.terminalError ? `${base}：${props.terminalError}` : base
+})
 </script>
 
 <style scoped>
 .summary { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.terminal-alert { margin-bottom: 12px; }
 .progress-line { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
 .progress-text { font-size: 0.75rem; color: var(--el-text-color-secondary); white-space: nowrap; }
 .duration { font-size: 0.8125rem; color: var(--el-text-color-secondary); }

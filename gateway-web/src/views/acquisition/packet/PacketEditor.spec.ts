@@ -9,6 +9,7 @@ vi.mock('@/api/protocolTools', () => ({
   listPresets: vi.fn(),
   sendFrame: vi.fn(),
 }))
+vi.mock('@/utils/confirm', () => ({ confirmAction: vi.fn() }))
 vi.mock('@/composables/acquisition/useDebugTargets', async () => {
   const { ref } = await vi.importActual<typeof import('vue')>('vue')
   return {
@@ -30,6 +31,7 @@ vi.mock('@/api/buses', () => ({
 import PacketEditor from './PacketEditor.vue'
 import HexInput from '@/components/industrial/HexInput.vue'
 import { listPresets, sendFrame, type SendResult } from '@/api/protocolTools'
+import { confirmAction } from '@/utils/confirm'
 
 /**
  * 报文编辑：这是唯一把「用户手写的帧」直接打到真实总线的入口。
@@ -75,6 +77,7 @@ describe('PacketEditor 报文编辑', () => {
     localStorage.clear()
     delete routeQuery.hex
     vi.mocked(sendFrame).mockResolvedValue(okResult)
+    vi.mocked(confirmAction).mockResolvedValue(true)
   })
 
   afterEach(() => {
@@ -116,6 +119,52 @@ describe('PacketEditor 报文编辑', () => {
     expect(result).toContain('通信成功')
     // 在线回帧也走同一解析内核，逐字段展示
     expect(wrapper.find('.online-parse').text()).toContain('响应帧解析')
+  })
+
+  /**
+   * DD-30：写帧下发前必须二次确认。后端 send_frame 下发前无拦截，
+   * 前端是误写生产总线的唯一防线。这三条钉住「写帧确认 / 取消不下发 / 读帧不打扰」。
+   */
+  const WRITE_FRAME = '01 06 00 00 00 01' // FC06 写单寄存器
+
+  it('写帧：弹二次确认，确认后才下发到总线', async () => {
+    vi.mocked(confirmAction).mockResolvedValue(true)
+    const wrapper = await mountPage()
+    await wrapper.findComponent(HexInput).find('input').setValue(WRITE_FRAME)
+    await settle()
+
+    await button(wrapper, '发送').trigger('click')
+    await settle()
+
+    expect(vi.mocked(confirmAction)).toHaveBeenCalledTimes(1)
+    const opts = vi.mocked(confirmAction).mock.calls[0]![0]
+    expect(opts.title).toContain('写帧')
+    expect(opts.message).toContain(WRITE_FRAME)
+    expect(opts.autofocus).toBe(false)
+    expect(vi.mocked(sendFrame)).toHaveBeenCalledWith(WRITE_FRAME, '/dev/ttyUSB0', 1500)
+  })
+
+  it('写帧：用户取消确认时绝不下发', async () => {
+    vi.mocked(confirmAction).mockResolvedValue(false)
+    const wrapper = await mountPage()
+    await wrapper.findComponent(HexInput).find('input').setValue(WRITE_FRAME)
+    await settle()
+
+    await button(wrapper, '发送').trigger('click')
+    await settle()
+
+    expect(vi.mocked(confirmAction)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sendFrame)).not.toHaveBeenCalled()
+  })
+
+  it('读帧（FC03）：不弹确认，直接下发', async () => {
+    const wrapper = await mountPage()
+
+    await button(wrapper, '发送').trigger('click')
+    await settle()
+
+    expect(vi.mocked(confirmAction)).not.toHaveBeenCalled()
+    expect(vi.mocked(sendFrame)).toHaveBeenCalledOnce()
   })
 
   it('超时失败时展示「超时无响应」与后端解析文案，不显示成功样式', async () => {

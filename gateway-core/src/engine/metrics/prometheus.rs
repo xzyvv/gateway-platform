@@ -158,12 +158,35 @@ impl Metrics {
             self.point_write_failures.load(Ordering::Relaxed)
         ));
 
+        // DD-62：诊断日志 WS 丢行（广播滞后 / 客户端慢）。
+        out.push_str(
+            "# HELP gateway_log_ws_dropped_total Diagnostics log WS lines dropped \
+             (broadcast lag or slow-client send queue full)\n",
+        );
+        out.push_str("# TYPE gateway_log_ws_dropped_total counter\n");
+        out.push_str(&format!(
+            "gateway_log_ws_dropped_total {}\n",
+            self.log_ws_dropped.load(Ordering::Relaxed)
+        ));
+
         // r52-MEM1：进程 RSS（自监控）。0 表示采集失败/不支持平台。
         out.push_str("# HELP gateway_process_rss_bytes Process RSS in bytes (0 = unsupported)\n");
         out.push_str("# TYPE gateway_process_rss_bytes gauge\n");
         out.push_str(&format!(
             "gateway_process_rss_bytes {}\n",
             self.process_rss_bytes.load(Ordering::Relaxed)
+        ));
+
+        // DD-38：硬件看门狗喂狗写失败次数。计数由 platform 模块的全局状态持有，
+        // 导出时直接采样（此前只写不读，Prometheus 上恒不存在）。
+        out.push_str(
+            "# HELP gateway_watchdog_hw_write_errors_total Hardware watchdog write failures \
+             (nonzero = the hardware watchdog is NOT being fed)\n",
+        );
+        out.push_str("# TYPE gateway_watchdog_hw_write_errors_total counter\n");
+        out.push_str(&format!(
+            "gateway_watchdog_hw_write_errors_total {}\n",
+            crate::platform::hardware_watchdog::hw_write_errors_total()
         ));
 
         // ===== sink 指标（每个内置 sink 一组标签）=====

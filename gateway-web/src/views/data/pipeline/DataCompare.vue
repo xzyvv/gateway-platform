@@ -41,6 +41,18 @@
         </SectionHeader>
       </template>
       <div ref="chartEl" class="compare-chart" data-chart-label="两组数据对比趋势图"></div>
+      <!-- DD-53：/api/history 默认只返回窗口内最新 1000 条；忽略 truncated 会让用户
+           把「部分数据」当成「全部数据」下结论，这里必须显式提示。 -->
+      <el-alert
+        v-if="truncation"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="trunc-alert"
+        :title="`数据已截断：${truncation.point} 窗口内共 ${truncation.total.toLocaleString()} 条，仅显示最近 ${truncation.returned.toLocaleString()} 条`"
+      >
+        <span>趋势图与统计摘要只基于已返回的数据；如需完整数据请缩短时间范围或改用降采样查询。</span>
+      </el-alert>
     </el-card>
 
     <el-card v-if="dataRows.length" shadow="never" class="section-card" style="margin-top: 16px">
@@ -92,6 +104,8 @@ const selectedPoints = computed(() =>
 const dataRows = ref<Record<string, string | number>[]>([])
 type StatRow = { name: string; min: number; max: number; avg: number; range: number; std: number }
 const stats = ref<StatRow[]>([])
+/** DD-53：窗口内数据被 /api/history 截断时的提示（取截断最严重的点位） */
+const truncation = ref<{ point: string; total: number; returned: number } | null>(null)
 // 查询进行中：禁用选择器与查询按钮，避免 await 期间改选择导致结果与选择错位
 const loading = ref(false)
 // 查询序号守卫：旧查询的结果不得覆盖新查询
@@ -144,8 +158,21 @@ async function loadData() {
         // P2-1：返回体为信封内的 { items, total, ... } 而非裸数组
         // W1：不再视图内手拼 query 串，统一走 `/api/history` 的唯一取数入口
         const res = await fetchHistorySamples({ pointId: p.id, start, end: now })
-        return { point: p, data: res?.items ?? [] }
-      } catch { return { point: p, data: [] as { timestamp: number; value: number }[] } }
+        return {
+          point: p,
+          data: res?.items ?? [],
+          // DD-53：保留截断元信息，交给下方统一提示
+          total: res?.total ?? 0,
+          truncated: Boolean(res?.truncated || res?.has_more),
+        }
+      } catch {
+        return {
+          point: p,
+          data: [] as { timestamp: number; value: number }[],
+          total: 0,
+          truncated: false,
+        }
+      }
     })
   )
 
@@ -181,6 +208,18 @@ async function loadData() {
   // 旧请求的结果不得写入（已有更新的查询发出）。
   // 注意这里不复位 loading：当前那一轮才负责把它置回 false。
   if (!queryGuard.isCurrent(seq)) return
+
+  // DD-53：截断信息与数据一起提交（同样受竞态守卫保护）
+  const worst = results
+    .filter((r) => r.truncated)
+    .sort((a, b) => b.total - a.total)[0]
+  truncation.value = worst
+    ? {
+        point: `${worst.point.deviceName}/${worst.point.pointName}`,
+        total: worst.total,
+        returned: worst.data.length,
+      }
+    : null
 
   dataRows.value = rows
   stats.value = statsList
@@ -257,4 +296,5 @@ watch(chartEl, (el) => {
 .time-range { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
 .query-hint { font-size: 0.75rem; color: var(--text-secondary); }
 .compare-chart { height: 360px; }
+.trunc-alert { margin-top: 8px; }
 </style>

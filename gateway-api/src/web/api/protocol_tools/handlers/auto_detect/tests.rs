@@ -226,6 +226,10 @@ async fn 探测引擎_stop中止后status为aborted且保留已完成步骤() {
         r.steps.iter().any(|s| s.status != "pending"),
         "aborted 前已完成的步骤必须保留"
     );
-    assert_eq!(r.progress, 100);
+    assert!(
+        r.progress > 0 && r.progress < 100,
+        "中止时进度必须保留已扫比例，不能置 100（实际 {}）",
+        r.progress
+    );
     assert!(r.end_time_ms.is_some());
 }

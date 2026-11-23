@@ -39,6 +39,11 @@ impl Collector for ModbusCollector {
         self.bus.name()
     }
 
+    /// DD-11：把运行时自适应 gap 暴露给只读的「调度优化」展示，避免前端估算。
+    fn merge_gap(&self) -> Option<u16> {
+        Some(self.merge_stats.lock().next_gap())
+    }
+
     fn diag_supported(&self) -> bool {
         true
     }

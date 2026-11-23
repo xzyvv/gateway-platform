@@ -138,11 +138,25 @@ pub(crate) fn run_wal_checkpoint(conn: &mut Connection, reason: &str, metrics: O
 ///
 /// `metrics` 为可选传入：为 `None` 时仅记日志、不累计指标（用于测试）。
 pub(crate) fn check_wal_size(conn: &mut Connection, wal_path: &Path, metrics: Option<&Metrics>) {
+    use std::sync::atomic::Ordering;
     // 文件可能不存在（WAL 尚未生成或已被 checkpoint 截断）。
+    // DD-19：此时 gauge 必须归零，不能把上一次的大小留在指标里。
     let size = match std::fs::metadata(wal_path) {
         Ok(meta) => meta.len(),
-        Err(_) => return,
+        Err(_) => {
+            if let Some(m) = metrics {
+                m.queue_persist.wal_size_bytes.store(0, Ordering::Relaxed);
+            }
+            return;
+        }
     };
+    // DD-19：这个函数是生产路径上唯一稳定读到 WAL 大小的位置，gauge 必须在这里写；
+    // 历史实现只在单测里赋值，导致 `gateway_wal_size_bytes` 线上恒为 0。
+    if let Some(m) = metrics {
+        m.queue_persist
+            .wal_size_bytes
+            .store(size, Ordering::Relaxed);
+    }
     if size >= WAL_SIZE_WARN_BYTES {
         tracing::error!(
             "WAL file size {} bytes exceeds 100MB hard threshold, forcing extra checkpoint",
@@ -225,6 +239,14 @@ mod tests {
             .wal_checkpoint
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(before, after, "missing file should not trigger checkpoint");
+        assert_eq!(
+            metrics
+                .queue_persist
+                .wal_size_bytes
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "WAL 文件不存在时 gauge 必须归零"
+        );
     }
 
     /// S01: 构造一个恰好越过早期预警但未达硬告警的 WAL 大小。    
@@ -256,6 +278,14 @@ mod tests {
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(before_warn, after_warn, "1B file should not warn");
         assert_eq!(before_ckpt, after_ckpt, "1B file should not checkpoint");
+        assert_eq!(
+            metrics
+                .queue_persist
+                .wal_size_bytes
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "低于告警阈值时也要回写 WAL 大小 gauge"
+        );
     }
 
     /// r42-Q2 回归：WAL 路径必须是主库路径 + "-wal"（字符串后缀），

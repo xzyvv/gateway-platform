@@ -19,6 +19,8 @@
 mod core;
 mod helpers;
 mod storage;
+/// DD-52：stored_counts 诊断查询（外移以控制本文件行数预算）。
+mod stored_counts_api;
 
 pub use self::core::QueuedItem;
 pub use self::storage::MemoryStorage;
@@ -79,6 +81,25 @@ const BACKLOG_ALARM_INTERVAL: std::time::Duration = std::time::Duration::from_se
 /// 中立的求值闭包，把「消费者有哪些」的知识留在上层。
 pub type NorthConsumerProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// DD-17：把「内存缓冲深度 + 当前是否降级」同步到指标（gauge）。
+///
+/// 降级期间数据只在内存里，断电即丢；此前没有任何 gauge 暴露这一点，
+/// 现场表现为接口 200、指标无异。所有改变 fallback 缓冲 / 持久化能力的
+/// 路径（enqueue 降级、flush 成功/失败、磁盘状态切换）都必须调用本函数。
+pub(crate) fn sync_degraded_metrics(
+    metrics: &Arc<parking_lot::Mutex<Arc<Metrics>>>,
+    depth: usize,
+    degraded: bool,
+) {
+    let m = metrics.lock();
+    m.queue_persist
+        .fallback_depth
+        .store(depth as u64, std::sync::atomic::Ordering::Relaxed);
+    m.queue_persist
+        .degraded
+        .store(u64::from(degraded), std::sync::atomic::Ordering::Relaxed);
+}
+
 pub struct DataQueue {
     tx: mpsc::Sender<QueueCommand>,
     _handle: tokio::task::JoinHandle<()>,
@@ -123,6 +144,9 @@ impl DataQueue {
     /// 设置磁盘是否可写（由 health_monitor 调用，磁盘满时阻止 enqueue）。
     pub fn set_disk_ok(&self, ok: bool) {
         self.disk_ok.store(ok, std::sync::atomic::Ordering::Relaxed);
+        // DD-17：能否落库本身就是降级信号（即便此刻缓冲为空，下一次入队也只会进内存）。
+        let depth = self.fallback_len();
+        sync_degraded_metrics(&self.metrics, depth, !ok || depth > 0);
     }
 
     /// 当前是否允许入队（磁盘压力状态的反向视图）。
@@ -303,6 +327,8 @@ impl DataQueue {
                 push_into_fallback(&mut buf, FALLBACK_CAPACITY, points, &mut no_bounce)
             };
             let buffered = self.fallback_buffer.lock().len();
+            // DD-17：降级态与缓冲深度必须可观测——数据此刻只在内存里，断电即丢。
+            sync_degraded_metrics(&self.metrics, buffered, true);
             // Bug 183 (N01): 容量超限被踢出的点计入 dropped 指标。
             if dropped_by_cap > 0 {
                 self.metrics
@@ -348,6 +374,8 @@ impl DataQueue {
         self.fallback_warned
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.flush_fallback().await?;
+        // DD-17：落库路径恢复，降级态归零（flush 成功后缓冲已清空）。
+        sync_degraded_metrics(&self.metrics, 0, false);
         self.tx
             .send(QueueCommand::Enqueue(points))
             .await
@@ -366,6 +394,8 @@ impl DataQueue {
         let items: Vec<DataPoint> = {
             let mut buf = self.fallback_buffer.lock();
             if buf.is_empty() {
+                // DD-17：空缓冲的 flush 说明已无内存滞留数据，降级态应归零。
+                sync_degraded_metrics(&self.metrics, 0, false);
                 return Ok(());
             }
             buf.drain(..).collect()
@@ -397,11 +427,17 @@ impl DataQueue {
                 dropped,
                 e
             );
+            // DD-17：回退后数据仍在内存，降级态必须可见。
+            let depth = buf.len();
+            drop(buf);
+            sync_degraded_metrics(&self.metrics, depth, true);
             return Err(GatewayError::Queue(format!(
                 "flush fallback send failed ({} points restored to buffer): {}",
                 n, e
             )));
         }
+        // DD-17：flush 成功 → 缓冲已清空，降级态归零。
+        sync_degraded_metrics(&self.metrics, 0, false);
         Ok(())
     }
 
@@ -436,6 +472,8 @@ impl DataQueue {
                         n
                     );
                 }
+                // DD-17：同步冲刷成功 → 内存已无滞留数据。
+                sync_degraded_metrics(&self.metrics, 0, false);
                 Ok(inserted)
             }
             Err(e) => {
@@ -456,6 +494,10 @@ impl DataQueue {
                     dropped,
                     e
                 );
+                // DD-17：回退后数据仍在内存，降级态必须可见。
+                let depth = buf.len();
+                drop(buf);
+                sync_degraded_metrics(&self.metrics, depth, true);
                 Err(e)
             }
         }

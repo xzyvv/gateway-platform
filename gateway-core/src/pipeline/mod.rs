@@ -1,6 +1,6 @@
 //! 处理管道（采集与处理解耦）
 //!
-//! 将采集循环中的后处理步骤（边缘过滤 → 协议转换 → 虚拟点 → 入队 → 实时广播）
+//! 将采集循环中的后处理步骤（边缘过滤 → 协议转换 → 质量规则 → 虚拟点 → 实时广播 → 入队）
 //! 剥离到独立的异步任务中，通过 mpsc 通道接收采集到的原始数据点。
 //!
 //! 优势：
@@ -76,8 +76,12 @@ impl CollectedBatch {
 /// 2. 协议转换模板
 /// 3. 数据质量规则
 /// 4. 虚拟点位求值
-/// 5. 入队 DataQueue
-/// 6. 实时数据 WebSocket 广播
+/// 5. 实时数据 WebSocket 广播（并投递北向无损队列）
+/// 6. 入队 DataQueue（由 `run()` 的 micro-batching 合并后落库）
+///
+/// 注意 5 / 6 的先后：**先广播、后入队**。广播在 `process_batch` 内逐批发出
+/// （订阅者只服务可容忍丢帧的下游），入队在 `run()` 里攒批后统一落库；
+/// 两者并列投递同一份数据（零拷贝共享），不存在「入队成功才算广播成功」的依赖。
 ///
 /// 北向上报（MQTT/Webhook/Server Sinks）由 NorthDispatcher 统一管理，
 /// 从北向专用队列（第 5 层无损通道）接收数据，不再由 Pipeline 直接持有。
@@ -213,6 +217,9 @@ impl ProcessingPipeline {
         // 兜底分支，强制把滞留数据入队。
         let mut flush_tick = tokio::time::interval(window_ms);
         flush_tick.tick().await; // 跳过首次立即触发
+                                 // DD-16：点位实时值缓存按 TTL 定期淘汰，防止点位下线后缓存单调增长。
+        let mut prune_tick = tokio::time::interval(Duration::from_secs(60));
+        prune_tick.tick().await; // 跳过首次立即触发
 
         loop {
             tokio::select! {
@@ -232,6 +239,10 @@ impl ProcessingPipeline {
                         self.enqueue_checked(std::mem::take(&mut accum)).await;
                         last_flush = std::time::Instant::now();
                     }
+                }
+                // DD-16：按 TTL 真正淘汰已过期的点位实时值缓存
+                _ = prune_tick.tick() => {
+                    self.virtual_points.prune_cache(DataPoint::now());
                 }
                 // 正常接收采集数据
                 Some(batch) = rx.recv() => {
@@ -361,6 +372,15 @@ impl ProcessingPipeline {
     /// 强制刷新所有聚合缓冲区
     pub fn flush_all(&self, points: &[PointConfig]) -> Vec<DataPoint> {
         self.edge.flush_all(points)
+    }
+
+    /// 清理已下线点位的管道内部状态（DD-16）
+    ///
+    /// 由调度器在点位热重载提交后调用：`active` 是重载后的全部点位 ID，
+    /// 死区/变化上传基线、质量边沿按它淘汰；虚拟点实时值缓存按 TTL 淘汰。
+    pub fn prune_state(&self, active: &std::collections::HashSet<String>) {
+        self.edge.prune(active);
+        self.virtual_points.prune_cache(DataPoint::now());
     }
 }
 

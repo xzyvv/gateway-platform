@@ -68,7 +68,8 @@ impl ProtocolCapabilities {
         }
     }
 
-    /// TCP 批量读写协议（mc / fins）：批量读 + 写 + 按软元件地址逐点探测
+    /// TCP 批量读写协议（mc / fins）：批量读 + 写 + 寄存器扫描 + 真实诊断
+    /// （诊断 = 读一个字元件，验证链路与软元件地址是否可读）。
     pub const fn tcp_batch_write() -> Self {
         Self {
             supports_batch_read: true,
@@ -82,9 +83,14 @@ impl ProtocolCapabilities {
         }
     }
 
-    /// 远动 TCP 批量读写协议（iec104）：在 [`Self::tcp_batch_write`] 基础上增加真实诊断
-    /// （建链 + STARTDT + 总召唤）。不能直接把 `tcp_batch_write` 的 diag 改为 true——
-    /// 该构造器同时被 mc / fins 复用，那两个协议尚未实现 `diag`。
+    /// 远动 TCP 批量读写协议（iec104）：批量读 + 写 + 真实诊断
+    /// （诊断 = 建链 + STARTDT + 总召唤）。
+    ///
+    /// 与 [`Self::tcp_batch_write`] 的能力差异只有 `supports_register_scan`：
+    /// iec104 没有「按地址段探测可读寄存器」这回事（取数只能靠总召唤），故为 false。
+    /// 诊断能力两者同为 true —— mc / fins 的诊断是「读一个字元件」，iec104 的诊断是
+    /// 「建链 + STARTDT + 总召唤」，两者都已实现（见 `registry/tests.rs` 的
+    /// `test_supports_diag_only_for_implemented_protocols`）。
     pub const fn telecontrol_tcp_write() -> Self {
         Self {
             supports_batch_read: true,

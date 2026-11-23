@@ -55,6 +55,18 @@ pub struct QueuePersistMetrics {
     /// 这是配置选择的预期行为，不是故障：用来核对「采样量 × 周期比 − 实际上行量」
     /// 是否吻合，避免现场把快照折叠误判为丢数据。
     pub snapshot_superseded_rows: AtomicU64,
+
+    /// DD-17: 当前滞留在内存 fallback 缓冲、尚未落库的数据点数（gauge）。
+    ///
+    /// 降级（磁盘满 / 未送达溢出 / 写库失败）期间数据只在内存里，断电即丢。
+    /// 此前只能靠 `persist_dropped` 反推「丢了多少」，看不到「此刻攒了多少」，
+    /// 现场表现为接口 200、指标无异，而数据全在内存里。
+    pub fallback_depth: AtomicU64,
+    /// DD-17: 当前入队路径是否处于降级态（1 = 只进内存缓冲，0 = 正常落库）。
+    ///
+    /// 与 `fallback_depth` 分开：深度会随 flush 自然回落，而本 gauge 表达
+    /// 「持久化能力当前不可用」这一状态本身，便于直接 `== 1` 告警。
+    pub degraded: AtomicU64,
 }
 
 impl QueuePersistMetrics {
@@ -138,6 +150,19 @@ impl QueuePersistMetrics {
             "# HELP gateway_queue_snapshot_superseded_total Rows collapsed by snapshot report mode (delivered but not uploaded)\n\
              # TYPE gateway_queue_snapshot_superseded_total counter\n\
              gateway_queue_snapshot_superseded_total {superseded}"
+        );
+        let depth = self
+            .fallback_depth
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let degraded = self.degraded.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_queue_fallback_depth Points currently buffered in the in-memory fallback (not persisted yet)\n\
+             # TYPE gateway_queue_fallback_depth gauge\n\
+             gateway_queue_fallback_depth {depth}\n\
+             # HELP gateway_queue_degraded 1 when enqueue is degraded to the in-memory fallback, 0 when persisting to storage\n\
+             # TYPE gateway_queue_degraded gauge\n\
+             gateway_queue_degraded {degraded}"
         );
     }
 }

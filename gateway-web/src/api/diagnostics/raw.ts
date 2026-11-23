@@ -39,6 +39,7 @@ import type {
   DiagResult,
   GatewayDiag,
   ModbusError,
+  ScheduleOptimizeReport,
   ScheduleTimeline,
   StatsReport,
 } from '../generated'
@@ -50,8 +51,17 @@ export type {
   DiagResult,
   GatewayDiag,
   ModbusError,
+  ScheduleOptimizeReport,
   ScheduleTimeline,
   StatsReport,
+}
+
+// ============================================================================
+// 调度优化（DD-11：合并计划由后端计算，前端只渲染）
+// ============================================================================
+
+export function getScheduleOptimizeReport(): Promise<ScheduleOptimizeReport> {
+  return request<ScheduleOptimizeReport>({ url: '/api/diagnostics/schedule-optimize', method: 'GET' })
 }
 
 // ============================================================================

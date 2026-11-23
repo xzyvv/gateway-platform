@@ -7,7 +7,7 @@ use crate::web::error_codes as codes;
 use crate::web::types::BusConsumerKind;
 #[cfg(feature = "remote-shell")]
 use axum::response::IntoResponse;
-use limit::{realtime_max_subscribers, WsSlot};
+use limit::{realtime_max_subscribers, LogWsSlot, WsSlot};
 
 /// 第 2 层：单连接发送缓冲上限（批）。满载时丢弃当前批（最新值优先），
 /// 避免慢客户端把内存无限撑大。
@@ -30,7 +30,6 @@ pub(crate) async fn diagnostics_logs_ws(
     };
     use axum::extract::ws::Message;
     use axum::response::IntoResponse;
-    use futures::StreamExt;
 
     // A6: WebSocket 升级前校验 token，避免未授权客户端订阅诊断日志流。
     // B1 修复：token 提取顺序为 Header > Sec-WebSocket-Protocol 子协议 > URL query。
@@ -66,45 +65,132 @@ pub(crate) async fn diagnostics_logs_ws(
         None => ws,
     };
 
-    let mut rx = state.platform.diagnostics.subscribe_logs();
+    // DD-62：日志流此前既无连接上限，也在 Lagged 时静默丢行。升级前预占名额
+    // （与实时数据流分开计数），超限直接 503，避免"先接受再断开"的重连风暴。
+    let max_subscribers = realtime_max_subscribers(&state);
+    let log_slot = match LogWsSlot::try_acquire(max_subscribers) {
+        Some(slot) => slot,
+        None => {
+            tracing::warn!(
+                "diagnostics logs ws rejected: connection limit {} reached",
+                max_subscribers
+            );
+            return ApiError {
+                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                code: codes::REALTIME_LIMIT,
+                message: "too many diagnostics log websocket connections".to_string(),
+            }
+            .into_response();
+        }
+    };
 
-    ws.on_upgrade(move |mut socket| async move {
+    let mut rx = state.platform.diagnostics.subscribe_logs();
+    let metrics = state.platform.metrics.clone();
+
+    ws.on_upgrade(move |socket| async move {
+        // 连接期间持槽位，任务结束（Drop）自动归还。
+        let _slot = log_slot;
+        use futures::{SinkExt, StreamExt};
+
+        // DD-62：读写分离 + 有界发送缓冲 + 发送超时，与实时数据流同构。
+        // 旧实现直接在 select! 分支里 `socket.send().await`：慢客户端（TCP 窗口为 0）
+        // 会把整个连接任务挂死，也无从统计丢了多少行日志。
+        let (mut sink, mut stream) = socket.split();
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Message>(WS_OUT_BUFFER);
+        let writer = tokio::spawn(async move {
+            while let Some(msg) = out_rx.recv().await {
+                let is_close = matches!(msg, Message::Close(_));
+                match tokio::time::timeout(WS_SEND_TIMEOUT, sink.send(msg)).await {
+                    Ok(Ok(())) => {}
+                    _ => break,
+                }
+                if is_close {
+                    break;
+                }
+            }
+        });
+
         let mut ping_ticker = tokio::time::interval(Duration::from_secs(30));
         // Bug 97: 增加 idle timeout ticker——90s 内未收到客户端消息视为僵尸客户端。
         let mut idle_ticker = tokio::time::interval(Duration::from_secs(90));
         idle_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut last_activity = tokio::time::Instant::now();
+        // 本连接累计丢行（广播 Lagged + 发送队列满），节流告警防日志风暴。
+        let mut dropped: u64 = 0;
+        let mut last_drop_warn: Option<tokio::time::Instant> = None;
+
         loop {
             tokio::select! {
                 result = rx.recv() => {
                     match result {
                         Ok(line) => {
-                            if socket.send(Message::Text(line)).await.is_err() {
-                                break;
+                            match out_tx.try_send(Message::Text(line)) {
+                                Ok(()) => {
+                                    last_activity = tokio::time::Instant::now();
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    // 客户端慢于 writer：丢弃当前行（内存上界固定为 WS_OUT_BUFFER）。
+                                    dropped = dropped.saturating_add(1);
+                                    metrics.add_log_ws_dropped(1);
+                                    let now = tokio::time::Instant::now();
+                                    let should_warn = last_drop_warn
+                                        .map(|t| now.duration_since(t) >= Duration::from_secs(10))
+                                        .unwrap_or(true);
+                                    if should_warn {
+                                        last_drop_warn = Some(now);
+                                        tracing::warn!(
+                                            "diagnostics logs ws send queue full, dropped {} lines (cumulative)",
+                                            dropped
+                                        );
+                                    }
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
                             }
-                            last_activity = tokio::time::Instant::now();
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            // 旧实现 `Lagged(_) => continue`：丢行静默、指标不可见。
+                            // 现在计指标 + 节流告警，让"日志缺行"可被现场感知。
+                            dropped = dropped.saturating_add(n);
+                            metrics.add_log_ws_dropped(n);
+                            let now = tokio::time::Instant::now();
+                            let should_warn = last_drop_warn
+                                .map(|t| now.duration_since(t) >= Duration::from_secs(10))
+                                .unwrap_or(true);
+                            if should_warn {
+                                last_drop_warn = Some(now);
+                                tracing::warn!(
+                                    "diagnostics logs ws lagged, dropped {} lines (cumulative {})",
+                                    n,
+                                    dropped
+                                );
+                            } else {
+                                tracing::debug!(
+                                    "diagnostics logs ws lagged, dropped {} lines (cumulative {})",
+                                    n,
+                                    dropped
+                                );
+                            }
+                        }
                         Err(_) => break,
                     }
                 }
                 _ = ping_ticker.tick() => {
-                    if socket.send(Message::Ping(Vec::new())).await.is_err() {
+                    if out_tx.try_send(Message::Ping(Vec::new())).is_err() {
                         break;
                     }
                 }
                 _ = idle_ticker.tick() => {
                     if last_activity.elapsed() >= Duration::from_secs(90) {
                         tracing::debug!("diagnostics logs ws idle timeout, closing");
-                        let _ = socket.send(Message::Close(None)).await;
+                        let _ = out_tx.try_send(Message::Close(None));
                         break;
                     }
                 }
-                msg = socket.next() => {
+                msg = stream.next() => {
                     last_activity = tokio::time::Instant::now();
                     match msg {
                         Some(Ok(Message::Ping(p))) => {
-                            if socket.send(Message::Pong(p)).await.is_err() { break; }
+                            if out_tx.try_send(Message::Pong(p)).is_err() { break; }
                         }
                         Some(Ok(Message::Close(_))) | None => break,
                         _ => {}
@@ -112,6 +198,10 @@ pub(crate) async fn diagnostics_logs_ws(
                 }
             }
         }
+
+        // 关闭投递端，让 writer 排空剩余消息后退出；等待有界（单条最多 WS_SEND_TIMEOUT）。
+        drop(out_tx);
+        let _ = writer.await;
     })
     .into_response()
 }

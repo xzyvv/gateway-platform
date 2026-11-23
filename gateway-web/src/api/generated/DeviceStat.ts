@@ -11,4 +11,29 @@ success_rate: number | null,
 /**
  * 平均延迟（ms）；窗口内无采集为 null
  */
-avg_latency_ms: number | null, data_points: number, };
+avg_latency_ms: number | null, data_points: number, 
+/**
+ * DD-52：窗口内**实际落库**的样本数（死区 / 变化上传等管线过滤后的真实值）。
+ * 由队列存储按点位统计下发，前端据此计算真实压缩率，不再用配置比例估算。
+ */
+stored_points: number, 
+/**
+ * DD-12：丢包率（% = 100 − 成功率）；窗口内无采集为 null
+ */
+loss_rate: number | null, 
+/**
+ * DD-12：该设备点位中最短的采集周期（ms）；无点位为 null
+ */
+current_period_ms: bigint | null, 
+/**
+ * DD-12：后端按成功率给出的建议采集周期（ms）；无周期为 null
+ */
+suggested_period_ms: bigint | null, 
+/**
+ * DD-12：通信健康评级 excellent / good / fair / poor / unknown
+ */
+health: string, 
+/**
+ * DD-12：健康评级对应的中文建议（后端单一口径，前端不再自行计算）
+ */
+suggestion: string, };

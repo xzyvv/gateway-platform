@@ -91,7 +91,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, h, Fragment } from 'vue'
-import { ElMessage, ElButton, ElSwitch, ElTag, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElButton, ElSwitch, ElTag, ElTooltip, type FormInstance, type FormRules } from 'element-plus'
 import { confirmDelete } from '@/utils/confirm'
 import {Plus, Refresh} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
@@ -251,14 +251,20 @@ const ruleColumns: ColumnDef<ConvertRule>[] = [
   {
     key: 'enabled',
     title: '状态',
-    width: 80,
+    width: 110,
+    // DD-15：运行时编译失败的规则仍保留在列表里，用红色标签标注「不生效」并给出原因，
+    // 不再只留一条后端日志（与虚拟点位错误的可见口径一致）。
     cell: (row) =>
-      h(ElSwitch, {
-        size: 'small',
-        modelValue: row.enabled,
-        'onUpdate:modelValue': (v: unknown) => { row.enabled = Boolean(v) },
-        onChange: () => toggle(row.id),
-      }),
+      row.error
+        ? h(ElTooltip, { content: row.error, placement: 'top' }, () =>
+            h(ElTag, { size: 'small', type: 'danger' }, () => '不生效'),
+          )
+        : h(ElSwitch, {
+            size: 'small',
+            modelValue: row.enabled,
+            'onUpdate:modelValue': (v: unknown) => { row.enabled = Boolean(v) },
+            onChange: () => toggle(row.id),
+          }),
   },
   actionColumn<ConvertRule>({
     width: 140,

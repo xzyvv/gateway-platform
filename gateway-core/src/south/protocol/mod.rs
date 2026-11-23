@@ -389,6 +389,12 @@ pub trait Collector: Send + Sync {
     /// 所属总线名
     fn bus_name(&self) -> &str;
 
+    /// DD-11：当前自适应合并间隔阈值；不支持合并的协议返回 None。
+    /// 仅用于 Web「调度优化」只读展示复用运行时真实参数，不参与采集决策。
+    fn merge_gap(&self) -> Option<u16> {
+        None
+    }
+
     /// 读取单个点位
     fn read<'a>(
         &'a self,

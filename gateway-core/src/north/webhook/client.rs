@@ -359,9 +359,12 @@ impl WebhookClient {
     }
 
     /// 将一批数据持久化到 outbox（protocol='http'）。
-    async fn persist_batch(&self, points: Vec<DataPoint>) {
+    ///
+    /// DD-24：单片失败不再静默吞掉——记录首个错误、继续尝试其余片，
+    /// 最后统一返回，由 `publish_batch` 按现有惯例向上暴露（避免一片失败丢整批）。
+    async fn persist_batch(&self, points: Vec<DataPoint>) -> GatewayResult<()> {
         if points.is_empty() {
-            return;
+            return Ok(());
         }
         // Bug P1-B6 (fix): 旧实现对整批 points 一次性 serialize + persist，
         // 5000 条 payload 约 5MB，HTTP 慢端点会触发 reqwest timeout_secs 失败
@@ -372,13 +375,22 @@ impl WebhookClient {
         //   3) flush_pending 的 REPLAY_BATCH_SIZE 仍可控制 DB 读批量。
         // 兜底：batch_size=0（异常配置）退化为 100，避免无限切片或 0 切片。
         let batch_size = self.config.batch_size.clamp(1, 1000);
+        let mut first_err: Option<GatewayError> = None;
         for chunk in points.chunks(batch_size) {
-            self.persist_one_chunk(chunk).await;
+            if let Err(e) = self.persist_one_chunk(chunk).await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
         }
         // P0：每轮入队后做一次容量上限回收。端点长期不可达时 pending 行只增不减
         // （5xx / 超时 / 连不上都保留行），MQTT / Kafka 早已有同等保护，webhook 缺这一环。
         // 放在 persist_batch 末尾（而非每片）——一圈采集只做一次 COUNT+DELETE。
         self.enforce_pending_limit().await;
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// P0：限制 outbox 中 `protocol='http'` 的 pending 行数，超出按最旧物理删除。
@@ -414,15 +426,28 @@ impl WebhookClient {
     }
 
     /// 单片持久化（Bug P1-B6 提取：persist_batch 切片后单片复用）
-    async fn persist_one_chunk(&self, chunk: &[DataPoint]) {
+    ///
+    /// DD-24：失败必须计数并返回——落库失败 = 本片数据丢失，此前只有日志
+    /// （且内层 `Ok(Err)` 曾整段静默），指标上与「超限回收」口径不一致。
+    async fn persist_one_chunk(&self, chunk: &[DataPoint]) -> GatewayResult<()> {
         if chunk.is_empty() {
-            return;
+            return Ok(());
         }
         let payload = match serde_json::to_vec(chunk) {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("webhook serialize failed: {}", e);
-                return;
+                tracing::error!(
+                    "webhook serialize failed, {} points dropped: {}",
+                    chunk.len(),
+                    e
+                );
+                if let Some(m) = &self.metrics {
+                    m.inc_webhook_data_lost();
+                }
+                return Err(GatewayError::Message(format!(
+                    "webhook serialize failed: {}",
+                    e
+                )));
             }
         };
         // Bug C17: 不能用裸 timestamp_millis()（同毫秒两批会撞唯一索引被丢弃）。
@@ -452,12 +477,32 @@ impl WebhookClient {
         // 注：persist() 返回 `Result<i64, GatewayError>`（i64 = last_insert_rowid），
         // 此处用模式 `Ok(_)` 吞掉 rowid 仅做错误处理——webhook 路径不需要这个 id。
         match result {
-            Ok(Ok(_rowid)) => {}
+            Ok(Ok(_rowid)) => Ok(()),
             Ok(Err(e)) => {
-                tracing::error!("webhook persist failed, batch dropped: {}", e);
+                // DD-24：outbox 落库失败 = 本片数据未持久化，计数后向上返回。
+                tracing::error!(
+                    "webhook persist failed, {} points dropped: {}",
+                    chunk.len(),
+                    e
+                );
+                if let Some(m) = &self.metrics {
+                    m.inc_webhook_data_lost();
+                }
+                Err(e)
             }
             Err(e) => {
-                tracing::error!("webhook persist join error: {}", e);
+                tracing::error!(
+                    "webhook persist join error, {} points dropped: {}",
+                    chunk.len(),
+                    e
+                );
+                if let Some(m) = &self.metrics {
+                    m.inc_webhook_data_lost();
+                }
+                Err(GatewayError::Message(format!(
+                    "webhook persist join error: {}",
+                    e
+                )))
             }
         }
     }
@@ -861,7 +906,8 @@ impl crate::north::NorthConnector for WebhookClient {
             return Ok(());
         }
         // 复用 persist_batch：数据入 outbox，run() 循环定时 flush_pending 发送。
-        self.persist_batch(batch.to_vec()).await;
+        // DD-24：失败必须向上返回（dispatch 会按 connector 记录告警），不再静默。
+        self.persist_batch(batch.to_vec()).await?;
         Ok(())
     }
 

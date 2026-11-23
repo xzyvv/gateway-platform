@@ -34,9 +34,9 @@ use axum::{
 };
 
 use super::{
-    diagnose_point, download_logs, get_bus_load, get_gateway_diag, get_schedule_timeline,
-    get_stats_report, list_bus_loads, list_common_issues, list_log_archives, list_modbus_errors,
-    refresh_bus_loads,
+    diagnose_point, download_logs, get_bus_load, get_gateway_diag, get_schedule_optimize,
+    get_schedule_timeline, get_stats_report, list_bus_loads, list_common_issues, list_log_archives,
+    list_modbus_errors, refresh_bus_loads,
 };
 // 日志流 / 命令执行 handler 原属 `realtime` 子域，经 `web::api` 扁平重导出取用。
 use crate::web::api::{diagnostics_exec, diagnostics_logs_ws};
@@ -56,6 +56,10 @@ pub fn diagnostics_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
             get(list_common_issues),
         )
         .route("/api/diagnostics/stats", get(get_stats_report))
+        .route(
+            "/api/diagnostics/schedule-optimize",
+            get(get_schedule_optimize),
+        )
         .route(
             "/api/diagnostics/schedule-timeline",
             get(get_schedule_timeline),

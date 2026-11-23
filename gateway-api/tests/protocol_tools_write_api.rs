@@ -14,7 +14,7 @@ mod common;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{header, Request};
+use axum::http::{header, Request, StatusCode};
 use gateway_core::config::GatewayConfig;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -431,4 +431,70 @@ async fn simulator_start_update_register_stop() {
 
     let body = call(&app, "POST", "/api/protocol-tools/simulator/stop", None).await;
     assert_eq!(body["code"], 0, "停止从站模拟器失败: {body}");
+}
+
+/// DD-57：`POST /api/protocol-tools/iec104/ioa-read` 此前是全量端点里唯一
+/// 没有测试覆盖的写端点。这里覆盖**不需要真实 IEC104 从站**的四个分支
+/// （缺 bus / ioas 为空 / 总线不存在 / 协议不匹配）——全部在触碰网络之前
+/// 就返回，断言 HTTP 状态码与机器可读的 `error` 分类。
+#[tokio::test]
+async fn iec104_ioa_read_validates_request_before_touching_the_wire() {
+    let (_state, app) = app_with_bus().await;
+
+    // 1) 缺 bus → 400 / missing_bus
+    let resp = app
+        .clone()
+        .oneshot(req(
+            "POST",
+            "/api/protocol-tools/iec104/ioa-read",
+            Some(json!({ "ioas": [100] })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "missing_bus");
+    assert!(body["message"].as_str().unwrap().contains("bus"));
+
+    // 2) ioas 为空 → 400（参数校验，消息为现场可读中文）
+    let resp = app
+        .clone()
+        .oneshot(req(
+            "POST",
+            "/api/protocol-tools/iec104/ioa-read",
+            Some(json!({ "bus": "bus0", "ioas": [] })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert!(body["message"].as_str().unwrap().contains("ioas 不能为空"));
+
+    // 3) 总线不在配置中 → 404 / bus_not_found
+    let resp = app
+        .clone()
+        .oneshot(req(
+            "POST",
+            "/api/protocol-tools/iec104/ioa-read",
+            Some(json!({ "bus": "no_such_bus", "ioas": [100] })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "bus_not_found");
+
+    // 4) 总线协议不是 iec104 → 400 / unsupported_protocol（夹具 bus0 是 modbus）
+    let resp = app
+        .clone()
+        .oneshot(req(
+            "POST",
+            "/api/protocol-tools/iec104/ioa-read",
+            Some(json!({ "bus": "bus0", "ioas": [100] })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "unsupported_protocol");
 }

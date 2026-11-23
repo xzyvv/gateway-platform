@@ -6,7 +6,7 @@ use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::metrics::Metrics;
 use crate::engine::model::{DataPoint, Quality};
 use crate::queue::{MemoryStorage, QueueStorage, QueuedItem, FALLBACK_MAX_RETRIES};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// r15-Q1 (fix): 错误码前缀解析必须可靠。
@@ -77,6 +77,9 @@ struct FaultInjectingStorage {
     inner: MemoryStorage,
     fail_dequeue: Arc<std::sync::atomic::AtomicBool>,
     fail_release: Arc<std::sync::atomic::AtomicBool>,
+    /// DD-18：注入磁盘满写入失败，并统计实际写库次数。
+    fail_enqueue: Arc<std::sync::atomic::AtomicBool>,
+    enqueue_calls: Arc<AtomicUsize>,
 }
 
 impl FaultInjectingStorage {
@@ -85,12 +88,20 @@ impl FaultInjectingStorage {
             inner: MemoryStorage::new(),
             fail_dequeue: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             fail_release: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fail_enqueue: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            enqueue_calls: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
 
 impl QueueStorage for FaultInjectingStorage {
     fn enqueue_batch(&self, points: &[DataPoint]) -> GatewayResult<usize> {
+        self.enqueue_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_enqueue.load(Ordering::SeqCst) {
+            return Err(GatewayError::Queue(
+                "sqlite_error(code=13): database or disk is full".into(),
+            ));
+        }
         self.inner.enqueue_batch(points)
     }
     fn dequeue_batch(&self, limit: usize) -> GatewayResult<Vec<QueuedItem>> {
@@ -207,6 +218,59 @@ async fn release_db_error_increments_failure_metric() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     assert_eq!(observed, 1, "release DB 失败必须递增 persist_failed");
+}
+
+/// DD-18：检测到磁盘满后，退避窗口内后续入队**不得再撞存储**，而是直接进
+/// fallback（此前日志宣称「pausing enqueue」，实际持续写失败）。
+///
+/// 反证闭环：删掉命令分发前的 `disk_full_backoff_active` 分支 →
+/// 第二批仍会调用 `enqueue_batch`，`enqueue_calls` 从 1 变 2，断言失败。
+#[tokio::test]
+async fn dd18_disk_full_backoff_pauses_storage_writes() {
+    let raw = Arc::new(FaultInjectingStorage::new());
+    raw.fail_enqueue.store(true, Ordering::SeqCst);
+    let storage: Arc<dyn QueueStorage> = raw.clone();
+    let queue = crate::queue::DataQueue::with_storage(storage).unwrap();
+    let metrics = Arc::new(Metrics::new());
+    queue.set_metrics(metrics.clone());
+
+    // `tokio::time::interval` 首次 tick 立即触发。先让它空转过去，
+    // 避免把「启动时对空缓冲的探测」混入写库次数统计。
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // 第一批：写库失败 → 回退进 fallback，并记一次失败
+    queue.enqueue(make_points(2)).await.unwrap();
+    let mut observed = false;
+    for _ in 0..400 {
+        if queue.fallback_len() == 2 && metrics.queue_persist.degraded.load(Ordering::Relaxed) == 1
+        {
+            observed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(observed, "写失败的数据必须回到 fallback 且降级态可见");
+    assert_eq!(raw.enqueue_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        metrics.queue_persist.persist_failed.load(Ordering::Relaxed),
+        1
+    );
+
+    // 第二批：退避期内只进 fallback，绝不能再调用存储
+    queue.enqueue(make_points(3)).await.unwrap();
+    for _ in 0..400 {
+        if queue.fallback_len() == 5 && metrics.queue_persist.degraded.load(Ordering::Relaxed) == 1
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(queue.fallback_len(), 5, "退避期内新数据必须全部进 fallback");
+    assert_eq!(
+        raw.enqueue_calls.load(Ordering::SeqCst),
+        1,
+        "退避期内不得再次尝试写库（真暂停，而非只打日志）"
+    );
 }
 
 fn make_points(n: usize) -> Vec<DataPoint> {

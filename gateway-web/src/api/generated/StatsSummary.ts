@@ -3,4 +3,8 @@
 /**
  * 汇总指标
  */
-export type StatsSummary = { total_reads: number, success_rate: number | null, avg_latency_ms: number | null, total_data_points: number, };
+export type StatsSummary = { total_reads: number, success_rate: number | null, avg_latency_ms: number | null, total_data_points: number, 
+/**
+ * DD-52：窗口内实际落库的样本总数（真实压缩率分子）
+ */
+total_stored_points: number, };

@@ -155,7 +155,12 @@ pub(super) fn spawn_auto_detect(
         {
             let mut r = entry.lock();
             r.status = final_status.into();
-            r.progress = 100;
+            // DD-02：失败/中止不得置 100%，否则前端把「中途掉线」显示成「已完成」。
+            if final_status == "done" {
+                r.progress = 100;
+            } else {
+                r.progress = r.progress.clamp(0, 99);
+            }
             r.end_time_ms = Some(now_ms());
         }
         let action = if final_status == "aborted" {

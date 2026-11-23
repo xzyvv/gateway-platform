@@ -20,6 +20,8 @@
 pub mod transaction;
 
 mod batch;
+
+pub use batch::{merge_plan, MergeGroupInfo};
 mod collector;
 mod exception;
 pub(crate) mod frames;

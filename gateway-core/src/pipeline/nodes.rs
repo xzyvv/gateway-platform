@@ -1,7 +1,7 @@
 //! 边缘计算节点（聚合、死区、变化检测）
 
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::{AggregationConfig, PointConfig};
 use crate::engine::model::DataPoint;
@@ -335,6 +335,11 @@ impl PipelineNode for DeadbandNode {
         }
         Some(dp)
     }
+
+    /// DD-16：点位下线后淘汰死区基线，避免基线表随点位增删单调增长。
+    fn prune(&self, active: &HashSet<String>) {
+        self.last_values.lock().retain(|id, _| active.contains(id));
+    }
 }
 
 /// 变化上传节点
@@ -397,5 +402,10 @@ impl PipelineNode for ChangeNode {
             .lock()
             .insert(dp.point_id.clone(), dp.value);
         Some(dp)
+    }
+
+    /// DD-16：点位下线后淘汰变化上传基线，避免基线表随点位增删单调增长。
+    fn prune(&self, active: &HashSet<String>) {
+        self.last_values.lock().retain(|id, _| active.contains(id));
     }
 }

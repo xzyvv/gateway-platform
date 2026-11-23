@@ -481,11 +481,12 @@ async fn disconnect_aborts_pool_and_triggers_reconnect() {
 
 /// r15-SD4 回归：退避只在"真正通信成功"后清零；单纯 TCP 建连成功（连上即断）
 /// 不得把累加的重连次数冲掉，否则设备半开时永远停在 1s 退避。
+/// DD-09：没有成功通信的失败周期必须让档位 +1，而不是原值不动。
 #[test]
 fn reconnect_backoff_resets_only_after_real_communication() {
-    assert_eq!(advance_reconnect_backoff(0, false), 0);
-    assert_eq!(advance_reconnect_backoff(1, false), 1);
-    assert_eq!(advance_reconnect_backoff(5, false), 5);
+    assert_eq!(advance_reconnect_backoff(0, false), 1);
+    assert_eq!(advance_reconnect_backoff(1, false), 2);
+    assert_eq!(advance_reconnect_backoff(5, false), 6);
     assert_eq!(advance_reconnect_backoff(5, true), 0);
 }
 

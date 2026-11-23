@@ -44,6 +44,9 @@ pub struct ConvertRule {
     #[ts(type = "number")]
     pub last_converted_at_ms: Option<i64>,
     pub last_value: Option<String>,
+    /// DD-15：运行期编译失败导致「当前不生效」的原因；`None` 表示正常生效。
+    /// 规则本身仍保留在配置中（与虚拟点位错误口径一致），仅做可见标注。
+    pub error: Option<String>,
     #[ts(type = "number")]
     pub created_at_ms: i64,
 }
@@ -88,6 +91,7 @@ fn to_config(r: &ConvertRule) -> ConvertRuleConfig {
 fn to_dto(
     c: &ConvertRuleConfig,
     hits: &std::collections::HashMap<String, crate::web::traits::ConvertHitView>,
+    issues: &std::collections::HashMap<String, String>,
 ) -> ConvertRule {
     let hit = hits.get(&c.id);
     ConvertRule {
@@ -112,6 +116,7 @@ fn to_dto(
         enabled: c.enabled,
         last_converted_at_ms: hit.map(|h| h.last_converted_at_ms),
         last_value: hit.map(|h| h.last_value.clone()),
+        error: issues.get(&c.id).cloned(),
         created_at_ms: c.created_at_ms,
     }
 }
@@ -148,12 +153,13 @@ pub(crate) async fn list_convert_rules(
 ) -> Result<Json<ApiResponse<Vec<ConvertRule>>>, ApiError> {
     let cfg = state.config.load();
     let hits = state.north.gateway.convert_hits();
+    let issues = state.north.gateway.convert_issues();
     let rules: Vec<ConvertRule> = cfg
         .convert_rules
         .as_deref()
         .unwrap_or(&[])
         .iter()
-        .map(|c| to_dto(c, &hits))
+        .map(|c| to_dto(c, &hits, &issues))
         .collect();
     Ok(Json(ApiResponse::ok(rules)))
 }
@@ -187,6 +193,8 @@ pub(crate) async fn create_convert_rule(
     }
     rules.push(to_config(&r));
     persist_and_reload(&state, &old_cfg, cfg).await?;
+    // 保存成功后按运行时实际编译结果回填，避免把请求里携带的 error 原样回显。
+    r.error = state.north.gateway.convert_issues().get(&r.id).cloned();
     Ok(Json(ApiResponse::ok(r)))
 }
 

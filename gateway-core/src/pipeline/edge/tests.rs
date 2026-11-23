@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::AggregationConfig;
+use std::collections::HashSet;
 
 fn make_point(id: &str, deadband: f64, on_change: bool) -> PointConfig {
     PointConfig {
@@ -167,6 +168,37 @@ fn test_custom_pipeline() {
     let dp2 = DataPoint::good("p5", "dev", 10.0, 10.0, "u16");
     // 无 ChangeNode，相同值也上传
     assert!(ep.process(&p, dp2).is_some());
+}
+
+/// DD-16：点位下线后死区基线必须被淘汰，否则基线表随点位增删单调增长。
+#[test]
+fn deadband_baseline_is_pruned_for_removed_points() {
+    let node = DeadbandNode::new();
+    let p = make_point("p9", 1.0, false);
+    assert!(node
+        .process(&p, DataPoint::good("p9", "dev", 10.0, 10.0, "u16"))
+        .is_some());
+    // 当前配置只保留 other：p9 的基线应被淘汰
+    node.prune(&HashSet::from(["other".to_string()]));
+    // 基线已清空，同值样本不得再被判为「未变化」
+    assert!(node
+        .process(&p, DataPoint::good("p9", "dev", 10.0, 10.0, "u16"))
+        .is_some());
+}
+
+/// DD-16：变化上传基线同样按下线点位淘汰。
+#[test]
+fn on_change_baseline_is_pruned_for_removed_points() {
+    let node = ChangeNode::new();
+    let p = make_point("p10", 0.0, true);
+    assert!(node
+        .process(&p, DataPoint::good("p10", "dev", 10.0, 10.0, "u16"))
+        .is_some());
+    node.prune(&HashSet::new());
+    // 基线已清空，同值样本必须重新上行
+    assert!(node
+        .process(&p, DataPoint::good("p10", "dev", 10.0, 10.0, "u16"))
+        .is_some());
 }
 
 /// 验证聚合节点作为标准 PipelineNode 接入统一节点循环

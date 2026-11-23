@@ -15,6 +15,8 @@ use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::engine::error::{GatewayError, GatewayResult};
 use crate::engine::metrics::Metrics;
+
+mod diag_handlers;
 use crate::engine::model::DataPoint;
 
 use super::item::QueuedItem;
@@ -70,6 +72,12 @@ pub(crate) enum QueueCommand {
     /// v2.0: 查询最旧一条持久化数据的时间戳（unix 毫秒），用于历史保留跨度统计。
     /// None = 无历史数据。
     OldestTs(oneshot::Sender<Option<i64>>),
+    /// 按点位统计窗口内实际落库的样本数（诊断：数据压缩页的真实压缩量）。
+    StoredCounts {
+        start: i64,
+        end: i64,
+        reply: oneshot::Sender<GatewayResult<std::collections::HashMap<String, i64>>>,
+    },
 }
 
 /// 磁盘满保护：检测到 SQLITE_FULL/IOERR 后暂停入队的时间（秒）
@@ -282,6 +290,46 @@ fn reclaim_fallback_points(
     (retained, dropped)
 }
 
+/// DD-18: 磁盘满退避窗口是否仍在生效。
+///
+/// 生效期内 `QueueCommand::Enqueue` 不再尝试写库，而是直接进 fallback 缓冲；
+/// 到期后放行一次写库作为「探测」：成功即清标志，失败则重新退避。
+fn disk_full_backoff_active(
+    disk_full: &AtomicBool,
+    retry_at: &std::sync::atomic::AtomicU64,
+) -> bool {
+    if !disk_full.load(Ordering::Relaxed) {
+        return false;
+    }
+    unix_now_secs() < retry_at.load(Ordering::Relaxed)
+}
+
+/// 当前 unix 秒。SystemTime 异常时按 0 处理（宁可不退避，也不 panic）。
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// DD-17: 把内存缓冲深度与「当前是否降级」同步到指标。
+///
+/// 降级 = 磁盘满暂停写库，或缓冲里仍有未落库的数据点（此刻只在内存里）。
+fn sync_degraded(
+    metrics: &Arc<parking_lot::Mutex<Arc<Metrics>>>,
+    fallback: &Arc<parking_lot::Mutex<std::collections::VecDeque<DataPoint>>>,
+    disk_full: bool,
+) {
+    let depth = fallback.lock().len();
+    let m = metrics.lock();
+    m.queue_persist
+        .fallback_depth
+        .store(depth as u64, Ordering::Relaxed);
+    m.queue_persist
+        .degraded
+        .store(u64::from(disk_full || depth > 0), Ordering::Relaxed);
+}
+
 /// 队列处理 task
 ///
 /// 通过 `Arc<dyn QueueStorage>` 注入存储后端，支持 SQLite / Memory 等。
@@ -321,21 +369,51 @@ pub(crate) async fn queue_task(
         tokio::select! {
                     cmd = rx.recv() => {
                         let Some(cmd) = cmd else { break; };
+        // DD-18: 磁盘满退避期内**真正暂停写库**——本批直接进 fallback 缓冲，
+        // 不再反复触发注定失败的 SQLite 写入。此前 disk_full / disk_full_retry_at
+        // 只写不读，日志却宣称「pausing enqueue」，现场据此误判队列已停。
+        // 退避到期后放行一次写库探测：成功清标志，失败重新退避（见下方 sql_result 分支）。
+        let cmd = match cmd {
+            QueueCommand::Enqueue(points)
+                if disk_full_backoff_active(&disk_full, &disk_full_retry_at) =>
+            {
+                let n = points.len();
+                let (_retained, dropped) = {
+                    let mut buf = fallback.lock();
+                    let mut no_bounce = 0u32; // 暂停不是错误，不消耗反弹计数
+                    crate::queue::push_into_fallback(
+                        &mut buf,
+                        crate::queue::FALLBACK_CAPACITY,
+                        points,
+                        &mut no_bounce,
+                    )
+                };
+                if dropped > 0 {
+                    metrics
+                        .lock()
+                        .queue_persist
+                        .persist_dropped
+                        .fetch_add(dropped as u64, Ordering::Relaxed);
+                }
+                sync_degraded(&metrics, &fallback, true);
+                tracing::debug!(
+                    "queue write paused (disk full backoff): {} points buffered (depth={}, dropped={})",
+                    n,
+                    fallback.lock().len(),
+                    dropped
+                );
+                continue;
+            }
+            other => other,
+        };
         // 修复(审查#B6)：单条命令处理逻辑用 catch_unwind 包裹，
         // queue_task 由 spawn_catch_unwind 启动且不会重启，此前任一命令
                         // panic 都会 drop 掉 future 并丢弃 mpsc::Receiver，导致队列静默停摆。
         let handled = std::panic::AssertUnwindSafe(async {
                             match cmd {
                                 QueueCommand::Enqueue(points) => {
-        // Bug 81: 磁盘满时跳过入队，避免反复触发写入失败和日志洪水。
-        // disk_full_retry_at 退避期内直接丢弃数据；
-        // retention cleanup 释放空间后，下次成功入队会自动清除
-        // disk_full 标志恢复正常写入。
-        // Bug 2.3 (2026-Q1): 内层不再 30s drop 数据。
-        // 上层 DataQueue::enqueue 已经在 disk_ok=false 时走 fallback buffer。
-        // 本任务只负责中转，disk_full 仅用作可观测事件。
-        let _ = disk_full.load(Ordering::Relaxed);
-                                    let _ = disk_full_retry_at.load(Ordering::Relaxed);
+        // Bug 2.3 (2026-Q1): 内层不再 30s drop 数据；退避期已在命令分发前
+        // 拦到 fallback 缓冲（见上方 DD-18 分支），此处只负责正常写库。
                                     let n_points = points.len();
                                     // #2: 存储操作移出 tokio worker 线程，避免阻塞 channel 处理
                                     let storage_clone = storage.clone();
@@ -379,13 +457,16 @@ pub(crate) async fn queue_task(
                                     ).await;
                                     match sql_result {
                                         Ok(Ok(_)) => {
-                                            // 入队成功，清除磁盘满标志
+                                            // 入队成功，清除磁盘满标志（含退避时刻）
                                             if disk_full.load(Ordering::Relaxed) {
                                                 disk_full.store(false, Ordering::Relaxed);
+                                                disk_full_retry_at.store(0, Ordering::Relaxed);
                                                 tracing::info!("disk recovered, resuming enqueue");
                                             }
                                             // Bug 183 (N01): 写成功后重置反弹计数。
                                             *fallback_retry_count.lock() = 0;
+                                            // DD-17: 落库恢复 → 降级态归零（缓冲有残留时深度照实上报）。
+                                            sync_degraded(&metrics, &fallback, false);
                                         }
                                         Ok(Err((pts, e))) => {
                                             // Bug 183 (N01): 写失败先 +1 指标，再决定如何回退。
@@ -395,10 +476,7 @@ pub(crate) async fn queue_task(
                                                 .fetch_add(1, Ordering::Relaxed);
                                             if is_disk_full_error(&e) {
                                                 disk_full.store(true, Ordering::Relaxed);
-                                                let retry_at = std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .map(|d| d.as_secs() + DISK_FULL_BACKOFF_SECS)
-                                                    .unwrap_or(0);
+                                                let retry_at = unix_now_secs() + DISK_FULL_BACKOFF_SECS;
                                                 disk_full_retry_at.store(retry_at, Ordering::Relaxed);
                                                 tracing::error!("disk full detected, pausing enqueue for {}s: {}", DISK_FULL_BACKOFF_SECS, e);
                                             } else {
@@ -450,6 +528,8 @@ pub(crate) async fn queue_task(
                                                     *cnt
                                                 );
                                             }
+                                            // DD-17: 回退后缓冲非空 = 数据只在内存里，降级态必须可见。
+                                            sync_degraded(&metrics, &fallback, disk_full.load(Ordering::Relaxed));
                                         }
                                         Err(e) => {
                                             // r15-Q3 (fix): JoinError 分支原先只打一行日志就丢点。
@@ -488,6 +568,8 @@ pub(crate) async fn queue_task(
                                                     *cnt
                                                 );
                                             }
+                                            // DD-17: 同 Ok(Err) 分支——回退后必须暴露降级态。
+                                            sync_degraded(&metrics, &fallback, disk_full.load(Ordering::Relaxed));
                                         }
                                     }
                                 }
@@ -665,21 +747,11 @@ pub(crate) async fn queue_task(
                                     storage.set_storage_retention_days(days);
                                 }
                                 QueueCommand::OldestTs(reply) => {
-                                    // 真实 DB 查询（SQLite MIN 聚合）走 spawn_blocking，
-                                    // 与 HistoryEx 同范式，避免阻塞 tokio worker。
-                                    let storage_clone = storage.clone();
-                                    let result = tokio::task::spawn_blocking(move || {
-                                        storage_clone.oldest_data_timestamp()
-                                    })
-                                    .await;
-                                    let ts = match result {
-                                        Ok(v) => v,
-                                        Err(e) => {
-                                            tracing::warn!("oldest_data_timestamp join failed: {}", e);
-                                            None
-                                        }
-                                    };
-                                    let _ = reply.send(ts);
+                                    diag_handlers::oldest_ts(storage.clone(), reply).await;
+                                }
+                                QueueCommand::StoredCounts { start, end, reply } => {
+                                    diag_handlers::stored_counts(storage.clone(), start, end, reply)
+                                        .await;
                                 }
                             }
                         })
@@ -756,6 +828,15 @@ pub(crate) async fn queue_task(
                                 Ok(Ok(_)) => {
                                     // 写成功后重置反弹计数
                                     *retry_count_clone.lock() = 0;
+                                    // DD-18: tick 冲刷成功即视为磁盘恢复探测通过，解除暂停。
+                                    if disk_full.load(Ordering::Relaxed) {
+                                        disk_full.store(false, Ordering::Relaxed);
+                                        disk_full_retry_at.store(0, Ordering::Relaxed);
+                                        tracing::info!(
+                                            "disk recovered (fallback flush by tick), resuming enqueue"
+                                        );
+                                    }
+                                    sync_degraded(&metrics, &fallback, false);
                                     tracing::info!(
                                         "fallback flush by tick: {} points persisted to SQLite",
                                         n
@@ -767,7 +848,17 @@ pub(crate) async fn queue_task(
                                         .queue_persist.persist_failed
                                         .fetch_add(1, Ordering::Relaxed);
                                     if is_disk_full_error(&e) {
-                                        tracing::warn!("fallback flush: disk full, will retry: {}", e);
+                                        // DD-18: 冲刷探测仍失败 → 重新退避，避免每批都撞注定失败的写。
+                                        disk_full.store(true, Ordering::Relaxed);
+                                        disk_full_retry_at.store(
+                                            unix_now_secs() + DISK_FULL_BACKOFF_SECS,
+                                            Ordering::Relaxed,
+                                        );
+                                        tracing::warn!(
+                                            "fallback flush: disk full, retry in {}s: {}",
+                                            DISK_FULL_BACKOFF_SECS,
+                                            e
+                                        );
                                     } else {
                                         tracing::warn!("fallback flush failed: {}", e);
                                     }
@@ -799,6 +890,8 @@ pub(crate) async fn queue_task(
                                         "fallback flush: {} points reclaimed to buffer (retained={}, dropped={}, bounce={})",
                                         n, retained, dropped, *cnt
                                     );
+                                    // DD-17: 冲刷失败后缓冲仍有数据 → 降级态照实上报。
+                                    sync_degraded(&metrics, &fallback, disk_full.load(Ordering::Relaxed));
                                 }
                                 Err(e) => {
                                     // #106 (fix): JoinError 不再永久丢掉整批点。从调用方
@@ -823,6 +916,8 @@ pub(crate) async fn queue_task(
                                         retained,
                                         dropped
                                     );
+                                    // DD-17: JoinError 回退后数据仍在内存，降级态必须可见。
+                                    sync_degraded(&metrics, &fallback, disk_full.load(Ordering::Relaxed));
                                 }
                             }
                         }

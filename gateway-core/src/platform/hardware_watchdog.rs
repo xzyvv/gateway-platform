@@ -343,6 +343,18 @@ pub fn stop_platform_watchdog() {
     }
 }
 
+/// 硬件看门狗写失败累计次数（`ACTIVE_INNER` 尚未初始化时为 0）。
+///
+/// DD-38：计数此前只写不读——`hw_write_errors` 在 `kick()` / `stop()` / 初始
+/// 心跳里递增，但没有任何生产路径读取它，Prometheus 上永远看不到。这里提供
+/// 全局采样入口，由 metrics 导出时直接读取。
+pub fn hw_write_errors_total() -> u64 {
+    ACTIVE_INNER
+        .get()
+        .map(|inner| inner.hw_write_errors.load(Ordering::Relaxed))
+        .unwrap_or(0)
+}
+
 /// 长耗时路径（OTA 写入等）复用主看门狗的 fd 喂狗。
 ///
 /// **不要**在这里自己 `open("/dev/watchdog")`：独占设备第二次 open 必然

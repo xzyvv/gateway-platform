@@ -19,7 +19,7 @@
 //! - GET    /api/devices/shadows                  -> list_shadows
 //! - GET    /api/devices/control/writable         -> list_writable_points
 //! - GET    /api/devices/control/commands         -> list_commands
-//! - POST   /api/devices/control/send             -> send_command
+//! - POST   /api/devices/control/send             -> send_command【已废弃 DD-55：改用 /api/point-tools/write】
 //! - GET    /api/devices/topology                 -> device_topology
 //! - GET    /api/devices/point-quality            -> list_point_quality
 //! - GET    /api/devices/point-quality/stats      -> point_quality_stats

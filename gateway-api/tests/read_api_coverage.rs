@@ -339,6 +339,42 @@ async fn diagnostics_schedule_timeline() {
 }
 
 #[tokio::test]
+async fn diagnostics_schedule_optimize_reports_backend_merge_plan() {
+    let (_state, app) = state_with_device().await;
+
+    let body = call(&app, "GET", "/api/diagnostics/schedule-optimize", None).await;
+    assert_eq!(body["code"], 0, "{body}");
+    let devices = body["data"]["devices"]
+        .as_array()
+        .expect("devices 应为数组");
+    assert_eq!(devices.len(), 1, "{body}");
+    let dev = &devices[0];
+    assert_eq!(dev["device_id"], "dev1");
+    assert_eq!(dev["protocol"], "modbus");
+    // 合并计划由后端算（DD-11），前端不再自行估算
+    assert_eq!(dev["merge_supported"], true);
+    assert!(dev["gap_threshold"].as_i64().unwrap() > 0);
+    // 合并前帧数 = 点位数（夹具里 dev1 同时有显式点位与模板展开点位）
+    let point_count = dev["point_count"].as_i64().unwrap();
+    assert!(point_count > 0, "{body}");
+    assert_eq!(dev["original_reads"].as_i64().unwrap(), point_count);
+    // 合并后帧数不会多于合并前，且分组数与之相等
+    let merged = dev["merged_reads"].as_i64().unwrap();
+    assert!(merged <= point_count, "{body}");
+    assert_eq!(
+        dev["groups"].as_array().expect("groups").len() as i64,
+        merged
+    );
+    // 总览字段与设备明细自洽
+    assert_eq!(body["data"]["total_points"].as_i64().unwrap(), point_count);
+    assert_eq!(
+        body["data"]["total_original_reads"].as_i64().unwrap(),
+        point_count
+    );
+    assert_eq!(body["data"]["total_merged_reads"].as_i64().unwrap(), merged);
+}
+
+#[tokio::test]
 async fn diagnostics_log_archives() {
     let (_state, app) = state_with_device().await;
 

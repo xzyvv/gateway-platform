@@ -68,8 +68,13 @@ impl Scheduler {
     /// - Modbus 在 read_batch_with_slots 内部按 (slave_id, fc) 批量合并并逐结果写槽
     /// - DLT645/CJT188 逐点读取并逐点写槽；其他协议走 trait 默认逐点写槽实现
     ///
-    /// 组键 `format!("{}:{}", collector.name(), bus_name)`，与 group_key_for_point 一致。
-    pub(crate) fn spawn_collector_task(self: &Arc<Self>, bus_name: &str, points: Vec<PointConfig>) {
+    /// 组键 `protocol:bus`（由调用方按 `group_key_for_point` 生成后显式传入）。
+    pub(crate) fn spawn_collector_task(
+        self: &Arc<Self>,
+        key: &str,
+        bus_name: &str,
+        points: Vec<PointConfig>,
+    ) {
         let collector = match self.collectors.lock().get(bus_name) {
             Some(c) => c.clone(),
             None => {
@@ -111,16 +116,15 @@ impl Scheduler {
             )
         };
 
-        // #13: 组键统一为 `protocol:bus`（group_key），由该组点位自身推导，
-        // 不再用 `collector.name()`。旧实现两处不一致：
-        //  - 与 reload/group_key_for_point 口径漂移 → reload 判定"组变了"→ 全停全建抖动；
-        //  - 同一 bus 挂多协议时两组生成同一键 → 第二次 insert 覆盖第一个句柄，
-        //    前一个 task 失去跟踪变成孤儿，与后建 task 同时读写同一条 RS485 总线。
+        // #13 / DD-08：组键统一为 `protocol:bus`（group_key），由调用方显式传入。
+        // spawn 不再按 `points.first()` 自行推导——旧 start() 只按 bus 分组，同 bus
+        // 挂多协议时整组键取第一个点的协议，与 reload 的 (bus, protocol) 分组口径
+        // 漂移：热重载判定「组变了」→ 全停全建抖动，且组键错误会让熔断/退避状态串组。
+        let key = key.to_string();
         let proto = points
             .first()
             .map(|p| p.protocol.as_str())
             .unwrap_or_else(|| collector.name());
-        let key = super::group_key(proto, bus_name);
         // F-11：时序记录的归属信息（与组键口径一致），在采集循环尾部写入真实执行窗口
         let record_key = key.clone();
         let record_proto = proto.to_string();
@@ -158,8 +162,22 @@ impl Scheduler {
                     // 超时保护：防止协议栈卡死拖垮整个采集循环
                     let start = std::time::Instant::now();
                     // ROI-07（R-3）：只读「已到重试时间」的点，退避按点位生效。
-                    let (due_idx, all_due) = {
+                    // DD-13：先取 device_states 快照并立即释放，再单独锁 breakers。
+                    // 原实现在持有 device_states 时嵌套取 breakers，与其它路径的加锁
+                    // 顺序相反时会形成锁环路；每轮 clone 一份退避间隔即可避免嵌套。
+                    let backoffs: Vec<Duration> = {
                         let states = self_arc.device_states.lock();
+                        points
+                            .iter()
+                            .map(|p| {
+                                states
+                                    .get(&p.id)
+                                    .map(|s| s.current_interval)
+                                    .unwrap_or(interval)
+                            })
+                            .collect()
+                    };
+                    let (due_idx, all_due) = {
                         let mut last = last_attempt.lock().unwrap_or_else(|e| e.into_inner());
                         // ROI-10：熔断中的设备本轮直接跳过，不占用总线、不刷失败日志。
                         // 跳过时不更新 `last_attempt`，冷却期满后可立刻探测。
@@ -171,11 +189,7 @@ impl Scheduler {
                                 continue;
                             }
                             // 未初始化（新点 / 重载后首轮）或没有状态时一律视为到期
-                            let backoff = states
-                                .get(&p.id)
-                                .map(|s| s.current_interval)
-                                .unwrap_or(interval);
-                            let is_due = point_due(last.get(&p.id).copied(), start, backoff);
+                            let is_due = point_due(last.get(&p.id).copied(), start, backoffs[i]);
                             if is_due {
                                 last.insert(p.id.clone(), start);
                                 due.push(i);

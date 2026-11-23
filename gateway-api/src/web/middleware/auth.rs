@@ -295,6 +295,11 @@ fn required_write_scope(path: &str) -> Option<&'static str> {
         // protocol_tools/routes.rs 的 convert_write）一致：历史写成 `conversion`
         // 导致本分支永不命中，该组写操作掉进 `/api/protocol-tools` 的 devices 域。
         Some("config:write")
+    } else if path == "/api/north/dead-letters" || path.starts_with("/api/north/dead-letters/") {
+        // DD-63：死信里是失败报文原文（可能含凭据），重投会真实对外发包、
+        // 清理会销毁唯一副本——风险与系统域同级，不再由可授予的 config:write 放行。
+        // 与只读侧 `is_sensitive_read_path` 的敏感读口径对齐。
+        Some("system:write")
     } else if path.starts_with("/api/config")
         || path.starts_with("/api/buses")
         || path.starts_with("/api/uplink")

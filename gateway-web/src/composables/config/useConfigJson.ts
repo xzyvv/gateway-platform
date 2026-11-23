@@ -112,8 +112,12 @@ export function useConfigJson({ config, activeTab, onUnknownTopKeys }: UseConfig
   })
 
   // 反向：raw 标签停留期间，表单字段变更同步回文本框
+  // DD-50：监听整个配置对象（deep），不再手写 6 个小节白名单。
+  // 旧实现漏掉 devices / convert_rules / quality_rules / self_heal / queue /
+  // sim_consumer / point_trash 等小节：停留在原始 JSON 标签页编辑这些表单时，
+  // 文本框不会回写，切走再切回会把编辑内容覆盖掉。
   watch(
-    [() => config.buses, () => config.web, () => config.mqtt, () => config.ntp, () => config.telemetry, () => config.webhook],
+    () => config,
     () => {
       if (activeTab.value === 'raw' && !parseError.value) {
         try {

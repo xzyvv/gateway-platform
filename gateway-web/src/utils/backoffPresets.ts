@@ -1,16 +1,23 @@
 /**
  * 重连退避预设：MQTT 客户端与总线（TCP）共用同一套档位。
  *
- * 标准档与后端 `default_reconnect_backoff()` 完全一致（2/4/8/16/32/60 秒 + 40% 抖动），
- * 保证「不动这个下拉」不会改变升级前的重连节奏。
+ * DD-10：`standard` 不再手写，直接取自后端 `MqttConfig` 的 serde 默认值
+ * （由 `npm run types:export` 生成的同源常量），保证「不动这个下拉」不会改变
+ * 升级前的重连节奏。总线自己的默认退避与 MQTT 不同（1/2/5/10/30 + 20%），
+ * 由调用方从 `bus.reconnect_backoff` / `defaultBusReconnectBackoff()` 读取，
+ * 不再拿 MQTT 的标准档给总线兜底。
  */
 import type { MqttConfig } from '@/api/types'
+import { DEFAULT_MQTT } from '@/api/generated/configDefaults.generated'
 
 export type Backoff = MqttConfig['reconnect_backoff']
 export type BackoffPreset = 'standard' | 'fast' | 'conservative' | 'custom'
 
 export const BACKOFF_PRESETS: Record<Exclude<BackoffPreset, 'custom'>, Backoff> = {
-  standard: { seconds: [2, 4, 8, 16, 32, 60], jitter_ratio: 0.4 },
+  standard: {
+    seconds: [...DEFAULT_MQTT.reconnect_backoff.seconds],
+    jitter_ratio: DEFAULT_MQTT.reconnect_backoff.jitter_ratio,
+  },
   fast: { seconds: [1, 1, 2, 3, 5, 10], jitter_ratio: 0.2 },
   conservative: { seconds: [5, 15, 30, 60, 120, 300], jitter_ratio: 0.5 },
 }
@@ -23,8 +30,12 @@ export const BACKOFF_LABELS: Record<BackoffPreset, string> = {
 }
 
 /** 下拉选项文案；带上秒数与抖动，现场不必先选再猜 */
+const standardLabel = `标准（${BACKOFF_PRESETS.standard.seconds.join('/')} 秒，抖动 ${Math.round(
+  BACKOFF_PRESETS.standard.jitter_ratio * 100,
+)}%）`
+
 export const BACKOFF_OPTIONS: ReadonlyArray<{ value: BackoffPreset; label: string }> = [
-  { value: 'standard', label: '标准（2/4/8/16/32/60 秒，抖动 40%）' },
+  { value: 'standard', label: standardLabel },
   { value: 'fast', label: '快速（1/1/2/3/5/10 秒，抖动 20%）' },
   { value: 'conservative', label: '保守（5/15/30/60/120/300 秒，抖动 50%）' },
   { value: 'custom', label: '自定义（配置文件档位，选此项不改写）' },

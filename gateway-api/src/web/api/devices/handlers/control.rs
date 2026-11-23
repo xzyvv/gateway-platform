@@ -3,11 +3,12 @@
 //! 路由：
 //! - GET  /api/devices/control/writable  -> list_writable_points
 //! - GET  /api/devices/control/commands   -> list_commands
-//! - POST /api/devices/control/send      -> send_command
+//! - POST /api/devices/control/send      -> send_command【已废弃】（DD-55，改用 /api/point-tools/write）
 
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::Json;
 
 use crate::web::api::points::{
@@ -106,13 +107,17 @@ pub(crate) async fn list_commands(
 
 /// POST /api/devices/control/send — 下发控制命令
 ///
-/// 写业务（查点 → writable 白名单 → 下发 → 指标/审计）统一收敛到
-/// `points::write_points_core`（单写模式），本 handler 只负责把结果适配成
-/// `ControlCommand` 响应；失败码 5101 与旧实现一致（Bug 221）。
+/// **【已废弃】**（DD-55）：前端写路径已统一到 `POST /api/point-tools/write`
+/// （`usePointWrite.ts`），本端点前端已无调用方，属孤儿端点。
+///
+/// 处理方式：不删除（外部脚本可能仍在调用，删除即破坏契约），改为**标注废弃**——
+/// 响应统一带 `Deprecation: true` 与 `Warning` 头，调用方可据此自动迁移；
+/// 写业务本身仍走统一核心 `points::write_points_core`，行为与旧实现一致
+/// （失败码 5101 与旧实现一致，Bug 221）。
 pub(crate) async fn send_command(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SendCommandRequest>,
-) -> Result<ApiResponse<ControlCommand>, ApiError> {
+) -> Result<(HeaderMap, Json<ApiResponse<ControlCommand>>), ApiError> {
     let writes = [PointWriteEntry {
         id: req.point_id.clone(),
         value: req.value,
@@ -124,27 +129,51 @@ pub(crate) async fn send_command(
         // Bug 221: 写失败必须返回非 0 业务码，前端统一走错误提示路径。
         // G-02: 按写结果三态区分业务码——5101 明确失败（可安全重试），
         // 5102 结果未知（设备可能已执行，禁止自动重试）。
-        return Ok(ApiResponse::err(
-            write_failure_code(err.outcome),
-            write_failure_message(err),
+        return Ok((
+            deprecation_headers(),
+            Json(ApiResponse::err(
+                write_failure_code(err.outcome),
+                write_failure_message(err),
+            )),
         ));
     }
 
     let ts = chrono::Utc::now().timestamp_millis();
-    Ok(ApiResponse::ok(ControlCommand {
-        id: format!("cmd-{}", ts),
-        device_id: item.device_id.clone().unwrap_or_default(),
-        device_name: item.device_id.clone().unwrap_or_default(),
-        point_id: item.point_id.clone(),
-        point_name: item
-            .point_name
-            .clone()
-            .unwrap_or_else(|| item.point_id.clone()),
-        write_value: req.value,
-        operator: "api".to_string(),
-        status: "success".to_string(),
-        created_at: ts,
-        executed_at: Some(ts),
-        result: Some(format!("写入成功：{}", req.value)),
-    }))
+    Ok((
+        deprecation_headers(),
+        Json(ApiResponse::ok(ControlCommand {
+            id: format!("cmd-{}", ts),
+            device_id: item.device_id.clone().unwrap_or_default(),
+            device_name: item.device_id.clone().unwrap_or_default(),
+            point_id: item.point_id.clone(),
+            point_name: item
+                .point_name
+                .clone()
+                .unwrap_or_else(|| item.point_id.clone()),
+            write_value: req.value,
+            operator: "api".to_string(),
+            status: "success".to_string(),
+            created_at: ts,
+            executed_at: Some(ts),
+            result: Some(format!("写入成功：{}", req.value)),
+        })),
+    ))
+}
+
+/// 废弃端点响应头：标准 `Deprecation: true` + `Warning: 299 - "..."`。
+///
+/// 让外部脚本（而非只有浏览器前端）也能看到该端点已进入废弃期。
+fn deprecation_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("deprecation"),
+        HeaderValue::from_static("true"),
+    );
+    headers.insert(
+        HeaderName::from_static("warning"),
+        HeaderValue::from_static(
+            "299 - \"POST /api/devices/control/send 已废弃，请改用 POST /api/point-tools/write\"",
+        ),
+    );
+    headers
 }

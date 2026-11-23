@@ -16,7 +16,8 @@ import { toConvertRule } from './types'
  * 唯一差异：last_converted_at_ms 在 Rust 侧是 Option<i64>（线网接受 number|null），
  * ts-rs 的 #[ts(type = "number")] 把它注记成了 number，这里按线网真实形态放宽。
  */
-type ConvertRuleWrite = Omit<ConvertRuleRaw, 'last_converted_at_ms'> & {
+// error 是后端只读的诊断字段（DD-15），写请求不携带。
+type ConvertRuleWrite = Omit<ConvertRuleRaw, 'last_converted_at_ms' | 'error'> & {
   last_converted_at_ms: number | null
 }
 

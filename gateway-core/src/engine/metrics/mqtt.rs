@@ -33,6 +33,18 @@ pub struct MqttMetrics {
     ///   `rate(gateway_mqtt_outbox_sync_fallback_total[5m]) > 1 for 5m` ——
     /// 表示 outbox task 已成吞吐瓶颈，需调大 outbox capacity 或后端落盘速度。
     pub outbox_sync_fallback: AtomicU64,
+
+    /// DD-23: 自定义上报模板渲染时出现「查不到值」变量的记录条数。
+    ///
+    /// 变量名拼错 / 缺少聚合配置时，渲染结果会缺段或为空——该记录仍可能
+    /// 被发出（内容是错的），因此必须让「命中次数」可见，而不是只在日志
+    /// 里告警一次。
+    pub template_missing_vars: AtomicU64,
+    /// DD-23: 模板渲染为空串、导致该点记录被丢弃的条数。
+    ///
+    /// 此前这类记录直接 `continue` 跳过，队列侧看起来「已发送」，实际
+    /// 从未到达平台。持续增长说明模板本身有问题（例如只剩注释）。
+    pub payload_empty_lines_dropped: AtomicU64,
 }
 
 impl MqttMetrics {
@@ -61,6 +73,17 @@ impl MqttMetrics {
             "# HELP gateway_mqtt_outbox_sync_fallback_total MQTT outbox task fell back to synchronous sqlite persist (cmd channel full)\n\
              # TYPE gateway_mqtt_outbox_sync_fallback_total counter\n\
              gateway_mqtt_outbox_sync_fallback_total {fallback}"
+        );
+        let missing = self.template_missing_vars.load(Ordering::Relaxed);
+        let empty = self.payload_empty_lines_dropped.load(Ordering::Relaxed);
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_mqtt_template_missing_vars_total Uplink records rendered with unresolved template variables\n\
+             # TYPE gateway_mqtt_template_missing_vars_total counter\n\
+             gateway_mqtt_template_missing_vars_total {missing}\n\
+             # HELP gateway_mqtt_payload_empty_lines_dropped_total Uplink records dropped because the template rendered an empty line\n\
+             # TYPE gateway_mqtt_payload_empty_lines_dropped_total counter\n\
+             gateway_mqtt_payload_empty_lines_dropped_total {empty}"
         );
     }
 }

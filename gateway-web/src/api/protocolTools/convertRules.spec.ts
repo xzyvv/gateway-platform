@@ -41,6 +41,7 @@ function ruleRow(patch: Partial<ConvertRuleRaw> = {}): ConvertRuleRaw {
     enabled: true,
     last_converted_at_ms: 1700000000000,
     last_value: '21.5',
+    error: null,
     created_at_ms: 1699999999000,
     ...patch,
   }
@@ -86,6 +87,7 @@ describe('convertRules 转换规则 CRUD 契约', () => {
       enabled: true,
       lastConvertedAt: 1700000000000,
       lastValue: '21.5',
+      error: null,
       createdAt: 1699999999000,
     })
   })

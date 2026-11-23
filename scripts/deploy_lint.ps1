@@ -2311,10 +2311,12 @@ Write-Host ""
 
 # ── C24  行数预算：不允许新增巨型文件（O-8） ──
 #
-# 前端已经由 eslint 的 max-lines 强制（gateway-web/eslint.config.js）：
-# 未登记的新文件超过行数预算即告警，CI 用 `--max-warnings 0` 跑 lint → 等于阻断。
-# 后端历史上巨型文件较多，一上来全报会把门禁变成噪音，
-# 所以这里做「有上限」的棘轮（基线每行带单文件行数上限 = 登记时行数 + 余量）：
+# 前端与后端**共用同一份账本、同一套规则**（DD-58）：
+#   - 前端：eslint 的 max-lines（800 行）兜底 + 本段 C24 扫 gateway-web/src；
+#     eslint 侧从 scripts/line_budget_frozen.txt 读前端条目的**单文件硬上限**，
+#     超出即 error（存量不得悄悄长）。
+#   - 后端：历史上巨型文件较多，一上来全报会把门禁变成噪音，
+#     所以这里做「有上限」的棘轮（基线每行带单文件行数上限 = 登记时行数 + 余量）：
 #   ① 未登记且 > 行数预算             → FAIL（新债，必须拆）
 #   ② 已登记但超过基线记录的行数       → FAIL（存量不能悄悄长）
 #   ③ 已登记但已降到 ≤ 行数预算        → OK（提示可以从基线移除）
@@ -2358,7 +2360,7 @@ else {
     Ok ("行数预算基线已载入：$($frozen.Count) 个已知巨型文件（带单文件上限）")
 }
 
-# 扫描范围：三个后端 crate 的业务源码。
+# 扫描范围：三个后端 crate 的业务源码 + 前端业务源码（DD-58：同一账本、同一口径）。
 # 测试文件不计——测试本来就该长，而且不进产品二进制。
 $oversized = @()
 foreach ($crate in @("gateway-core", "gateway-api", "gatewayd")) {
@@ -2368,6 +2370,24 @@ foreach ($crate in @("gateway-core", "gateway-api", "gatewayd")) {
         $rel = $crate + "/src/" + ($f.FullName.Substring($srcRoot.Length + 1) -replace '\\', '/')
         if ($rel -match '/tests?/') { continue }
         if ($f.Name -match '(^|_)tests?\.rs$') { continue }
+        $n = [System.IO.File]::ReadAllLines($f.FullName).Count
+        if ($n -gt $lineBudget) {
+            $oversized += [pscustomobject]@{ Rel = $rel; Lines = $n }
+        }
+    }
+}
+
+# 前端（DD-58）：此前前端只有 eslint 的 max-lines 兜底，仓库级门禁 C24 完全看不到
+# 前端——等于「前端没有冻结账本」。现在前端与后端共用 scripts/line_budget_frozen.txt：
+# 前端条目写 gateway-web/src/...，与后端同格式、同上限规则。
+# 排除项：自动生成目录 / 自动生成的图标打包产物 / 测试文件（与 eslint 口径一致）。
+$webSrcRoot = Join-Repo "gateway-web/src"
+if (Test-Path $webSrcRoot) {
+    foreach ($f in Get-ChildItem -Recurse -Path $webSrcRoot -Include *.ts,*.vue) {
+        $rel = "gateway-web/src/" + ($f.FullName.Substring($webSrcRoot.Length + 1) -replace '\\', '/')
+        if ($rel -match '/api/generated/') { continue }
+        if ($rel -match '/utils/ep-icons-compact\.ts$') { continue }
+        if ($f.Name -match '\.(spec|test)\.ts$') { continue }
         $n = [System.IO.File]::ReadAllLines($f.FullName).Count
         if ($n -gt $lineBudget) {
             $oversized += [pscustomobject]@{ Rel = $rel; Lines = $n }

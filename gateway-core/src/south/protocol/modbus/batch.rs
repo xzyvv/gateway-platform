@@ -64,6 +64,67 @@ pub(crate) fn merge_batches<'a>(
     batches
 }
 
+/// DD-11：只读采集计划视图（Web「调度优化」页展示用，不参与采集）。
+///
+/// 与真实采集路径共用 [`merge_batches`]：同样的 (slave_id, function_code) 分组、
+/// 同样的寄存器宽度、同样的 gap 阈值与协议上限，避免前端再抄一份近似算法
+/// （旧前端只按地址差 ≤5 合并，忽略从站/功能码/寄存器宽度，显示的优化率是假的）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeGroupInfo {
+    pub slave_id: u8,
+    pub function_code: u8,
+    pub start_addr: u16,
+    pub end_addr: u16,
+    pub point_count: u16,
+    pub point_ids: Vec<String>,
+}
+
+/// 计算一批点位的合并读取计划。
+///
+/// - 只对寄存器/线圈类读取有效；调用方负责先过滤出 Modbus 点位；
+/// - `gap_threshold` 由运行时自适应统计给出（见 `Collector::merge_gap`）。
+pub fn merge_plan(points: &[&PointConfig], gap_threshold: u16) -> Vec<MergeGroupInfo> {
+    // 与采集循环一致：按 (slave_id, function_code, 点位级超时) 分组，
+    // 不同超时的点位不会合进同一帧。
+    let mut groups: std::collections::HashMap<(u8, u8, Option<u64>), Vec<&PointConfig>> =
+        std::collections::HashMap::new();
+    for p in points {
+        let key = (
+            p.slave_id.unwrap_or(1),
+            p.function_code.unwrap_or(3),
+            p.timeout_ms,
+        );
+        groups.entry(key).or_default().push(*p);
+    }
+
+    let mut out = Vec::new();
+    for ((slave_id, function_code, _timeout), mut group) in groups {
+        group.sort_by_key(|p| p.address_num.unwrap_or(0));
+        // 与采集循环一致：线圈/离散输入上限 2000，寄存器上限 125
+        let max_count = if function_code == 1 || function_code == 2 {
+            2000
+        } else {
+            125
+        };
+        for batch in merge_batches(&group, gap_threshold, max_count) {
+            let end_addr = batch
+                .start_addr
+                .saturating_add(batch.count)
+                .saturating_sub(1);
+            out.push(MergeGroupInfo {
+                slave_id,
+                function_code,
+                start_addr: batch.start_addr,
+                end_addr,
+                point_count: batch.points.len() as u16,
+                point_ids: batch.points.iter().map(|p| p.id.clone()).collect(),
+            });
+        }
+    }
+    out.sort_by_key(|g| (g.slave_id, g.function_code, g.start_addr));
+    out
+}
+
 // ===== 数据解析 =====
 
 pub(crate) fn parse_point_value(point: &PointConfig, regs: &[u16], batch_start: u16) -> DataPoint {

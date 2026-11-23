@@ -61,7 +61,8 @@ impl LifecycleMetrics {
         use std::fmt::Write as _;
         let _ = writeln!(
             buf,
-            "# HELP gateway_watchdog_timeouts_total Watchdog timeout count\n\
+            "# HELP gateway_watchdog_timeouts_total Heartbeat stall count (edge-triggered; \
+             excludes hardware-watchdog write failures)\n\
              # TYPE gateway_watchdog_timeouts_total counter\n\
              gateway_watchdog_timeouts_total {}\n\
              # HELP gateway_task_panics_total Background task panic count\n\

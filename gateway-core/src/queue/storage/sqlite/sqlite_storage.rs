@@ -3,6 +3,7 @@
 //! 封装现有 SQLite WAL 队列实现，通过 QueueStorage trait 暴露统一接口。
 //! 内部维护 depth / in_flight 原子计数器和只读连接池。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -541,6 +542,39 @@ impl QueueStorage for SqliteStorage {
         }
     }
 
+    fn stored_counts(&self, start: i64, end: i64) -> GatewayResult<HashMap<String, i64>> {
+        // 原始表按行计数；聚合表按 sample_count 还原成原始样本数，
+        // 两者相加才是「窗口内实际落库的样本量」。
+        const SQL: &str = "SELECT point_id, SUM(n) FROM (\
+             SELECT point_id, COUNT(*) AS n FROM data_queue \
+               WHERE timestamp BETWEEN ?1 AND ?2 GROUP BY point_id \
+             UNION ALL \
+             SELECT point_id, SUM(sample_count) AS n FROM data_queue_aggregated \
+               WHERE window_start BETWEEN ?1 AND ?2 GROUP BY point_id\
+           ) GROUP BY point_id";
+        let run = |conn: &Connection| -> rusqlite::Result<HashMap<String, i64>> {
+            let mut stmt = conn.prepare(SQL)?;
+            let rows = stmt.query_map([start, end], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?;
+            let mut out = HashMap::new();
+            for row in rows {
+                let (point_id, n) = row?;
+                out.insert(point_id, n);
+            }
+            Ok(out)
+        };
+        let res = if let Some(rc) = self.read_pool.get() {
+            let out = run(&rc);
+            self.read_pool.release(rc);
+            out
+        } else {
+            let guard = self.conn.lock();
+            run(&guard)
+        };
+        res.map_err(|e| GatewayError::Queue(format!("stored_counts query failed: {}", e)))
+    }
+
     fn name(&self) -> &str {
         "sqlite"
     }
@@ -552,6 +586,10 @@ impl QueueStorage for SqliteStorage {
 
 #[cfg(test)]
 mod saturating_dec_tests;
+
+/// DD-52：实际落库样本数统计（原始表 + 聚合表 sample_count）。
+#[cfg(test)]
+mod stored_counts_tests;
 
 /// v2.0 配额用量口径：`oldest_data_timestamp` 必须同时看原始表与聚合表。
 ///

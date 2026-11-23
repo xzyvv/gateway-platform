@@ -67,6 +67,10 @@ export interface ReplayExecuteResult {
   sessionId: string; bus: string;
   startedAtMs: number; finishedAtMs: number;
   total: number; match: number; mismatch: number; failed: number;
+  /** DD-03：后端给出的执行终态（completed / aborted / failed），前端不得自行判定成功 */
+  terminal: string;
+  /** 计划执行帧数；terminal != completed 时 total（已执行）会小于它 */
+  planned: number;
   results: ReplayFrameResult[];
 }
 
@@ -75,7 +79,9 @@ export interface ConvertRule {
   targetProto: string; targetTag: string; transform: string;
   scale?: number | null; offset?: number | null;
   enumMap?: ConvertEnumItem[] | null;
-  enabled: boolean; lastConvertedAt?: number | null; lastValue?: string | null; createdAt: number;
+  enabled: boolean; lastConvertedAt?: number | null; lastValue?: string | null;
+  /** DD-15：运行时未生效原因；有值时应展示「不生效」而非启停开关 */
+  error?: string | null; createdAt: number;
 }
 
 export interface ScanCell { address: number; responded: boolean; value?: number | null; funcCode?: number | null; error?: string | null }
@@ -149,6 +155,7 @@ export function toReplayFrameResult(r: ReplayFrameResultRaw): ReplayFrameResult 
 export function toReplayExecuteResult(r: ReplayExecuteResultRaw): ReplayExecuteResult {
   return { sessionId: r.session_id, bus: r.bus, startedAtMs: Number(r.started_at_ms), finishedAtMs: Number(r.finished_at_ms),
     total: r.total, match: r.match, mismatch: r.mismatch, failed: r.failed,
+    terminal: r.terminal, planned: r.planned,
     results: r.results.map(toReplayFrameResult) }
 }
 
@@ -157,7 +164,7 @@ export function toConvertRule(r: ConvertRuleRaw): ConvertRule {
     sourcePointName: r.source_point_name, targetProto: r.target_proto, targetTag: r.target_tag,
     transform: r.transform, scale: r.scale, offset: r.offset, enumMap: r.enum_map,
     enabled: r.enabled, lastConvertedAt: r.last_converted_at_ms != null ? Number(r.last_converted_at_ms) : null,
-    lastValue: r.last_value, createdAt: Number(r.created_at_ms) }
+    lastValue: r.last_value, error: r.error ?? null, createdAt: Number(r.created_at_ms) }
 }
 
 export function toAutoDetectResult(r: AutoDetectResultRaw): AutoDetectResult {

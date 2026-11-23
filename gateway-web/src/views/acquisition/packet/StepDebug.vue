@@ -66,6 +66,7 @@ import {
   type SequenceStep,
 } from '@/composables/acquisition/useStepSequences'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { isWriteFrame } from '@/utils/hexFrame'
 import { copyText } from '@/utils/clipboard'
 import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 import { confirmAction } from '@/utils/confirm'
@@ -192,13 +193,6 @@ function pendingSteps(): Array<{ step: SequenceStep; index: number }> {
   return seq.steps
     .map((step, index) => ({ step, index }))
     .filter(({ step }) => !outcomes.value[step.id])
-}
-
-/** 写帧判定（FC05/06/0F/10）：自动执行前要把写操作数量摆到台面上 */
-function isWriteFrame(hex: string): boolean {
-  const compact = normalizeHex(hex).replace(/ /g, '')
-  const fc = Number.parseInt(compact.slice(2, 4), 16)
-  return fc === 5 || fc === 6 || fc === 15 || fc === 16
 }
 
 async function runRest(): Promise<void> {

@@ -161,7 +161,13 @@ async function scan() {
         onAborted: (info) => {
           ElMessage.warning(`扫描提前停止（${info.reason === 'duration_cap' ? '达到时长上限' : info.reason}），已扫 ${info.scanned}/${info.total}`)
         },
-        onFailed: (info) => { scanError.value = info.message },
+        // DD-48：failed 是与 summary 互斥的终态，失败时绝不弹「扫描完成」。
+        // 流式走 SSE、不经过 axios 拦截器（没有请求层的失败 toast），这里补一条 error
+        // 提示并把带处置建议的原因常驻在页面上方，保证失败反馈与 success/aborted 一致。
+        onFailed: (info) => {
+          scanError.value = info.message
+          ElMessage.error('从站扫描失败，原因与处置建议已显示在页面上方')
+        },
       })
       if (ctl.signal.aborted) ElMessage.info('已停止，显示已扫部分')
     } else {

@@ -9,9 +9,10 @@
 //! # Bug-R7 (fix)：LOCK ACQUISITION ORDER（加锁顺序不变量）
 //!
 //! 本模块所有 `Mutex` / `RwLock` 字段（`collectors` / `points` / `device_states` /
-//! `handles` / `group_stops`）当前均为 **parking_lot::Mutex**（同步锁，不跨 `.await` 持锁），
-//! 因此**当前不存在经典死锁风险**——parking_lot 锁是 RAII 同步借出，绝不会跨 await 被另一
-//! 个 `.await` 点持有（那是 tokio::Mutex 才会出现的问题）。
+//! `breakers` / `handles` / `group_stops` / `paused_buses` / `timeline` /
+//! `reload_lock` / `fail_reload_injector`）当前均为 **parking_lot::Mutex**（同步锁，不跨
+//! `.await` 持锁），因此**当前不存在经典死锁风险**——parking_lot 锁是 RAII 同步借出，
+//! 绝不会跨 await 被另一个 `.await` 点持有（那是 tokio::Mutex 才会出现的问题）。
 //!
 //! 但**未来重构风险**真实存在：
 //! - 如果有人把 `device_states` 改成 `tokio::Mutex<...>`（需要 `.await` 锁），
@@ -31,15 +32,20 @@
 //!   3. self.collectors          (parking_lot::Mutex)
 //!   4. self.points              (parking_lot::Mutex)
 //!   5. self.device_states       (Mutex — 当前 parking_lot；若改 tokio 不许同时持低层锁跨 await)
-//!   6. self.handles             (Mutex，parking_lot)
-//!   7. self.group_stops         (Mutex，parking_lot)
-//!   8. self.shutdown_tx.send    (watch::Sender 推送，本身几乎零开销)
-//!   9. self.reload_lock         (Semaphore，**显式跨 await**，仅 reload() 入口用)
+//!   6. self.breakers            (Mutex，parking_lot；**不得**在持有 device_states 时取)
+//!   7. self.handles             (Mutex，parking_lot)
+//!   8. self.group_stops         (Mutex，parking_lot)
+//!   9. self.paused_buses        (parking_lot::Mutex)
+//!  10. self.timeline            (Arc<Timeline>，内部独立短临界区，不参与嵌套)
+//!  11. self.fail_reload_injector (cfg(test) 专用，独立于生产路径)
+//!  12. self.shutdown_tx.send    (watch::Sender 推送，本身几乎零开销)
+//!  13. self.reload_lock         (Semaphore，**显式跨 await**，仅 reload() 入口用)
 //! ```
 //!
 //! 实际加锁点（2026-Q1 audit）：
 //! - `reload()`: collectors → points → reload_points_incremental (await 期间释放) → points → device_states ✅
 //! - `device_status()`: points → device_states ✅
+//! - `spawn_collector_task()` 每轮：先取 device_states 快照并释放 → 再锁 breakers（DD-13）✅
 //! - `start()`: running.swap → points.lock().clone()（单点锁，不嵌套）
 //! - `stop()`: shutdown_tx.send → handles.take → group_stops.lock().clear（独立域，无嵌套）
 //!
@@ -171,11 +177,16 @@ impl Scheduler {
         // 同上：重启前的时序样本不代表本轮运行，清空避免甘特图混入旧数据
         self.timeline.clear();
 
-        // 按总线分组
+        // DD-08：按 `protocol:bus` 分组，与 reload / group_key_for_point 同一口径。
+        // 旧实现只按 bus 分组，同 bus 挂多协议时会把不同协议的点塞进同一组，
+        // 组键取第一个点的协议 → 与热重载的分组结果对不上（全停全建）。
         let points = self.points.lock().clone();
-        let mut by_bus: HashMap<String, Vec<PointConfig>> = HashMap::new();
+        let mut by_group: HashMap<String, Vec<PointConfig>> = HashMap::new();
         for p in &points {
-            by_bus.entry(p.bus.clone()).or_default().push(p.clone());
+            by_group
+                .entry(group_key_for_point(p))
+                .or_default()
+                .push(p.clone());
         }
 
         // Bug-N2 (fix)：空 points 启动是配置错误信号——之前仅 `info!("with 0 points")`
@@ -196,12 +207,13 @@ impl Scheduler {
                 .fetch_add(1, Ordering::Relaxed);
         }
 
-        for (bus_name, bus_points) in &by_bus {
+        for (key, group_points) in &by_group {
             // 所有协议（含 GPIO）走统一 spawn_collector_task 路径
             // GPIO 通过 GpioCollector 实现 Collector trait，行为与其他协议一致
-            if !bus_points.is_empty() {
-                self.spawn_collector_task(bus_name, bus_points.clone());
-            }
+            let Some(first) = group_points.first() else {
+                continue;
+            };
+            self.spawn_collector_task(key, &first.bus, group_points.clone());
         }
 
         // 聚合刷新任务
@@ -478,24 +490,12 @@ fn group_key_for_point(p: &PointConfig) -> String {
 ///
 /// 供本模块与 `reload.rs`（通过 `super::`）共用。
 fn point_config_equal(a: &PointConfig, b: &PointConfig) -> bool {
-    a.id == b.id
-        && a.bus == b.bus
-        && a.address == b.address
-        && a.slave_id == b.slave_id
-        && a.address_num == b.address_num
-        && a.data_id == b.data_id
-        && a.function_code == b.function_code
-        && a.data_type == b.data_type
-        && a.byte_order == b.byte_order
-        && a.register_count == b.register_count
-        && a.interval == b.interval
-        && a.scale == b.scale
-        && a.offset == b.offset
-        && a.formula == b.formula
-        && a.deadband == b.deadband
-        && a.on_change == b.on_change
-        && a.unit == b.unit
-        && a.aggregation == b.aggregation
+    // DD-07：直接按 `PointConfig` 的全字段 `PartialEq` 比较。
+    // 旧实现手写白名单，漏了 timeout_ms / ct_ratio / pt_ratio / alarm_* /
+    // writable / write_min / write_max / device_id / protocol 等字段，导致
+    // 「改了点位读超时，热重载判定无变化、采集组不重建」——现场表现为改了不生效。
+    // 全字段比较在新增字段时自动覆盖；组重建的代价远低于「配置漂移且无提示」。
+    a == b
 }
 
 /// 一次 reload 的统计信息，用于上层 metric & API 响应

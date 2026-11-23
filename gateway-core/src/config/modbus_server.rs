@@ -26,10 +26,15 @@ pub struct ModbusServerConfig {
     #[serde(default = "default_mode")]
     pub mode: String,
 
-    /// 是否允许北向 Modbus 写回（FC06/FC16）。
+    /// 是否允许北向 Modbus 写入（FC06/FC16）。
     ///
-    /// 默认拒绝写，与 OPC UA 侧 write_enabled 对齐：存量依赖写操作的 SCADA
-    /// 必须在配置中显式启用本项，且点位需 writable=true 才可被写。
+    /// 写语义（DD-42）：只更新 Modbus Server 内存中的寄存器镜像，**不会下发到
+    /// 南向设备**；下一个采集周期 `apply_registers` 会用真实采集值覆盖它。
+    /// 这与 OPC UA 的 write_enabled 不同（OPC UA 写会走设备写回路径），
+    /// 配置项名称沿用历史命名，不代表「写设备」。
+    ///
+    /// 默认拒绝写：存量依赖写操作的 SCADA 必须显式启用本项，
+    /// 且点位需 writable=true、寄存器地址在写白名单内才可被写。
     #[serde(default)]
     pub write_enabled: bool,
 }

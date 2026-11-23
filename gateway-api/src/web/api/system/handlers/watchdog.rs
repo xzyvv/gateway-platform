@@ -34,7 +34,14 @@ pub struct ServiceInfo {
     pub uptime: u64,
     pub cpu: f32,
     pub mem: u64,
-    pub restarts: u64,
+    /// 后台任务 panic 次数（仅主进程行有值，其它行为 0）。
+    pub panic_count: u64,
+    /// 上行发布失败次数（MQTT 行）。
+    pub publish_fail_count: u64,
+    /// 采集失败次数（采集调度行）。
+    pub collect_fail_count: u64,
+    /// 心跳停顿次数（主进程行；边沿触发，一次 hang 只计 1）。
+    pub heartbeat_stall_count: u64,
 }
 
 /// 当前时间（秒级 Unix 时间戳），供自愈事件记录使用
@@ -68,11 +75,14 @@ pub(crate) async fn list_services(
         uptime,
         cpu,
         mem: 0,
-        restarts: metrics.lifecycle.task_panics.load(Ordering::Relaxed),
+        panic_count: metrics.lifecycle.task_panics.load(Ordering::Relaxed),
+        publish_fail_count: 0,
+        collect_fail_count: 0,
+        heartbeat_stall_count: metrics.lifecycle.watchdog_timeouts.load(Ordering::Relaxed),
     });
 
     // 2. MQTT 上行
-    let (mqtt_status, mqtt_restarts) = match state.north.gateway.mqtt() {
+    let (mqtt_status, mqtt_publish_failures) = match state.north.gateway.mqtt() {
         Some(m) => {
             let connected = m.is_connected();
             let circuit_open = m.is_circuit_open();
@@ -94,7 +104,10 @@ pub(crate) async fn list_services(
         uptime,
         cpu: 0.0,
         mem: 0,
-        restarts: mqtt_restarts,
+        panic_count: 0,
+        publish_fail_count: mqtt_publish_failures,
+        collect_fail_count: 0,
+        heartbeat_stall_count: 0,
     });
 
     // 3. 采集调度
@@ -117,7 +130,10 @@ pub(crate) async fn list_services(
         uptime,
         cpu: 0.0,
         mem: 0,
-        restarts: collect_failures,
+        panic_count: 0,
+        publish_fail_count: 0,
+        collect_fail_count: collect_failures,
+        heartbeat_stall_count: 0,
     });
 
     // 4. 数据队列（P0-1：与 /health/ready、/api/health/report 共用 queue_health）
@@ -146,7 +162,10 @@ pub(crate) async fn list_services(
         uptime,
         cpu: 0.0,
         mem: 0,
-        restarts: metrics.lifecycle.watchdog_timeouts.load(Ordering::Relaxed),
+        panic_count: 0,
+        publish_fail_count: 0,
+        collect_fail_count: 0,
+        heartbeat_stall_count: 0,
     });
 
     // 5. OTA
@@ -163,10 +182,10 @@ pub(crate) async fn list_services(
         uptime,
         cpu: 0.0,
         mem: 0,
-        restarts: metrics
-            .lifecycle
-            .config_reload_total
-            .load(Ordering::Relaxed),
+        panic_count: 0,
+        publish_fail_count: 0,
+        collect_fail_count: 0,
+        heartbeat_stall_count: 0,
     });
 
     Ok(Json(ApiResponse::ok(services)))

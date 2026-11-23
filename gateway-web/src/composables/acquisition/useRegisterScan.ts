@@ -144,10 +144,19 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
       pollFailures = 0
       if (r) {
         currentScan.value = r
-        if (r.status === 'done') {
+        // DD-02：done / failed / aborted 都是终态。旧实现只认 done，
+        // 扫描中途掉线（status=failed）会一直轮询、界面永远停在「扫描中」。
+        if (r.status !== 'running') {
           scanning.value = false
           stopPoll()
           loadHistory()
+          if (r.status === 'failed') {
+            scanError.value =
+              `扫描失败：已扫 ${r.cells.length}/${r.total} 个地址（${r.progress}%），` +
+              '通常为总线掉线或超出单次扫描时长上限，请检查接线后重试'
+          } else if (r.status === 'aborted') {
+            scanError.value = `扫描已中止：已扫 ${r.cells.length}/${r.total} 个地址（${r.progress}%）`
+          }
         }
       }
     } catch (e) {
@@ -290,7 +299,17 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
       key: 'status',
       title: '状态',
       width: 90,
-      cell: (row) => h(ElTag, { size: 'small', type: row.status === 'done' ? 'success' : 'warning' }, () => (row.status === 'done' ? '完成' : '进行中')),
+      // DD-02：failed / aborted 不能都显示成「进行中」。
+      cell: (row) => {
+        const map: Record<string, { type: 'success' | 'warning' | 'danger' | 'info'; text: string }> = {
+          done: { type: 'success', text: '完成' },
+          running: { type: 'warning', text: '进行中' },
+          failed: { type: 'danger', text: '失败' },
+          aborted: { type: 'info', text: '已中止' },
+        }
+        const s = map[row.status] ?? { type: 'info' as const, text: row.status }
+        return h(ElTag, { size: 'small', type: s.type }, () => s.text)
+      },
     },
     actionColumn<ScanResult>({
       width: 90,

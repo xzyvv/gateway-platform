@@ -259,9 +259,9 @@ import {
   protocolVariantsOf,
 } from '@/composables/devices/useProtocol'
 import type { BusConfig, OpcUaClientConfig } from '@/api/types'
+import { defaultBusReconnectBackoff } from '@/utils/configDefaults'
 import {
   BACKOFF_OPTIONS,
-  BACKOFF_PRESETS,
   applyPreset,
   presetOf,
   type BackoffPreset,
@@ -351,12 +351,14 @@ const needsCert = (bus: BusConfig) =>
   authOf(bus).auth === 'certificate' || authOf(bus).security_policy !== 'none'
 
 /** 反查总线当前退避档位（不在预设内则为「自定义」展示态） */
+// DD-10：缺字段时用**后端** BusConfig 默认退避兜底，而不是 MQTT 的标准档
+// （2/4/8/16/32/60 + 40%）；两套默认值不同，旧兜底会把实际运行参数显示错。
 const busBackoffPreset = (bus: BusConfig): BackoffPreset =>
-  presetOf(bus.reconnect_backoff ?? BACKOFF_PRESETS.standard)
+  presetOf(bus.reconnect_backoff ?? defaultBusReconnectBackoff())
 
-/** 当前退避的可读描述；旧配置可能没有该字段，回落标准档 */
+/** 当前退避的可读描述；旧配置可能没有该字段，回落后端总线默认档 */
 function busBackoffText(bus: BusConfig): string {
-  const b = bus.reconnect_backoff ?? BACKOFF_PRESETS.standard
+  const b = bus.reconnect_backoff ?? defaultBusReconnectBackoff()
   return `${b.seconds.join(' / ')} 秒，抖动 ${Math.round(b.jitter_ratio * 100)}%`
 }
 

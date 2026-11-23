@@ -248,6 +248,8 @@ pub(super) fn spawn_replay(
             match_count,
             mismatch_count,
             failed,
+            terminal: "completed".into(),
+            planned,
             results,
         };
         audit(

@@ -132,7 +132,14 @@ describe('DeliveryCheck 交付验收', () => {
     vi.mocked(getNorthStatus).mockResolvedValue(structuredClone(north()) as never)
     vi.mocked(getNtpStatus).mockResolvedValue({ status: 'synced', offset_ms: 12, source: 'ntp', last_sync: 1700000000 } as never)
     vi.mocked(listCertificates).mockResolvedValue([{ name: 'gateway', enabled: true, days_remaining: 200 }] as never)
-    vi.mocked(listServices).mockResolvedValue([{ name: 'collector', status: 'Running', restarts: 0 }] as never)
+    vi.mocked(listServices).mockResolvedValue([{
+      name: 'collector',
+      status: 'Running',
+      panic_count: 0,
+      publish_fail_count: 0,
+      collect_fail_count: 0,
+      heartbeat_stall_count: 0,
+    }] as never)
     vi.mocked(importProject).mockResolvedValue(undefined as never)
     vi.mocked(copyText).mockResolvedValue(true as never)
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)

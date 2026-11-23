@@ -3,11 +3,14 @@
     <SectionHeader title="数据压缩" icon="DataLine" />
 
     <el-row :gutter="16">
-      <el-col :span="6"><el-card shadow="never" class="stat"><div class="lbl">原始采集点</div><div class="val">{{ stat.rawPoints.toLocaleString() }}</div></el-card></el-col>
-      <el-col :span="6"><el-card shadow="never" class="stat"><div class="lbl">实际存储点</div><div class="val highlight">{{ stat.storedPoints.toLocaleString() }}</div></el-card></el-col>
+      <el-col :span="6"><el-card shadow="never" class="stat"><div class="lbl" title="采集成功次数：只有成功采集的点才可能入库">采集成功点</div><div class="val">{{ stat.rawPoints.toLocaleString() }}</div></el-card></el-col>
+      <el-col :span="6"><el-card shadow="never" class="stat"><div class="lbl" title="后端队列中实际落库的样本数（已扣除死区 / 变化上传过滤）">实际存储点</div><div class="val highlight">{{ stat.storedPoints.toLocaleString() }}</div></el-card></el-col>
       <el-col :span="6"><el-card shadow="never" class="stat"><div class="lbl">压缩率</div><div class="val highlight">{{ stat.ratio }}%</div></el-card></el-col>
       <el-col :span="6"><el-card shadow="never" class="stat"><div class="lbl">启用压缩点位数</div><div class="val highlight">{{ onChangedCount }} / {{ totalPoints }}</div></el-card></el-col>
     </el-row>
+    <p class="metric-hint">
+      采集成功点与实际存储点均取自后端统计（统计窗口与「诊断 → 统计」一致），压缩率 = 1 − 实际存储 / 采集成功；不再按点位配置比例估算。
+    </p>
 
     <el-row :gutter="16">
       <el-col :span="10">
@@ -25,7 +28,7 @@
       <el-col :span="14">
         <el-card shadow="never" class="section-card">
           <template #header><strong>压缩效果对比（按设备）</strong></template>
-          <!-- 没有启用变化上传的点位时压缩率为 0，两根柱子必然同高，画图只会误导；
+          <!-- 未启用变化上传时暂不渲染对比：避免把「未配置压缩」误读成「压缩无效」，
                改为配置引导。chart 容器用 v-show 保留挂载点，避免 chartRef 丢失 -->
           <div v-show="onChangedCount > 0" ref="chartRef" data-chart-label="数据压缩前后体积对比图" style="height:300px"></div>
           <el-alert
@@ -82,19 +85,22 @@ async function load() {
     totalPoints.value = points.length
     onChangedCount.value = points.filter((p) => p.on_change).length
 
-    const rawReads = stats.summary.totalReads || 0
-    stat.value.rawPoints = rawReads
-    const changedRatio = totalPoints.value > 0 ? onChangedCount.value / totalPoints.value : 0
-    const stored = Math.round(rawReads * (1 - changedRatio * 0.6))
+    // DD-52：采集成功量 / 实际存储量均由后端统计下发，禁止用配置比例估算。
+    // 分母用 dataPoints（采集成功次数）而非 totalReads（含失败尝试），
+    // 因为只有成功采集的样本才可能写入存储。
+    const collected = stats.summary.totalDataPoints || 0
+    const stored = stats.summary.totalStoredPoints || 0
+    stat.value.rawPoints = collected
     stat.value.storedPoints = stored
-    stat.value.ratio = rawReads > 0 ? Math.round((1 - stored / rawReads) * 100) : 0
+    stat.value.ratio =
+      collected > 0 ? Math.min(100, Math.max(0, Math.round((1 - stored / collected) * 100))) : 0
 
     const devNames = stats.deviceStats.map((d) => d.deviceName)
-    const rawArr = stats.deviceStats.map((d) => d.totalReads)
-    const compArr = stats.deviceStats.map((d) => Math.round(d.totalReads * (1 - changedRatio * 0.5)))
+    const rawArr = stats.deviceStats.map((d) => d.dataPoints)
+    const compArr = stats.deviceStats.map((d) => d.storedPoints)
 
-    // 无启用点位时两根柱子必然同高（changedRatio=0），跳过渲染并释放旧图，
-    // 界面上由引导提示替代（见模板 v-show / v-if）
+    // 未启用变化上传时暂不渲染压缩对比（界面上由配置引导替代，见模板 v-show / v-if），
+    // 避免把「未配置压缩」误读成「压缩无效」
     if (onChangedCount.value === 0) {
       disposeChart(chart)
       chart = null
@@ -106,13 +112,13 @@ async function load() {
     chart = initChart(chartRef.value)
     chart.setOption({
       tooltip: tooltipStyle,
-      legend: { ...legendStyle, data: ['原始采集点', '存储数据点'] },
+      legend: { ...legendStyle, data: ['采集成功点', '存储数据点'] },
       grid: defaultGrid,
       // 轴标签色由主题提供（gw-light/gw-dark），本地不覆盖
       xAxis: { ...categoryAxisStyle, data: devNames, axisLabel: { rotate: 30, fontSize: 10, hideOverlap: true } },
       yAxis: valueAxisStyle,
       series: [
-        { name: '原始采集点', type: 'bar', data: rawArr, itemStyle: { color: CHART_MUTED_TEXT } },
+        { name: '采集成功点', type: 'bar', data: rawArr, itemStyle: { color: CHART_MUTED_TEXT } },
         { name: '存储数据点', type: 'bar', data: compArr, itemStyle: { color: CHART_SUCCESS } },
       ],
     })
@@ -163,5 +169,6 @@ onUnmounted(() => {
 .stat .val.highlight { color: var(--text-success); }
 .section-card { margin-bottom: 16px; }
 .hint { color: var(--el-text-color-secondary); font-size: 0.75rem; line-height: 1.6; }
+.metric-hint { margin: 0 0 16px; font-size: 0.75rem; line-height: 1.6; color: var(--el-text-color-secondary); }
 .guide-hint { margin: 4px 0 0; font-size: 0.8125rem; line-height: 1.6; }
 </style>

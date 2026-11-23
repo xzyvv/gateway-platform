@@ -16,6 +16,7 @@
 | `e2e_smoke.ps1` | 真实进程端到端冒烟：临时配置 + 独立端口拉起 `gatewayd.exe` → 探活 → 登录 → 状态/配置校验/回放会话/协议/诊断/健康 → 清理；退出码 0 通过 / 1 失败（`-Build` 先编译、`-Port` 换端口、`-KeepTemp` 保留日志） |
 | `release_gate.ps1` | 发版前 Windows 一键门禁：按 CI 同口径串起仓库健康度 / api-surface / Rust fmt+check+clippy+test / gatewayd 构建 / 前端 lint+类型+构建+体积+单测覆盖率 / Playwright E2E / 真实进程冒烟，输出每步日志与 `summary.md`；默认 fail-fast，`-KeepGoing` 全跑汇总，`-Only` 重跑单项，退出码 0 通过 / 1 失败 |
 | `gen_api_surface.py` | 从 `gateway-api/src/web/**/routes.rs` 解析路由，生成 `docs/api-surface.md`（端点/方法/鉴权/handler）；`--check` 只校验不一致并以退出码 1 失败（CI 门禁，防路由与文档漂移） |
+| `verify_bugfix.ps1` | bug 修复验证（Windows PowerShell 5+）：① 改动范围体检（吞错模式 / 门禁口径变更 / 契约面变更）② 证据链检查（有无回归网、断言是否被改软）③ 全量门禁（Rust fmt+clippy+test、前端 lint+type-check+test、deploy_lint、接口覆盖、api-surface 一致性）。`-Base <ref>` 换对比基线，`-SkipRust/-SkipWeb/-SkipExtra` 跳段，`-AllowNoTest` 放行纯文档改动，`-AllowGateFailure` 只降级门禁失败，`-SummaryPath` 输出汇总；退出码 0 通过 / 1 阻断。配套清单见 [docs/audit-2026-11/06-bug修复验证清单.md](../docs/audit-2026-11/06-bug修复验证清单.md) |
 | `check_coverage.py` | 后端覆盖率"防回落地板"：解析 `lcov.info` 并按目录分桶（core 各模块 / api/web / total），低于阈值即退出码 1（CI 门禁）；`--print` 只打印实测值。口径对标前端 `gateway-web/vitest.config.ts` 的分目录 thresholds——下取整留约 3pp 余量，补测试只许上调不许下调。后端 lcov 无分支数据（`BRF` 恒 0），故只对 lines / functions 设阈值 |
 | `clean-targets.ps1` | 清理 Rust 构建产物：仓库根 `target/`（`-KeepRelease` 保留 release 产物）+ Trae 智能体会话沙箱（`%APPDATA%\...\work-mode-projects\`）里散落的 `target` / `*_target` 目录；`-DryRun` 只统计不删。删除走 `\\?\` 长路径接口，规避 Windows MAX_PATH 260 字符限制 |
 

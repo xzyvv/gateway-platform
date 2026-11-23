@@ -126,6 +126,14 @@ impl VirtualPointEngine {
         self.rules.load().len()
     }
 
+    /// 淘汰已过期的点位实时值缓存（DD-16）
+    ///
+    /// 由处理管道周期性调用：点位删除或长期不再上报后，缓存条目随 TTL 过期，
+    /// 这里把它们真正移出内存，避免点位规模大时缓存单调增长。
+    pub fn prune_cache(&self, now_ms: i64) {
+        self.cache.prune(now_ms);
+    }
+
     /// 更新点位实时值缓存
     ///
     /// **只写上报口径**：`final_points` 是经过边缘过滤 / 协议转换 / 质量规则后的
@@ -395,6 +403,23 @@ mod tests {
         assert_eq!(out[0].value, 42.0);
         assert_eq!(out[0].quality, Quality::Good);
         assert_eq!(out[0].device_id, "dev1");
+    }
+
+    /// DD-16：prune_cache 必须真正淘汰过期条目，虚拟点随之报「引用不可用」。
+    #[test]
+    fn prune_cache_removes_expired_inputs() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2")]);
+        let items = vec![item("p1", 21.0)];
+        engine.update_cache(
+            &items,
+            &items.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+        );
+        // interval=10s → TTL=max(30s, 30s)；越过 TTL 后条目必须被真正移除
+        engine.prune_cache(DataPoint::now() + 31_000);
+        let out = engine.evaluate();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].quality, Quality::Uncertain);
+        assert_eq!(out[0].quality_reason, "virtual_point:ERROR");
     }
 
     #[test]

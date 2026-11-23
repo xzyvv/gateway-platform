@@ -94,7 +94,7 @@ import { type DeviceStatView } from '@/api/diagnostics'
 import { useStatsReport } from '@/composables/data/useStatsReport'
 import { deviceFailureMap, fetchPointQualities } from '@/composables/data/usePointQuality'
 import { getConfig } from '@/api/config'
-import { communicationRating, communicationRateStatus } from '@/utils/healthVerdict'
+import { communicationRateStatus } from '@/utils/healthVerdict'
 
 interface CommProfile {
   deviceId: string;
@@ -108,8 +108,9 @@ interface CommProfile {
   timeoutCount: number;
   /** 该设备下连续失败点位数之和（原「时延分析」页的核心指标，合并后在此展示） */
   consecutiveFailures: number;
-  currentPeriodMs: number;
-  suggestedPeriodMs: number;
+  /** DD-12：当前/建议周期与评级、建议均来自后端，前端不再自行计算 */
+  currentPeriodMs: number | null;
+  suggestedPeriodMs: number | null;
   suggestion: string;
   health: 'excellent' | 'good' | 'fair' | 'poor' | 'unknown';
 }
@@ -117,9 +118,8 @@ interface CommProfile {
 const HEALTH_LABEL: Record<string, string> = { excellent: '优秀', good: '良好', fair: '一般', poor: '较差', unknown: '未采集' }
 const HEALTH_COLOR: Record<CommProfile['health'], 'success' | 'warning' | 'danger' | 'info'> = { excellent: 'success', good: 'success', fair: 'warning', poor: 'danger', unknown: 'info' }
 
-// 通信评级档位统一由 utils/healthVerdict 提供：与成功率进度条同源，
-// 避免「评级优秀但进度条告警」；与「设备健康评分」仍是不同指标。
-const healthFromRate = communicationRating
+// DD-12：通信评级 / 建议周期 / 建议文案统一由后端 stats-report 下发
+// （与「设备健康评分」仍是不同指标，但阈值只有后端一份实现）。
 
 const router = useRouter()
 /** 双向跳转（W2-#14）：本页给通信侧评级，综合分与离线维度去健康评分页看 */
@@ -170,8 +170,8 @@ const profileColumns: ColumnDef<CommProfile>[] = [
         ? h(ElTag, { size: 'small', type: 'danger', effect: 'plain' }, () => String(row.consecutiveFailures))
         : String(row.consecutiveFailures),
   },
-  { key: 'currentPeriodMs', title: '当前周期', width: 110, align: 'right', cell: (row) => `${row.currentPeriodMs}ms` },
-  { key: 'suggestedPeriodMs', title: '建议周期', width: 110, align: 'right', cell: (row) => h('span', { class: 'suggest' }, `${row.suggestedPeriodMs}ms`) },
+  { key: 'currentPeriodMs', title: '当前周期', width: 110, align: 'right', cell: (row) => (row.currentPeriodMs == null ? '—' : `${row.currentPeriodMs}ms`) },
+  { key: 'suggestedPeriodMs', title: '建议周期', width: 110, align: 'right', cell: (row) => h('span', { class: 'suggest' }, row.suggestedPeriodMs == null ? '—' : `${row.suggestedPeriodMs}ms`) },
   { key: 'suggestion', title: '优化建议', minWidth: 260, ellipsis: true },
 ]
 
@@ -213,38 +213,16 @@ async function load() {
     for (const d of cfg.devices || []) devBusMap.set(d.id, d.bus)
     // 连续失败点位：按设备累加点位质量里的 consecutive_failures（原「时延分析」页同口径）
     const failureMap = deviceFailureMap(qualities)
-    const pointIntervalMap = new Map<string, number>()
-    for (const pt of cfg.points) {
-      if (pt.device_id) {
-        const cur = pointIntervalMap.get(pt.device_id) ?? Infinity
-        pointIntervalMap.set(pt.device_id, Math.min(cur, pt.interval))
-      }
-    }
-    profiles.value = report.deviceStats.map((d: DeviceStatView) => {
-      const currentMs = (pointIntervalMap.get(d.deviceId) ?? 1) * 1000
-      const health = healthFromRate(d.successRate)
-      const suggested = health === 'excellent' ? Math.max(500, currentMs / 2)
-        : health === 'good' ? currentMs
-        : health === 'fair' ? currentMs * 2
-        : health === 'poor' ? currentMs * 3
-        : currentMs
-      const lossRate = d.successRate == null ? null : Math.round((100 - d.successRate) * 10) / 10
-      let suggestion = ''
-      if (health === 'unknown') suggestion = '统计窗口内无采集数据，无法评估'
-      else if (health === 'excellent') suggestion = `响应稳定(${d.avgLatency}ms)，可考虑缩短采集周期`
-      else if (health === 'good') suggestion = '通信良好，建议保持当前周期并关注抖动'
-      else if (health === 'fair') suggestion = `丢包率${lossRate}%，建议延长周期并检查线缆`
-      else suggestion = `通信质量差，建议大幅延长周期至${Math.round(suggested)}ms并排查设备负载`
-      return {
-        deviceId: d.deviceId, deviceName: d.deviceName,
-        busName: devBusMap.get(d.deviceId) || d.protocol,
-        avgRespMs: d.avgLatency, successRate: d.successRate,
-        lossRate, timeoutCount: d.failed,
-        consecutiveFailures: failureMap.get(d.deviceId) || 0,
-        currentPeriodMs: currentMs, suggestedPeriodMs: Math.round(suggested),
-        suggestion, health,
-      }
-    })
+    // DD-12：评级、建议周期、建议文案全部读后端字段，前端不再复刻阈值算法。
+    profiles.value = report.deviceStats.map((d: DeviceStatView) => ({
+      deviceId: d.deviceId, deviceName: d.deviceName,
+      busName: devBusMap.get(d.deviceId) || d.protocol,
+      avgRespMs: d.avgLatency, successRate: d.successRate,
+      lossRate: d.lossRate, timeoutCount: d.failed,
+      consecutiveFailures: failureMap.get(d.deviceId) || 0,
+      currentPeriodMs: d.currentPeriodMs, suggestedPeriodMs: d.suggestedPeriodMs,
+      suggestion: d.suggestion, health: d.health,
+    }))
   } catch (e) {
     showToast(e, '加载通信画像失败')
   } finally {

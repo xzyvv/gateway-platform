@@ -209,7 +209,9 @@ pub(crate) async fn create_quality_rule(
         ),
         "web",
     );
-    install_quality_rules(&state.platform.quality_rule_store);
+    install_quality_rules(&state.platform.quality_rule_store).map_err(|e| {
+        ApiError::internal(format!("规则已保存，但安装到采集管道失败，当前未生效: {e}"))
+    })?;
     Ok(Json(ApiResponse::ok(created)))
 }
 
@@ -240,7 +242,9 @@ pub(crate) async fn update_quality_rule(
         ),
         "web",
     );
-    install_quality_rules(&state.platform.quality_rule_store);
+    install_quality_rules(&state.platform.quality_rule_store).map_err(|e| {
+        ApiError::internal(format!("规则已保存，但安装到采集管道失败，当前未生效: {e}"))
+    })?;
     Ok(Json(ApiResponse::ok(updated)))
 }
 
@@ -258,6 +262,10 @@ pub(crate) async fn delete_quality_rule(
         "",
         "web",
     );
-    install_quality_rules(&state.platform.quality_rule_store);
+    install_quality_rules(&state.platform.quality_rule_store).map_err(|e| {
+        ApiError::internal(format!(
+            "规则已删除，但重装采集管道失败，旧规则可能仍在生效: {e}"
+        ))
+    })?;
     Ok(Json(ApiResponse::ok(true)))
 }

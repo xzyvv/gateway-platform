@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
 
 vi.mock('@/api/protocolTools', () => ({
   scanBus: vi.fn(),
@@ -121,6 +122,48 @@ describe('SlaveScan 扫描模式选择（p0-2 §7）', () => {
     expect(handlers.signal?.aborted).toBe(true)
     // 停止后按钮恢复「扫描」，可再次发起
     expect(wrapper.findAll('button').some((b) => b.text() === '扫描')).toBe(true)
+  })
+
+  /**
+   * DD-48 回归钉子：failed 是与 summary 互斥的终态。
+   * 失败时不得弹「扫描完成」success toast，必须弹 error 并把带处置建议的原因常驻展示。
+   */
+  it('流式 failed：不弹「扫描完成」，弹 error，原因常驻页面', async () => {
+    const successSpy = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: vi.fn() }) as never)
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: vi.fn() }) as never)
+    vi.mocked(canStreamScan).mockReturnValue(true)
+    vi.mocked(scanBusStream).mockImplementation(async (_bus, _s, _e, handlers) => {
+      handlers.onSlave?.({ slaveId: 1, responded: false })
+      handlers.onFailed?.({
+        error: 'bus_offline', message: '总线掉线，请检查接线', scanned: 1, total: 20,
+      })
+    })
+
+    const wrapper = await mountAndClickScan()
+
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('总线掉线，请检查接线')
+    successSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('流式 aborted：不弹「扫描完成」success，弹 warning 提前停止', async () => {
+    const successSpy = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({ close: vi.fn() }) as never)
+    const warningSpy = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: vi.fn() }) as never)
+    vi.mocked(canStreamScan).mockReturnValue(true)
+    vi.mocked(scanBusStream).mockImplementation(async (_bus, _s, _e, handlers) => {
+      handlers.onSlave?.(online)
+      handlers.onAborted?.({ reason: 'duration_cap', scanned: 1, total: 20 })
+    })
+
+    await mountAndClickScan()
+
+    expect(successSpy).not.toHaveBeenCalled()
+    expect(warningSpy).toHaveBeenCalledTimes(1)
+    expect(warningSpy.mock.calls[0]![0]).toContain('达到时长上限')
+    successSpy.mockRestore()
+    warningSpy.mockRestore()
   })
 })
 

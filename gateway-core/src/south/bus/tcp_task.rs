@@ -27,16 +27,20 @@ use crate::south::protocol::CollectorError;
 
 use super::{BusTransaction, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_DELAY_MS};
 
-/// 重连退避计数推进：只有确认「上次连接真正完成过一次事务」才清零。
+/// 重连退避计数推进：只有确认「上次连接真正完成过一次事务」才清零，否则累加。
 ///
 /// r15-SD4：原实现只要 TCP `connect()` 成功就 `reconnect_failures = 0`，
 /// 设备半开 / 假在线（连上立刻断）时每轮都从 1s 退避重新起算，指数退避
 /// 形同虚设，表现为高频重连打满 CPU 且日志只有 1s 间隔。
+///
+/// DD-09：旧实现只在 `connect()` 失败时 `+= 1`；「连上过、但一个事务都没成功
+/// 就掉线」的假在线设备计数恒为 0，重连频率恒定。现在每次失败的重连周期
+/// 都在入口推进一次（connect 失败仍由失败分支计数，入口不再重复加）。
 fn advance_reconnect_backoff(current: u32, had_successful_comm: bool) -> u32 {
     if had_successful_comm {
         0
     } else {
-        current
+        current.saturating_add(1)
     }
 }
 
@@ -77,6 +81,10 @@ pub(crate) async fn bus_task_tcp(
     let had_successful_comm = Arc::new(AtomicBool::new(false));
     // 是否已经成功连接过：仅用于区分「首次连接」与「断线重连」，后者计入重连次数
     let mut ever_connected = false;
+    // DD-09：上一轮重连是否在 connect 阶段就失败。connect 失败分支自身已 +1，
+    // 下一轮入口不再重复累加；「连上过但零成功事务就掉线」则在入口计一次失败，
+    // 让假在线设备的重连频率按失败次数真正退避。
+    let mut connect_failed_last = false;
 
     // P1: 共享 pool 引用。None 表示未连接或已断开。
     // 主循环负责（重）连接与构造 pool；spawn 的 submit task 在 Disconnected/Io 时
@@ -128,10 +136,15 @@ pub(crate) async fn bus_task_tcp(
         let need_reconnect = pool_slot.lock().await.is_none();
         if need_reconnect {
             // r15-SD4：仅当上次连接真正通信过才清零；"连上即断"保留累加值。
-            reconnect_failures = advance_reconnect_backoff(
-                reconnect_failures,
-                had_successful_comm.swap(false, Ordering::Relaxed),
-            );
+            // DD-09：假在线（连上过、零成功事务就掉线）在这里推进一档；
+            // connect 阶段失败已由下方失败分支 +1，此处不重复累加。
+            let had_comm = had_successful_comm.swap(false, Ordering::Relaxed);
+            if had_comm {
+                reconnect_failures = advance_reconnect_backoff(reconnect_failures, true);
+            } else if ever_connected && !connect_failed_last {
+                reconnect_failures = advance_reconnect_backoff(reconnect_failures, false);
+            }
+            connect_failed_last = false;
             // S3: 重连前先 sleep 退避（不持锁）
             if reconnect_failures > 0 {
                 // 统一走 delay_secs：jitter_ratio=0 时抖动项为 0，结果与 base 完全一致。
@@ -173,6 +186,7 @@ pub(crate) async fn bus_task_tcp(
                 }
                 Err(e) => {
                     reconnect_failures = reconnect_failures.saturating_add(1);
+                    connect_failed_last = true;
                     tracing::warn!(
                         "modbus tcp connect {} failed (attempt {}): {}",
                         tcp_addr,

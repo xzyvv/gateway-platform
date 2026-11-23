@@ -76,6 +76,15 @@ pub struct ReplayExecuteResult {
     pub mismatch_count: i32,
     /// 发送失败（含总线不可用）
     pub failed: i32,
+    /// 执行终态：`completed`（跑完 / 按 stop_on_mismatch 正常收尾）/
+    /// `aborted`（服务端时长上限）/ `failed`（总线中途不可用）。
+    ///
+    /// DD-03：阻塞模式在中止时也返回 200 + 部分结果，此前前端只能靠本地
+    /// 重建汇总，于是把"跑到一半断了"显示成"回放完成、全部一致"。
+    /// 这里显式给出终态，前端必须据此展示，不得再自行判定成功。
+    pub terminal: String,
+    /// 计划下发的帧数（`total` 是实际执行帧数；`terminal != completed` 时二者会不等）
+    pub planned: i32,
     pub results: Vec<ReplayFrameResult>,
 }
 
@@ -136,24 +145,37 @@ async fn collect_replay_blocking(mut rx: mpsc::UnboundedReceiver<ReplayEvent>) -
     let mut bus = String::new();
     let mut started_at_ms = 0i64;
     let mut frames: Vec<ReplayFrameResult> = Vec::new();
+    let mut planned = 0i32;
+    let mut terminal = "completed";
     while let Some(ev) = rx.next().await {
         match ev {
             ReplayEvent::Started {
                 session_id: s,
                 bus: b,
                 started_at_ms: t,
-                ..
+                total,
             } => {
                 session_id = s;
                 bus = b;
                 started_at_ms = t;
+                planned = total;
             }
             ReplayEvent::Frame(f) => frames.push(f),
             ReplayEvent::Summary(r) => return Json(ApiResponse::ok(*r)).into_response(),
-            ReplayEvent::Aborted { .. } | ReplayEvent::Failed { .. } => break,
+            ReplayEvent::Aborted { total, .. } => {
+                planned = total;
+                terminal = "aborted";
+                break;
+            }
+            ReplayEvent::Failed { total, .. } => {
+                planned = total;
+                terminal = "failed";
+                break;
+            }
         }
     }
-    // 服务端提前收尾：用已收集的帧重建汇总（与 v1 提前 break 后返回部分结果一致）
+    // 服务端提前收尾：用已收集的帧重建汇总（与 v1 提前 break 后返回部分结果一致），
+    // 但必须带上真实终态，前端才能如实显示"已中止/失败"而不是"完成"。
     let mut match_count = 0;
     let mut mismatch_count = 0;
     let mut failed = 0;
@@ -164,6 +186,9 @@ async fn collect_replay_blocking(mut rx: mpsc::UnboundedReceiver<ReplayEvent>) -
             _ => failed += 1,
         }
     }
+    if planned == 0 {
+        planned = frames.len() as i32;
+    }
     Json(ApiResponse::ok(ReplayExecuteResult {
         session_id,
         bus,
@@ -173,6 +198,8 @@ async fn collect_replay_blocking(mut rx: mpsc::UnboundedReceiver<ReplayEvent>) -
         match_count,
         mismatch_count,
         failed,
+        terminal: terminal.into(),
+        planned,
         results: frames,
     }))
     .into_response()

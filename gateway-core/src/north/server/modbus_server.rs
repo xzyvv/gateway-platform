@@ -7,6 +7,10 @@
 //! 位读（FC01/FC02）与寄存器共用同一地址空间：线圈地址 N 取寄存器 N 的最低位
 //! （`value & 1 != 0`），用于把布尔点位以位语义暴露给主站。
 //!
+//! 写语义（DD-42）：FC06/FC16 只写本进程内的寄存器镜像，**不写南向设备**，
+//! 下一采集周期由 [`ModbusServer::apply_registers`] 覆盖。与 OPC UA Server 的
+//! 写回设备不同，详见 `config::modbus_server::ModbusServerConfig::write_enabled`。
+//!
 //! MBAP header (7 bytes):
 //!   transaction_id(2) + protocol_id(2) + length(2) + unit_id(1)
 //! PDU:
@@ -90,7 +94,10 @@ impl ModbusServer {
         self.registers.write().insert(addr, value);
     }
 
-    /// 批量设置寄存器值
+    /// 批量设置寄存器值（采集 task 每个周期调用）。
+    ///
+    /// DD-42：这是寄存器镜像的**唯一真实来源**——主站通过 FC06/FC16 写入的值
+    /// 会在本函数下一次执行时被采集值覆盖。北向 Modbus 写不会回写到设备。
     pub fn apply_registers(&self, mappings: &[RegisterMapping], values: &HashMap<String, f64>) {
         let mut regs = self.registers.write();
         for m in mappings {

@@ -43,7 +43,10 @@ describe('watchdog（system 域看门狗 / 自愈契约）', () => {
         uptime: 3600,
         cpu: 1.5,
         mem: 2048,
-        restarts: 0,
+        panic_count: 0,
+        publish_fail_count: 2,
+        collect_fail_count: 0,
+        heartbeat_stall_count: 1,
       },
     ]
     requestMock.mockResolvedValue(rows)

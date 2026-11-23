@@ -35,14 +35,16 @@
 import { h, ref, onMounted } from 'vue'
 import { ElProgress, ElTag } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-const { showToast } = useErrorDisplay()
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { getConfig } from '@/api/config'
-import type { DeviceConfig, PointConfig } from '@/api/types'
+import { getScheduleOptimizeReport } from '@/api/diagnostics'
 
-interface MergeGroup { startAddr: number; endAddr: number; count: number }
+const { showToast } = useErrorDisplay()
+
+interface MergeGroup { slaveId: number; functionCode: number; startAddr: number; endAddr: number; count: number }
 interface DeviceOptimize {
   deviceName: string
+  protocol: string
+  mergeSupported: boolean
   pointCount: number
   originalReads: number
   mergedReads: number
@@ -55,72 +57,66 @@ const devices = ref<DeviceOptimize[]>([])
 const summary = ref({ totalPoints: 0, totalOriginalReads: 0, totalMergedReads: 0, avgReduction: 0 })
 const loading = ref(false)
 
-// 表格统一走 DataTable；列顺序/宽度与迁移前保持一致
+// DD-11：合并分组 / 优化率全部由后端 `GET /api/diagnostics/schedule-optimize` 下发，
+// 与真实采集路径共用 merge_batches（从站号 / 功能码 / 寄存器宽度 / 自适应 gap）。
+// 本页只做展示，不再自行按「地址差 ≤ 5」估算。
 const columns: ColumnDef<DeviceOptimize>[] = [
   { key: 'deviceName', title: '设备', minWidth: 140 },
+  { key: 'protocol', title: '协议', width: 90 },
   { key: 'pointCount', title: '点位数', width: 80 },
   { key: 'originalReads', title: '原始读取', width: 90 },
   { key: 'mergedReads', title: '合并读取', width: 90 },
   {
     key: 'reduction',
     title: '优化率',
-    width: 120,
-    cell: (row) => h(ElProgress, { percentage: row.reduction, status: row.reduction > 0 ? 'success' : 'exception', strokeWidth: 10 }),
+    width: 130,
+    cell: (row) =>
+      row.mergeSupported
+        ? h(ElProgress, { percentage: row.reduction, status: row.reduction > 0 ? 'success' : 'exception', strokeWidth: 10 })
+        : h(ElTag, { size: 'small', type: 'info', effect: 'plain' }, () => '不支持合并'),
   },
   {
     key: 'groups',
-    title: '合并组',
-    minWidth: 300,
+    title: '合并组（从站/功能码: 起-止）',
+    minWidth: 320,
     cell: (row) =>
       h(
         'span',
         null,
         row.groups.map((g) =>
-          h(ElTag, { key: `${g.startAddr}-${g.endAddr}`, size: 'small', style: 'margin-right:4px;margin-bottom:2px', effect: 'plain' }, () => `${g.startAddr}-${g.endAddr} (${g.count}个)`),
+          h(ElTag, { key: `${g.slaveId}-${g.functionCode}-${g.startAddr}-${g.endAddr}`, size: 'small', style: 'margin-right:4px;margin-bottom:2px', effect: 'plain' }, () => `${g.slaveId}/${g.functionCode}: ${g.startAddr}-${g.endAddr} (${g.count}个)`),
         ),
       ),
   },
 ]
 
-const MAX_GAP = 5
-
-function computeMerge(points: PointConfig[]): { groups: MergeGroup[]; merged: number } {
-  const addrs = points.map((p) => p.address_num).filter((a): a is number => a != null).sort((a, b) => a - b)
-  if (addrs.length === 0) return { groups: [], merged: 0 }
-  const groups: MergeGroup[] = []
-  let start = addrs[0]!
-  let end = addrs[0]!
-  let count = 1
-  for (let i = 1; i < addrs.length; i++) {
-    const cur = addrs[i]!
-    if (cur - end <= MAX_GAP) { end = cur; count++ }
-    else { groups.push({ startAddr: start, endAddr: end, count }); start = cur; end = cur; count = 1 }
-  }
-  groups.push({ startAddr: start, endAddr: end, count })
-  return { groups, merged: groups.length }
-}
-
 async function load() {
   loading.value = true
   try {
-    const cfg = await getConfig()
-    const devList: DeviceConfig[] = cfg.devices || []
-    const allPoints: PointConfig[] = cfg.points || []
-    const result: DeviceOptimize[] = []
-    let totalPts = 0, totalOrig = 0, totalMerged = 0
-    for (const d of devList) {
-      const devPoints = allPoints.filter((p) => p.device_id === d.id)
-      const pointCount = devPoints.length
-      const original = pointCount
-      const { groups, merged } = computeMerge(devPoints)
-      const reduction = original > 0 ? Math.round((original - merged) / original * 100) : 0
-      const savedMs = (original - merged) * 50
-      result.push({ deviceName: d.name, pointCount, originalReads: original, mergedReads: merged, reduction, savedMs, groups })
-      totalPts += pointCount; totalOrig += original; totalMerged += merged
+    const r = await getScheduleOptimizeReport()
+    devices.value = r.devices.map((d) => ({
+      deviceName: d.device_name,
+      protocol: d.protocol,
+      mergeSupported: d.merge_supported,
+      pointCount: d.point_count,
+      originalReads: d.original_reads,
+      mergedReads: d.merged_reads,
+      reduction: Math.round(d.reduction_percent),
+      savedMs: Number(d.saved_estimate_ms),
+      groups: d.groups.map((g) => ({
+        slaveId: g.slave_id,
+        functionCode: g.function_code,
+        startAddr: g.start_addr,
+        endAddr: g.end_addr,
+        count: g.point_count,
+      })),
+    }))
+    summary.value = {
+      totalPoints: r.total_points,
+      totalOriginalReads: r.total_original_reads,
+      totalMergedReads: r.total_merged_reads,
+      avgReduction: Math.round(r.reduction_percent),
     }
-    devices.value = result
-    const avgRed = totalOrig > 0 ? Math.round((totalOrig - totalMerged) / totalOrig * 100) : 0
-    summary.value = { totalPoints: totalPts, totalOriginalReads: totalOrig, totalMergedReads: totalMerged, avgReduction: avgRed }
   } catch (e) { showToast(e, '加载调度优化失败') } finally { loading.value = false }
 }
 onMounted(load)

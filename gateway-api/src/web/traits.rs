@@ -77,7 +77,18 @@ pub trait SchedulerTrait: Send + Sync {
         let _ = bus;
         false
     }
+
+    /// DD-11：总线当前自适应合并间隔阈值（「调度优化」只读展示用）。
+    ///
+    /// 默认 5，与 Modbus 自适应初值一致；mock 调度器无需关心。
+    fn merge_gap(&self, bus: &str) -> u16 {
+        let _ = bus;
+        5
+    }
 }
+
+/// DD-52：按点位统计的实际落库样本数（point_id -> 样本数）。
+pub type StoredCountsResult = GatewayResult<HashMap<String, i64>>;
 
 /// DataQueue trait（仅包含 web handler 实际调用的方法）
 pub trait DataQueueTrait: Send + Sync {
@@ -116,6 +127,16 @@ pub trait DataQueueTrait: Send + Sync {
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Option<i64>> + Send + 'a>> {
         Box::pin(async { None })
+    }
+    /// DD-52：按点位统计窗口内实际落库的样本数（诊断「数据压缩」页的真实口径）。
+    ///
+    /// 默认空表：mock / 无长期历史的后端不提供该统计，前端会显示 0 而不是估算值。
+    fn stored_counts<'a>(
+        &'a self,
+        _start: i64,
+        _end: i64,
+    ) -> Pin<Box<dyn Future<Output = StoredCountsResult> + Send + 'a>> {
+        Box::pin(async { Ok(HashMap::new()) })
     }
     /// 累计因队列容量上限被物理删除的行数：(总行数, 其中未送达行数)。
     ///
@@ -173,6 +194,8 @@ pub trait GatewayRuntimeTrait: Send + Sync {
     /// 返回 Web 契约视图而不暴露 core 的 `pipeline::convert` 模块，
     /// 使 `web/api` handler 满足 arch_deps 白名单（pipeline 为禁引模块）。
     fn convert_hits(&self) -> HashMap<String, ConvertHitView>;
+    /// DD-15：运行期未生效的转换规则（rule_id → 原因），供界面标注「不生效」。
+    fn convert_issues(&self) -> HashMap<String, String>;
     /// 虚拟点位最近求值状态快照（point_id → 状态）。
     ///
     /// 返回 Web 契约视图而不暴露 core 的 `pipeline::virtual_point` 模块，
@@ -290,6 +313,12 @@ impl SchedulerTrait for Scheduler {
     fn schedule_timeline(&self, window_ms: u64) -> ScheduleTimeline {
         Scheduler::timeline_snapshot(self, window_ms)
     }
+    fn merge_gap(&self, bus: &str) -> u16 {
+        Scheduler::collectors(self)
+            .get(bus)
+            .and_then(|c| c.merge_gap())
+            .unwrap_or(5)
+    }
     fn pause_bus(
         self: Arc<Self>,
         bus: String,
@@ -349,6 +378,13 @@ impl DataQueueTrait for DataQueue {
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Option<i64>> + Send + 'a>> {
         Box::pin(DataQueue::oldest_data_timestamp(self))
+    }
+    fn stored_counts<'a>(
+        &'a self,
+        start: i64,
+        end: i64,
+    ) -> Pin<Box<dyn Future<Output = StoredCountsResult> + Send + 'a>> {
+        Box::pin(DataQueue::stored_counts(self, start, end))
     }
 }
 
@@ -410,6 +446,9 @@ impl GatewayRuntimeTrait for GatewayRuntime {
                 )
             })
             .collect()
+    }
+    fn convert_issues(&self) -> HashMap<String, String> {
+        GatewayRuntime::convert_issues(self)
     }
     fn virtual_point_states(&self) -> HashMap<String, VirtualPointStateView> {
         GatewayRuntime::virtual_point_states(self)

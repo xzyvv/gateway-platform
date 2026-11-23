@@ -336,6 +336,43 @@ fn handle_write_fc16_rejects_malformed() {
     );
 }
 
+/// DD-43：FC16 跨 0xFFFF 时按**饱和**语义处理，与 FC01~FC04 读路径一致。
+///
+/// 旧实现白名单校验与写入都用 `wrapping_add`：起始地址 0xFFFF、数量 2 时第二个
+/// 元素回绕成 0，白名单只含 0xFFFF 会被判非法；写入还会把值写到地址 0。
+/// 现在两侧统一 `saturating_add`，越界地址都落在 0xFFFF。
+#[test]
+fn fc16_address_saturates_at_u16_max() {
+    let srv = ModbusServer::new(ModbusServerConfig::default());
+    srv.set_writable_addrs(
+        &[test_mapping("p1", u16::MAX)],
+        &HashSet::from(["p1".to_string()]),
+    );
+    let addrs = srv.writable_addrs.read();
+    // start=0xFFFF, qty=2, byte_count=4, 值 0x000A / 0x000B
+    let req = [0xFF, 0xFF, 0x00, 0x02, 0x04, 0x00, 0x0A, 0x00, 0x0B];
+    let resp = ModbusServer::handle_request(FC_WRITE_MULTIPLE, &req, &srv.registers, true, &addrs);
+    drop(addrs);
+
+    assert_eq!(resp[0], FC_WRITE_MULTIPLE, "白名单校验不得因回绕误拒");
+    // 两个偏移都饱和到 0xFFFF，后写覆盖前写
+    assert_eq!(srv.registers.read().get(&u16::MAX).copied(), Some(0x000B));
+    assert_eq!(
+        srv.registers.read().get(&0).copied(),
+        None,
+        "不得回绕写到地址 0"
+    );
+
+    // 读侧同样饱和：从 0xFFFF 读 2 个寄存器 = 同一地址的值重复
+    let req = [0xFF, 0xFF, 0x00, 0x02];
+    let resp = ModbusServer::handle_read(FC_READ_HOLDING, &req, &srv.registers);
+    assert_eq!(
+        resp,
+        vec![FC_READ_HOLDING, 4, 0x00, 0x0B, 0x00, 0x0B],
+        "读路径与写路径的越界地址口径必须一致"
+    );
+}
+
 #[test]
 fn handle_request_dispatches_new_function_codes() {
     let srv = ModbusServer::new(ModbusServerConfig::default());

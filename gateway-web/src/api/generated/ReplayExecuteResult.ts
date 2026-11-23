@@ -16,4 +16,17 @@ mismatch: number,
 /**
  * 发送失败（含总线不可用）
  */
-failed: number, results: Array<ReplayFrameResult>, };
+failed: number, 
+/**
+ * 执行终态：`completed`（跑完 / 按 stop_on_mismatch 正常收尾）/
+ * `aborted`（服务端时长上限）/ `failed`（总线中途不可用）。
+ *
+ * DD-03：阻塞模式在中止时也返回 200 + 部分结果，此前前端只能靠本地
+ * 重建汇总，于是把"跑到一半断了"显示成"回放完成、全部一致"。
+ * 这里显式给出终态，前端必须据此展示，不得再自行判定成功。
+ */
+terminal: string, 
+/**
+ * 计划下发的帧数（`total` 是实际执行帧数；`terminal != completed` 时二者会不等）
+ */
+planned: number, results: Array<ReplayFrameResult>, };

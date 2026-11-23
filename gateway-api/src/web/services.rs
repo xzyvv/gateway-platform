@@ -245,18 +245,21 @@ pub(crate) fn render_template(template: &str, vars: &TemplateVars) -> Result<Str
 
 /// 安装已启用的数据质量规则到处理管道快照（range / rate / nan 的真实执行入口）。
 ///
-/// `web/api` 分层规则不允许直接引用 `gateway_core::pipeline`，故由本门面承接：
-/// 每次规则写操作成功后调用一次，使新规则立即对后续采集数据生效。
-/// 读取/安装失败只记 error 日志，不回滚已成功的落库写入（网关仍按旧快照运行）。
-pub(crate) fn install_quality_rules(store: &gateway_core::config::QualityRuleStore) {
-    match store.list_enabled_rules() {
-        Ok(rules) => {
-            let count = rules.len();
-            gateway_core::pipeline::quality_rules::install_rules(rules);
-            tracing::info!("quality rules re-installed: {}", count);
-        }
-        Err(e) => tracing::error!("reload quality rules failed: {}", e),
-    }
+/// `web/api` 分层规则不允许直接引用 `gateway_core::pipeline`，故由本门面承接。
+///
+/// DD-41：返回真实安装结果。旧实现把读取/安装失败吞成一条 error 日志，
+/// 写接口照样返回 200——现场看到「保存成功」，实际规则根本没生效。
+/// 现在调用方拿到 Err 后返回 5xx，并明确告知「已保存但未生效」。
+pub(crate) fn install_quality_rules(
+    store: &gateway_core::config::QualityRuleStore,
+) -> Result<usize, String> {
+    let rules = store
+        .list_enabled_rules()
+        .map_err(|e| format!("读取已启用质量规则失败: {e}"))?;
+    let count = rules.len();
+    gateway_core::pipeline::quality_rules::install_rules(rules);
+    tracing::info!("quality rules re-installed: {}", count);
+    Ok(count)
 }
 
 /// 协议描述符（已序列化为 API 响应形状），供 GET /api/protocols 使用。
@@ -285,6 +288,36 @@ pub(crate) fn protocol_capabilities() -> Vec<Value> {
                 // 与后端 uses_numeric_decode 同源，前端不再硬编码协议清单
                 "numeric_decode": d.numeric_decode,
             })
+        })
+        .collect()
+}
+
+/// DD-11：「调度优化」页的单个合并读取组（只读展示）。
+pub(crate) struct MergeGroupDto {
+    pub slave_id: u8,
+    pub function_code: u8,
+    pub start_addr: u16,
+    pub end_addr: u16,
+    pub point_count: u16,
+}
+
+/// DD-11：用**采集路径同一实现**计算合并计划，供只读展示。
+///
+/// 旧前端自己按「地址差 ≤ 5」估算，忽略从站号 / 功能码 / 寄存器宽度 /
+/// 运行时自适应 gap，显示出的优化率是假的。这里直接复用 `merge_batches`，
+/// `gap` 由 `SchedulerTrait::merge_gap` 从运行时自适应状态读取。
+pub(crate) fn merge_plan(
+    points: &[&gateway_core::config::PointConfig],
+    gap: u16,
+) -> Vec<MergeGroupDto> {
+    gateway_core::south::protocol::modbus::merge_plan(points, gap)
+        .into_iter()
+        .map(|g| MergeGroupDto {
+            slave_id: g.slave_id,
+            function_code: g.function_code,
+            start_addr: g.start_addr,
+            end_addr: g.end_addr,
+            point_count: g.point_count,
         })
         .collect()
 }

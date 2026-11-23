@@ -26,8 +26,10 @@ import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { statusTagType as baseStatusTagType, type TagType } from '@/utils/statusType'
 
-/** 预置会话不可删（后端也拒绝，前端灰色 + tooltip） */
-const BUILTIN_IDS = new Set(['s1', 's2', 's3'])
+/** 预置会话不可删（后端也拒绝，前端灰色 + tooltip）。
+ *  DD-27：后端 gateway-api/.../packet_replay/sessions.rs 只内置 s1/s2；
+ *  曾多列 s3，点开必然 404。以后端口径为准，后端新增时同步这里。 */
+const BUILTIN_IDS = new Set(['s1', 's2'])
 
 export function isBuiltin(id: string): boolean {
   return BUILTIN_IDS.has(id)
@@ -81,10 +83,17 @@ export function usePacketReplay() {
   const liveFrames = ref<ReplayFrameResult[]>([])
   /** 流式 started 事件给出的计划总帧数（进度条分母）；0 = 未开始/阻塞模式 */
   const streamTotal = ref(0)
+  /**
+   * DD-03：回放终态。只有 `completed` 才算跑完；aborted / failed / stopped
+   * 必须在状态条显式提示，不能因为「收到了几帧 match」就显示成回放完成。
+   */
+  const terminalState = ref<'' | 'completed' | 'aborted' | 'failed' | 'stopped'>('')
+  /** 终态附加说明（失败原因），展示在状态条 */
+  const terminalError = ref('')
+  /** 用户是否主动点了停止（用于区分 stopped 与服务端 abort） */
+  let userStopped = false
   // 会话详情请求序号守卫：快速切换会话时，旧会话的详情不得覆盖新会话
   const selectGuard = useRequestGuard()
-  /** 流式 started 事件的开始时间戳（中断收尾时用于本地汇总） */
-  const streamStartedAt = ref(0)
   let abortCtrl: AbortController | null = null
 
   /** 进度条百分比（仅流式模式有计划总帧数） */
@@ -117,6 +126,8 @@ export function usePacketReplay() {
     execResult.value = null
     liveFrames.value = []
     streamTotal.value = 0
+    terminalState.value = ''
+    terminalError.value = ''
     try {
       const s = (await getSession(id)) || null
       if (!selectGuard.isCurrent(seq)) return
@@ -178,7 +189,9 @@ export function usePacketReplay() {
     execResult.value = null
     liveFrames.value = []
     streamTotal.value = 0
-    streamStartedAt.value = 0
+    terminalState.value = ''
+    terminalError.value = ''
+    userStopped = false
     const opts = { timeoutMs: timeoutMs.value, intervalMs: intervalMs.value, stopOnMismatch: stopOnMismatch.value }
     // 流式与阻塞是两条不同的写链路，失败文案按实际走的分支区分
     const useStream = canStreamReplay()
@@ -190,24 +203,45 @@ export function usePacketReplay() {
           signal: ctrl.signal,
           onStarted: (info) => {
             streamTotal.value = info.total
-            streamStartedAt.value = info.startedAtMs
           },
           onFrame: (f) => { liveFrames.value.push(f) },
-          onSummary: (r) => { execResult.value = r },
-          onFailed: (info) => { replayError.value = info.message },
-          // duration_cap aborted：落到下面用已收帧重建本地汇总
+          onSummary: (r) => {
+            execResult.value = r
+            // 以服务端终态为准（正常完成为 completed）
+            terminalState.value = r.terminal === 'completed' ? 'completed' : r.terminal === 'aborted' ? 'aborted' : 'failed'
+          },
+          onAborted: (info) => {
+            terminalState.value = 'aborted'
+            terminalError.value = `已执行 ${info.completed} / ${info.total} 帧（${info.reason === 'duration_cap' ? '服务端时长上限' : info.reason}）`
+          },
+          onFailed: (info) => {
+            terminalState.value = 'failed'
+            terminalError.value = info.message
+            replayError.value = info.message
+          },
         })
-        // 流收尾但无 summary（用户停止 / 硬上限 / failed）：用已收帧重建汇总展示
-        if (!execResult.value && liveFrames.value.length > 0) {
-          execResult.value = summarizeFrames(id, targetBus, liveFrames.value)
+        // DD-03：流结束但没收到 summary，且也非上述终态（用户停止/连接异常）——
+        // 不再本地重建"完成"汇总，只如实标注终态，逐帧结果仍在列表里。
+        if (!terminalState.value) {
+          terminalState.value = userStopped ? 'stopped' : 'failed'
+          if (!userStopped) terminalError.value = '回放流意外结束，未收到服务端汇总'
         }
       } else {
-        execResult.value = await executeReplayBlocking(id, targetBus, opts)
+        const r = await executeReplayBlocking(id, targetBus, opts)
+        execResult.value = r
+        terminalState.value = r.terminal === 'aborted' ? 'aborted' : r.terminal === 'failed' ? 'failed' : 'completed'
+        if (r.terminal === 'aborted') {
+          replayError.value = `回放已中止：已执行 ${r.total} / ${r.planned} 帧（服务端时长上限），结果仅含已执行部分`
+        } else if (r.terminal === 'failed') {
+          replayError.value = `回放中断：总线中途不可用，已执行 ${r.total} / ${r.planned} 帧`
+        }
       }
     } catch (e) {
       const fallback = useStream ? '启动回放失败' : '执行回放失败'
       replayError.value = message(e, fallback)
       showToast(e, fallback)
+      terminalState.value = 'failed'
+      terminalError.value = replayError.value
     } finally {
       playing.value = false
       abortCtrl = null
@@ -216,28 +250,16 @@ export function usePacketReplay() {
 
   /** 停止回放：断流后后端在下一帧开始前停止，正在等待的帧按超时收尾（契约 §4） */
   function stopReplay() {
+    userStopped = true
     abortCtrl?.abort()
-  }
-
-  /** 用已到达的逐帧结果重建本地汇总（流式中断/硬上限/failed 收尾时） */
-  function summarizeFrames(id: string, busName: string, frames: ReplayFrameResult[]): ReplayExecuteResult {
-    return {
-      sessionId: id,
-      bus: busName,
-      startedAtMs: streamStartedAt.value || Date.now(),
-      finishedAtMs: Date.now(),
-      total: frames.length,
-      match: frames.filter((f) => f.status === 'match').length,
-      mismatch: frames.filter((f) => f.status === 'mismatch').length,
-      failed: frames.filter((f) => f.status !== 'match' && f.status !== 'mismatch').length,
-      results: [...frames],
-    }
   }
 
   function reset() {
     execResult.value = null
     liveFrames.value = []
     streamTotal.value = 0
+    terminalState.value = ''
+    terminalError.value = ''
     replayError.value = ''
   }
 
@@ -271,6 +293,8 @@ export function usePacketReplay() {
     liveFrames,
     streamTotal,
     progressPct,
+    terminalState,
+    terminalError,
     framesById,
     select,
     doDelete,

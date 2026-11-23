@@ -43,7 +43,9 @@ impl ModbusServer {
                         let qty = u16::from_be_bytes([data[2], data[3]]);
                         qty == 0
                             || qty > 123
-                            || (0..qty).all(|i| writable_addrs.contains(&start.wrapping_add(i)))
+                            // DD-43：与读路径统一用 saturating_add——跨越 0xFFFF 的
+                            // 地址饱和到 0xFFFF（读侧同样如此），不再回绕到 0。
+                            || (0..qty).all(|i| writable_addrs.contains(&start.saturating_add(i)))
                     });
                 if !allowed {
                     return Self::exception(fc, EX_ILLEGAL_DATA_ADDRESS);
@@ -187,8 +189,9 @@ impl ModbusServer {
         for i in 0..quantity as usize {
             let off = 5 + i * 2;
             let value = u16::from_be_bytes([data[off], data[off + 1]]);
-            // 批量跨地址上界时按 u16 回绕，避免越界 panic
-            reg_map.insert(starting_addr.wrapping_add(i as u16), value);
+            // DD-43：与 FC01~FC04 读路径统一——跨 0xFFFF 时饱和到 0xFFFF，
+            // 不再回绕到 0；读写两侧对越界地址得到同一组寄存器。
+            reg_map.insert(starting_addr.saturating_add(i as u16), value);
         }
         drop(reg_map);
 

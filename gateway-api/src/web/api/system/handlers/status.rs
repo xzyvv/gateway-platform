@@ -284,6 +284,9 @@ pub(crate) async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoR
         queue_thresholds: Some(crate::web::types::QueueThresholds {
             warning: BACKLOG_WARN_ROWS,
             error: BACKPRESSURE_ROWS,
+            // DD-51：真实淘汰线 = max_rows 的 90%（与存储层删除口径同源），
+            // 不是背压阈值 100000。
+            evict: capacity_pressure_rows(state.config.config.load().max_queue_rows()),
         }),
         cpu_usage: cpu_usage_pct().await,
         mem_usage: mem_usage_pct(),

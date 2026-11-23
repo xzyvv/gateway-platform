@@ -272,7 +272,9 @@ async fn run_modbus_accept_loop(
                         out.extend_from_slice(&tx_id.to_be_bytes());
                         out.extend_from_slice(&0u16.to_be_bytes());
                         out.extend_from_slice(&resp_len.to_be_bytes());
-                        out.push(pdu.first().copied().unwrap_or(0));
+                        // MBAP 头的 unit_id 在 header[6]，必须回显请求里的从站地址；
+                        // 早先误用了 pdu.first()（功能码），客户端会按 unit_id mismatch 判失败。
+                        out.push(header[6]);
                         out.extend_from_slice(&response_pdu);
                         if socket.write_all(&out).await.is_err() { return; }
                         *c.lock() += 1;

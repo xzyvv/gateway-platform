@@ -377,6 +377,9 @@ impl GatewayRuntimeTrait for MockGateway {
     ) -> std::collections::HashMap<String, gateway_api::web::traits::ConvertHitView> {
         std::collections::HashMap::new()
     }
+    fn convert_issues(&self) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::new()
+    }
     fn virtual_point_states(
         &self,
     ) -> std::collections::HashMap<String, gateway_api::web::traits::VirtualPointStateView> {

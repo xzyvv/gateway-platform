@@ -20,6 +20,7 @@ import type {
   BusLoadHistoryView,
   BusLoadView,
   CommonIssueView,
+  DeviceStatView,
   DiagResultView,
   DiagStepView,
   GatewayDiagView,
@@ -69,6 +70,12 @@ export function toStatsReportView(r: StatsReport): StatsReportView {
       successRate: d.success_rate,
       avgLatency: d.avg_latency_ms,
       dataPoints: d.data_points,
+      storedPoints: d.stored_points,
+      lossRate: d.loss_rate,
+      currentPeriodMs: d.current_period_ms == null ? null : Number(d.current_period_ms),
+      suggestedPeriodMs: d.suggested_period_ms == null ? null : Number(d.suggested_period_ms),
+      health: d.health as DeviceStatView['health'],
+      suggestion: d.suggestion,
     })),
     busStats: r.bus_stats.map((b) => ({
       bus: b.bus,
@@ -94,6 +101,7 @@ export function toStatsReportView(r: StatsReport): StatsReportView {
       successRate: r.summary.success_rate,
       avgLatency: r.summary.avg_latency_ms,
       totalDataPoints: r.summary.total_data_points,
+      totalStoredPoints: r.summary.total_stored_points,
     },
   }
 }

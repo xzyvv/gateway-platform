@@ -188,7 +188,14 @@ describe('evalCertificates', () => {
 describe('evalWatchdog', () => {
   it('服务停止未通过，重启提醒', () => {
     const svc = (status: string): ServiceInfo =>
-      ({ id: status, name: status, status, restarts: 0, last_heartbeat: null } as unknown as ServiceInfo)
+      ({
+        name: status,
+        status,
+        panic_count: 0,
+        publish_fail_count: 0,
+        collect_fail_count: 0,
+        heartbeat_stall_count: 0,
+      } as unknown as ServiceInfo)
     expect(evalWatchdog([svc('Stopped')]).level).toBe('fail')
     expect(evalWatchdog([svc('Restarting')]).level).toBe('warn')
     expect(evalWatchdog([svc('Running')]).level).toBe('pass')

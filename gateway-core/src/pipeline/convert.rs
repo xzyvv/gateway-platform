@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use crate::config::ConvertRuleConfig;
 use crate::engine::model::{DataPoint, Quality};
@@ -65,22 +65,33 @@ struct RuleSet {
 }
 
 impl RuleSet {
-    /// 编译配置：非法规则跳过 + warn（见 `RuleCompiled::compile`）
-    fn compile(configs: &[ConvertRuleConfig]) -> Self {
+    /// 编译配置：非法规则跳过 + warn，同时把「未生效」原因回传给引擎（DD-15）。
+    ///
+    /// 与虚拟点位的口径对齐：配置仍保留在 `config.json` 里、界面照常展示，
+    /// 但通过 `ConvertEngine::compile_issues()` 标注「这条规则不生效」，
+    /// 不让它只消失在一条日志里。
+    fn compile(configs: &[ConvertRuleConfig]) -> (Self, HashMap<String, String>) {
         let mut rules: Vec<Arc<RuleCompiled>> = Vec::with_capacity(configs.len());
         let mut by_point: HashMap<String, Vec<Arc<RuleCompiled>>> = HashMap::new();
+        let mut issues: HashMap<String, String> = HashMap::new();
         for cfg in configs {
-            let compiled = match RuleCompiled::compile(cfg) {
-                Some(c) => Arc::new(c),
-                None => continue,
-            };
-            by_point
-                .entry(compiled.source_point_id.clone())
-                .or_default()
-                .push(Arc::clone(&compiled));
-            rules.push(compiled);
+            match RuleCompiled::compile(cfg) {
+                Ok(Some(c)) => {
+                    let compiled = Arc::new(c);
+                    by_point
+                        .entry(compiled.source_point_id.clone())
+                        .or_default()
+                        .push(Arc::clone(&compiled));
+                    rules.push(compiled);
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    tracing::warn!("convert rule {} 未生效: {}", cfg.id, reason);
+                    issues.insert(cfg.id.clone(), reason);
+                }
+            }
         }
-        Self { rules, by_point }
+        (Self { rules, by_point }, issues)
     }
 
     fn is_empty(&self) -> bool {
@@ -93,20 +104,19 @@ impl RuleSet {
 }
 
 impl RuleCompiled {
-    fn compile(rule: &ConvertRuleConfig) -> Option<Self> {
+    /// `Ok(None)` = 规则停用（正常跳过，不算错误）；`Err` = 配置非法、运行时不生效。
+    fn compile(rule: &ConvertRuleConfig) -> Result<Option<Self>, String> {
         if !rule.enabled {
-            return None;
+            return Ok(None);
         }
         let transform = match rule.transform.as_str() {
             "raw" => Transform::Raw,
             "linear" => {
                 let (Some(scale), Some(offset)) = (rule.scale, rule.offset) else {
-                    tracing::warn!("convert rule {}: linear 缺 scale/offset，跳过", rule.id);
-                    return None;
+                    return Err("linear 缺 scale/offset".to_string());
                 };
                 if !scale.is_finite() || !offset.is_finite() {
-                    tracing::warn!("convert rule {}: linear scale/offset 非有限，跳过", rule.id);
-                    return None;
+                    return Err("linear scale/offset 非有限数值".to_string());
                 }
                 Transform::Linear { scale, offset }
             }
@@ -127,43 +137,40 @@ impl RuleCompiled {
                     .map(|item| (item.key.trim().to_string(), item.label.clone()))
                     .collect();
                 if map.is_empty() {
-                    tracing::warn!("convert rule {}: enum_map 为空或全部非法，跳过", rule.id);
-                    return None;
+                    return Err("enum_map 为空或全部非法".to_string());
                 }
                 Transform::Enum(map)
             }
             other => {
-                tracing::warn!(
-                    "convert rule {}: 未知 transform \"{}\"，跳过",
-                    rule.id,
-                    other
-                );
-                return None;
+                return Err(format!("未知 transform \"{other}\""));
             }
         };
         if rule.source_point_id.trim().is_empty() {
-            tracing::warn!("convert rule {}: source_point_id 为空，跳过", rule.id);
-            return None;
+            return Err("source_point_id 为空".to_string());
         }
-        Some(Self {
+        Ok(Some(Self {
             id: rule.id.clone(),
             source_point_id: rule.source_point_id.clone(),
             transform,
-        })
+        }))
     }
 }
 
 /// 协议转换引擎（线程安全；apply 只读规则快照，热重载无锁切换）
 pub struct ConvertEngine {
     rules: ArcSwap<RuleSet>,
+    /// DD-15：运行时编译失败、当前不生效的规则（rule_id → 原因），供界面标注。
+    issues: RwLock<HashMap<String, String>>,
     hits: Mutex<HashMap<String, ConvertHit>>,
 }
 
 impl ConvertEngine {
-    /// 从配置构建引擎（非法规则跳过 + warn，见 `RuleCompiled::compile`）
+    /// 从配置构建引擎（非法规则跳过 + 记账，见 `RuleCompiled::compile`）
     pub fn new(rules: Vec<ConvertRuleConfig>) -> Arc<Self> {
+        let (rule_set, issues) = RuleSet::compile(&rules);
         Arc::new(Self {
-            rules: ArcSwap::from_pointee(RuleSet::compile(&rules)),
+            rules: ArcSwap::from_pointee(rule_set),
+            issues: RwLock::new(issues),
             hits: Mutex::new(HashMap::new()),
         })
     }
@@ -175,7 +182,14 @@ impl ConvertEngine {
 
     /// 热重载：原子替换规则集；命中记账保留（规则 id 不变则记账延续）
     pub fn update_rules(&self, rules: Vec<ConvertRuleConfig>) {
-        self.rules.store(Arc::new(RuleSet::compile(&rules)));
+        let (rule_set, issues) = RuleSet::compile(&rules);
+        self.rules.store(Arc::new(rule_set));
+        *self.issues.write() = issues;
+    }
+
+    /// DD-15：当前运行时未生效的转换规则及原因（配置保留、界面可标注）。
+    pub fn compile_issues(&self) -> HashMap<String, String> {
+        self.issues.read().clone()
     }
 
     /// 规则数（编译后、仅启用的）

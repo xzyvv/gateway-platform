@@ -215,7 +215,10 @@ fn create_modbus_server(ctx: &NorthServerContext) -> Option<Arc<dyn NorthServer>
         ctx.gateway.metrics.clone(),
     );
     mb_sink.build_mappings(ctx.expanded_points, mb_cfg.base_register);
-    // 写白名单口径与 OPC UA 一致：仅 writable=true 的点位寄存器地址可被 FC06/FC16 写。
+    // 写白名单沿用 PointConfig.writable：仅 writable=true 的点位寄存器可被 FC06/FC16 写。
+    // 注意（DD-42）：这里与 OPC UA 只共享"白名单来源"，不共享写语义——
+    // OPC UA 写请求会经写回路径下发到设备；Modbus Server 的写只更新本地寄存器镜像，
+    // 下一次采集（apply_registers）会覆盖，不会写设备。
     mb_sink.set_writable_addrs(ctx.expanded_points);
     ctx.north_dispatcher
         .register_connector(mb_sink as Arc<dyn crate::north::NorthConnector>);

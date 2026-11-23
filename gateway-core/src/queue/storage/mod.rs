@@ -14,6 +14,7 @@ pub use memory::MemoryStorage;
 pub use sqlite::SqliteStorage;
 
 use serde::Serialize;
+use std::collections::HashMap;
 
 use crate::engine::error::GatewayResult;
 use crate::engine::model::DataPoint;
@@ -237,6 +238,20 @@ pub trait QueueStorage: Send + Sync {
     /// 默认 None：内存后端无持久化历史，返回 None 表示"跨度为 0"。
     fn oldest_data_timestamp(&self) -> Option<i64> {
         None
+    }
+
+    /// 按点位统计窗口内**实际落库**的样本数（`[start, end]`，unix 毫秒）。
+    ///
+    /// 供「数据压缩」页展示「采集成功量 → 实际存储量」的真实对比：
+    /// 死区 / 变化上传等管线过滤发生在入库之前，这里的计数是过滤后的结果，
+    /// 前端不得再用配置比例估算。
+    ///
+    /// 同时统计原始表与分钟聚合表（聚合表按 `sample_count` 还原原始样本数），
+    /// 避免超过 24h 的长窗口只看到被压缩后的桶数。
+    ///
+    /// 默认空表：内存后端无长期历史，不提供该诊断口径。
+    fn stored_counts(&self, _start: i64, _end: i64) -> GatewayResult<HashMap<String, i64>> {
+        Ok(HashMap::new())
     }
 
     /// 是否需要定期维护。

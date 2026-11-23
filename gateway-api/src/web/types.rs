@@ -209,6 +209,13 @@ pub(crate) struct QueueThresholds {
     pub(crate) warning: i64,
     /// 背压/告警阈值（行）：超过即判定上行消费不及，持续丢数风险
     pub(crate) error: i64,
+    /// 容量淘汰线（行）：达到即由存储层物理删除最旧数据（`queue.max_rows` 的 90%）。
+    ///
+    /// DD-51：前端「断连续传」页曾把本值写死为 100000（那是背压阈值，不是淘汰线），
+    /// 与真实淘汰口径不一致。现在由后端与 `capacity_pressure_rows` 同源下发，
+    /// 未下发时前端显示「—」，不再猜测。
+    #[serde(default)]
+    pub(crate) evict: i64,
 }
 
 /// 运行状态
@@ -486,5 +493,42 @@ mod export_ts {
         gateway_core::south::scheduler::ScheduleTimeline::export_all_to(out)
             .expect("ScheduleTimeline");
         println!("TS types exported to {:?}", out);
+    }
+
+    /// DD-22：前端不再手抄 serde 默认值——把后端真实默认值导出为同源 TS 常量。
+    ///
+    /// 测试名包含 `export_ts_types`，会随 `npm run types:export` 一起执行；
+    /// 默认值今后只在 `gateway-core/src/config/*.rs` 维护一份。
+    #[test]
+    fn export_ts_types_web_defaults() {
+        use gateway_core::config::{
+            BusConfig, MqttConfig, QueueConfig, SimConsumerConfig, WebConfig,
+        };
+
+        let out = std::path::Path::new("../gateway-web/src/api/generated");
+        std::fs::create_dir_all(out).expect("create generated dir");
+        let empty = serde_json::json!({});
+        let web: WebConfig = serde_json::from_value(empty.clone()).expect("web defaults");
+        let mqtt: MqttConfig = serde_json::from_value(empty.clone()).expect("mqtt defaults");
+        let sim: SimConsumerConfig = serde_json::from_value(empty).expect("sim_consumer defaults");
+        let queue = QueueConfig::default();
+        let bus = BusConfig::default().reconnect_backoff;
+
+        let body = format!(
+            "// 本文件由 `npm run types:export`（cargo test export_ts_types_web_defaults）生成，请勿手改。\n\
+             import type {{ MqttConfig, SimConsumerConfig, WebConfig }} from '../types'\n\n\
+             export const DEFAULT_WEB = {web} as unknown as WebConfig;\n\
+             export const DEFAULT_MQTT = {mqtt} as unknown as MqttConfig;\n\
+             export const DEFAULT_SIM_CONSUMER = {sim} as unknown as SimConsumerConfig;\n\
+             export const DEFAULT_QUEUE: {{ max_rows: number }} = {queue};\n\
+             export const DEFAULT_BUS_RECONNECT_BACKOFF: {{ seconds: number[]; jitter_ratio: number }} = {bus};\n",
+            web = serde_json::to_string_pretty(&web).expect("serialize web"),
+            mqtt = serde_json::to_string_pretty(&mqtt).expect("serialize mqtt"),
+            sim = serde_json::to_string_pretty(&sim).expect("serialize sim"),
+            queue = serde_json::to_string_pretty(&queue).expect("serialize queue"),
+            bus = serde_json::to_string_pretty(&bus).expect("serialize bus"),
+        );
+        std::fs::write(out.join("configDefaults.generated.ts"), body)
+            .expect("write config defaults");
     }
 }

@@ -70,20 +70,30 @@ impl MqttClient {
         for item in items {
             let vars = template_vars_from_item(item, configs.get(&item.point_id), convert);
             let (line, missing) = engine.render_checked(&vars);
-            // R3: 模板引用了查不到值的变量（拼写错误 / 缺少聚合配置）会静默渲染成
-            // 空串，现场极难排查。首次命中时告警一次（swap 保证只告警一次）。
-            if !missing.is_empty()
-                && !self
+            // R3/DD-23: 模板引用了查不到值的变量（拼写错误 / 缺少聚合配置）会
+            // 按空值渲染，现场极难排查；命中行计入指标，日志首次命中报一次。
+            if !missing.is_empty() {
+                // DD-23：缺变量不是「提示」，是「这一行内容是错的」——必须计数；
+                // 日志只打一次（swap）避免每批刷屏，但级别为 error（数据错误）。
+                self.metrics.inc_mqtt_template_missing_vars();
+                if !self
                     .unresolved_template_warned
                     .swap(true, std::sync::atomic::Ordering::Relaxed)
-            {
-                tracing::warn!(
-                    "MQTT payload 模板存在未解析变量（将渲染为空串，请检查变量名拼写或聚合配置）: {}",
-                    missing.join(", ")
-                );
+                {
+                    tracing::error!(
+                        "MQTT payload 模板存在未解析变量（已按空值渲染，记录内容不完整，请检查变量名拼写或聚合配置）: {}",
+                        missing.join(", ")
+                    );
+                }
             }
             if line.is_empty() {
-                // 模板渲染出空字符串（如模板只有注释）—— 跳过，避免空行噪声
+                // DD-23：空行不能静默丢——该点记录不会到达平台，必须计数 + 报错。
+                self.metrics.inc_mqtt_payload_empty_line_dropped();
+                tracing::error!(
+                    "MQTT payload 模板渲染为空串，记录被丢弃: device_id={}, point_id={}（检查 payload_template 是否为纯注释/空模板）",
+                    item.device_id,
+                    item.point_id
+                );
                 continue;
             }
             if !out.is_empty() {

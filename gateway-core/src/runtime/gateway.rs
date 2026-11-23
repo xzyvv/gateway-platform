@@ -632,7 +632,9 @@ impl GatewayRuntime {
         for item in serial {
             let name = item.cfg.port_name.clone();
             // 串口独占：必须等旧 task 真正退出（端口释放）后再开新口。
-            if let Some(old) = self.bus_managers.lock().get(&name).cloned() {
+            // 先把 Arc 从锁里取出并释放 guard，再 await —— 避免 MutexGuard 跨 await 点。
+            let old = { self.bus_managers.lock().get(&name).cloned() };
+            if let Some(old) = old {
                 old.close_task(std::time::Duration::from_millis(300)).await;
             }
             if let Some(old_cfg) = &item.old_cfg {
@@ -732,6 +734,12 @@ impl GatewayRuntime {
         &self,
     ) -> std::collections::HashMap<String, crate::pipeline::convert::ConvertHit> {
         self.convert.hits_snapshot()
+    }
+
+    /// DD-15：运行期未生效（编译失败被跳过）的转换规则（rule_id → 原因）。
+    /// 规则仍保留在配置与界面中，仅标注「不生效」，与虚拟点位的错误口径一致。
+    pub fn convert_issues(&self) -> std::collections::HashMap<String, String> {
+        self.convert.compile_issues()
     }
 
     /// 虚拟点位最近求值状态快照（point_id → 状态），供 Web 契约层透出

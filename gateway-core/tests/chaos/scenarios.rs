@@ -2617,8 +2617,9 @@ async fn scenario_serial_modbus_rtu_write_family() {
         ));
         let collector = ModbusCollector::new("mock-tty", bm);
 
+        // 截断回显 = 响应无法解析；按统一写语义「写已下发但无法证明未生效」→ WriteUncertain。
         match collector.write(&mk_point(6, 16, "i16"), -5.0).await {
-            Err(CollectorError::NoReply) => {}
+            Err(CollectorError::WriteUncertain(_)) => {}
             other => panic!("截断回显不得误判写入成功，实际 {other:?}"),
         }
     }
@@ -2689,8 +2690,9 @@ async fn scenario_bacnet_ip_rpm_and_write_property() {
         let collector =
             BacnetCollector::new(server.addr.clone(), "bacbus".into(), Duration::from_secs(3));
         collector.connect().await.expect("connect 必须成功");
+        // WriteProperty 收到 Abort/Error/Reject = 设备明确回话且写确定未生效 → DeviceRejected。
         match collector.write(&mk("w", "analog-output:5"), 42.0).await {
-            Err(CollectorError::InvalidFrame(_)) => {}
+            Err(CollectorError::DeviceRejected(_)) => {}
             other => panic!("WriteProperty Abort 必须判失败，实际 {other:?}"),
         }
     }

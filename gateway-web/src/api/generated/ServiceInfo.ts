@@ -4,4 +4,20 @@ import type { ServiceStatus } from "./ServiceStatus";
 /**
  * 服务信息
  */
-export type ServiceInfo = { name: string, status: ServiceStatus, pid: number, uptime: bigint, cpu: number, mem: bigint, restarts: bigint, };
+export type ServiceInfo = { name: string, status: ServiceStatus, pid: number, uptime: bigint, cpu: number, mem: bigint, 
+/**
+ * 后台任务 panic 次数（仅主进程行有值，其它行为 0）。
+ */
+panic_count: bigint, 
+/**
+ * 上行发布失败次数（MQTT 行）。
+ */
+publish_fail_count: bigint, 
+/**
+ * 采集失败次数（采集调度行）。
+ */
+collect_fail_count: bigint, 
+/**
+ * 心跳停顿次数（主进程行；边沿触发，一次 hang 只计 1）。
+ */
+heartbeat_stall_count: bigint, };

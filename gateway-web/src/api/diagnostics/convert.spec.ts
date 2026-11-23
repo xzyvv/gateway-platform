@@ -40,6 +40,7 @@ function report(buses: StatsReport['bus_stats']): StatsReport {
       success_rate: 90,
       avg_latency_ms: 12,
       total_data_points: 9,
+      total_stored_points: 4,
     },
   }
 }

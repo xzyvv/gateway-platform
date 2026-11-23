@@ -7,10 +7,17 @@
  * - POST /api/watchdog/services/:name/restart -> restartService
  */
 import { request } from './index'
+import type { ServiceInfo as ServiceInfoDto } from './generated/ServiceInfo'
+import type { ServiceStatus } from './generated/ServiceStatus'
 
-export type ServiceStatus = 'Running' | 'Restarting' | 'Stopped' | 'Unknown'
+export type { ServiceStatus } from './generated/ServiceStatus'
 export type HealAction = 'RestartService' | 'ResetSerial' | 'ResetNetwork'
 
+/**
+ * 服务行的前端视图：后端 `u64` 在 ts-rs 里是 `bigint`，而 JSON 实际传的是
+ * number；统一在 API 边界转成 number，页面与自检逻辑不必再做大整数运算。
+ * 字段口径见后端 `ServiceInfo`（DD-37：不再复用 `restarts` 承载多种计数）。
+ */
 export interface ServiceInfo {
   name: string
   status: ServiceStatus
@@ -18,7 +25,10 @@ export interface ServiceInfo {
   uptime: number
   cpu: number
   mem: number
-  restarts: number
+  panic_count: number
+  publish_fail_count: number
+  collect_fail_count: number
+  heartbeat_stall_count: number
 }
 
 export interface HealEvent {
@@ -31,8 +41,23 @@ export interface HealEvent {
   detail?: string
 }
 
-export function listServices(): Promise<ServiceInfo[]> {
-  return request<ServiceInfo[]>({ url: '/api/watchdog/services', method: 'GET' })
+export async function listServices(): Promise<ServiceInfo[]> {
+  const rows = await request<ServiceInfoDto[]>({
+    url: '/api/watchdog/services',
+    method: 'GET',
+  })
+  return rows.map((r) => ({
+    name: r.name,
+    status: r.status,
+    pid: Number(r.pid),
+    uptime: Number(r.uptime),
+    cpu: r.cpu,
+    mem: Number(r.mem),
+    panic_count: Number(r.panic_count),
+    publish_fail_count: Number(r.publish_fail_count),
+    collect_fail_count: Number(r.collect_fail_count),
+    heartbeat_stall_count: Number(r.heartbeat_stall_count),
+  }))
 }
 
 export function listHealEvents(): Promise<HealEvent[]> {

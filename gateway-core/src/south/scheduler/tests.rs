@@ -46,6 +46,73 @@ fn point(id: &str, bus: &str, address: &str) -> PointConfig {
     }
 }
 
+/// DD-07 回归：点位比较必须覆盖全部字段——改超时 / 比例 / 可写性 / 告警阈值
+/// 等任一字段都要判定为「变了」，否则热重载不重建采集组，现场表现为改了不生效。
+#[test]
+fn point_config_equal_covers_all_fields() {
+    let base = point("p1", "bus1", "100");
+    assert!(point_config_equal(&base, &base.clone()));
+
+    let cases: Vec<(&str, PointConfig)> = vec![
+        ("protocol", {
+            let mut p = base.clone();
+            p.protocol = "modbus".into();
+            p
+        }),
+        ("device_id", {
+            let mut p = base.clone();
+            p.device_id = Some("dev".into());
+            p
+        }),
+        ("timeout_ms", {
+            let mut p = base.clone();
+            p.timeout_ms = Some(500);
+            p
+        }),
+        ("ct_ratio", {
+            let mut p = base.clone();
+            p.ct_ratio = Some(2.0);
+            p
+        }),
+        ("pt_ratio", {
+            let mut p = base.clone();
+            p.pt_ratio = Some(2.0);
+            p
+        }),
+        ("writable", {
+            let mut p = base.clone();
+            p.writable = true;
+            p
+        }),
+        ("write_min", {
+            let mut p = base.clone();
+            p.write_min = Some(0.0);
+            p
+        }),
+        ("write_max", {
+            let mut p = base.clone();
+            p.write_max = Some(100.0);
+            p
+        }),
+        ("alarm_high", {
+            let mut p = base.clone();
+            p.alarm_high = Some(90.0);
+            p
+        }),
+        ("alarm_low", {
+            let mut p = base.clone();
+            p.alarm_low = Some(10.0);
+            p
+        }),
+    ];
+    for (field, changed) in cases {
+        assert!(
+            !point_config_equal(&base, &changed),
+            "字段 {field} 变化必须触发采集组重建"
+        );
+    }
+}
+
 fn test_pipeline(metrics: Arc<Metrics>) -> Arc<ProcessingPipeline> {
     let queue = Arc::new(
         DataQueue::with_storage(Arc::new(MemoryStorage::new()) as Arc<dyn QueueStorage>)

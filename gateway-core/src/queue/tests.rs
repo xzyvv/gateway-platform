@@ -86,6 +86,33 @@ async fn test_history_query() {
     assert_eq!(hist.granularity, "raw");
 }
 
+/// DD-17：降级入内存时 `gateway_queue_degraded` / `gateway_queue_fallback_depth`
+/// 必须反映真实状态，恢复落库后归零——否则「接口 200、数据只在内存」不可见。
+#[tokio::test]
+async fn dd17_degraded_gauges_track_fallback_lifecycle() {
+    use crate::engine::metrics::Metrics;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let queue = DataQueue::new_memory().unwrap();
+    let metrics = Arc::new(Metrics::new());
+    queue.set_metrics(metrics.clone());
+
+    let depth = || metrics.queue_persist.fallback_depth.load(Ordering::Relaxed);
+    let degraded = || metrics.queue_persist.degraded.load(Ordering::Relaxed);
+
+    queue.set_disk_ok(false);
+    assert_eq!(degraded(), 1, "磁盘不可写即处于降级态");
+    queue.enqueue(vec![make_point("p1", 1.0)]).await.unwrap();
+    assert_eq!(depth(), 1, "内存缓冲深度必须显式暴露");
+    assert_eq!(degraded(), 1);
+
+    queue.set_disk_ok(true);
+    queue.enqueue(vec![make_point("p2", 2.0)]).await.unwrap();
+    assert_eq!(depth(), 0, "恢复落库后深度必须归零");
+    assert_eq!(degraded(), 0, "恢复落库后降级态必须归零");
+}
+
 #[tokio::test]
 async fn test_disk_full_buffers_in_fallback() {
     let queue = DataQueue::new_memory().unwrap();

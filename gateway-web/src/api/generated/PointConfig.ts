@@ -74,7 +74,7 @@ interval: number,
  * ROI-11：慢设备可单独放大，避免为了它把整条总线的超时全调大。
  * 串口物理帧传输时间仍是下限，配置过小不会低于该值。
  */
-timeout_ms: number, 
+timeout_ms?: number, 
 /**
  * 倍率（formula 为空时使用）
  */

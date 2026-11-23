@@ -106,7 +106,13 @@ pub(super) fn spawn_register_scan(
         {
             let mut r = entry.lock();
             r.status = final_status.into();
-            r.progress = 100;
+            // DD-02：只有真正跑完才是 100%。失败/中止时保留已扫比例，
+            // 否则前端会把「扫了 3/100 就掉线」显示成「100% 完成」。
+            if final_status == "done" {
+                r.progress = 100;
+            } else {
+                r.progress = ((r.cells.len() as i64 * 100) / total as i64).clamp(0, 99) as i32;
+            }
         }
         let action = if final_status == "aborted" {
             "debug.register_scan.abort"

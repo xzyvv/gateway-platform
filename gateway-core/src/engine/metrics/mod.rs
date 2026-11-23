@@ -160,6 +160,13 @@ pub struct Metrics {
     /// Prom 命名：`gateway_point_write_error_total`。
     pub point_write_failures: AtomicU64,
 
+    /// DD-62：诊断日志 WS 被丢弃的日志行数（广播滞后或客户端发送队列满）。
+    /// Prom 命名：`gateway_log_ws_dropped_total`。
+    ///
+    /// 日志流此前在 `Lagged` 时直接 continue——丢行既不可见也无日志，
+    /// 现场看到的只是"日志缺了一段"。此计数让丢行可被 Prometheus 直接观测。
+    pub log_ws_dropped: AtomicU64,
+
     /// 当日采集事务次数（UTC 跨日惰性滚动）。
     pub daily_collect: AtomicU64,
     /// 当日告警触发次数（UTC 跨日惰性滚动）。

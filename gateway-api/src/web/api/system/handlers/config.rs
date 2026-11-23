@@ -345,53 +345,27 @@ pub(crate) async fn rollback_config_version(
 
 /// 计算两份配置的字段级差异（与 config_diff / compare_config_versions 共用逻辑）
 pub(crate) fn config_field_diffs(old: &GatewayConfig, new: &GatewayConfig) -> Vec<String> {
-    let mut diffs = Vec::new();
-    if old.buses != new.buses {
-        diffs.push("buses".to_string());
-    }
-    if old.points != new.points {
-        diffs.push("points".to_string());
-    }
-    if old.mqtt != new.mqtt {
-        diffs.push("mqtt".to_string());
-    }
-    if old.web != new.web {
-        diffs.push("web".to_string());
-    }
-    if old.ntp != new.ntp {
-        diffs.push("ntp".to_string());
-    }
-    if old.devices != new.devices {
-        diffs.push("devices".to_string());
-    }
-    if old.webhook != new.webhook {
-        diffs.push("webhook".to_string());
-    }
-    if old.cellular != new.cellular {
-        diffs.push("cellular".to_string());
-    }
-    if old.opcua != new.opcua {
-        diffs.push("opcua".to_string());
-    }
-    if old.modbus_server != new.modbus_server {
-        diffs.push("modbus_server".to_string());
-    }
-    if old.modbus_passthrough != new.modbus_passthrough {
-        diffs.push("modbus_passthrough".to_string());
-    }
-    if old.telemetry != new.telemetry {
-        diffs.push("telemetry".to_string());
-    }
-    if old.device_groups != new.device_groups {
-        diffs.push("device_groups".to_string());
-    }
-    if old.device_assets != new.device_assets {
-        diffs.push("device_assets".to_string());
-    }
-    if old.virtual_points != new.virtual_points {
-        diffs.push("virtual_points".to_string());
-    }
-    diffs
+    // DD-21：比较序列化后的**全部顶层小节**，不再手写 15 个字段。
+    // 旧实现漏掉 convert_rules / self_heal / queue / sim_consumer / point_trash /
+    // license / schema_version 等，这些小节改了也永远显示「无变化」。
+    // 遍历序列化结果还能在以后新增小节时自动覆盖，无需再维护白名单。
+    let (Ok(old_v), Ok(new_v)) = (serde_json::to_value(old), serde_json::to_value(new)) else {
+        // 序列化失败说明配置不可用，按「全部变化」保守处理，避免误报无变化。
+        return vec!["*".to_string()];
+    };
+    let old_obj = old_v.as_object();
+    let new_obj = new_v.as_object();
+    let mut keys: Vec<&String> = old_obj
+        .into_iter()
+        .flat_map(|m| m.keys())
+        .chain(new_obj.into_iter().flat_map(|m| m.keys()))
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys.into_iter()
+        .filter(|k| old_obj.and_then(|m| m.get(*k)) != new_obj.and_then(|m| m.get(*k)))
+        .cloned()
+        .collect()
 }
 
 /// 配置差异对比：比较提交的配置与当前内存配置，返回差异字段
@@ -405,4 +379,26 @@ pub(crate) async fn config_diff(
         "changed_fields": diffs,
         "has_changes": !diffs.is_empty(),
     })))
+}
+
+#[cfg(test)]
+mod field_diffs_tests {
+    use super::*;
+
+    /// DD-21 回归：旧白名单之外的小节（schema_version / sim_consumer /
+    /// convert_rules / queue …）发生变化也必须被识别为「有变化」。
+    #[test]
+    fn detects_sections_outside_legacy_whitelist() {
+        let old = GatewayConfig::default();
+        let mut new = old.clone();
+        new.schema_version = old.schema_version + 1;
+        assert_eq!(
+            config_field_diffs(&old, &new),
+            vec!["schema_version".to_string()]
+        );
+        assert!(
+            config_field_diffs(&old, &old.clone()).is_empty(),
+            "相同配置不应报告差异"
+        );
+    }
 }

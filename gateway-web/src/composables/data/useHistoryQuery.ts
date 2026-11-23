@@ -116,7 +116,17 @@ export function useHistoryQuery() {
     return null
   })
 
-  type HistoryPoint = { timestamp: number; value: number; quality: string; rowKey?: string }
+  // DD-54：后端降采样桶会带 sample_count / min_value / max_value，
+  // 二次聚合必须按样本数加权（见 utils/aggregateHistory）。
+  type HistoryPoint = {
+    timestamp: number
+    value: number
+    quality: string
+    rowKey?: string
+    sample_count?: number
+    min_value?: number | null
+    max_value?: number | null
+  }
   const history = ref<HistoryPoint[]>([])
   const granularity = ref<AggregateGranularity>('raw')
 
@@ -167,6 +177,23 @@ export function useHistoryQuery() {
   }
 
   const stats = computed(() => {
+    const fmt = (v: number) => Number.isInteger(v) ? v.toString() : v.toFixed(2)
+    // DD-54：小时/天视图下按桶内样本数加权，避免把各桶均值再简单平均
+    // （后端桶是加权均值，直接平均会偏向采样稀疏的桶）。
+    if (granularity.value !== 'raw' && aggregated.value.length > 0) {
+      let n = 0
+      let sum = 0
+      let min = Infinity
+      let max = -Infinity
+      for (const a of aggregated.value) {
+        const w = a.count > 0 ? a.count : 1
+        n += w
+        sum += a.avg * w
+        if (a.min < min) min = a.min
+        if (a.max > max) max = a.max
+      }
+      return { min: fmt(min), max: fmt(max), avg: fmt(sum / n) }
+    }
     const values = displayHistory.value
       .map((h) => h.value)
       .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
@@ -181,7 +208,6 @@ export function useHistoryQuery() {
       sum += v
     }
     const avg = sum / values.length
-    const fmt = (v: number) => Number.isInteger(v) ? v.toString() : v.toFixed(2)
     return { min: fmt(min), max: fmt(max), avg: fmt(avg) }
   })
 

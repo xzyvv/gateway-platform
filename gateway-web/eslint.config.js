@@ -3,23 +3,51 @@ import tseslint from 'typescript-eslint'
 import vue from 'eslint-plugin-vue'
 import prettier from 'eslint-config-prettier'
 import globals from 'globals'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // ── 行数预算（O-8）──
 // 约定见 docs/architecture/frontend.md：单文件超过 ~800 行即视为巨型文件，必须拆分。
 // 这里把约定变成 lint 断言：
 //   - 新增/未登记文件超过预算 → warning。CI 用 `--max-warnings 0` 跑 lint，所以等于阻断。
-//   - 存量超限文件登记在下方清单里（豁免），不阻断当前 CI；
-//     拆到 ≤800 行后**请把对应行删掉**，否则它会一直享受豁免。
+//   - 存量超限文件登记在**冻结账本**里，并带**单文件硬上限**（超出即 error），
+//     拆到 ≤800 行后请把对应行从账本删掉。
 // 预算 500 → 800：500 行的阈值会把「正常但偏大」的组件也逼成巨型文件，
 // 于是每次加功能都要先拆文件，拆分本身又制造新文件与新 PR —— 门禁从
 // 「防失控」退化成「无限拆分」。后端 C24 用同一个 800 口径。
 const LINE_BUDGET = 800
-const LINE_BUDGET_EXEMPT = [
+
+// 自动生成物：不纳入行数预算（生成物不靠人拆）。
+const LINE_BUDGET_GENERATED = [
   // 自动生成，勿手改（vite alias 重定向 @element-plus/icons-vue 的产物）
   'src/utils/ep-icons-compact.ts',
-  // ── 存量超限（债务清单：只许减少，不许新增）──
-  // 当前已全部清空：存量巨型文件已按 §3.3 约定拆分完毕
 ]
+
+// 冻结账本与后端共用一份（DD-58）：scripts/line_budget_frozen.txt
+// 格式：<仓库相对路径><TAB><行数上限>，# 开头为注释。
+// 前端条目以 `gateway-web/` 开头，这里转成 eslint 相对路径（src/...）。
+const FROZEN_LEDGER = resolve(dirname(fileURLToPath(import.meta.url)), '../scripts/line_budget_frozen.txt')
+
+function loadFrozenFrontendCaps() {
+  const caps = new Map()
+  if (!existsSync(FROZEN_LEDGER)) return caps
+  const text = readFileSync(FROZEN_LEDGER, 'utf8')
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const sep = trimmed.lastIndexOf('\t')
+    if (sep <= 0) continue
+    const rel = trimmed.slice(0, sep).trim()
+    const cap = Number(trimmed.slice(sep + 1).trim())
+    if (!Number.isInteger(cap)) continue
+    if (!rel.startsWith('gateway-web/')) continue
+    caps.set(rel.slice('gateway-web/'.length), cap)
+  }
+  return caps
+}
+
+const FROZEN_FRONTEND_CAPS = loadFrozenFrontendCaps()
 
 export default tseslint.config(
   {
@@ -98,14 +126,22 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
-  // 行数预算：业务源码纳入检查，测试文件与豁免清单除外
+  // 行数预算：业务源码纳入检查；自动生成物与已登记文件除外
   {
     files: ['src/**/*.{ts,vue}'],
-    ignores: LINE_BUDGET_EXEMPT,
+    ignores: [...LINE_BUDGET_GENERATED, ...FROZEN_FRONTEND_CAPS.keys()],
     rules: {
       'max-lines': ['warn', { max: LINE_BUDGET }],
     },
   },
+  // 已登记文件按冻结账本里的**单文件硬上限**判定（超出即 error，存量不得悄悄长）。
+  // 与后端 C24 的棘轮口径一致：账本改动会进 review，不会被静默绕过。
+  ...[...FROZEN_FRONTEND_CAPS.entries()].map(([file, cap]) => ({
+    files: [file],
+    rules: {
+      'max-lines': ['error', { max: cap }],
+    },
+  })),
   {
     files: ['src/**/*.spec.ts', 'src/**/*.test.ts', 'src/test/**/*.ts'],
     rules: {

@@ -61,7 +61,8 @@ import BusPauseBanner from '@/components/BusPauseBanner.vue'
 import BusSelect from '@/components/industrial/BusSelect.vue'
 import { withDiagHint } from '@/utils/diagHints'
 import { protocolFailureLabel } from '@/utils/protocolFailures'
-import { isValidHex } from '@/utils/hexFrame'
+import { isValidHex, isWriteFrame } from '@/utils/hexFrame'
+import { confirmAction } from '@/utils/confirm'
 import { inferParseProtocol, parseFrame, type ParseResult } from '@/utils/frameParser'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import FrameParser from './FrameParser.vue'
@@ -119,6 +120,19 @@ async function send() {
   if (inputInvalid.value || !isValidHex(hex.value)) {
     ElMessage.warning('请求帧不是合法的 HEX（需偶数长度的 0-9A-F），已阻止下发')
     return
+  }
+  // DD-30：写帧（FC05/06/15/16）下发前必须二次确认。后端 send_frame 下发前
+  // 无任何拦截、只在回执里标注写操作，前端是误写生产总线的唯一防线。
+  // 与 StepDebug 共用 isWriteFrame（口径对齐后端 judge_modbus）+ confirmAction（全仓唯一确认入口）。
+  // autofocus:false：不自动聚焦确认按钮，避免习惯性回车把写帧发出去。
+  if (isWriteFrame(hex.value)) {
+    const ok = await confirmAction({
+      title: '写帧下发确认',
+      message: `即将向总线 ${bus.value} 下发写操作帧：${hex.value}\n写命令会真实改变设备状态，且已发出的帧不可撤回。确认继续？`,
+      confirmText: '确认下发',
+      autofocus: false,
+    })
+    if (!ok) return
   }
   sending.value = true
   try {

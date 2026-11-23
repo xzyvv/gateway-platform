@@ -121,6 +121,54 @@ describe('DataCompare.vue — 图表重建与查询越界', () => {
   })
 
   /**
+   * DD-53 回归：/api/history 截断时必须显式提示，不能把部分数据当全部。
+   *
+   * 原实现忽略 `truncated` / `has_more`，窗口内 5000 条只返回 2 条也无任何提示。
+   */
+  it('数据被截断时显示截断提示（DD-53）', async () => {
+    mockFetchHistorySamples.mockResolvedValue({
+      items: [
+        { timestamp: 1700000000000, value: 1 },
+        { timestamp: 1700000001000, value: 2 },
+      ],
+      total: 5000,
+      returned: 2,
+      truncated: true,
+      has_more: true,
+      granularity: 'raw',
+    })
+    const wrapper = mount(DataCompare)
+    await flushPromises()
+    await selectPoints(wrapper, ['p1'])
+
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('查询'))!
+    await btn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(stateOf(wrapper).truncation).toEqual({ point: '仪表1/温度', total: 5000, returned: 2 })
+    const text = wrapper.text()
+    expect(text).toContain('数据已截断')
+    expect(text).toContain('5,000')
+    wrapper.unmount()
+  })
+
+  it('未截断时不显示提示（DD-53）', async () => {
+    const wrapper = mount(DataCompare)
+    await flushPromises()
+    await selectPoints(wrapper, ['p1'])
+
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('查询'))!
+    await btn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(stateOf(wrapper).truncation).toBeNull()
+    expect(wrapper.text()).not.toContain('数据已截断')
+    wrapper.unmount()
+  })
+
+  /**
    * 回归：查询期间改选择不越界。
    *
    * 原实现 await 之后仍读 computed 的 selectedPoints.value[j]!，

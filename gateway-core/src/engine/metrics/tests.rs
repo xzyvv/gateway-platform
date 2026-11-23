@@ -9,6 +9,16 @@ fn test_export_contains_alias_metrics() {
     assert!(out.contains("gateway_queue_length"));
     assert!(out.contains("gateway_devices_online"));
     assert!(out.contains("gateway_errors_total"));
+    // DD-38：硬件看门狗写失败计数必须有导出行，否则现场无法判断「喂狗已失效」。
+    assert!(
+        out.contains("gateway_watchdog_hw_write_errors_total "),
+        "{out}"
+    );
+
+    // DD-62：日志 WS 丢行要有独立计数。
+    m.add_log_ws_dropped(3);
+    let out = m.prometheus_export();
+    assert!(out.contains("gateway_log_ws_dropped_total 3\n"), "{out}");
 }
 
 /// #5/#6：死信处置链路（重投 / 重投冲突 / 主动清理 / 自动裁剪）必须有指标。
@@ -52,10 +62,27 @@ fn test_export_contains_queue_persist_and_wal_gauges() {
         .wal_size_bytes
         .store(1234, Ordering::Relaxed);
     m.queue_persist.db_size_bytes.store(5678, Ordering::Relaxed);
+    // DD-17：降级态与内存缓冲深度必须能导出，否则「数据只在内存」不可见
+    m.queue_persist.fallback_depth.store(7, Ordering::Relaxed);
+    m.queue_persist.degraded.store(1, Ordering::Relaxed);
     let out = m.prometheus_export();
     assert!(out.contains("gateway_queue_persist_dropped_total 3"));
     assert!(out.contains("gateway_wal_size_bytes 1234"));
     assert!(out.contains("gateway_sqlite_db_size_bytes 5678"));
+    assert!(out.contains("gateway_queue_fallback_depth 7"));
+    assert!(out.contains("gateway_queue_degraded 1"));
+}
+
+/// DD-23：模板缺变量 / 空串丢行必须能导出（静默丢数据不可接受）。
+#[test]
+fn test_export_contains_mqtt_template_loss_counters() {
+    let m = Metrics::new();
+    m.inc_mqtt_template_missing_vars();
+    m.inc_mqtt_template_missing_vars();
+    m.inc_mqtt_payload_empty_line_dropped();
+    let out = m.prometheus_export();
+    assert!(out.contains("gateway_mqtt_template_missing_vars_total 2"));
+    assert!(out.contains("gateway_mqtt_payload_empty_lines_dropped_total 1"));
 }
 
 /// 回归：OPC UA 写回持锁等待指标必须出现在 `/api/metrics`，否则现场无法观测

@@ -64,6 +64,8 @@ const summary: ReplayExecuteResult = {
   match: 1,
   mismatch: 0,
   failed: 0,
+  terminal: 'completed',
+  planned: 1,
   results: [frame],
 }
 
@@ -117,5 +119,36 @@ describe('PacketReplay 回放模式选择（p0-1b §6/§8）', () => {
     })
     expect(executeReplayStream).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('一致 1')
+  })
+
+  // DD-03：中止不得显示成完成。旧实现用已收帧本地重建汇总，界面只看到「一致 1」。
+  it('DD-03：流式 aborted 时如实提示未跑完，且不伪造完成汇总', async () => {
+    vi.mocked(canStreamReplay).mockReturnValue(true)
+    vi.mocked(executeReplayStream).mockImplementation(async (_id, _bus, _opts, handlers) => {
+      handlers.onStarted?.({ sessionId: 'rs_1', bus: '/dev/ttyUSB0', total: 10, startedAtMs: 1000 })
+      handlers.onFrame?.(frame)
+      handlers.onAborted?.({ reason: 'duration_cap', completed: 1, total: 10 })
+    })
+
+    const wrapper = await mountAndClickReplay()
+
+    expect(wrapper.text()).toContain('回放未跑完')
+    expect(wrapper.text()).toContain('已执行 1 / 10 帧')
+    expect(wrapper.text()).not.toContain('一致 1')
+  })
+
+  it('DD-03：阻塞模式 terminal=aborted 时提示已中止并给出已执行帧数', async () => {
+    vi.mocked(canStreamReplay).mockReturnValue(false)
+    vi.mocked(executeReplayBlocking).mockResolvedValue({
+      ...summary,
+      total: 1,
+      planned: 10,
+      terminal: 'aborted',
+    })
+
+    const wrapper = await mountAndClickReplay()
+
+    expect(wrapper.text()).toContain('回放已中止')
+    expect(wrapper.text()).toContain('已执行 1 / 10 帧')
   })
 })

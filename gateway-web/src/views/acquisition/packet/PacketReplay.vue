@@ -49,6 +49,8 @@
             :total="streamTotal"
             :percentage="progressPct"
             :result="execResult"
+            :terminal="terminalState"
+            :terminal-error="terminalError"
           />
           <ReplayFrameList :packets="session.packets" :frames="framesById" />
         </el-card>
@@ -93,6 +95,8 @@ const {
   liveFrames,
   streamTotal,
   progressPct,
+  terminalState,
+  terminalError,
   framesById,
   select,
   doDelete,

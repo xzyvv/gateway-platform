@@ -13,7 +13,7 @@
 //! `OutlierNode`（异常值剔除）等。
 
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::PointConfig;
 use crate::engine::model::DataPoint;
@@ -56,6 +56,12 @@ pub trait PipelineNode: Send + Sync {
     fn process_recovered(&self, point: &PointConfig, dp: DataPoint) -> Option<DataPoint> {
         self.process(point, dp)
     }
+
+    /// 清理已下线点位的内部基线（默认无状态节点无操作）
+    ///
+    /// `active` 是当前配置中的全部点位 ID。有状态节点（死区/变化上传）应丢弃
+    /// 不在其中的条目，避免点位删除后基线表随运行时间单调增长（DD-16）。
+    fn prune(&self, _active: &HashSet<String>) {}
 
     /// 刷新所有到期的窗口状态（默认无操作）
     ///
@@ -174,6 +180,17 @@ impl EdgeProcessor {
             .iter()
             .flat_map(|n| n.flush_all(points))
             .collect()
+    }
+
+    /// 清理已下线点位的节点基线与质量边沿（DD-16）
+    ///
+    /// 由调度器在点位热重载提交后调用：点位删除后，死区/变化上传基线与
+    /// `last_quality` 若无淘汰点，会随运行时间单调增长。
+    pub fn prune(&self, active: &HashSet<String>) {
+        for node in &self.nodes {
+            node.prune(active);
+        }
+        self.last_quality.lock().retain(|id, _| active.contains(id));
     }
 }
 

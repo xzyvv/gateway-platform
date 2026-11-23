@@ -78,7 +78,8 @@ describe('CJT188 异常应答帧的状态解读', () => {
 
   it('状态 ST 第一字节置电池欠压位时列出该位', () => {
     // ST = 04 00 → 第1字节 bit2 电池电压欠压，JD 正常
-    const bytes = [0x68, 0x10, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xc1, 0x03, 0x01, 0x04, 0x00]
+    // DD-01：帧结构为 68 + ADDR(7) + C + L + DATA + CS + 16，无独立仪表类型字节
+    const bytes = [0x68, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xc1, 0x03, 0x01, 0x04, 0x00]
     const sum = bytes.reduce((s, b) => s + b, 0) & 0xff
     const hex = [...bytes, sum, 0x16].map((b) => b.toString(16).padStart(2, '0')).join(' ')
     const r = parseCJT188(hex)
@@ -87,7 +88,7 @@ describe('CJT188 异常应答帧的状态解读', () => {
   })
 
   it('状态全正常时给出「正常」结论而非留白', () => {
-    const bytes = [0x68, 0x10, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xc1, 0x03, 0x01, 0x00, 0x00]
+    const bytes = [0x68, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xc1, 0x03, 0x01, 0x00, 0x00]
     const sum = bytes.reduce((s, b) => s + b, 0) & 0xff
     const hex = [...bytes, sum, 0x16].map((b) => b.toString(16).padStart(2, '0')).join(' ')
     const r = parseCJT188(hex)
@@ -97,6 +98,29 @@ describe('CJT188 异常应答帧的状态解读', () => {
   it('主站请求帧：不做状态解读', () => {
     const r = parseCJT188(sampleFrames.cjt188!)
     expect(fieldValue(r.fields, '状态 ST')).toBeUndefined()
+  })
+
+  // DD-01：前端曾多假定 1 字节「仪表类型」，导致地址/控制码/数据区整体偏移。
+  // 这里用非对称地址锁死后端口径：`68 + ADDR(7) + C + L + DATA + CS + 16`。
+  it('DD-01：按后端 68+ADDR(7)+C+L 口径解析，字段不再错位', () => {
+    const bytes = [0x68, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x99, 0xc1, 0x03, 0x01, 0x00, 0x04]
+    const sum = bytes.reduce((s, b) => s + b, 0) & 0xff
+    const hex = [...bytes, sum, 0x16].map((b) => b.toString(16).padStart(2, '0')).join(' ')
+    const r = parseCJT188(hex)
+    expect(r.valid).toBe(true)
+    // 低字节在前 + 末字节厂商代码，反转后应为 99 06 05 04 03 02 01
+    expect(fieldValue(r.fields, '仪表地址')).toBe('99060504030201')
+    expect(fieldValue(r.fields, '控制码')).toBe('0xc1')
+    expect(fieldValue(r.fields, '数据长度')).toBe('3')
+    // 不再输出后端口径里不存在的「仪表类型」字段
+    expect(fieldValue(r.fields, '仪表类型')).toBeUndefined()
+  })
+
+  it('DD-01：校验和错误时 valid=false，不把坏帧显示成通过', () => {
+    const hex = sampleFrames.cjt188!.replace(/12 16$/, '13 16')
+    const r = parseCJT188(hex)
+    expect(r.valid).toBe(false)
+    expect(fieldValue(r.fields, '校验和')).toBe('失败')
   })
 })
 
@@ -109,5 +133,19 @@ describe('示例帧完整性', () => {
       // 帧尾必须是 0x16
       expect(bytes[bytes.length - 1]).toBe(0x16)
     }
+  })
+
+  it('正常示例帧（用户在解析页点「填入示例」的默认值）校验和自洽（DD-28 回归钉子）', () => {
+    // 所有 68 帧（DLT645/CJT188）的 CS = 整帧除末两字节累加和 & 0xFF。
+    // 旧 DLT645 示例写 0x0E、实际应为 0xAD，用户误以为解析器故障。
+    for (const hex of [sampleFrames.dlt645!, sampleFrames.cjt188!]) {
+      const bytes = hex.split(/\s+/).map((h) => parseInt(h, 16))
+      const sum = bytes.reduce((s, b, i) => (i < bytes.length - 2 ? s + b : s), 0) & 0xff
+      expect(sum, `帧 ${hex} 校验和不符`).toBe(bytes[bytes.length - 2])
+      expect(bytes[bytes.length - 1]).toBe(0x16)
+    }
+    // 解析器的「校验和」字段须判通过，避免示例帧与校验逻辑各自漂移
+    const r = parseDLT645(sampleFrames.dlt645!)
+    expect(fieldValue(r.fields, '校验和')).toBe('通过')
   })
 })

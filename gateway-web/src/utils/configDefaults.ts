@@ -5,7 +5,14 @@
  * Web/MQTT 节的 serde 默认值、表单构造种子、未知顶层键检测。
  * 不依赖 Vue，可被 composable 与测试直接复用。
  */
-import type { GatewayConfig, MqttConfig, SimConsumerConfig, WebConfig } from '@/api/types'
+import type { BusConfig, GatewayConfig, MqttConfig, SimConsumerConfig, WebConfig } from '@/api/types'
+import {
+  DEFAULT_BUS_RECONNECT_BACKOFF,
+  DEFAULT_MQTT,
+  DEFAULT_QUEUE,
+  DEFAULT_SIM_CONSUMER,
+  DEFAULT_WEB,
+} from '@/api/generated/configDefaults.generated'
 
 // 表单态即 API 形态（与后端 ts-rs 生成的 GatewayConfig 对齐）：
 // buses 为无名数组，总线身份即 port_name，与后端 Vec<BusConfig> 一致。
@@ -15,9 +22,9 @@ export type ConfigForm = GatewayConfig & { [key: string]: unknown }
 // B2: 顶层已知键集合（与 src/api/generated/GatewayConfig.ts 字段列表一致）。
 // 同步约束：后端 ts-rs 增/删顶层字段时同步维护本集合（不维护会导致拼写错的未知键
 // 被静默接受、模板/原始 JSON 整段导入时无声丢失关键节）。
-export const KNOWN_GATEWAY_TOP_KEYS = new Set<string>([
+export const KNOWN_GATEWAY_TOP_KEY_LIST = [
   'schema_version',
-  'buses', 'points', 'devices', 'point_trash',
+  'buses', 'points', 'devices', 'point_trash', 'convert_rules',
   'mqtt', 'ntp', 'web', 'webhook',
   'sim_consumer',
   'cellular', 'opcua',
@@ -26,7 +33,15 @@ export const KNOWN_GATEWAY_TOP_KEYS = new Set<string>([
   'telemetry', 'license',
   'self_heal',
   'queue',
-])
+] as const satisfies readonly (keyof GatewayConfig)[]
+
+export const KNOWN_GATEWAY_TOP_KEYS = new Set<string>(KNOWN_GATEWAY_TOP_KEY_LIST)
+
+// 编译期断言：`GatewayConfig` 的每个顶层字段都必须登记在清单里。
+// 若漏登记，`_MissingGatewayTopKey` 不再是 never，本类型默认参数即违反 `extends never`
+// 约束 → type-check 报错（报错信息里带缺失键名）。这是「以后加节不再漏」的护栏。
+export type _MissingGatewayTopKey = Exclude<keyof GatewayConfig, (typeof KNOWN_GATEWAY_TOP_KEY_LIST)[number]>
+export type _AssertNoMissingTopKey<T extends never = _MissingGatewayTopKey> = T
 
 // B1: 其余 nullable 节（后端 serde 默认 null）若用户解析的 JSON 漏写，
 // Object.assign 不会写入，原值保留为 null 不算丢失；但「重置为最小骨架后
@@ -38,46 +53,32 @@ export const KNOWN_NULLABLE_KEYS = [
   'virtual_points', 'telemetry', 'license', 'point_trash',
 ] as const
 
-// 后端 WebConfig 的 serde 默认值（web 节缺失时兜底，工厂函数保证每次返回新对象）
-//
-// listen_addr / allow_anon_read 必须与后端 `gateway-core/src/config/web.rs` 的
-// serde 默认值一致：兜底填 `0.0.0.0:8080` 会让「配置里缺 web 段 → 前端补默认值
-// → 保存回写」这条路径产出一份绑定全网卡 + 空 password_hash 的配置，
-// 而这正是 bootstrap 的 fail-closed 硬性违规，保存后网关重启即被拒绝启动。
+// DD-22：默认值不再在前端手抄，统一来自后端 serde 默认值生成的同源常量
+// （`gateway-web/src/api/generated/configDefaults.generated.ts`，由
+// `npm run types:export` 生成）。手抄副本曾出现 listen_addr / topic /
+// reconnect_backoff 与后端漂移，导致「缺节 → 前端补默认 → 保存回写」产出
+// 一份无法启动或首屏周期不符的配置。
+function fresh<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T
+}
+
 export function defaultWeb(): WebConfig {
-  return {
-    api_token: '',
-    username: 'admin',
-    password_hash: '',
-    listen_addr: '127.0.0.1:8080',
-    allow_anon_read: false,
-    realtime_buffer: 1024,
-    realtime_max_subscribers: 64,
-    ota_signing_key: null,
-    rate_limit_per_sec: null,
-    cors_origins: null,
-    allow_default_token: true,
-    users: [],
-    webhook_test_allow_hosts: [],
-    webhook_test_block_private: false,
-    demo_replay_sessions: false,
-  }
+  return fresh(DEFAULT_WEB)
 }
 
-// 后端 MqttConfig 的 serde 默认值（mqtt 节缺失时兜底，工厂函数保证每次返回新对象）
-//
-// 必须与 `gateway-core/src/config/mqtt.rs` 的 serde 默认值逐项一致：
-// - `topic` 不能是空串——后端 `validate_mqtt_topic` 不受 mqtt.enabled 门控，
-//   「缺 mqtt 段 → 前端补默认值 → 保存回写」会直接 400；
-// - `publish_interval` 与后端不一致时，UI 首屏展示的周期与实际上行周期不符；
-// - `reconnect_backoff` 对齐后端 `default_reconnect_backoff`（2/4/8/16/32/60 + 40% 抖动）。
+/** 后端 MqttConfig 的 serde 默认值（每次返回独立对象） */
 export function defaultMqtt(): MqttConfig {
-  return { enabled: false, broker: 'tcp://localhost:1883', topic: 'factory/line1', publish_interval: 5, qos: 1, keep_alive: 30, ack_timeout_secs: 10, username: null, password: null, compression: null, compression_threshold: null, resume_rate_limit: null, payload_template: null, tls: null, reconnect_backoff: { seconds: [2, 4, 8, 16, 32, 60], jitter_ratio: 0.4 }, report_mode: 'stream' }
+  return fresh(DEFAULT_MQTT)
 }
 
-// 后端 SimConsumerConfig 的 serde 默认值（sim_consumer 节缺失时兜底，工厂函数保证每次返回新对象）
+/** 后端 SimConsumerConfig 的 serde 默认值（每次返回独立对象） */
 export function defaultSimConsumer(): SimConsumerConfig {
-  return { enabled: false, batch_size: 100, interval_ms: 1000, log_every: 100 }
+  return fresh(DEFAULT_SIM_CONSUMER)
+}
+
+/** 后端 BusConfig.reconnect_backoff 的 serde 默认值（DD-10：前端不再自备一套） */
+export function defaultBusReconnectBackoff(): BusConfig['reconnect_backoff'] {
+  return fresh(DEFAULT_BUS_RECONNECT_BACKOFF)
 }
 
 /** 检测未识别的顶层键，返回键名列表（不触发任何 UI 副作用，由调用方决定如何提示） */
@@ -108,6 +109,6 @@ export function createSeedConfig(): ConfigForm {
     telemetry: null,
     license: null,
     self_heal: null,
-    queue: { max_rows: 1_000_000 },
+    queue: fresh(DEFAULT_QUEUE),
   }
 }

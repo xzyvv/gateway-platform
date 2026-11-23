@@ -3,6 +3,8 @@
  * 偏移 | HEX | ASCII 三栏行，供抓包/回放详情做双栏对照展示。
  */
 
+import { byteToAscii, hexToBytes } from './hexCodec'
+
 export interface HexDumpRow {
   /** 行首偏移（4 位大写 hex） */
   offset: string
@@ -12,18 +14,9 @@ export interface HexDumpRow {
   ascii: string
 }
 
-/** 解析 HEX 字符串为字节数组；非法输入（空/奇数长度/含非 hex 字符）返回空数组 */
-export function hexToBytes(hex: string): number[] {
-  const clean = (hex || '').replace(/\s+/g, '')
-  if (!clean || clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) return []
-  const out: number[] = []
-  for (let i = 0; i < clean.length; i += 2) out.push(parseInt(clean.slice(i, i + 2), 16))
-  return out
-}
-
-export function byteToAscii(b: number): string {
-  return b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.'
-}
+// DD-47：字节解析口径已收敛到 hexCodec.ts（全项目单一真源）。
+// 本模块保留 re-export，对外符号与调用方 import 路径均不变。
+export { hexToBytes, byteToAscii } from './hexCodec'
 
 /** 按每行 perRow 字节切分，生成三栏行 */
 export function hexDumpRows(hex: string, perRow = 16): HexDumpRow[] {
