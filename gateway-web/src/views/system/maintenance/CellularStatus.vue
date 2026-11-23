@@ -113,14 +113,16 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
 import {Refresh} from '@element-plus/icons-vue'
 import { getCellularStatus, type CellularStatus } from '@/api/network'
-import { extractErrorMessage } from '@/utils/errorHandler'
 import { logError } from '@/utils/logger'
 import { usePolling } from '@/composables/core/usePolling'
-import { formatClock, formatDateTime } from '@/utils/datetime'
+import { formatClock, formatTimestamp } from '@/utils/datetime'
 import { statusTagType, type TagType } from '@/utils/statusType'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+
+// getCellularStatus 是 GET：拦截器已弹全局通知并打标记，showToast 据此跳过重复提示
+const { showToast } = useErrorDisplay()
 
 const data = ref<CellularStatus | null>(null)
 const loading = ref(false)
@@ -203,9 +205,8 @@ const signalColor = computed(() => {
 })
 
 function formatTime(t: number) {
-  if (!t) return '-'
-  const ms = t > 1e12 ? t : t * 1000
-  return formatDateTime(ms)
+  // 更新时间戳单位由后端决定，用 auto 阈值自动判断秒/毫秒，空值兜底 '-'
+  return formatTimestamp(t, { fallback: '-' })
 }
 
 async function load() {
@@ -214,9 +215,8 @@ async function load() {
     data.value = await getCellularStatus()
     lastUpdate.value = formatClock()
   } catch (e) {
-    // W102: 提取具体错误信息便于排查——此前仅显示"加载失败"，运维无法定位
-    const detail = extractErrorMessage(e, '')
-    ElMessage.error(`加载蜂窝网络状态失败：${detail || '未知错误'}`)
+    // W102: showToast 统一拼「动作失败：<原因>」，并补诊断建议；GET 已全局通知的不重复弹
+    showToast(e, '加载蜂窝网络状态失败')
     logError('cell', e)
   } finally {
     loading.value = false

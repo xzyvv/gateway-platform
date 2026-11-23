@@ -1,4 +1,4 @@
-import { statusTagType, type TagType } from './statusType'
+import { qualityTagType as statusQualityTagType, type TagType } from './statusType'
 
 // 数据质量标签的单一来源：History / Realtime / DataQuality / DeviceShadow 等页面统一从这里取文案。
 //
@@ -38,22 +38,12 @@ export function qualityText(q: string): string {
 export type { TagType }
 
 /**
- * 本模块特有词：聚合值 / 过期值在此处是「中性灰」(info)，
- * 与通用表（old=warning）不同，故本地登记后再委托通用表。
- */
-const QUALITY_OVERRIDE: Record<string, TagType> = {
-  aggregated: 'info',
-  old: 'info',
-}
-
-/**
- * 取质量对应的徽章颜色：先查本地覆盖表（聚合/过期），
- * 再走全站唯一映射表 utils/statusType；通用表落不到具体档位时按 warning 兜底。
+ * 质量 → 徽章色：统一委托全站本源 utils/statusType 的 qualityTagType。
+ *
+ * 历史页曾有本地覆盖表（aggregated/old=info）与 info→warning 兜底，导致同一质量词
+ * 在历史页 / 实时页取色不同（old 尤其明显：QUALITY_TEXT 里 old 与 stale 同为「过期」）。
+ * 已收敛为单一口径，这里保留同名导出仅为兼容既有 import，不再持有第二份映射逻辑。
  */
 export function qualityTagType(q: string): TagType {
-  const key = q.toLowerCase()
-  const hit = QUALITY_OVERRIDE[key]
-  if (hit) return hit
-  const t = statusTagType(q)
-  return t === 'info' ? 'warning' : t
+  return statusQualityTagType(q)
 }

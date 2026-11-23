@@ -94,3 +94,17 @@ export function statusTagType(status: string | number | null | undefined): TagTy
   }
   return 'info'
 }
+
+/**
+ * 数据质量取色的全站唯一入口。
+ *
+ * 质量词（good/bad/uncertain/stale/old/aggregated/未知）与通用状态共用上面这一份
+ * 语义映射；历史页 / 实时页 / 数据质量页不再各自 override 或改兜底色：
+ * - `old` 与 `stale` 在 QUALITY_TEXT 里同为「过期」，是同义词，取色必须一致（warning）；
+ * - `aggregated`（聚合）与未登记的新质量词落 info（中性），不猜成 danger / warning。
+ *
+ * 质量文案另取 utils/qualityLabels 的 qualityText——本函数只管颜色。
+ */
+export function qualityTagType(q: string): TagType {
+  return statusTagType(q)
+}

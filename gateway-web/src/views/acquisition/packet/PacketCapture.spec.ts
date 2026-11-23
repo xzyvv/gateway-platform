@@ -8,13 +8,21 @@ const mockGetPackets = vi.fn()
 const mockStartCapture = vi.fn()
 const mockStopCapture = vi.fn()
 const mockClearPackets = vi.fn()
+const mockSaveSession = vi.fn()
+const promptMock = vi.hoisted(() => vi.fn())
+
+// 「存为回放会话」的原生 prompt 已改成 ElMessageBox.prompt：取消走 reject，不能落库
+vi.mock('element-plus', async () => {
+  const actual = await vi.importActual<typeof import('element-plus')>('element-plus')
+  return { ...actual, ElMessageBox: { ...actual.ElMessageBox, prompt: promptMock } }
+})
 
 vi.mock('@/api/protocolTools', () => ({
   startCapture: (...args: unknown[]) => mockStartCapture(...args),
   stopCapture: () => mockStopCapture(),
   getPackets: (...args: unknown[]) => mockGetPackets(...args),
   clearPackets: () => mockClearPackets(),
-  saveSession: vi.fn(),
+  saveSession: (...args: unknown[]) => mockSaveSession(...args),
 }))
 
 vi.mock('@/composables/acquisition/useDebugTargets', () => ({
@@ -199,6 +207,54 @@ describe('PacketCapture.vue — 失败与空态可辨识', () => {
     wrapper.findComponent(FilterToolbar).vm.$emit('update:modelValue', { bus: 'COM9', device: '' })
     await nextTick()
     expect(wrapper.text()).toContain('当前筛选条件下没有报文')
+    wrapper.unmount()
+  })
+})
+
+/**
+ * 13 号报告 §2.1：原生 prompt → ElMessageBox.prompt。
+ * 钉住"确认才落库、取消不落库"——把取消误当保存会在现场留下垃圾会话。
+ */
+describe('PacketCapture.vue — 存为回放会话的弹窗', () => {
+  const PACKET = {
+    id: 'p1', direction: 'request' as const, time: 1_700_000_000_000,
+    deviceName: '温控器', bus: 'COM1', deviceId: 'dev-1', delayMs: 12,
+    hex: '01 03 00 00 00 01', parsed: '读保持寄存器',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetPackets.mockResolvedValue([PACKET])
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  })
+  afterEach(() => vi.useRealTimers())
+
+  async function clickSave() {
+    const wrapper = mount(PacketCapture)
+    await flushPromises()
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('存为回放会话'))
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('确认后按输入名保存会话', async () => {
+    promptMock.mockResolvedValue({ value: '现场抓包A' })
+    const wrapper = await clickSave()
+    expect(promptMock).toHaveBeenCalledWith('回放会话名称：', '存为回放会话', {
+      inputValue: expect.any(String),
+    })
+    expect(mockSaveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '现场抓包A' }),
+    )
+    wrapper.unmount()
+  })
+
+  it('取消（prompt reject）不落库', async () => {
+    promptMock.mockRejectedValue('cancel')
+    const wrapper = await clickSave()
+    expect(mockSaveSession).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

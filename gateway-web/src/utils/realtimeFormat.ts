@@ -1,6 +1,6 @@
 import { qualityText } from '@/utils/qualityLabels'
-import { statusTagType, type TagType } from '@/utils/statusType'
-import { formatTimeOfDay } from '@/utils/datetime'
+import { qualityTagType as statusQualityTagType, type TagType } from '@/utils/statusType'
+import { formatTimestamp } from '@/utils/datetime'
 
 /**
  * 实时数据页的展示格式化纯函数集合。
@@ -30,12 +30,14 @@ export function qualityClass(q: string) {
 }
 
 /**
- * 质量 → 徽章颜色：good/warn 类已登记在全站唯一映射表 utils/statusType；
- * 通用表落不到具体档位（未知质量）时按 danger 兜底，保持原有语义。
+ * 质量 → 徽章颜色：统一委托全站本源 utils/statusType 的 qualityTagType。
+ *
+ * 实时页原有 info→danger 兜底会把「聚合/未知质量」误标成 danger（红色告警），
+ * 与历史页口径冲突。已收敛为单一口径：聚合/未知落 info（中性），不再吓人地报红。
+ * 这里保留同名导出仅为兼容既有 import。
  */
 export function qualityTagType(q: string): TagType {
-  const t = statusTagType(q)
-  return t === 'info' ? 'danger' : t
+  return statusQualityTagType(q)
 }
 
 // 文案统一取自 utils/qualityLabels 单一来源（实时推送的 key 为小写 good/stale/bad/uncertain）
@@ -88,9 +90,6 @@ export function formatValue(v: unknown): string {
 }
 
 export function formatTime(ts: number): string {
-  if (!ts) return '-'
-  const ms = ts < 1e12 ? ts * 1000 : ts
-  const d = new Date(ms)
-  if (isNaN(d.getTime())) return '-'
-  return formatTimeOfDay(d)
+  // 实时帧时间戳单位由后端决定，用 auto 阈值归一化（边界 1e12 当毫秒），style=time 只出时分秒
+  return formatTimestamp(ts, { style: 'time', fallback: '-' })
 }

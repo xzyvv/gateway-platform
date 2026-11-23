@@ -77,6 +77,10 @@ import {
   type LogArchiveItem,
 } from '@/api/logArchive'
 import { extractErrorReason } from '@/utils/errorHandler'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+
+// downloadArchive 是 GET：拦截器已弹全局通知并打标记，showToast 据此跳过重复提示
+const { showToast } = useErrorDisplay()
 
 const loading = ref(false)
 const archives = ref<LogArchiveItem[]>([])
@@ -167,7 +171,7 @@ async function download(date: string) {
     await downloadArchive(date)
     ElMessage.success(`已下载 ${date} 的日志`)
   } catch (e) {
-    ElMessage.error(extractErrorReason(e, '下载日志失败'))
+    showToast(e, '下载日志失败')
   }
 }
 
@@ -176,7 +180,7 @@ async function downloadCurrent() {
     await downloadArchive()
     ElMessage.success('已下载当期日志')
   } catch (e) {
-    ElMessage.error(extractErrorReason(e, '下载日志失败'))
+    showToast(e, '下载日志失败')
   }
 }
 

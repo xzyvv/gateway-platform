@@ -8,7 +8,7 @@ import { aggregateHistory, type AggregateGranularity } from '@/utils/aggregateHi
 import { buildHistoryChartOption } from '@/utils/historyChart'
 import { buildHistoryCsv, downloadCsvText, triggerDownload } from '@/utils/exportCsv'
 import { qualityMap, qualityTagType } from '@/utils/qualityLabels'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime, formatTimestamp } from '@/utils/datetime'
 import { runConcurrent } from '@/utils/concurrency'
 
 /**
@@ -163,11 +163,8 @@ export function useHistoryQuery() {
   const { next: nextQuery, isCurrent } = useRequestGuard()
 
   function formatTime(ts: number): string {
-    if (ts == null || !Number.isFinite(ts) || ts <= 0) return '-'
-    // f8: ts 已是毫秒时间戳，直接构造 Date（原实现 ×1000 会导致时间轴显示到 1970 年之后）
-    const d = new Date(ts)
-    if (isNaN(d.getTime())) return '-'
-    return formatDateTime(d)
+    // f8: ts 已是毫秒时间戳（原实现 ×1000 会让时间轴跑到 1970 年之后），空值兜底 '-'
+    return formatTimestamp(ts, { unit: 'ms', fallback: '-' })
   }
 
   function setQuickRange(ms: number) {

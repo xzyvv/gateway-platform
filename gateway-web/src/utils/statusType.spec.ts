@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { statusTagType, type TagType } from './statusType'
+import { statusTagType, qualityTagType, type TagType } from './statusType'
+import { qualityTagType as historyQualityTagType } from './qualityLabels'
+import { qualityTagType as realtimeQualityTagType } from './realtimeFormat'
 
 /**
  * 全站唯一状态取色表的契约：
@@ -57,5 +59,35 @@ describe('statusTagType — 全站唯一状态取色表', () => {
 
   it('未登记的新词落到 info（不猜颜色）', () => {
     expect(statusTagType('someBrandNewState')).toBe('info')
+  })
+})
+
+/**
+ * 质量取色统一契约：历史页 / 实时页 / 数据质量页三处 qualityTagType
+ * 必须与本源同词同色，杜绝同一质量在不同页面取不同色。
+ */
+describe('qualityTagType — 质量取色全站唯一口径', () => {
+  it('good/bad/uncertain 与通用状态语义一致', () => {
+    expect(qualityTagType('good')).toBe('success')
+    expect(qualityTagType('bad')).toBe('danger')
+    expect(qualityTagType('uncertain')).toBe('warning')
+  })
+
+  it('old 与 stale 同为「过期」，取色必须一致', () => {
+    expect(qualityTagType('old')).toBe(qualityTagType('stale'))
+    expect(qualityTagType('old')).toBe('warning')
+  })
+
+  it('聚合与未知质量落 info（中性），不猜成 danger/warning', () => {
+    expect(qualityTagType('aggregated')).toBe('info')
+    expect(qualityTagType('someNewQuality')).toBe('info')
+  })
+
+  it('两个调用门面（历史页 / 实时页）与本源口径一致', () => {
+    const words = ['good', 'bad', 'uncertain', 'stale', 'old', 'aggregated', 'brandNew']
+    for (const w of words) {
+      expect(historyQualityTagType(w)).toBe(qualityTagType(w))
+      expect(realtimeQualityTagType(w)).toBe(qualityTagType(w))
+    }
   })
 })

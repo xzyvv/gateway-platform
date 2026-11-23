@@ -1,7 +1,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { confirmAction } from '@/utils/confirm'
-import { extractErrorMessage, failureMessage } from '@/utils/errorHandler'
+import { failureMessage } from '@/utils/errorHandler'
 import { registerDirtyGuard } from '@/utils/dirtyGuard'
 import {
   postConfig,
@@ -11,6 +11,7 @@ import {
 import { setToken } from '@/api'
 import type { GatewayConfig } from '@/api/types'
 import { validateConfig, type ConfigIssue } from '@/utils/configValidation'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import {
   createSeedConfig,
   defaultWeb,
@@ -38,6 +39,7 @@ import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
  */
 export function useConfigActions() {
   const route = useRoute()
+  const { showToast } = useErrorDisplay()
 
   // ===== 当前 tab =====
   // 支持 ?section=mqtt 这类深链：其他页面的「去配置 MQTT」直接落到对应分节，
@@ -376,7 +378,8 @@ export function useConfigActions() {
       ElMessage.success('配置已导出（凭据字段已脱敏，迁移到新网关需重新填写）')
     } catch (e) {
       // 导出失败不能静默：用户会以为已下载，实际没有文件
-      ElMessage.error(extractErrorMessage(e, '导出配置失败，请稍后重试'))
+      // apiExport 是 GET，拦截器已全局通知并打标记，showToast 据此跳过重复提示
+      showToast(e, '导出配置失败')
     }
   }
 

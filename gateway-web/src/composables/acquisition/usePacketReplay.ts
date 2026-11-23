@@ -9,6 +9,7 @@
  * 进度条、逐帧状态、停止按钮都读同一份状态，父子各维护一份必然串台。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import {
   listSessions,
   getSession,
@@ -24,6 +25,7 @@ import {
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
+import { confirmDelete } from '@/utils/confirm'
 import { statusTagType as baseStatusTagType, type TagType } from '@/utils/statusType'
 
 /** 预置会话不可删（后端也拒绝，前端灰色 + tooltip）。
@@ -140,7 +142,8 @@ export function usePacketReplay() {
   }
 
   async function doDelete(id: string) {
-    if (!confirm(`确定删除「${sessions.value.find((s) => s.id === id)?.name ?? id}」？`)) return
+    const name = sessions.value.find((s) => s.id === id)?.name ?? id
+    if (!(await confirmDelete(name))) return
     try {
       await deleteSession(id)
       sessions.value = sessions.value.filter((s) => s.id !== id)
@@ -154,7 +157,14 @@ export function usePacketReplay() {
 
   async function saveAsNew() {
     if (!session.value) return
-    const name = prompt('新会话名称：', session.value.name + '（副本）')
+    let name: string
+    try {
+      ({ value: name } = await ElMessageBox.prompt('新会话名称：', '另存回放会话', {
+        inputValue: session.value.name + '（副本）',
+      }))
+    } catch {
+      return // 用户取消
+    }
     if (!name) return
     const copy: ReplaySession = {
       ...session.value,

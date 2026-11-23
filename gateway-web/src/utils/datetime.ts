@@ -17,6 +17,47 @@
 
 type DateInput = number | string | Date | null | undefined
 
+/**
+ * 时间戳归一化策略（后端不同接口的时间单位不统一，这是客观事实）：
+ * - `auto`：按 1e12 阈值自动判断（< 1e12 当秒，否则当毫秒）——绝大多数接口；
+ * - `sec`：无条件 ×1000（配置版本等明确以秒为单位的接口）；
+ * - `ms`：已是毫秒，不换算（历史查询导出等接口已保证单位）。
+ */
+type TimestampUnit = 'auto' | 'sec' | 'ms'
+
+interface FormatTimestampOptions {
+  /** 输入单位，默认 `auto` */
+  unit?: TimestampUnit
+  /** 输出样式：`datetime`（默认，完整日期时间）/ `time`（仅时分秒） */
+  style?: 'datetime' | 'time'
+  /** 空值 / 无效值兜底文案，默认空串 '' */
+  fallback?: string
+}
+
+/**
+ * 时间戳统一格式化：归一化（秒 / 毫秒）+ 委托 formatDateTime / formatTimeOfDay + 空值兜底。
+ *
+ * 为什么收敛到这里：曾散落在 6 个文件各写一份「t > 1e12 ? t : t*1000」，
+ * 阈值写法还不统一（`> 1e12` vs `< 1e12`，边界值语义有分歧）。后端单位口径
+ * 一旦调整，要改 6 处且容易漏。现在字段含义用 `unit` 显式声明，换算只此一处。
+ *
+ * 约定：
+ * - `0` / 负数 / NaN / 非有限数一律视为「无有效时间」，返回 `fallback`；
+ * - 归一化后仍无效时同样返回 `fallback`（不让 "Invalid Date" 泄漏到界面）；
+ * - 不做时区转换，与 formatDateTime / formatTimeOfDay 一致。
+ */
+export function formatTimestamp(
+  input: number | null | undefined,
+  opts: FormatTimestampOptions = {},
+): string {
+  const { unit = 'auto', style = 'datetime', fallback = '' } = opts
+  if (input == null || !Number.isFinite(input) || input <= 0) return fallback
+  const ms = unit === 'sec' ? input * 1000 : unit === 'ms' ? input : (input < 1e12 ? input * 1000 : input)
+  if (!Number.isFinite(ms)) return fallback
+  const formatted = style === 'time' ? formatTimeOfDay(ms) : formatDateTime(ms)
+  return formatted || fallback
+}
+
 /** 把外部输入安全地转成 Date；无效输入返回 null */
 function toDate(input: DateInput): Date | null {
   if (input == null || input === '') return null

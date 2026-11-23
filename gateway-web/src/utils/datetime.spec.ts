@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatClock, formatDate, formatDateTime, formatTimeOfDay, pad2 } from './datetime'
+import { formatClock, formatDate, formatDateTime, formatTimeOfDay, formatTimestamp, pad2 } from './datetime'
 
 // 用「本地时刻」构造，避免用例本身依赖运行机器时区
 const sample = new Date(2026, 9, 24, 12, 31, 14) // 2026-10-24 12:31:14 本地时间
@@ -44,5 +44,48 @@ describe('datetime', () => {
     expect(pad2(7)).toBe('07')
     expect(pad2(42)).toBe('42')
     expect(pad2(123)).toBe('123')
+  })
+})
+
+/**
+ * formatTimestamp：秒 / 毫秒归一化口径的单一真源（13 号报告 §2.2）。
+ * 6 处散落的「t > 1e12 ? t : t*1000」收敛到这里，钉住三种单位与边界值。
+ */
+describe('formatTimestamp 归一化口径', () => {
+  const SEC = 1_762_211_234 // 2026-01-01 前后，秒级
+  const MS = SEC * 1000 // 对应毫秒级
+
+  it('auto：秒级按秒、毫秒级按毫秒，输出一致', () => {
+    expect(formatTimestamp(SEC)).toBe(formatTimestamp(MS))
+  })
+
+  it('auto：1e12 边界当毫秒（不再出现 ×1000 溢出）', () => {
+    // 边界值毫秒 1e12 = 2001-09-09；旧实现一处 >1e12 一处 <1e12，行为不一致
+    const boundary = 1e12
+    const asMs = formatTimestamp(boundary)
+    expect(asMs).toMatch(/^2001\//)
+    expect(asMs).not.toContain('Invalid')
+  })
+
+  it('sec：无条件 ×1000（配置版本等秒单位接口）', () => {
+    expect(formatTimestamp(SEC, { unit: 'sec' })).toBe(formatDateTime(MS))
+    expect(formatTimestamp(SEC, { unit: 'sec' })).not.toBe(formatDateTime(SEC))
+  })
+
+  it('ms：已是毫秒不换算（历史导出接口）', () => {
+    expect(formatTimestamp(MS, { unit: 'ms' })).toBe(formatDateTime(MS))
+  })
+
+  it('style=time 只出时分秒', () => {
+    expect(formatTimestamp(MS, { style: 'time' })).toBe(formatTimeOfDay(MS))
+    expect(formatTimestamp(MS, { style: 'time' })).not.toContain('/')
+  })
+
+  it('空值与无效值一律返回 fallback，不泄漏 Invalid Date', () => {
+    const bad = [null, undefined, NaN, Infinity, -Infinity, 0, -1]
+    for (const v of bad) {
+      expect(formatTimestamp(v, { fallback: '-' })).toBe('-')
+    }
+    expect(formatTimestamp(SEC, { fallback: '-' })).not.toBe('-')
   })
 })

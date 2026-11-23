@@ -9,27 +9,20 @@
  * 本模块不再提供 `sendCommand` 这类第二写入口。
  */
 import { request } from './index'
+import type { WritablePoint as WritablePointRaw } from './generated/WritablePoint'
+import type { ControlCommand as ControlCommandRaw } from './generated/ControlCommand'
 
-export interface WritablePoint {
-  id: string
-  name: string
-  data_type: string
-  device_id: string
-  device_name: string
-}
+// 字段与 generated 完全一致，直接复用契约类型
+export type WritablePoint = WritablePointRaw
 
-export interface ControlCommand {
-  id: string
-  device_id: string
-  device_name: string
-  point_id: string
-  point_name: string
-  write_value: number
-  operator: string
+/**
+ * 视图类型从 ts-rs generated 契约派生：字段名以契约为真源，
+ * 仅覆盖两处视图差异——status 收窄为字面量联合、bigint 时间戳转 number。
+ */
+export type ControlCommand = Omit<ControlCommandRaw, 'status' | 'created_at' | 'executed_at'> & {
   status: 'success' | 'failed' | 'pending'
   created_at: number
   executed_at: number | null
-  result: string | null
 }
 
 export function listWritablePoints(): Promise<WritablePoint[]> {

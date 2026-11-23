@@ -67,7 +67,7 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
 import { logError } from '@/utils/logger'
 import TableSkeleton from '@/components/TableSkeleton.vue'
-import { formatDateTime } from '@/utils/datetime'
+import { formatTimestamp } from '@/utils/datetime'
 
 interface PtData {
   enabled: boolean
@@ -94,9 +94,8 @@ function goRuntimeConfig() {
 }
 
 function formatTime(t: number) {
-  if (!t) return '-'
-  const ms = t > 1e12 ? t : t * 1000
-  return formatDateTime(ms)
+  // 会话开始时间单位由后端决定，用 auto 阈值自动判断秒/毫秒，空值兜底 '-'
+  return formatTimestamp(t, { fallback: '-' })
 }
 
 async function load() {

@@ -17,6 +17,7 @@ import {
   QUALITY_COLOR,
   type QualityRule,
 } from './dataQuality'
+import { qualityTagType } from '../utils/statusType'
 
 interface RequestConfig {
   url: string
@@ -296,8 +297,9 @@ describe('dataQuality 质量文案与配色常量', () => {
     expect(QUALITY_LABEL.old).toBe('过期')
   })
 
-  // 锁定配色契约：good=success / bad=danger / uncertain=warning / old=info
-  it('QUALITY_COLOR 映射固定', () => {
-    expect(QUALITY_COLOR).toEqual({ good: 'success', bad: 'danger', uncertain: 'warning', old: 'info' })
+  // 锁定配色契约：三处取色已统一到 statusType 本源，old 与 stale 同为「过期」必须同色
+  it('QUALITY_COLOR 映射固定且 old 与 stale 同色', () => {
+    expect(QUALITY_COLOR).toEqual({ good: 'success', bad: 'danger', uncertain: 'warning', old: 'warning' })
+    expect(QUALITY_COLOR.old).toBe(qualityTagType('stale'))
   })
 })

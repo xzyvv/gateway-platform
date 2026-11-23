@@ -11,6 +11,10 @@
 import { request } from './index'
 import { scopedGet, scopedSet } from '../utils/gatewayStorage'
 import { QUALITY_TEXT } from '../utils/qualityLabels'
+import { qualityTagType } from '../utils/statusType'
+import type { PointQuality as PointQualityRaw } from './generated/PointQuality'
+import type { QualityStats as QualityStatsRaw } from './generated/QualityStats'
+import type { PointBackoff as PointBackoffRaw } from './generated/PointBackoff'
 
 export type Quality = 'good' | 'bad' | 'uncertain' | 'old'
 
@@ -19,28 +23,25 @@ export const QUALITY_LABEL: Record<Quality, string> = {
   good: QUALITY_TEXT.good, bad: QUALITY_TEXT.bad, uncertain: QUALITY_TEXT.uncertain, old: QUALITY_TEXT.old,
 }
 
+/** 取色统一委托 statusType 本源：old 与 stale 同为「过期」，二者必须同色（warning） */
 export const QUALITY_COLOR: Record<Quality, string> = {
-  good: 'success', bad: 'danger', uncertain: 'warning', old: 'info',
+  good: qualityTagType('good'), bad: qualityTagType('bad'),
+  uncertain: qualityTagType('uncertain'), old: qualityTagType('old'),
 }
 
-export interface PointQuality {
-  point_id: string
-  point_name: string
-  device_id: string
-  device_name: string
-  value: number | null
+/**
+ * 视图类型从 ts-rs generated 契约派生（DD: 契约直用）：
+ * 字段名以 generated 为真源，后端加/删/改字段会立即在本文件类型检查中暴露。
+ * 仅覆盖两处前端视图差异——u64 在 JSON 里是 number（ts-rs 标 bigint）、
+ * quality 收窄为本页字面量联合；运行时行为不变。
+ */
+export type PointQuality = Omit<PointQualityRaw, 'quality' | 'last_update_at'> & {
   quality: Quality
-  consecutive_failures: number
   last_update_at: number
 }
 
-export interface QualityStats {
-  good: number
-  bad: number
-  stale: number
-  unknown: number
-  total: number
-}
+// 字段与 generated 完全一致，直接复用契约类型
+export type QualityStats = QualityStatsRaw
 
 export function listPointQuality(): Promise<PointQuality[]> {
   return request<PointQuality[]>({ url: '/api/devices/point-quality', method: 'GET' })
@@ -50,30 +51,23 @@ export function getQualityStats(): Promise<QualityStats> {
   return request<QualityStats>({ url: '/api/devices/point-quality/stats', method: 'GET' })
 }
 
-// ===== 采集退避状态（GET /api/devices/backoff，字段与 generated/PointBackoff.ts 保持一致）=====
+// ===== 采集退避状态（GET /api/devices/backoff）=====
 
-export interface PointBackoff {
-  point_id: string
-  point_name: string
-  device_id: string
-  device_name: string
-  bus: string
+/**
+ * 视图类型从 generated/PointBackoff 派生：字段名以契约为真源，
+ * 仅把 ts-rs 的 bigint 毫秒字段收窄为 number、quality 收窄为本页字面量联合。
+ */
+export type PointBackoff = Omit<
+  PointBackoffRaw,
+  'base_interval_ms' | 'current_interval_ms' | 'last_good_ts' | 'quality'
+> & {
   /** 配置的基础采集间隔（毫秒） */
   base_interval_ms: number
   /** 当前实际采集间隔（退避时放大，毫秒） */
   current_interval_ms: number
-  /** 退避倍率 = current / base（1 表示未退避） */
-  backoff_multiplier: number
-  /** 连续失败次数（>=3 进入退避） */
-  consecutive_failures: number
-  /** 连续重发次数 */
-  stale_count: number
-  last_good_value: number | null
   /** 上次成功时间戳（毫秒，0 表示从未成功） */
   last_good_ts: number
   quality: Quality
-  /** 是否处于退避中 */
-  backing_off: boolean
 }
 
 export function listPointBackoff(): Promise<PointBackoff[]> {

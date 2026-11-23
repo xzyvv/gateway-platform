@@ -108,16 +108,19 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { VideoPlay, CircleCheck, CircleClose, Warning, Clock } from '@element-plus/icons-vue'
 import { diagnosePointView as diagnose, type DiagResultView as DiagResult, type DiagStepStatus } from '@/api/diagnostics'
 import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
 import { formatDateTime } from '@/utils/datetime'
-import { failureMessage } from '@/utils/errorHandler'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
-import type { DeviceConfig, PointConfig } from '@/api/types'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
+import type { DeviceConfig, PointConfig } from '@/api/types'
+
+// GET 读操作（listDevices / listPoints）的 catch 统一走 showToast：拦截器已对
+// GET 弹过全局通知并打标记，showToast 据此跳过重复提示。
+const { showToast } = useErrorDisplay()
 
 const selectedDevice = ref('')
 const selectedPoint = ref('')
@@ -160,7 +163,7 @@ async function loadPointsForDevice(deviceId: string) {
     if (!pointsGuard.isCurrent(seq)) return
     points.value = data
   } catch (e) {
-    if (pointsGuard.isCurrent(seq)) ElMessage.error(failureMessage('加载设备点位', e))
+    if (pointsGuard.isCurrent(seq)) showToast(e, '加载设备点位失败')
   } finally {
     if (pointsGuard.isCurrent(seq)) loadingPoints.value = false
   }
@@ -182,7 +185,7 @@ onMounted(async () => {
       await loadPointsForDevice(selectedDevice.value)
     }
   } catch (e) {
-    ElMessage.error(failureMessage('加载设备列表', e))
+    showToast(e, '加载设备列表失败')
   } finally {
     if (!isUnmounted()) loadingDevices.value = false
   }

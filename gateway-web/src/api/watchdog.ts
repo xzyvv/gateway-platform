@@ -8,10 +8,12 @@
  */
 import { request } from './index'
 import type { ServiceInfo as ServiceInfoDto } from './generated/ServiceInfo'
+import type { HealEvent as HealEventRaw } from './generated/HealEvent'
+import type { HealAction } from './generated/HealAction'
 import type { ServiceStatus } from './generated/ServiceStatus'
 
 export type { ServiceStatus } from './generated/ServiceStatus'
-export type HealAction = 'RestartService' | 'ResetSerial' | 'ResetNetwork'
+export type { HealAction } from './generated/HealAction'
 
 /**
  * 服务行的前端视图：后端 `u64` 在 ts-rs 里是 `bigint`，而 JSON 实际传的是
@@ -31,13 +33,13 @@ export interface ServiceInfo {
   heartbeat_stall_count: number
 }
 
-export interface HealEvent {
-  id: string
+/**
+ * 视图类型从 ts-rs generated 契约派生：action 直接复用 generated 的 HealAction，
+ * 仅覆盖两处视图差异——bigint 时间戳转 number、可空 detail 转可选字段。
+ */
+export type HealEvent = Omit<HealEventRaw, 'time' | 'action' | 'detail'> & {
   time: number
   action: HealAction
-  target: string
-  reason: string
-  result: string
   detail?: string
 }
 

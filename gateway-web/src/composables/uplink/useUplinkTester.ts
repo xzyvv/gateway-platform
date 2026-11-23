@@ -3,7 +3,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { confirmDelete } from '@/utils/confirm'
 import { copyText } from '@/utils/clipboard'
-import { formatTimeOfDay } from '@/utils/datetime'
+import { formatTimestamp } from '@/utils/datetime'
 import {
   testUplink,
   getUplinkConfig,
@@ -195,7 +195,8 @@ export function useUplinkTester() {
   }
 
   function formatTime(t: number): string {
-    return formatTimeOfDay(t)
+    // 历史记录时间戳已是毫秒（与旧 formatTimeOfDay(t) 等价），style=time 只出时分秒
+    return formatTimestamp(t, { unit: 'ms', style: 'time' })
   }
 
   onMounted(async () => {

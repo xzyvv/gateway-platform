@@ -51,7 +51,7 @@ import { useRouter } from 'vue-router'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { useQueryState } from '@/composables/core/useQueryState'
 const { showToast } = useErrorDisplay()
-import { ElButton, ElTag, ElMessage } from 'element-plus'
+import { ElButton, ElTag, ElMessage, ElMessageBox } from 'element-plus'
 import {VideoPlay, VideoPause} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/utils/commonColumns'
@@ -150,7 +150,14 @@ function exportFiltered() {
  */
 async function saveAsSession() {
   const frames = filtered.value.map((p) => ({ time: p.time, direction: p.direction, hex: p.hex, parsed: p.parsed }))
-  const name = prompt('回放会话名称：', defaultSessionName())
+  let name: string
+  try {
+    ({ value: name } = await ElMessageBox.prompt('回放会话名称：', '存为回放会话', {
+      inputValue: defaultSessionName(),
+    }))
+  } catch {
+    return // 用户取消
+  }
   if (!name) return
   // 设备名仅作展示标识；混抓多设备时如实标注
   const devNames = new Set(filtered.value.map((p) => p.deviceName))

@@ -30,7 +30,7 @@ export function useAutoDetect() {
   const autoDetectSupported = computed(
     () => capsOf(selectedProtocol.value)?.supports_auto_detect ?? false,
   )
-  const { message } = useErrorDisplay()
+  const { showToast } = useErrorDisplay()
 
   const detecting = ref(false)
   const done = ref(false)
@@ -64,7 +64,7 @@ export function useAutoDetect() {
       if (++pollFailures >= 3) {
         stopPoll()
         detecting.value = false
-        ElMessage.error(message(e, '获取探测进度失败'))
+        showToast(e, '获取探测进度失败')
       }
     }
   }
@@ -83,7 +83,7 @@ export function useAutoDetect() {
       startPoll(true)
     } catch (e) {
       detecting.value = false
-      ElMessage.error(message(e, '启动探测失败'))
+      showToast(e, '启动探测失败')
     }
   }
 

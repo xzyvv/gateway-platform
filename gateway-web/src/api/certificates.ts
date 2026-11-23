@@ -10,22 +10,18 @@
  * 后端已删除该端点，其字段（`days_remaining` / `cert_path`）并入列表项。
  */
 import { request } from './index'
+import type { CertificateInfo } from './generated/CertificateInfo'
 
-export interface Certificate {
-  id: string
-  name: string
-  cert_type: 'server' | 'client' | 'ca'
-  subject: string
-  issuer: string
-  serial_number: string
+/**
+ * 视图类型从 ts-rs generated/CertificateInfo 契约派生：cert_type 字面量联合直接复用契约，
+ * 仅覆盖视图差异——bigint 时间戳/天数转 number、可空 bound_to 转可选字段。
+ * 保留 Certificate 导出名以兼容既有调用方。
+ */
+export type Certificate = Omit<CertificateInfo, 'valid_from' | 'valid_to' | 'days_remaining' | 'bound_to'> & {
   valid_from: number
   valid_to: number
   /** 剩余有效天数（负数 = 已过期） */
   days_remaining: number
-  /** 证书文件在本机的路径 */
-  cert_path: string
-  fingerprint: string
-  enabled: boolean
   bound_to?: string
 }
 

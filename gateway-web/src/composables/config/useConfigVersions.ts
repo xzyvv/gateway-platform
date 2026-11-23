@@ -7,9 +7,15 @@ import {
   compareConfigVersions, type ConfigVersionMeta, type ConfigVersionSummary,
 } from '@/api/config'
 import { failureMessage } from '@/utils/errorHandler'
-import { formatDateTime } from '@/utils/datetime'
+import { formatTimestamp } from '@/utils/datetime'
 import { formatBytes } from '@/utils/format'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+
+// GET 读操作的 catch 统一走 showToast：拦截器已对 GET 弹过全局通知并打
+// USER_NOTIFIED 标记，showToast 据此跳过重复的那条；写操作（备份/回滚）才用
+// failureMessage 保留带动作语境的本地提示（拦截器对写操作静音）。
+const { showToast } = useErrorDisplay()
 
 /** 字段中文标签映射（配置对比时使用） */
 const FIELD_LABELS: Record<string, string> = {
@@ -42,7 +48,7 @@ export function useConfigVersions() {
     try {
       versions.value = await listConfigVersions()
     } catch (e) {
-      ElMessage.error(failureMessage('加载版本列表', e))
+      showToast(e, '加载版本列表失败')
       logError('cfg-ver', e)
     } finally {
       loading.value = false
@@ -50,8 +56,8 @@ export function useConfigVersions() {
   }
 
   function formatTime(t?: number) {
-    if (!t) return '-'
-    return formatDateTime(t * 1000)
+    // 配置版本时间戳约定为秒（旧实现无条件 ×1000），空值兜底 '-'
+    return formatTimestamp(t, { unit: 'sec', fallback: '-' })
   }
 
   // 快照查看
@@ -69,7 +75,7 @@ export function useConfigVersions() {
       const cfg = await getConfigVersion(v.id)
       snapshotJson.value = JSON.stringify(cfg, null, 2)
     } catch (e) {
-      ElMessage.error(failureMessage('加载快照', e))
+      showToast(e, '加载快照失败')
       logError('cfg-ver', e)
     } finally {
       snapshotLoading.value = false
@@ -142,7 +148,7 @@ export function useConfigVersions() {
       compareToJson.value = JSON.stringify(toCfg, null, 2)
     } catch (e) {
       if (compareGuard.isCurrent(seq)) {
-        ElMessage.error(failureMessage('对比版本', e))
+        showToast(e, '对比版本失败')
         logError('cfg-ver', e)
       }
     } finally {

@@ -44,10 +44,11 @@ describe('qualityTagType', () => {
     expect(qualityTagType('Bad')).toBe('danger')
   })
 
-  it('过期类(old)→info，不确定/ stale→warning', () => {
-    expect(qualityTagType('old')).toBe('info')
+  it('old 与 stale 同为「过期」必须同色（warning），聚合→info', () => {
+    expect(qualityTagType('old')).toBe('warning')
+    expect(qualityTagType('stale')).toBe('warning')
+    expect(qualityTagType('old')).toBe(qualityTagType('stale'))
     expect(qualityTagType('Aggregated')).toBe('info')
     expect(qualityTagType('uncertain')).toBe('warning')
-    expect(qualityTagType('stale')).toBe('warning')
   })
 })

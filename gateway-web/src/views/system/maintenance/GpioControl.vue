@@ -99,6 +99,10 @@ import { extractErrorMessage } from '@/utils/errorHandler'
 import { logError } from '@/utils/logger'
 import { usePolling } from '@/composables/core/usePolling'
 import { formatClock } from '@/utils/datetime'
+import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+
+// getIoStatus 是 GET：拦截器已弹全局通知并打标记，showToast 据此跳过重复提示
+const { showToast } = useErrorDisplay()
 
 const status = ref<IoStatus | null>(null)
 const loading = ref(false)
@@ -120,8 +124,7 @@ async function load() {
     status.value = await getIoStatus()
     lastUpdate.value = formatClock()
   } catch (e) {
-    const detail = extractErrorMessage(e, '')
-    ElMessage.error(`加载 GPIO 状态失败：${detail || '未知错误'}`)
+    showToast(e, '加载 GPIO 状态失败')
     logError('gpio', e)
   } finally {
     loading.value = false
