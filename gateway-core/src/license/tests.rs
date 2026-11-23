@@ -573,6 +573,33 @@ fn test_ntp_resync_clears_tampered() {
     assert!(err2.is_none());
 }
 
+/// 回归（CI e2e 卡死 / 看门狗 abort）：`apply_ntp_resync` 曾在 `if let` 的
+/// scrutinee 里取 `self.path.lock()`，临时 guard 活到块尾，块内 `load()` 再次
+/// 加锁 → parking_lot 不可重入 → 同线程自死锁。该路径由 60s 周期的 NTP 对账
+/// 任务触发，一旦触发即永久卡死一个 tokio worker，最终被软件看门狗 abort。
+#[test]
+fn apply_ntp_resync_with_loaded_path_does_not_deadlock() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = Arc::new(manager(dir.path()));
+    let lic = write_lic(dir.path(), &sign_payload(&test_payload()));
+    // load() 会先把路径记进 self.path；本机真实指纹与测试钥对签发的 license
+    // 必然不匹配（返回 Fingerprint），与本次回归目标无关。
+    m.load(&lic).ok();
+    assert!(m.loaded_path().is_some(), "路径必须已登记");
+
+    let now = chrono::Utc::now().timestamp();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = m.clone();
+    std::thread::spawn(move || {
+        worker.apply_ntp_resync(now);
+        let _ = tx.send(());
+    });
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
+        "apply_ntp_resync 必须在 5s 内返回：路径锁在 load() 前未释放会自死锁"
+    );
+}
+
 // ===== ts-rs 类型导出 =====
 
 #[test]

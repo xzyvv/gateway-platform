@@ -502,11 +502,22 @@ impl LicenseManager {
         }
     }
 
+    /// 取已加载的 license 路径副本。
+    ///
+    /// 必须经此函数取值，不能写成 `if let Some(p) = self.path.lock().clone()`：
+    /// 后者 scrutinee 里的临时 `MutexGuard` 生命周期被延长到整个 `if let` 块结束，
+    /// 而块内 [`Self::load`] 又要 `self.path.lock()` 写回路径 —— `parking_lot`
+    /// 互斥不可重入，同线程二次加锁即永久自死锁。
+    fn loaded_path(&self) -> Option<PathBuf> {
+        let guard = self.path.lock();
+        guard.clone()
+    }
+
     /// 每日定时重校验（重读文件 + 重算有效期），由后台任务驱动
     pub async fn refresh_loop(self: Arc<Self>) {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
-            if let Some(path) = self.path.lock().clone() {
+            if let Some(path) = self.loaded_path() {
                 if let Err(e) = self.load(&path) {
                     tracing::warn!("license daily refresh rejected: {}", e);
                 }
@@ -583,9 +594,7 @@ impl LicenseManager {
     pub fn import(&self, text: &str) -> Result<(), LicenseError> {
         self.dry_parse(text)?;
         let path = self
-            .path
-            .lock()
-            .clone()
+            .loaded_path()
             .unwrap_or_else(|| std::path::PathBuf::from("license.lic"));
         std::fs::write(&path, text).map_err(|e| {
             tracing::warn!("license import write failed: {}", e);
@@ -603,7 +612,7 @@ impl LicenseManager {
             tracing::warn!("license clock resync failed: {}", e);
             return;
         }
-        if let Some(path) = self.path.lock().clone() {
+        if let Some(path) = self.loaded_path() {
             if let Err(e) = self.load(&path) {
                 tracing::warn!("license reload after ntp resync rejected: {}", e);
             }
