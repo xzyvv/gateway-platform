@@ -1579,3 +1579,132 @@ async fn snapshot_collapse_command_bounds_one_cycle() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].value, 99.0);
 }
+
+// ===== I-37：出队顺序由 id（写入顺序）决定 =====
+
+/// I-37：出队顺序必须由自增 id 决定，而不是 timestamp / source_ts 排序。
+///
+/// 反证闭环：把 `dequeue_batch` 的 `ORDER BY id ASC` 换成
+/// `ORDER BY timestamp ASC` → 本用例取回的顺序会变成 p-early/p-mid/p-late。
+#[test]
+fn dequeue_uses_id_order_not_timestamp_order() {
+    let (_dir, storage) = temp_sqlite();
+    let now = DataPoint::now();
+    // 插入顺序（id 1/2/3）与时间戳顺序完全相反：越晚写入的数据时间戳越旧。
+    let points = vec![
+        make_point_at("p-late", 1.0, now),
+        make_point_at("p-mid", 2.0, now - 5_000),
+        make_point_at("p-early", 3.0, now - 10_000),
+    ];
+    storage.enqueue_batch(&points).unwrap();
+
+    let items = storage.dequeue_batch(10).unwrap();
+    let ids: Vec<i64> = items.iter().map(|i| i.id).collect();
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "出队必须按 id 升序，实际 id 顺序: {ids:?}"
+    );
+    let order: Vec<&str> = items.iter().map(|i| i.point_id.as_str()).collect();
+    assert_eq!(
+        order,
+        vec!["p-late", "p-mid", "p-early"],
+        "出队顺序必须按写入顺序（id），而非时间戳"
+    );
+    // 测试前提：时间戳是严格降序的，与 id 顺序正好相反，否则本用例测不出差异。
+    let timestamps: Vec<i64> = items.iter().map(|i| i.timestamp).collect();
+    assert!(
+        timestamps[0] > timestamps[1] && timestamps[1] > timestamps[2],
+        "测试前提：时间戳应为降序，实际: {timestamps:?}"
+    );
+}
+
+// ===== I-42：系统级降级路径不消耗 fallback 反弹预算 =====
+
+/// I-42：磁盘满 / unsent overflow 降级走哨兵计数（`&mut 0u32`），
+/// 不消耗 5 轮 fallback 重试预算。
+///
+/// 若这两条路径真的消耗预算，从第 `FALLBACK_MAX_RETRIES + 1` 轮起整批数据会被
+/// 丢弃（`persist_dropped` 增长、`fallback_len` 不再增加）。
+#[tokio::test]
+async fn disk_full_path_does_not_consume_retry_budget() {
+    use crate::engine::metrics::Metrics;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let rounds = (FALLBACK_MAX_RETRIES * 2) as usize;
+    assert!(rounds > FALLBACK_MAX_RETRIES as usize);
+
+    // ① 磁盘满：连续 2×预算轮入队，一条都不能丢。
+    let queue = DataQueue::new_memory().unwrap();
+    let metrics = Arc::new(Metrics::new());
+    queue.set_metrics(metrics.clone());
+    queue.set_disk_ok(false);
+    for i in 0..rounds {
+        queue
+            .enqueue(vec![make_point(&format!("d{i}"), i as f64)])
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        queue.fallback_len(),
+        rounds,
+        "磁盘满路径不得消耗反弹预算，全部数据必须留在缓冲"
+    );
+    assert_eq!(
+        metrics
+            .queue_persist
+            .persist_dropped
+            .load(Ordering::Relaxed),
+        0,
+        "磁盘满路径不得丢点"
+    );
+
+    // 恢复后缓冲全部落盘，证明数据确实只是暂存而非被丢弃。
+    queue.set_disk_ok(true);
+    queue
+        .enqueue(vec![make_point("d-last", 99.0)])
+        .await
+        .unwrap();
+    assert_eq!(queue.fallback_len(), 0, "恢复后缓冲应清空");
+    assert_eq!(
+        queue.len().await,
+        rounds + 1,
+        "缓冲中的 rounds 个点与恢复后的新点都必须落盘"
+    );
+
+    // ② unsent overflow：真实 SQLite 后端灌入 10 条未送达行（比例 100% ≥ 80%），
+    //    DataQueue::enqueue 因而走 fallback 分支（与磁盘满共用哨兵计数）。
+    let (_dir, storage) = temp_sqlite();
+    let now = DataPoint::now();
+    let unsent: Vec<DataPoint> = (0..10)
+        .map(|i| make_point_at(&format!("u{i}"), 1.0, now - i as i64))
+        .collect();
+    storage.enqueue_batch(&unsent).unwrap();
+    assert!(
+        storage.unsent_overflow(),
+        "测试前提：未送达比例 100% 必须触发 unsent_overflow"
+    );
+
+    let queue = DataQueue::with_storage(Arc::new(storage)).unwrap();
+    let metrics = Arc::new(Metrics::new());
+    queue.set_metrics(metrics.clone());
+    for i in 0..rounds {
+        queue
+            .enqueue(vec![make_point(&format!("o{i}"), i as f64)])
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        queue.fallback_len(),
+        rounds,
+        "unsent overflow 路径不得消耗反弹预算，全部数据必须留在缓冲"
+    );
+    assert_eq!(
+        metrics
+            .queue_persist
+            .persist_dropped
+            .load(Ordering::Relaxed),
+        0,
+        "unsent overflow 路径不得丢点"
+    );
+}

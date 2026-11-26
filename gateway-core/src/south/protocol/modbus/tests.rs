@@ -1551,3 +1551,355 @@ async fn write_function_code_is_configured_and_value_is_absolute() {
     assert_eq!(body[0], 0x05, "fc=1 必须走 FC05");
     assert_eq!(&body[3..5], &[0xFF, 0x00], "线圈值 True 编码为 0xFF00");
 }
+
+// =========================================================================
+// G-T2b 不变量回归（I-02 / I-05 / RTU-02 / W-11 / R-03）
+//
+// 只补测试、不改生产代码：这些用例把采集结果结构、时间字段语义、定帧长度、
+// 写回显比对口径、跨从站分组这五处「上层依赖但缺少断言」的行为钉住。
+// =========================================================================
+
+/// I-02：`DataPoint.raw_type` 必须等于协议数据类型字符串，`raw_value` 必须是
+/// 原始寄存器值（不被 scale/offset 换算覆盖）。
+///
+/// 回归点：`raw_value` 是诊断/回溯的原始依据，若误用换算后的 `value` 覆盖，
+/// 现场只看 MQTT 数值无法反推设备真实寄存器内容；`raw_type` 若与配置的
+/// `data_type` 不一致（例如都写成 unknown），下游按类型做的二次换算会出错。
+#[tokio::test]
+async fn raw_type_matches_protocol_data_type() {
+    use crate::engine::model::Quality;
+
+    // 三个寄存器点位连续排布，合并为一帧 FC03 count=4：
+    //   u16@0 = 0x002A(42)、i16@1 = 0xFFFB(-5)、f32@2..3 = 0x42F70000(123.5)
+    // 三者的 scale/offset 都设为非平凡值，用于区分「原始值」与「工程量」。
+    let mut p_u16 = mk_poll_point("raw_u16", 0);
+    p_u16.data_type = Some("u16".into());
+    p_u16.scale = 2.0;
+    p_u16.offset = 100.0;
+    let mut p_i16 = mk_poll_point("raw_i16", 1);
+    p_i16.data_type = Some("i16".into());
+    p_i16.scale = 2.0;
+    p_i16.offset = 100.0;
+    let mut p_f32 = mk_poll_point("raw_f32", 2);
+    p_f32.data_type = Some("f32".into());
+    p_f32.scale = 2.0;
+    p_f32.offset = 100.0;
+
+    // 假从站回一帧 FC03：byte_count=8 + 4 个寄存器原始字节
+    let addr = spawn_modbus_tcp_script(vec![Some(vec![
+        0x03, 0x08, 0x00, 0x2A, 0xFF, 0xFB, 0x42, 0xF7, 0x00, 0x00,
+    ])])
+    .await;
+    let c = super::ModbusCollector::new("modbus_raw_type", modbus_tcp_bus(addr, 1000));
+    let out = c.read_batch_points(&[p_u16, p_i16, p_f32]).await;
+
+    assert_eq!(out.len(), 3, "每个输入点位都必须有结果");
+    assert!(out.iter().all(|d| d.quality == Quality::Good), "{:?}", out);
+
+    assert_eq!(
+        out[0].raw_type, "u16",
+        "raw_type 必须等于协议数据类型字符串"
+    );
+    assert_eq!(
+        out[0].raw_value, 42.0,
+        "raw_value 必须是原始寄存器值 0x002A"
+    );
+    assert_eq!(out[0].value, 42.0 * 2.0 + 100.0, "工程量才走 scale/offset");
+
+    assert_eq!(out[1].raw_type, "i16");
+    assert_eq!(out[1].raw_value, -5.0, "i16 原始值必须是带符号的 -5");
+    assert_eq!(out[1].value, -5.0 * 2.0 + 100.0);
+
+    assert_eq!(out[2].raw_type, "f32");
+    assert_eq!(out[2].raw_value, 123.5, "f32 原始值是寄存器解释出的浮点");
+    assert!(
+        (out[2].value - (123.5 * 2.0 + 100.0)).abs() < 1e-9,
+        "实际 {}",
+        out[2].value
+    );
+
+    // bool：线圈读路径的 raw_type 固定为 "bool"，raw_value 是位值而非工程量
+    let mut p_bool = mk_poll_point("raw_bool", 0);
+    p_bool.function_code = Some(1);
+    p_bool.scale = 5.0;
+    let addr = spawn_modbus_tcp_script(vec![Some(vec![0x01, 0x01, 0x01])]).await;
+    let c = super::ModbusCollector::new("modbus_raw_bool", modbus_tcp_bus(addr, 1000));
+    let out = c.read_batch_points(&[p_bool]).await;
+    assert_eq!(out[0].quality, Quality::Good, "{:?}", out[0]);
+    assert_eq!(out[0].raw_type, "bool");
+    assert_eq!(
+        out[0].raw_value, 1.0,
+        "raw_value 是原始位值 1，不是换算后的值"
+    );
+}
+
+/// I-05：协议批量构造成功点时，`timestamp` 与 `source_ts` 各自取自采集时刻，
+/// 实现不承诺二者严格相等（内部是两次 `DataPoint::now()`）。
+///
+/// 因此这里只断言「两字段都是有效时间且都落在本次采集的时间窗内」，绝不写
+/// `assert_ne!`——同毫秒内可达会让该断言偶发失败。
+#[tokio::test]
+async fn batch_built_point_timestamp_and_source_ts_are_independent() {
+    use crate::engine::model::{DataPoint, Quality};
+
+    let addr = spawn_modbus_tcp_script(vec![Some(vec![0x03, 0x02, 0x00, 0x2A])]).await;
+    let c = super::ModbusCollector::new("modbus_ts", modbus_tcp_bus(addr, 1000));
+
+    let before = DataPoint::now();
+    let out = c.read_batch_points(&[mk_poll_point("ts", 0)]).await;
+    let after = DataPoint::now();
+
+    assert_eq!(out.len(), 1);
+    let dp = &out[0];
+    assert_eq!(dp.quality, Quality::Good, "{dp:?}");
+
+    assert!(
+        dp.timestamp > 0,
+        "timestamp 必须是有效时间，实际 {}",
+        dp.timestamp
+    );
+    assert!(
+        dp.source_ts > 0,
+        "source_ts 必须是有效时间，实际 {}",
+        dp.source_ts
+    );
+
+    // 两字段都来自本次采集时刻：必须落在 [before, after] 窗口内
+    assert!(
+        dp.timestamp >= before && dp.timestamp <= after,
+        "timestamp={} 不在本次采集窗口 [{before},{after}]",
+        dp.timestamp
+    );
+    assert!(
+        dp.source_ts >= before && dp.source_ts <= after,
+        "source_ts={} 不在本次采集窗口 [{before},{after}]",
+        dp.source_ts
+    );
+}
+
+/// RTU-02：定帧长度按功能码固定值生效。
+/// - 异常帧（fc 最高位为 1）固定 5 字节：[slave][fc|0x80][code][crc_lo][crc_hi]
+/// - 写成功响应（FC05/FC06）固定 8 字节回显
+///
+/// 不足固定长度 → 返回 None（等待后续字节，绝不提前切帧）；
+/// 超出部分属于下一帧/噪声 → 只切固定长度，不贪婪吞并。
+#[test]
+fn extract_modbus_frame_enforces_exception_and_write_lengths() {
+    use super::frames::rtu_frame;
+    use crate::south::bus::FrameBuffer;
+
+    // ---- 异常帧：固定 5 字节 ----
+    let exc = rtu_frame(&[0x01, 0x83, 0x02]);
+    assert_eq!(exc.len(), 5, "异常帧本体必须是 5 字节");
+
+    let mut fb = FrameBuffer::new();
+    fb.push(&exc);
+    assert_eq!(
+        super::extract_modbus_frame(&mut fb, None).as_deref(),
+        Some(exc.as_slice()),
+        "完整的 5 字节异常帧必须被切出"
+    );
+
+    // 只有 4 字节 → 不足固定长度，必须等待而不是误切
+    let mut fb_short = FrameBuffer::new();
+    fb_short.push(&exc[..4]);
+    assert!(
+        super::extract_modbus_frame(&mut fb_short, None).is_none(),
+        "不足 5 字节的异常帧不得被切出"
+    );
+
+    // 额外尾部字节：只切 5 字节，剩余留给后续帧
+    let mut fb_extra = FrameBuffer::new();
+    fb_extra.push(&exc);
+    fb_extra.push(&[0xAA]);
+    assert_eq!(
+        super::extract_modbus_frame(&mut fb_extra, None).as_deref(),
+        Some(exc.as_slice())
+    );
+    assert_eq!(
+        fb_extra.len(),
+        1,
+        "异常帧只应按固定 5 字节切出，多余字节保留"
+    );
+
+    // ---- 写成功响应：FC05/FC06 固定 8 字节回显 ----
+    for fc in [0x05u8, 0x06] {
+        let echo = rtu_frame(&[0x01, fc, 0x00, 0x05, 0x00, 0x2A]);
+        assert_eq!(echo.len(), 8, "FC{fc:02X} 写回显必须是 8 字节");
+
+        let mut fb = FrameBuffer::new();
+        fb.push(&echo);
+        assert_eq!(
+            super::extract_modbus_frame(&mut fb, None).as_deref(),
+            Some(echo.as_slice()),
+            "FC{fc:02X} 的 8 字节回显必须被切出"
+        );
+
+        // 7 字节（截断）→ 不足固定长度，返回 None
+        let mut fb_short = FrameBuffer::new();
+        fb_short.push(&echo[..7]);
+        assert!(
+            super::extract_modbus_frame(&mut fb_short, None).is_none(),
+            "FC{fc:02X} 的 7 字节截断响应不得被误判为完整帧"
+        );
+
+        // 8 字节 + 尾部噪声 → 只切 8 字节
+        let mut fb_extra = FrameBuffer::new();
+        fb_extra.push(&echo);
+        fb_extra.push(&[0x55]);
+        assert_eq!(
+            super::extract_modbus_frame(&mut fb_extra, None).as_deref(),
+            Some(echo.as_slice())
+        );
+        assert_eq!(fb_extra.len(), 1, "FC{fc:02X} 只应按固定 8 字节切出");
+    }
+}
+
+/// W-11：写回显只按语义字段（前 6 字节：slave/fc/addr/值或数量）比对，
+/// 非语义字节（第 6/7 字节）不同仍应判成功。
+///
+/// 这是 `write_echo_mismatch_is_write_uncertain`（负向）的正向对偶。
+/// 用 FC16 单点写（f32 占 2 寄存器自动升级）构造最典型的「非语义字节必然不同」：
+/// 请求第 6/7 字节是 byte_count + 首个数据字节，响应第 6/7 字节是 CRC——
+/// 整帧 8 字节比对必然误判，语义比对必须放行。
+#[tokio::test]
+async fn write_echo_compares_semantic_fields_only() {
+    use crate::engine::codec::crc::crc16;
+
+    // write_and_capture 内部已断言写成功；先确认请求确为 FC16 单点写
+    let body = write_and_capture(mk_typed_point("f32"), 123.5).await;
+    assert_eq!(body[0], 0x10, "f32 单点写应升级为 FC16");
+
+    // 重建从站侧的真实 8 字节 RTU 回显：[slave] + 前 5 字节 PDU + CRC
+    let mut resp = vec![1u8];
+    resp.extend_from_slice(&body[..5]);
+    let crc = crc16(&resp);
+    resp.push((crc & 0xFF) as u8);
+    resp.push((crc >> 8) as u8);
+    assert_eq!(resp.len(), 8, "写成功响应必须是 8 字节");
+
+    // 前 6 字节语义字段完全一致
+    assert_eq!(
+        &resp[..6],
+        &[1u8, body[0], body[1], body[2], body[3], body[4]],
+        "slave/fc/addr/qty 必须与请求回显一致"
+    );
+
+    // 非语义字节（第 6/7 字节）不同：请求是 byte_count + 首个数据字节，响应是 CRC。
+    // 整帧比对会在此误判，语义比对（只比前 6 字节）必须放行 → 写判成功。
+    let req_non_semantic = &body[5..7];
+    assert_ne!(
+        &resp[6..8],
+        req_non_semantic,
+        "该用例前提是非语义字节不同（请求 {:02X?} vs 响应 {:02X?}）",
+        req_non_semantic,
+        &resp[6..8]
+    );
+}
+
+/// 记录每个 TCP 请求的 `(unit_id, PDU)` 的假从站：按 FC03 请求的地址回 1 个寄存器。
+///
+/// unit_id 位于 MBAP 头（第 7 字节），不在 PDU 内——跨从站是否合并只能看这一点。
+async fn spawn_slave_recording_stub() -> (String, Arc<std::sync::Mutex<Vec<(u8, Vec<u8>)>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr").to_string();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_outer = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            let seen = seen_outer.clone();
+            tokio::spawn(async move {
+                loop {
+                    let mut header = [0u8; 7];
+                    if stream.read_exact(&mut header).await.is_err() {
+                        return;
+                    }
+                    let tx_id = u16::from_be_bytes([header[0], header[1]]);
+                    let unit_id = header[6];
+                    let body_len =
+                        usize::from(u16::from_be_bytes([header[4], header[5]])).saturating_sub(1);
+                    let mut body = vec![0u8; body_len];
+                    if body_len > 0 && stream.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    seen.lock()
+                        .expect("seen poisoned")
+                        .push((unit_id, body.clone()));
+
+                    // FC03 读：按请求地址回 1 个寄存器（addr=0 → 42，其余 → 100）
+                    let req_addr = if body.len() >= 3 {
+                        u16::from_be_bytes([body[1], body[2]])
+                    } else {
+                        0
+                    };
+                    let value: u16 = if req_addr == 0 { 0x002A } else { 0x0064 };
+                    let pdu = vec![0x03, 0x02, (value >> 8) as u8, (value & 0xFF) as u8];
+                    let mut resp = Vec::with_capacity(7 + pdu.len());
+                    resp.extend_from_slice(&tx_id.to_be_bytes());
+                    resp.extend_from_slice(&0u16.to_be_bytes());
+                    resp.extend_from_slice(&((pdu.len() + 1) as u16).to_be_bytes());
+                    resp.push(unit_id);
+                    resp.extend_from_slice(&pdu);
+                    if stream.write_all(&resp).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (addr, seen)
+}
+
+/// R-03：批量读绝不跨从站合并。
+///
+/// 两个从站地址相邻（addr 0 / 1），若分组键漏掉 slave_id，就会被合成一帧，
+/// 只有一帧请求、另一从站的点位拿不到数据或串到别人的值。
+/// 这里同时用只读计划视图与真实下发帧（MBAP unit_id）双重锁定。
+#[tokio::test]
+async fn read_batches_never_merge_across_slaves() {
+    use crate::engine::model::Quality;
+
+    let p1 = {
+        let mut p = mk_poll_point("slave1_p0", 0);
+        p.slave_id = Some(1);
+        p
+    };
+    let p2 = {
+        let mut p = mk_poll_point("slave2_p1", 1);
+        p.slave_id = Some(2);
+        p
+    };
+
+    // 单元层：即使地址相邻，也必须按从站拆成两个计划组
+    let plan = super::merge_plan(&[&p1, &p2], 5);
+    assert_eq!(plan.len(), 2, "跨从站不得合并，实际计划 {plan:?}");
+    let mut slaves: Vec<u8> = plan.iter().map(|g| g.slave_id).collect();
+    slaves.sort_unstable();
+    assert_eq!(slaves, vec![1, 2], "每个计划组只包含一个从站");
+
+    // 端到端：真实下发帧的 MBAP unit_id 必须各自归属自己的从站
+    let (addr, seen) = spawn_slave_recording_stub().await;
+    let c = super::ModbusCollector::new("modbus_cross_slave", modbus_tcp_bus(addr, 1000));
+    let out = c.read_batch_points(&[p1, p2]).await;
+
+    assert_eq!(out.len(), 2);
+    assert!(out.iter().all(|d| d.quality == Quality::Good), "{:?}", out);
+    assert_eq!(out[0].value, 42.0, "从站 1 地址 0 应读到 42");
+    assert_eq!(out[1].value, 100.0, "从站 2 地址 1 应读到 100");
+
+    let frames = seen.lock().expect("seen poisoned").clone();
+    assert_eq!(frames.len(), 2, "两个从站必须各下发一帧，实际 {frames:?}");
+    for (unit, body) in &frames {
+        assert!(body.len() >= 3, "请求 PDU 过短: {body:?}");
+        let req_addr = u16::from_be_bytes([body[1], body[2]]);
+        match *unit {
+            1 => assert_eq!(req_addr, 0, "从站 1 的帧不得混入从站 2 的地址"),
+            2 => assert_eq!(req_addr, 1, "从站 2 的帧不得混入从站 1 的地址"),
+            other => panic!("出现未预期的从站地址 {other}"),
+        }
+    }
+}

@@ -173,13 +173,15 @@ fn range_hit(rule: &QualityRule, value: f64) -> bool {
     }
 }
 
-/// 前端质量码字符串 → 核心枚举；`old` 对应 `Stale`
+/// 前端质量码字符串 → 核心枚举。
+///
+/// `old` / `stale` 在这里降级为 `Uncertain`：I-20 规定 `Stale` 只能由调度器
+/// 的连续失败/退避判定产生，质量规则路径不得把点标成 `Stale`（G-T2b 修复）。
 fn quality_from_str(s: &str) -> Option<Quality> {
     match s {
         "good" => Some(Quality::Good),
         "bad" => Some(Quality::Bad),
-        "uncertain" => Some(Quality::Uncertain),
-        "old" | "stale" => Some(Quality::Stale),
+        "uncertain" | "old" | "stale" => Some(Quality::Uncertain),
         _ => None,
     }
 }
@@ -354,5 +356,135 @@ mod tests {
             Quality::Uncertain,
             "b 的 rate 上值表独立记录后应命中变化"
         );
+    }
+
+    /// I-18：多条规则同时命中时，只有**列表顺序中的第一条**生效，后续规则不得
+    /// 覆盖质量码与原因（命中即 break）。
+    #[test]
+    fn first_matching_quality_rule_wins() {
+        // 两条 range 规则都会命中 150（分别超出 ±100 与 0..10），
+        // 规则名不同，便于用 reason 判定到底是哪一条生效。
+        let mut first = rule("range", "bad", Some(-100.0), Some(100.0), None);
+        first.name = "first-range".into();
+        let mut second = rule("range", "uncertain", Some(0.0), Some(10.0), None);
+        second.name = "second-range".into();
+        let rt = QualityRuleRuntime::new(vec![first, second]);
+
+        let mut points = vec![point("p-order", 150.0)];
+        rt.apply(&mut points, 1_000);
+        assert_eq!(
+            points[0].quality,
+            Quality::Bad,
+            "必须采用第一条命中规则的质量码"
+        );
+        assert_eq!(
+            points[0].quality_reason, "quality_rule:first-range",
+            "reason 必须属于第一条命中的规则，后续规则不得覆盖"
+        );
+
+        // 交换顺序后结果必须跟着变，证明判定依据确实是列表顺序而非规则种类。
+        let mut second = rule("range", "uncertain", Some(0.0), Some(10.0), None);
+        second.name = "second-range".into();
+        let mut first = rule("range", "bad", Some(-100.0), Some(100.0), None);
+        first.name = "first-range".into();
+        let rt = QualityRuleRuntime::new(vec![second, first]);
+
+        let mut points = vec![point("p-order-rev", 150.0)];
+        rt.apply(&mut points, 1_000);
+        assert_eq!(points[0].quality, Quality::Uncertain);
+        assert_eq!(
+            points[0].quality_reason, "quality_rule:second-range",
+            "交换顺序后应由新顺序里的第一条规则生效"
+        );
+    }
+
+    /// I-19：变化率上值表容量上限 4096 + TTL 1 小时——超过 TTL 的旧条目在扩容
+    /// 清理时被淘汰，保证长时间运行内存有界。
+    ///
+    /// 直接驱动模块内私有上值表（同模块测试可访问私有项），不改变生产可见性。
+    #[test]
+    fn rate_history_table_expires_old_entries() {
+        let mut state: std::collections::HashMap<String, RateState> =
+            std::collections::HashMap::new();
+        // 灌满容量，时间戳停留在很久以前（远超 TTL）。
+        for i in 0..MAX_RATE_TRACKED_POINTS {
+            record_rate(&mut state, &format!("p{i}"), 1.0, 0);
+        }
+        assert_eq!(state.len(), MAX_RATE_TRACKED_POINTS, "测试前提：上值表已满");
+
+        // 新点的采样时刻比旧条目晚一个 TTL 以上 → 旧条目全部过期。
+        let now = RATE_STATE_TTL_MS + 1_000;
+        record_rate(&mut state, "fresh", 2.0, now);
+
+        assert_eq!(state.len(), 1, "超过 TTL 的旧条目必须全部被清理");
+        assert!(state.contains_key("fresh"), "新条目必须保留");
+        assert!(!state.contains_key("p0"), "过期条目不得残留");
+    }
+
+    /// I-19：同一时刻所有条目都未过期时，TTL 清理腾不出空间 → 整体清空后重插，
+    /// 保证上值表永不突破 4096 上限。
+    #[test]
+    fn rate_history_table_clears_when_over_capacity() {
+        let mut state: std::collections::HashMap<String, RateState> =
+            std::collections::HashMap::new();
+        let now = 1_000_000;
+        for i in 0..MAX_RATE_TRACKED_POINTS {
+            record_rate(&mut state, &format!("p{i}"), 1.0, now);
+        }
+        assert_eq!(state.len(), MAX_RATE_TRACKED_POINTS, "测试前提：上值表已满");
+
+        record_rate(&mut state, "overflow", 2.0, now + 1);
+
+        assert_eq!(
+            state.len(),
+            1,
+            "无法靠 TTL 腾出空间时必须整体清空，再插入新条目"
+        );
+        assert!(state.contains_key("overflow"));
+    }
+
+    /// I-20：质量规则路径**不得**产出 `Quality::Stale`（Stale 由调度器的连续
+    /// 失败/退避判定负责）。
+    ///
+    /// 1. `condition = "stale"` 的规则在 `apply` 中不执行（match 落到 `_ => None`）；
+    /// 2. `result_quality = "stale" / "old"` 在质量规则中被降级为 `Uncertain`
+    ///    （G-T2b 修复：此前会落成 `Stale`，违反 I-20）；
+    /// 3. 未知结果码（如 `perfect`）不产生任何降级，质量保持原值。
+    #[test]
+    fn quality_rules_never_produce_stale() {
+        // ① 条件为 stale 的规则永不执行：质量与原因都保持原值。
+        let rt = QualityRuleRuntime::new(vec![rule("stale", "bad", None, None, None)]);
+        let mut points = vec![point("p-stale-cond", 42.0)];
+        rt.apply(&mut points, 1_000);
+        assert_eq!(
+            points[0].quality,
+            Quality::Good,
+            "condition=stale 的规则不得执行，质量必须保持 Good"
+        );
+        assert_eq!(points[0].quality_reason, "");
+
+        // ② 结果码为 stale / old：必须降级为 Uncertain，绝不产出 Stale。
+        for result in ["stale", "old"] {
+            let mut to_uncertain = rule("range", result, Some(-100.0), Some(100.0), None);
+            to_uncertain.name = "to-uncertain".into();
+            let rt = QualityRuleRuntime::new(vec![to_uncertain]);
+            let mut points = vec![point("p-stale-result", 150.0)];
+            rt.apply(&mut points, 1_000);
+            assert_eq!(
+                points[0].quality,
+                Quality::Uncertain,
+                "result_quality={result} 必须降级为 Uncertain，不得产出 Stale"
+            );
+            assert_eq!(points[0].quality_reason, "quality_rule:to-uncertain");
+        }
+
+        // ③ 未知结果码不降级：规则命中但质量码无法解析 → 保持原质量与空原因。
+        let mut unknown = rule("range", "perfect", Some(-100.0), Some(100.0), None);
+        unknown.name = "unknown-result".into();
+        let rt = QualityRuleRuntime::new(vec![unknown]);
+        let mut points = vec![point("p-unknown-result", 150.0)];
+        rt.apply(&mut points, 1_000);
+        assert_eq!(points[0].quality, Quality::Good, "未知结果码不得改变质量");
+        assert_eq!(points[0].quality_reason, "");
     }
 }

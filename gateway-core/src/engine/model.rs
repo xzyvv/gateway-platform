@@ -359,6 +359,28 @@ mod tests {
         );
     }
 
+    /// I-04：Good 点必须携带 `stale_count == 0`，且 `timestamp` 与 `source_ts` 同源。
+    ///
+    /// `stale_count > 0` 的唯一语义是「本轮复用 last_good 陈旧值」，成功样本带上
+    /// 非零计数会让消费方把实时值误判为陈旧值；`source_ts` 也必须是本轮采集时刻，
+    /// 不能沿用上次的原始时标。
+    #[test]
+    fn good_point_has_zero_stale_count() {
+        let before = DataPoint::now();
+        let p = DataPoint::good("p1", "d1", 42.5, 850.0, "u16");
+        let after = DataPoint::now();
+        assert_eq!(p.quality, Quality::Good);
+        assert_eq!(p.stale_count, 0, "Good 点的 stale_count 必须为 0");
+        assert_eq!(
+            p.timestamp, p.source_ts,
+            "Good 点的 source_ts 必须等于 timestamp（本轮采集时刻）"
+        );
+        assert!(
+            p.source_ts >= before && p.source_ts <= after,
+            "source_ts 必须落在本次构造的时间区间内"
+        );
+    }
+
     /// R-2：失败点复用上一次成功值时，必须用 `raw_type = "last_good"` 显式标记
     /// 「这是旧值」，否则消费方会把旧值当成本轮实时值（静默的错误数据）。
     #[test]

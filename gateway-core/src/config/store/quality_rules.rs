@@ -26,7 +26,8 @@ use super::conn::SharedConn;
 /// 字段与前端 `gateway-web/src/api/dataQuality.ts` 的 `QualityRule` 一一对应
 /// （camelCase 序列化）：`condition` 取 `range|rate|nan`（历史数据可能仍有
 /// `stale`，但写接口已拒绝、管道不执行），
-/// `result_quality` 取 `good|bad|uncertain|old`（`old` 映射核心质量码 `Stale`）。
+/// `result_quality` 取 `good|bad|uncertain|old|stale`；其中 `old`/`stale` 在
+/// 质量规则中降级为 `Uncertain`——`Stale` 只能由调度器判定，规则路径不得产出。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityRule {

@@ -360,3 +360,53 @@ fn retention_deletes_at_most_one_batch_per_cycle() {
     let fourth = SqliteStorage::cleanup_old_records(&mut conn, Some(1), &depth, &rows_total);
     assert_eq!(fourth, 0, "无超期行时应为空操作");
 }
+
+/// I-38：容量淘汰顺序必须是 `timestamp ASC, id ASC`——先按时间淘汰最旧行，
+/// 同一时间戳内再按 id 升序（确定性 tie-break，保证探针统计与实删行一致）。
+#[test]
+fn capacity_prune_orders_by_timestamp_then_id() {
+    let mut conn = setup_conn();
+    // 4 行同属最旧时间戳 1000（id 1..4），6 行同属较新时间戳 2000（id 5..10）。
+    for i in 0..4 {
+        conn.execute(
+            "INSERT INTO data_queue (point_id, value, raw_value, raw_type, quality, timestamp, in_flight, delivered)
+             VALUES (?1, 0.0, 0.0, 'f64', 'good', 1000, 0, 0)",
+            params![format!("old-{}", i)],
+        )
+        .expect("insert old row");
+    }
+    for i in 0..6 {
+        conn.execute(
+            "INSERT INTO data_queue (point_id, value, raw_value, raw_type, quality, timestamp, in_flight, delivered)
+             VALUES (?1, 0.0, 0.0, 'f64', 'good', 2000, 0, 0)",
+            params![format!("new-{}", i)],
+        )
+        .expect("insert new row");
+    }
+
+    // 10 行削到 4 行 → 删 6 行：先删 4 行 timestamp=1000，
+    // 再删 timestamp=2000 中 id 最小的 2 行（id 5、6）。
+    let report = enforce(&mut conn, 4);
+    assert_eq!(report.deleted, 6);
+
+    let mut stmt = conn
+        .prepare("SELECT id, point_id, timestamp FROM data_queue ORDER BY id ASC")
+        .expect("prepare remaining rows");
+    let remaining: Vec<(i64, String, i64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .expect("query remaining rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect remaining rows");
+    drop(stmt);
+
+    assert_eq!(
+        remaining,
+        vec![
+            (7, "new-2".to_string(), 2000),
+            (8, "new-3".to_string(), 2000),
+            (9, "new-4".to_string(), 2000),
+            (10, "new-5".to_string(), 2000),
+        ],
+        "必须先按 timestamp 淘汰最旧行，同一时间戳内按 id 升序淘汰"
+    );
+}

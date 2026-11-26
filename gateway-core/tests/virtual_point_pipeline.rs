@@ -191,6 +191,63 @@ async fn derived_virtual_point_reaches_queue_and_northbound() {
     cm_handle.abort();
 }
 
+/// I-56：虚拟派生点 `source_ts == timestamp`（派生量没有独立的采集时刻）。
+///
+/// 直接看广播总线上的 `DataPoint`，避免经队列/历史映射后无法确认字段来源。
+#[tokio::test]
+async fn virtual_point_source_ts_equals_timestamp() {
+    let metrics = Arc::new(Metrics::new());
+    let queue = Arc::new(DataQueue::new_memory().expect("内存队列初始化失败"));
+    let bus = RealtimeBus::new(64);
+    let mut bus_rx = bus.subscribe();
+
+    let engine = VirtualPointEngine::new(vec![virtual_point("vp_power", "{u} * {i}")]);
+    let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
+        edge: Arc::new(EdgeProcessor::new()),
+        convert: ConvertEngine::empty(),
+        virtual_points: engine.clone(),
+        quality_rules: Arc::new(
+            gateway_core::pipeline::quality_rules::QualityRuleRuntime::default(),
+        ),
+        queue: queue.clone(),
+        realtime_bus: Some(bus.clone()),
+        north_tx: None,
+        buffer: 16,
+        metrics: metrics.clone(),
+    });
+
+    pipeline
+        .submit(CollectedBatch::new(vec![
+            (
+                point_config("u"),
+                DataPoint::good("u", "d1", 220.0, 220.0, "f32"),
+            ),
+            (
+                point_config("i"),
+                DataPoint::good("i", "d1", 10.0, 10.0, "f32"),
+            ),
+        ]))
+        .await;
+
+    let batch = tokio::time::timeout(Duration::from_secs(2), bus_rx.recv())
+        .await
+        .expect("管道必须在超时前广播该批")
+        .expect("总线不应关闭");
+    let vp = batch
+        .iter()
+        .find(|d| d.point_id == "vp_power")
+        .expect("派生点必须出现在广播批中");
+
+    assert!(vp.timestamp > 0, "派生点必须带新鲜时间戳");
+    assert_eq!(
+        vp.source_ts, vp.timestamp,
+        "虚拟点 source_ts 必须等于 timestamp（派生量无独立采集时刻）"
+    );
+    assert_eq!(vp.quality, gateway_core::engine::model::Quality::Good);
+
+    pipeline.shutdown();
+}
+
 /// 上报节流：输入不变时派生值不重复产出（避免同一数值反复刷屏）。
 #[tokio::test]
 async fn derived_value_is_not_re_emitted_when_input_unchanged() {

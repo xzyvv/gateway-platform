@@ -562,6 +562,61 @@ mod tests {
         (pipeline, queue, north_rx)
     }
 
+    /// 装配一条**带真实 RealtimeBus** 的管道：
+    /// 返回管道、队列、广播订阅端与北向接收端（I-44 用）。
+    fn spawn_pipeline_with_bus(
+        edge: EdgeProcessor,
+        convert: Vec<ConvertRuleConfig>,
+        vps: Vec<VirtualPoint>,
+    ) -> (
+        Arc<ProcessingPipeline>,
+        Arc<DataQueue>,
+        tokio::sync::broadcast::Receiver<Arc<Vec<DataPoint>>>,
+        mpsc::Receiver<Arc<Vec<DataPoint>>>,
+    ) {
+        let queue = Arc::new(DataQueue::new_memory().expect("memory queue"));
+        let bus = RealtimeBus::new(64);
+        let bus_rx = bus.subscribe();
+        let (north_tx, north_rx) = NorthFeed::channel(16);
+        let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
+            edge: Arc::new(edge),
+            convert: ConvertEngine::new(convert),
+            virtual_points: VirtualPointEngine::new(vps),
+            quality_rules: Arc::new(quality_rules::QualityRuleRuntime::default()),
+            queue: queue.clone(),
+            realtime_bus: Some(bus),
+            north_tx: Some(north_tx),
+            buffer: 16,
+            metrics: Arc::new(Metrics::default()),
+        });
+        (pipeline, queue, bus_rx, north_rx)
+    }
+
+    /// 轮询等待队列长度至少达到 `expected`（micro-batch 有 10ms 窗口）。
+    async fn wait_queue_at_least(queue: &Arc<DataQueue>, expected: usize) -> usize {
+        for _ in 0..400 {
+            let len = queue.len().await;
+            if len >= expected {
+                return len;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        queue.len().await
+    }
+
+    /// 紧循环等待队列长度达到 `expected`：只让出执行权、不睡眠。
+    /// 用于测量「入队是否早于 10ms 兜底 tick」——睡眠会把 tick 一并等进来。
+    async fn spin_queue_len(queue: &Arc<DataQueue>, expected: usize) -> usize {
+        for _ in 0..20_000 {
+            let len = queue.len().await;
+            if len >= expected {
+                return len;
+            }
+            tokio::task::yield_now().await;
+        }
+        queue.len().await
+    }
+
     /// I-52：处理顺序必须是「边缘过滤 → 协议转换 → 虚拟点」。
     ///
     /// 用死区 0.5 + 线性 ×10 构造顺序敏感场景：
@@ -789,5 +844,168 @@ mod tests {
         );
         assert!(vp.timestamp > 0);
         assert_eq!(vp.stale_count, 0, "派生点不得携带陈旧计数");
+    }
+
+    // ===== G-T2b：micro-batch 与广播/北向投递不变量（I-43 / I-44 / I-45 管道侧） =====
+
+    /// I-43：accum 攒满 500 点必须**立刻入队**，不能等 10ms 兜底 tick。
+    ///
+    /// 单批 500 点在 `process_batch` 返回后即满足 `batch_threshold`，应在
+    /// micro-batch 窗口（10ms）之前落到队列；若阈值分支被删掉，只能等 tick
+    /// （≥10ms）才入队，下界断言会失败。
+    #[tokio::test]
+    async fn micro_batch_flushes_at_500_points() {
+        let (pipeline, queue, _north_rx) = spawn_pipeline(Vec::new(), Vec::new());
+
+        let items: Vec<(PointConfig, DataPoint)> = (0..500)
+            .map(|i| {
+                let id = format!("p{i}");
+                (
+                    point(&id, 0.0),
+                    DataPoint::good(&id, "dev", i as f64, i as f64, "f32"),
+                )
+            })
+            .collect();
+
+        let started = std::time::Instant::now();
+        pipeline.submit(CollectedBatch::new(items)).await;
+        let len = spin_queue_len(&queue, 500).await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(len, 500, "满 500 点必须整批入队");
+        assert!(
+            elapsed < Duration::from_millis(10),
+            "满 500 点必须立即入队（阈值判定），实测 {:?}；≥10ms 说明退化成等兜底 tick",
+            elapsed
+        );
+        pipeline.shutdown();
+    }
+
+    /// I-43：退出信号必须把 accum 里残留的（<500 点）数据 flush 再退出，不得丢数。
+    #[tokio::test]
+    async fn shutdown_flushes_pending_micro_batch() {
+        let (pipeline, queue, mut north_rx) = spawn_pipeline(Vec::new(), Vec::new());
+
+        let items: Vec<(PointConfig, DataPoint)> = (0..3)
+            .map(|i| {
+                let id = format!("p{i}");
+                (
+                    point(&id, 0.0),
+                    DataPoint::good(&id, "dev", i as f64, i as f64, "f32"),
+                )
+            })
+            .collect();
+        pipeline.submit(CollectedBatch::new(items)).await;
+
+        // 等到 process_batch 完成（批次已进北向队列），此刻 3 点已进入 accum
+        let _ = tokio::time::timeout(Duration::from_secs(2), north_rx.recv())
+            .await
+            .expect("管道必须在超时前处理该批")
+            .expect("北向通道不应关闭");
+        tokio::task::yield_now().await;
+
+        pipeline.shutdown();
+        let len = wait_queue_at_least(&queue, 3).await;
+        assert_eq!(len, 3, "退出信号必须 flush 残留的 micro-batch，不得丢数");
+    }
+
+    /// I-44：同一批必须**先发布到广播总线，再投递北向队列**。
+    ///
+    /// 北向队列收到该批的时刻，广播必然已在总线上就绪；反序会导致
+    /// 「北向已上报、看板还没数据」的可观测缺口。
+    #[tokio::test]
+    async fn pipeline_publishes_bus_before_feed() {
+        let (pipeline, _queue, mut bus_rx, mut north_rx) =
+            spawn_pipeline_with_bus(EdgeProcessor::new(), Vec::new(), Vec::new());
+
+        pipeline
+            .submit(CollectedBatch::new(vec![(
+                point("p1", 0.0),
+                DataPoint::good("p1", "dev", 1.0, 1.0, "f32"),
+            )]))
+            .await;
+
+        let from_feed = tokio::time::timeout(Duration::from_secs(2), north_rx.recv())
+            .await
+            .expect("北向必须在超时前收到批次")
+            .expect("北向通道不应关闭");
+        let from_bus = bus_rx
+            .try_recv()
+            .expect("北向收到数据时广播必须已发布（投递顺序错误）");
+
+        assert_eq!(from_bus.len(), 1);
+        assert_eq!(from_bus[0].point_id, "p1");
+        assert_eq!(from_feed.len(), 1);
+        pipeline.shutdown();
+    }
+
+    /// I-44：广播总线与北向队列必须共享**同一份** `Arc<Vec<DataPoint>>`（零拷贝）。
+    #[tokio::test]
+    async fn pipeline_shares_same_arc_between_bus_and_feed() {
+        let (pipeline, _queue, mut bus_rx, mut north_rx) =
+            spawn_pipeline_with_bus(EdgeProcessor::new(), Vec::new(), Vec::new());
+
+        pipeline
+            .submit(CollectedBatch::new(vec![
+                (
+                    point("p1", 0.0),
+                    DataPoint::good("p1", "dev", 1.0, 1.0, "f32"),
+                ),
+                (
+                    point("p2", 0.0),
+                    DataPoint::good("p2", "dev", 2.0, 2.0, "f32"),
+                ),
+            ]))
+            .await;
+
+        let from_feed = tokio::time::timeout(Duration::from_secs(2), north_rx.recv())
+            .await
+            .expect("北向必须在超时前收到批次")
+            .expect("北向通道不应关闭");
+        let from_bus = tokio::time::timeout(Duration::from_secs(2), bus_rx.recv())
+            .await
+            .expect("广播必须在超时前收到批次")
+            .expect("总线不应关闭");
+
+        assert_eq!(from_bus.len(), 2);
+        assert!(
+            Arc::ptr_eq(&from_bus, &from_feed),
+            "广播与北向必须共享同一份 Arc；指针不同说明热路径上发生了深拷贝"
+        );
+        pipeline.shutdown();
+    }
+
+    /// I-45：NorthFeed 接收端掉线后，管道只记 warn 并丢弃该批，不得 panic / 卡死。
+    #[tokio::test]
+    async fn pipeline_drops_batch_with_warn_when_feed_closed() {
+        let (pipeline, queue, north_rx) = spawn_pipeline(Vec::new(), Vec::new());
+        // 模拟 NorthDispatcher 已退出：接收端在管道投递前被 drop
+        drop(north_rx);
+
+        pipeline
+            .submit(CollectedBatch::new(vec![(
+                point("p1", 0.0),
+                DataPoint::good("p1", "dev", 1.0, 1.0, "f32"),
+            )]))
+            .await;
+        assert_eq!(
+            wait_queue_at_least(&queue, 1).await,
+            1,
+            "北向掉线只丢上报，入队路径必须照常"
+        );
+
+        // 管道任务未 panic 退出：后续批次仍能正常处理
+        pipeline
+            .submit(CollectedBatch::new(vec![(
+                point("p2", 0.0),
+                DataPoint::good("p2", "dev", 2.0, 2.0, "f32"),
+            )]))
+            .await;
+        assert_eq!(
+            wait_queue_at_least(&queue, 2).await,
+            2,
+            "北向掉线后管道必须继续工作"
+        );
+        pipeline.shutdown();
     }
 }

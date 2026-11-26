@@ -554,6 +554,88 @@ mod tests {
         assert_eq!(out[0].value, 63.0);
     }
 
+    /// I-33：热重载后**按 id 保留**求值状态——新公式算出的值与旧值相同则不得重复上报。
+    ///
+    /// 用 `{p1} * 2` → `{p1} + 21`（缓存里 p1=21，两种公式都得 42）区分「保留」与「重算」：
+    /// 若重载时清空了状态，prev 为空 → 首次求值必然产出 1 个点。
+    #[test]
+    fn hot_reload_preserves_value_and_error_state() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2")]);
+        let items = vec![item("p1", 21.0)];
+        engine.update_cache(
+            &items,
+            &items.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+        );
+        assert_eq!(engine.evaluate().len(), 1);
+        assert_eq!(engine.states()["vp1"].value, Some(42.0));
+
+        engine.update_rules(vec![vp("vp1", "{p1} + 21")]);
+        let out = engine.evaluate();
+        assert!(
+            out.is_empty(),
+            "同值重载不得重新产出（说明状态未按 id 保留），实际 {} 个",
+            out.len()
+        );
+        assert_eq!(engine.states()["vp1"].value, Some(42.0));
+
+        // 错误状态同理：重载前后都因引用缺失失败，状态未变 → 不重复上报
+        let err_engine = VirtualPointEngine::new(vec![vp("vp_e", "{nope} * 2")]);
+        assert_eq!(err_engine.evaluate().len(), 1, "首次错误必须上报一次");
+        assert!(err_engine.states()["vp_e"].error.is_some());
+
+        err_engine.update_rules(vec![vp("vp_e", "{nope} * 2")]);
+        assert!(
+            err_engine.evaluate().is_empty(),
+            "错误状态未变时不得重复上报"
+        );
+        let st = &err_engine.states()["vp_e"];
+        assert!(st.error.is_some(), "重载后错误状态仍须保留");
+        assert_eq!(st.value, None);
+    }
+
+    /// I-33：被删除的虚拟点位其求值状态必须一并清理（状态表不得随配置变更无限增长）。
+    #[test]
+    fn hot_reload_prunes_state_of_removed_rule() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2"), vp("vp2", "{p1} + 1")]);
+        let items = vec![item("p1", 10.0)];
+        engine.update_cache(
+            &items,
+            &items.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+        );
+        assert_eq!(engine.evaluate().len(), 2);
+        assert!(engine.states().contains_key("vp1"));
+
+        engine.update_rules(vec![vp("vp2", "{p1} + 1")]);
+        let states = engine.states();
+        assert!(
+            !states.contains_key("vp1"),
+            "被删除规则的历史状态必须清理，否则状态表随配置只增不减"
+        );
+        assert!(states.contains_key("vp2"), "保留规则的状态不得丢失");
+        assert_eq!(states["vp2"].value, Some(11.0));
+        assert_eq!(engine.rule_count(), 1);
+    }
+
+    /// I-33：点位实时值缓存不随规则重载重置——重载后的新公式仍能读到重载前的采集值。
+    #[test]
+    fn hot_reload_keeps_point_cache() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2")]);
+        let items = vec![item("p1", 21.0)];
+        engine.update_cache(
+            &items,
+            &items.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+        );
+        assert_eq!(engine.evaluate()[0].value, 42.0);
+
+        // 换成只引用 p1 的新规则：缓存若被重置，这里只能产出错误点（引用不可用）
+        engine.update_rules(vec![vp("vp2", "{p1} + 1")]);
+        let out = engine.evaluate();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].point_id, "vp2");
+        assert_eq!(out[0].quality, Quality::Good, "重载不得清空点位实时值缓存");
+        assert_eq!(out[0].value, 22.0);
+    }
+
     #[test]
     fn recalc_returns_current_state() {
         let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2")]);

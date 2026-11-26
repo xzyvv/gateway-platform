@@ -4,10 +4,11 @@ use crate::engine::model::Quality;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// 测试用 connector：只累加计数
+/// 测试用 connector：累加计数；`fail` 时模拟投递失败（错误只应被记 warn）。
 struct TestConnector {
     name_str: String,
     count: AtomicUsize,
+    fail: bool,
 }
 
 #[async_trait::async_trait]
@@ -21,6 +22,12 @@ impl crate::north::NorthConnector for TestConnector {
     async fn stop(&self) {}
     async fn publish_batch(&self, _batch: &[DataPoint]) -> crate::engine::error::GatewayResult<()> {
         self.count.fetch_add(1, Ordering::Relaxed);
+        if self.fail {
+            // 失败 connector：每次投递都报错，验证不影响其它 connector
+            return Err(crate::engine::error::GatewayError::Protocol(
+                "injected publish failure".into(),
+            ));
+        }
         Ok(())
     }
     fn health(&self) -> crate::north::ConnectorHealth {
@@ -39,10 +46,12 @@ async fn test_north_dispatcher_fanout() {
     let s1 = Arc::new(TestConnector {
         name_str: "s1".into(),
         count: AtomicUsize::new(0),
+        fail: false,
     });
     let s2 = Arc::new(TestConnector {
         name_str: "s2".into(),
         count: AtomicUsize::new(0),
+        fail: false,
     });
     mgr.register_connector(s1.clone() as Arc<dyn NorthConnector>);
     mgr.register_connector(s2.clone() as Arc<dyn NorthConnector>);
@@ -108,6 +117,7 @@ async fn test_connector_publish_batch_no_panic_on_empty() {
     let connector = TestConnector {
         name_str: "test".into(),
         count: AtomicUsize::new(0),
+        fail: false,
     };
     let _ = connector.publish_batch(&[]).await;
     // TestConnector.publish_batch always increments (regardless of batch size)
@@ -170,6 +180,7 @@ async fn north_feed_backpressure_delivers_every_batch() {
     let connector = Arc::new(TestConnector {
         name_str: "bp".into(),
         count: AtomicUsize::new(0),
+        fail: false,
     });
     mgr.register_connector(connector.clone() as Arc<dyn NorthConnector>);
 
@@ -207,4 +218,112 @@ async fn north_feed_backpressure_delivers_every_batch() {
 
     mgr.shutdown_token().shutdown();
     let _ = tokio::time::timeout(std::time::Duration::from_millis(500), run_handle).await;
+}
+
+/// I-51：单个 connector 失败只记 warn，不得阻断其它 connector 收齐全部批次。
+///
+/// `fanout` 用 `join_all` 并发投递，各 connector 的 `publish_batch` 结果彼此独立；
+/// 若退化成「一个失败就 return」，健康 connector 会少收批次。
+#[tokio::test]
+async fn failing_connector_does_not_block_others() {
+    let total = 5usize;
+    let (tx, rx) = crate::north::NorthFeed::channel(16);
+    let mgr = NorthDispatcher::new(rx);
+
+    let failing = Arc::new(TestConnector {
+        name_str: "bad".into(),
+        count: AtomicUsize::new(0),
+        fail: true,
+    });
+    let healthy = Arc::new(TestConnector {
+        name_str: "good".into(),
+        count: AtomicUsize::new(0),
+        fail: false,
+    });
+    mgr.register_connector(failing.clone() as Arc<dyn NorthConnector>);
+    mgr.register_connector(healthy.clone() as Arc<dyn NorthConnector>);
+
+    let mgr_clone = mgr.clone();
+    let run_handle = tokio::spawn(async move { mgr_clone.run().await });
+    tokio::task::yield_now().await;
+
+    for i in 0..total {
+        tx.send(Arc::new(vec![DataPoint::good(
+            &format!("p{}", i),
+            "d1",
+            i as f64,
+            i as f64,
+            "u16",
+        )]))
+        .await
+        .unwrap();
+    }
+
+    for _ in 0..200 {
+        if healthy.count.load(Ordering::Relaxed) == total {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
+    assert_eq!(
+        healthy.count.load(Ordering::Relaxed),
+        total,
+        "失败 connector 不得阻断其它 connector 收齐全部批次"
+    );
+    assert_eq!(
+        failing.count.load(Ordering::Relaxed),
+        total,
+        "失败 connector 每批仍会被调用（错误只在 fanout 内记 warn）"
+    );
+
+    mgr.shutdown_token().shutdown();
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(500), run_handle).await;
+}
+
+/// I-51：停机信号到达时，队列中已积压的批次必须先 drain 再退出。
+///
+/// 停机窗口里 `run` 若直接 break，末尾几批上行数据会永久丢失；
+/// 正确语义是 shutdown 分支先 `try_recv` 把积压全部 fan-out 出去。
+#[tokio::test]
+async fn dispatcher_drains_pending_batches_before_exit() {
+    let total = 5usize;
+    let (tx, rx) = crate::north::NorthFeed::channel(16);
+    let mgr = NorthDispatcher::new(rx);
+
+    let connector = Arc::new(TestConnector {
+        name_str: "drain".into(),
+        count: AtomicUsize::new(0),
+        fail: false,
+    });
+    mgr.register_connector(connector.clone() as Arc<dyn NorthConnector>);
+
+    // 先在队列里积压，run 尚未启动（接收端还没被 take 走）
+    for i in 0..total {
+        tx.send(Arc::new(vec![DataPoint::good(
+            &format!("p{}", i),
+            "d1",
+            i as f64,
+            i as f64,
+            "u16",
+        )]))
+        .await
+        .unwrap();
+    }
+
+    let mgr_clone = mgr.clone();
+    let run_handle = tokio::spawn(async move { mgr_clone.run().await });
+    // 立刻停机：此时队列仍有积压
+    mgr.shutdown_token().shutdown();
+
+    let res = tokio::time::timeout(std::time::Duration::from_secs(5), run_handle)
+        .await
+        .expect("停机后 run 必须在 5s 内退出");
+    assert!(res.is_ok(), "run 应正常结束");
+
+    assert_eq!(
+        connector.count.load(Ordering::Relaxed),
+        total,
+        "停机前已积压的批次必须全部 drain，不得被停机窗口截断"
+    );
 }

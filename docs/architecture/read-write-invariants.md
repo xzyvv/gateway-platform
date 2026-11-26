@@ -31,10 +31,10 @@
 | B-08 | 池满不得直接失败，应先短等待退避 | ✅ | `TransactionPool::acquire_slot`；测试 `pool_waits_for_slot_instead_of_failing_immediately` |
 | B-09 | 池满/本地拥塞必须报 `BusBusy`，不得伪装成「设备不应答」 | ✅ | `map_txn_err`：`Busy → BusBusy` |
 | B-10 | 事务前的陈旧字节必须排空 | ✅ | 串口 `clear_input()` |
-| B-11 | 排空的陈旧字节必须可观测（非 0 = 上一帧没收完整） | ✅ | `gateway_bus_stale_bytes_dropped_total` + warn 日志 |
+| B-11 | 排空的陈旧字节必须可观测（非 0 = 上一帧没收完整） | ✅ | `gateway_bus_stale_bytes_dropped_total` + warn 日志；测试 `draining_stale_input_increments_stale_bytes_metric`（`south/bus/serial_task/tests.rs`） |
 | B-12 | 串口在途事务不可被抢占（物理约束，非缺陷） | ✅ | 串口 task 单事务串行，控制通道只在当前事务结束后消费；测试 `in_flight_serial_transaction_is_not_preempted` 断言读事务等应答期间控制写不落线、两帧不交错 |
 | B-13 | 串口故障分级：设备级失败不得重开端口 | ✅ | `serial_task` 自检帧 + `MIN_REOPEN_INTERVAL` |
-| B-14 | 广播地址（slave=0）不得记为「成功通信过的从站」 | ✅ | `last_good_slave` 过滤 `slave == 0` |
+| B-14 | 广播地址（slave=0）不得记为「成功通信过的从站」 | ✅ | `last_good_slave` 过滤 `slave == 0`；测试 `broadcast_slave_zero_is_excluded_from_known_good_slaves`（`south/bus/tests.rs`） |
 
 ## 2. 写语义（跨协议统一口径）
 
@@ -63,7 +63,7 @@
 | W-08 | 写超时后应能读回核实（消除「未知」） | ✅ | API 写入口在 `outcome == uncertain` 时自动读回：单写 `read`（5s 预算），批写按总线 `read_batch`（`batch_timeout_budget`）；**只做正向收敛**——读回值与写入值一致（容差 = 半量化单位 `|scale|/2`）才判定写已生效，不一致或读不到都保持 5102 并把读回值附给操作员（`write_readback_matches`） |
 | W-09 | 点位**不建模**「写值 / 增量 / 脉冲」写属性（决议 A）：写通道由 `function_code` 决定，寄存器宽度由 `data_type` 决定，写入值为绝对值 | ✅ | 测试 `write_function_code_is_configured_and_value_is_absolute`：fc=6→FC06、fc 缺省→FC06、f32→自动升 FC16、fc=1→FC05，且写入值为绝对值（无累加语义） |
 | W-10 | Modbus 写异常响应必须保留 `ModbusException` 语义 | ✅ | `trait_impl.rs` 先判 5 字节异常帧；测试 `write_exception_frame_maps_to_modbus_exception` |
-| W-11 | 写响应按**语义字段**校验（slave/fc/addr/值），不得整帧比对 | ✅ | `verify_write_echo`（CRC 由定帧层负责） |
+| W-11 | 写响应按**语义字段**校验（slave/fc/addr/值），不得整帧比对 | ✅ | `verify_write_echo`（CRC 由定帧层负责）；测试 `write_echo_compares_semantic_fields_only`（`south/protocol/modbus/tests.rs`） |
 | W-11b | 写回显**不匹配** → 应答无法解析 → 结果未知（写很可能已执行），不得报成普通失败 | ✅ | Modbus `verify_write_echo` 失败 → `mark_write_uncertain`；测试 `write_echo_mismatch_is_write_uncertain` |
 | W-12 | 自研客户端协议（s7comm / fins / mc / iec104 / bacnet）的写路径必须套用同一套定级 | ✅ | 各协议写路径 `mark_write_uncertain`；测试 `s7comm/mc/fins/iec104/bacnet` 写语义用例 |
 | W-13 | **未下发**的失败（地址解析失败、参数非法、建链失败、`BusBusy`、不可写功能码）不得算「结果未知」 | ✅ | 这些路径不套 `mark_write_uncertain`；不可写 FC → `Unsupported`；测试 `write_unsupported_function_code_is_not_uncertain` |
@@ -77,7 +77,7 @@
 |---|---|---|---|
 | R-01 | 读响应必须校验从站地址与 `byte_count` | ✅ | `parse_read_response` / `parse_coils_response` |
 | R-02 | 读异常码必须区分「配置类」与「可恢复类」 | ✅ | `classify_exception` |
-| R-03 | 批量读必须按 `(slave_id, 功能码)` 分组，不得跨从站合并 | ✅ | `read_batch_points_with_slots` |
+| R-03 | 批量读必须按 `(slave_id, 功能码)` 分组，不得跨从站合并 | ✅ | `read_batch_points_with_slots`；测试 `read_batches_never_merge_across_slaves`（`south/protocol/modbus/tests.rs`） |
 | R-04 | 批量写合并必须地址**严格连续**，不得跨空洞 | ✅ | `merge_write_batches` |
 | R-05 | 批量读合并上限：线圈 2000 点 / 寄存器 125 点 | ✅ | `merge_batches` |
 
@@ -86,7 +86,7 @@
 | # | 不变量 | 状态 | 守点 |
 |---|---|---|---|
 | RTU-01 | RTU 帧结构 `[slave][fc][data][crc_lo][crc_hi]`，CRC 必校 | ✅ | `frames.rs` |
-| RTU-02 | 异常帧定长 5 字节；读响应 `3 + byte_count + 2`；写响应 8 字节 | ✅ | `extract_modbus_frame` |
+| RTU-02 | 异常帧定长 5 字节；读响应 `3 + byte_count + 2`；写响应 8 字节 | ✅ | `extract_modbus_frame`；测试 `extract_modbus_frame_enforces_exception_and_write_lengths`（`south/protocol/modbus/tests.rs`） |
 | RTU-03 | FC21（写文件记录）变长回显必须支持 | ✅ | `extract_modbus_frame` 新增 `0x15` 分支 |
 | RTU-04 | 未知功能码不得被误判为完整帧（必须逐字节重同步） | ✅ | `extract_modbus_frame` 默认分支 |
 | RTU-05 | 寄存器读 `expected_count` 校验公式 = `n * 2` | ✅ | `extract_modbus_frame` |
@@ -109,7 +109,7 @@
 | TCP-04 | 写与写必须串行（同一 socket 上不可交叉） | ✅ | `write_sem = Semaphore(1)` |
 | TCP-05 | 连接断开必须触发重连，且不得重发在途请求 | ✅ | `tcp_task` 代次校验（`Arc::ptr_eq`） |
 | TCP-06 | 写超时必须作废在途事务并强制重连，且**不得重发**该写 | ✅ | `abort_all()` + `retry_allowed=false` |
-| TCP-07 | 断链/写超时的原因与作废数量必须可观测 | ✅ | `abort_all` 返回计数 + 原因日志 |
+| TCP-07 | 断链/写超时的原因与作废数量必须可观测 | ✅ | `abort_all` 返回计数 + 原因日志；测试 `abort_reason_and_count_are_recorded`（`south/bus/tcp_task/tests.rs`）。备注：`abort_all` 本身无 reason 参数，原因由调用方 `warn!` 记录，测试以源码契约断言 |
 | TCP-08 | 写与读共享同一 socket 时的并发上限必须一致 | ✅ | 池槽位 = `tcp_concurrent`，写保留槽位 |
 | TCP-09 | 单台不应答设备不得占满整条总线的槽位 | ❌ | **缺口 G-05**：无 per-slave 限流/熔断/观测 |
 

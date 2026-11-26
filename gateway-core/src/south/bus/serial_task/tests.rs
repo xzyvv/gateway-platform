@@ -596,6 +596,74 @@ async fn stale_input_is_drained_before_transaction() {
 }
 
 // ============================================================
+// B-11: 陈旧字节确实被排空，且按实际丢弃字节数计入 stale 指标
+// ============================================================
+//
+// 现场复盘：只看 Prometheus 文本里「有这个指标名」并不能证明因果链成立——
+// 指标可能从未被真正写入。这里用「接收缓冲预置 N 字节垃圾 → 事务前排空 →
+// 计数恰好 +N」把整条链路钉住。桩的读行为是确定的：先把预置字节交完，
+// 随后（本次请求尚未写出时）返回 0 字节表示缓冲为空，不依赖任何计时竞态。
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn draining_stale_input_increments_stale_bytes_metric() {
+    // 预置的陈旧字节：长度刻意取 7，便于和响应长度区分
+    let garbage = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02];
+    let response = modbus_fc03_response(0x002A);
+    let port = MockPort::with_stale(garbage.clone(), response.clone(), 0);
+    let mut handle = SerialHandle::from_stream(port.clone());
+    let gpio = RecordingGpio::new();
+    let metrics = crate::engine::metrics::Metrics::new();
+
+    let res = do_transaction(
+        &mut handle,
+        TransactionParams {
+            request: &[0x01, 0x03, 0x00, 0x00, 0x00, 0x01],
+            timeout: Duration::from_millis(500),
+            protocol: "modbus",
+            expected_count: Some(1),
+            de_pin: Some(DE_PIN),
+            modbus_mode: "rtu",
+            baud: 9600,
+            frame_sent: None,
+        },
+        &gpio,
+        Some(&metrics),
+    )
+    .await;
+
+    // 排空后本次响应必须完整解析（错误处理路径不会误吞本次响应）
+    assert_eq!(
+        res.expect("排空陈旧字节后应正常拿到本次响应"),
+        response,
+        "本次事务必须返回自己的响应，而不是被陈旧字节污染"
+    );
+
+    // 因果链的量化断言：stale 计数必须等于被丢弃的垃圾字节数
+    let dropped = metrics
+        .bus
+        .stale_bytes_dropped
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        dropped,
+        garbage.len() as u64,
+        "排空 {} 字节陈旧输入后，gateway_bus_stale_bytes_dropped_total 必须恰好增加 {}，实际 {dropped}",
+        garbage.len(),
+        garbage.len()
+    );
+
+    // 导出侧同一口径：Prometheus 文本里该计数就是实际值，而非仅有指标名
+    let mut rendered = String::new();
+    metrics.bus.render(&mut rendered);
+    assert!(
+        rendered.contains(&format!(
+            "gateway_bus_stale_bytes_dropped_total {}",
+            garbage.len()
+        )),
+        "Prometheus 渲染的 stale 计数未反映实际丢弃字节数：{rendered}"
+    );
+}
+
+// ============================================================
 // 原 #112: Modbus ASCII 接收缓冲必须有硬上限
 // ============================================================
 

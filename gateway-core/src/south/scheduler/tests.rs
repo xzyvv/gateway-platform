@@ -1044,3 +1044,84 @@ async fn roi19_handle_results_unifies_ok_bad_before_pipeline() {
     assert_eq!(it.quality, "bad");
     assert_eq!(it.quality_reason, "modbus_decode:DECODE");
 }
+
+/// I-56：调度器 `Err` 路径的失败点 `source_ts` 必须是 last_good 时刻；
+/// 无成功历史的点保持 0（`none` 语义，不得伪造时间戳）。
+///
+/// 与 `roi19_*` 的 `Ok+Bad` 用例互补：这里走的是真正的 `Err` 分支
+/// （`PointAction::Err` 组装失败点），覆盖该路径的字段口径。
+#[tokio::test]
+async fn err_path_failure_point_uses_last_good_source_ts() {
+    let metrics = Arc::new(Metrics::new());
+    let queue = Arc::new(
+        DataQueue::with_storage(Arc::new(MemoryStorage::new()) as Arc<dyn QueueStorage>)
+            .expect("build queue"),
+    );
+    let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
+        edge: Arc::new(EdgeProcessor::new()),
+        convert: crate::pipeline::ConvertEngine::empty(),
+        virtual_points: crate::pipeline::VirtualPointEngine::empty(),
+        quality_rules: Arc::new(crate::pipeline::quality_rules::QualityRuleRuntime::default()),
+        queue: queue.clone(),
+        realtime_bus: None,
+        north_tx: None,
+        buffer: 8,
+        metrics: metrics.clone(),
+    });
+    // p_old 曾有成功历史；p_new 从未成功
+    let pts = vec![point("p_old", "b1", "0"), point("p_new", "b1", "1")];
+    let scheduler = Arc::new(Scheduler::new(
+        HashMap::new(),
+        pts.clone(),
+        pipeline,
+        metrics,
+    ));
+
+    let last_good_ts = {
+        let mut states = scheduler.device_states.lock();
+        let st = states
+            .entry("p_old".to_string())
+            .or_insert_with(|| DeviceState::new(Duration::from_secs(1)));
+        st.record_success(7.5);
+        st.last_good_ts
+    };
+    assert!(last_good_ts > 0, "record_success 必须写入 last_good 时刻");
+
+    scheduler
+        .handle_results(
+            &pts,
+            vec![Err(CollectorError::NoReply), Err(CollectorError::NoReply)],
+        )
+        .await;
+
+    // 收集上报链路里的两个失败点（pipeline 有 micro-batch 窗口）
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut items = Vec::new();
+    while items.len() < 2 && Instant::now() < deadline {
+        let got = queue.dequeue(10).await.expect("dequeue");
+        items.extend(got);
+        if items.len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    assert_eq!(items.len(), 2, "两个失败点都必须进入上报链路");
+
+    let old = items
+        .iter()
+        .find(|i| i.point_id == "p_old")
+        .expect("缺 p_old");
+    assert_eq!(old.value, 7.5, "Err 路径必须复用最近一次成功值");
+    assert_eq!(
+        old.source_ts, last_good_ts,
+        "Err 路径失败点的 source_ts 必须是 last_good 时刻"
+    );
+    assert_eq!(old.raw_type, "last_good", "平台据此识别陈旧值");
+
+    let new = items
+        .iter()
+        .find(|i| i.point_id == "p_new")
+        .expect("缺 p_new");
+    assert_eq!(new.value, 0.0);
+    assert_eq!(new.source_ts, 0, "无成功历史时 source_ts 必须为 0");
+    assert_eq!(new.raw_type, "none");
+}

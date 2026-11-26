@@ -238,4 +238,22 @@ mod tests {
         assert!(err.0.len() == 1);
         assert!(tx.is_closed());
     }
+
+    /// I-45：默认北向队列容量必须是 1024 批。
+    ///
+    /// 该值直接决定「broker 短时不可用时能积压多少上行数据」的背压水位，
+    /// 悄悄改小会让现场在短抖动里更早触发采集降速。
+    #[test]
+    fn default_north_feed_capacity_is_1024() {
+        assert_eq!(
+            DEFAULT_NORTH_FEED_CAPACITY, 1024,
+            "默认容量变更会改变北向背压水位（bootstrap 按该常量装配）"
+        );
+        let (tx, _rx) = NorthFeed::channel(DEFAULT_NORTH_FEED_CAPACITY);
+        assert_eq!(
+            tx.stats().capacity,
+            1024,
+            "按默认容量装配的队列必须能积压 1024 批"
+        );
+    }
 }

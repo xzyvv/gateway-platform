@@ -1115,6 +1115,73 @@ async fn self_check_skipped_without_known_good_slave_keeps_handle() {
     drop(bm);
 }
 
+/// B-14：广播地址 0 即使返回了合法帧，也不得进入「成功通信过的从站」集合。
+///
+/// 现场复盘：slave 0 是 Modbus 广播地址，从站按协议不应答。若把 0 记成
+/// `last_good_slave`，后续自检帧会打向广播地址（必然无人应答）→ 自检恒失败 →
+/// 每次连续静默都被误判为「端口损坏」并重开整条总线，把同总线的正常从站
+/// 一起打断。这里先让 slave 0 成功一次，再制造 10 笔静默触发自检：
+/// 若过滤生效则自检被跳过（无探测帧、不重开），否则会向 0 发探测帧并失败重开。
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn broadcast_slave_zero_is_excluded_from_known_good_slaves() {
+    let port = SwitchablePort::new(&[0]); // 只有广播地址「在线」
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (bm, metrics) = spawn_serial_bus(
+        &port,
+        Arc::new(CountingOpener {
+            calls: Arc::clone(&calls),
+        }) as Arc<dyn SerialOpener>,
+    );
+
+    // 1) slave 0 返回合法 FC03 响应——代码必须先「记录」再按 `s != 0` 过滤
+    let ok = bm
+        .transaction(read_one(0), Some(1))
+        .await
+        .expect("slave 0 桩应返回合法响应帧");
+    assert_eq!(ok.len(), 7, "FC03 单寄存器响应应为 7 字节");
+
+    // 2) 整条总线静默 10 次 → 达到自检阈值
+    port.set_alive(&[]);
+    for i in 0..10 {
+        let err = bm
+            .transaction(read_one(1), Some(1))
+            .await
+            .expect_err("静默从站必须失败");
+        assert!(
+            !matches!(err, CollectorError::BusClosed),
+            "第 {} 笔：静默不应导致句柄被丢弃（{err:?}）",
+            i + 1
+        );
+    }
+
+    // 3) 广播地址被排除 → 「无已知良好从站」→ 自检跳过，而非打向 0
+    wait_until(
+        || metrics.bus.self_check_skipped.load(Ordering::Relaxed) >= 1,
+        2000,
+        "广播地址 0 不得被当作已知良好从站（自检未被跳过）",
+    )
+    .await;
+    // 留出探测帧可能落线的窗口，再确认线上没有新增发往 0 的帧
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let broadcast_frames = port
+        .requests()
+        .iter()
+        .filter(|r| r.first() == Some(&0))
+        .count();
+    assert_eq!(
+        broadcast_frames, 1,
+        "除首笔 slave 0 请求外，不得再向广播地址发探测帧"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "自检被跳过时不得丢句柄重开串口"
+    );
+
+    drop(bm);
+}
+
 // ===== 原 #107: 应答等待预算必须覆盖总线重试最坏耗时 =====
 //
 // 现场复盘：默认配置下总线 task 重试最坏耗时 = 3×timeout + 2×200ms；

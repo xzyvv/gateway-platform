@@ -6,7 +6,7 @@
 //! 错误在新连接建立后才回写、误杀新 pool」的时序。
 
 use super::*;
-use crate::south::protocol::modbus::transaction::TransactionError;
+use crate::south::protocol::modbus::transaction::{TransactionError, TransactionPool};
 
 #[test]
 fn parse_rtu_request_rejects_too_short() {
@@ -690,4 +690,75 @@ async fn reload_does_not_duplicate_inflight_tcp_write() {
     );
 
     server.abort();
+}
+
+// =========================================================
+// TCP-07：abort_all 必须回报被作废事务数，且中止原因可追溯
+// =========================================================
+//
+// 现场复盘：连接断开时 `abort_all` 会把全部在途事务一次性作废。运维需要两个
+// 事实才能解释「为什么这一轮采集全失败」：作废了多少笔、因为什么。这里用
+// 无 socket 的 pool 直接登记两个 waiter，确定性地验证计数与归因通知；
+// 中止原因则由调用点日志承载，用源码契约钉住（见文末说明）。
+
+#[tokio::test]
+async fn abort_reason_and_count_are_recorded() {
+    // 不绑定 socket：只登记 / 作废 waiter，完全不涉及网络时序
+    let pool = TransactionPool::new(8);
+
+    // 直接登记两个在途 waiter（等价于两条已下发、正在等应答的事务）
+    let (tx_id1, rx1) = pool
+        .acquire_slot(false, Duration::from_millis(0), 1)
+        .await
+        .expect("登记第 1 个在途 waiter");
+    let (tx_id2, rx2) = pool
+        .acquire_slot(false, Duration::from_millis(0), 2)
+        .await
+        .expect("登记第 2 个在途 waiter");
+    assert_ne!(tx_id1, tx_id2, "两个在途事务必须持有不同的 transaction id");
+    assert_eq!(pool.active_count().await, 2, "中止前应恰有两个在途事务");
+
+    let aborted = pool.abort_all().await;
+    assert_eq!(
+        aborted, 2,
+        "abort_all 必须返回被作废的在途事务数（现场靠它说明一次断连连带失败了多少采集）"
+    );
+    assert_eq!(
+        pool.active_count().await,
+        0,
+        "中止后不得残留任何 waiter（否则槽位泄漏、后续事务恒 Busy）"
+    );
+
+    // 中止归因随通知下发：每个等待者都必须收到 Disconnected
+    for (idx, rx) in [rx1, rx2].into_iter().enumerate() {
+        match rx.await.expect("waiter 必须收到中止结果，不得被静默丢弃") {
+            Err(TransactionError::Disconnected) => {}
+            other => panic!(
+                "第 {} 个 waiter 应收到 Disconnected，实际 {other:?}",
+                idx + 1
+            ),
+        }
+    }
+
+    // 归因可观测性：`abort_all` 本身没有 reason 参数，中止原因由调用方在
+    // 中止处用 `warn!` 连同返回的计数一起记录。这里用源码契约钉住两个调用点，
+    // 防止以后删掉「原因 + 数量」日志后，现场再也无法解释总线闪断。
+    let frame_src = include_str!("../../protocol/modbus/transaction/frame.rs");
+    assert!(
+        frame_src.contains("abort_all().await"),
+        "reader_loop 断链路径必须调用 abort_all 作废在途事务"
+    );
+    assert!(
+        frame_src.contains("aborted {} in-flight transaction(s)"),
+        "reader_loop 中止时必须记录原因并带出被作废事务数"
+    );
+    let txn_src = include_str!("../../protocol/modbus/transaction.rs");
+    assert!(
+        txn_src.contains("write stalled"),
+        "写路径超时中止时必须记录具体原因（write stalled）"
+    );
+    assert!(
+        txn_src.contains("aborting {} in-flight transaction(s)"),
+        "写路径中止时必须记录被作废事务数"
+    );
 }
