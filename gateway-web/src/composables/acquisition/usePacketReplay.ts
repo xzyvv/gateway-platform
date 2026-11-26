@@ -23,6 +23,7 @@ import {
   type ReplayFrameResult,
 } from '@/api/protocolTools'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
+import { toTaskTerminal, type TaskTerminal } from '@/composables/core/useTaskProgress'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { confirmDelete } from '@/utils/confirm'
@@ -88,8 +89,9 @@ export function usePacketReplay() {
   /**
    * DD-03：回放终态。只有 `completed` 才算跑完；aborted / failed / stopped
    * 必须在状态条显式提示，不能因为「收到了几帧 match」就显示成回放完成。
+   * DD-49：终态值统一走 `toTaskTerminal`（与扫描/探测同一口径，未识别即 failed）。
    */
-  const terminalState = ref<'' | 'completed' | 'aborted' | 'failed' | 'stopped'>('')
+  const terminalState = ref<TaskTerminal | ''>('')
   /** 终态附加说明（失败原因），展示在状态条 */
   const terminalError = ref('')
   /** 用户是否主动点了停止（用于区分 stopped 与服务端 abort） */
@@ -217,8 +219,8 @@ export function usePacketReplay() {
           onFrame: (f) => { liveFrames.value.push(f) },
           onSummary: (r) => {
             execResult.value = r
-            // 以服务端终态为准（正常完成为 completed）
-            terminalState.value = r.terminal === 'completed' ? 'completed' : r.terminal === 'aborted' ? 'aborted' : 'failed'
+            // 以服务端终态为准（DD-49：统一映射，未知终态按 failed，不报成完成）
+            terminalState.value = toTaskTerminal(r.terminal)
           },
           onAborted: (info) => {
             terminalState.value = 'aborted'
@@ -239,10 +241,11 @@ export function usePacketReplay() {
       } else {
         const r = await executeReplayBlocking(id, targetBus, opts)
         execResult.value = r
-        terminalState.value = r.terminal === 'aborted' ? 'aborted' : r.terminal === 'failed' ? 'failed' : 'completed'
-        if (r.terminal === 'aborted') {
+        const terminal = toTaskTerminal(r.terminal)
+        terminalState.value = terminal
+        if (terminal === 'aborted') {
           replayError.value = `回放已中止：已执行 ${r.total} / ${r.planned} 帧（服务端时长上限），结果仅含已执行部分`
-        } else if (r.terminal === 'failed') {
+        } else if (terminal === 'failed') {
           replayError.value = `回放中断：总线中途不可用，已执行 ${r.total} / ${r.planned} 帧`
         }
       }

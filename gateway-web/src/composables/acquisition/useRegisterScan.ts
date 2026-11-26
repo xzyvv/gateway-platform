@@ -18,7 +18,7 @@ import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 import { copyText } from '@/utils/clipboard'
 import { withDiagHint } from '@/utils/diagHints'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { usePolling } from '@/composables/core/usePolling'
+import { usePolledTask } from '@/composables/core/useTaskProgress'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn, timeColumn } from '@/utils/commonColumns'
 import { confirmAction } from '@/utils/confirm'
@@ -133,45 +133,33 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
   const gridInfo = computed<GridInfo>(() => computeGrid(currentScan.value?.cells ?? []))
 
   const { message } = useErrorDisplay()
-  /** 轮询连续失败次数：网关掉线时避免永远停在"扫描中" */
-  let pollFailures = 0
-  /** 当前轮询的扫描任务 id（usePolling 的 fn 通过闭包读取） */
+  /** 当前轮询的扫描任务 id（usePolledTask 的 fetch 通过闭包读取） */
   let activeScanId = ''
 
-  async function pollScanResult() {
-    try {
-      const r = await getScanResult(activeScanId)
-      pollFailures = 0
-      if (r) {
-        currentScan.value = r
-        // DD-02：done / failed / aborted 都是终态。旧实现只认 done，
-        // 扫描中途掉线（status=failed）会一直轮询、界面永远停在「扫描中」。
-        if (r.status !== 'running') {
-          scanning.value = false
-          stopPoll()
-          loadHistory()
-          if (r.status === 'failed') {
-            scanError.value =
-              `扫描失败：已扫 ${r.cells.length}/${r.total} 个地址（${r.progress}%），` +
-              '通常为总线掉线或超出单次扫描时长上限，请检查接线后重试'
-          } else if (r.status === 'aborted') {
-            scanError.value = `扫描已中止：已扫 ${r.cells.length}/${r.total} 个地址（${r.progress}%）`
-          }
-        }
+  // DD-49：轮询与终态收尾交给统一口径；DD-02 的 failed/aborted 收尾集中在 onSettled 一处，
+  // 连续失败 3 次由 usePolledTask 统一收敛，不再各页各写一份。
+  const { begin: beginPoll, end: endPoll } = usePolledTask<ScanResult>({
+    interval: POLL_INTERVAL_MS,
+    fetch: () => getScanResult(activeScanId),
+    statusOf: (r) => r.status,
+    onUpdate: (r) => { currentScan.value = r },
+    onSettled: (r, terminal) => {
+      scanning.value = false
+      loadHistory()
+      if (terminal === 'failed') {
+        scanError.value =
+          `扫描失败：已扫 ${r.cells.length}/${r.total} 个地址（${r.progress}%），` +
+          '通常为总线掉线或超出单次扫描时长上限，请检查接线后重试'
+      } else if (terminal === 'aborted') {
+        scanError.value = `扫描已中止：已扫 ${r.cells.length}/${r.total} 个地址（${r.progress}%）`
       }
-    } catch (e) {
-      // 网关/总线掉线时轮询会持续失败：连续 3 次即停止并给出处置建议
-      if (++pollFailures >= 3) {
-        stopPoll()
-        scanning.value = false
-        scanError.value = message(e, '获取扫描进度失败')
-      }
-    }
-  }
-
-  // Bug 178: 定时器单例与卸载清理由 usePolling 保证（重复 start 幂等）。
-  // 失败上限（3 次即停）由业务自管，因此关闭内置退避；标签页隐藏暂停仍然生效。
-  const { start: startPoll, stop: stopPoll } = usePolling(pollScanResult, POLL_INTERVAL_MS, { autoStart: false, backoff: false })
+    },
+    onFetchFailures: (e) => {
+      // 网关/总线掉线时轮询会持续失败：达到上限即停并给出处置建议
+      scanning.value = false
+      scanError.value = message(e, '获取扫描进度失败')
+    },
+  })
 
   async function startScanFn() {
     if (!bus.value) { ElMessage.warning('请先选择总线'); return }
@@ -188,15 +176,15 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
     clearFormFieldErrors(formRef.value, ['startAddr', 'endAddr'])
     scanning.value = true
     scanError.value = ''
-    // Bug 178: 重复点击「开始扫描」前先停掉上一轮轮询（usePolling.stop 幂等）
-    stopPoll()
-    pollFailures = 0
+    // Bug 178: 重复点击「开始扫描」前先停掉上一轮轮询（end 幂等）
+    endPoll()
     try {
       activeScanId = await startScan(bus.value, slaveId.value, regType.value, startAddr.value, endAddr.value)
       // 查询扫描结果
-      startPoll()
+      beginPoll()
     } catch (e) {
       scanning.value = false
+      endPoll()
       scanError.value = message(e, '扫描请求失败')
     }
   }
@@ -239,7 +227,7 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
       // 删除的是当前展示的记录时一并清空，避免详情停在已不存在的扫描上
       if (currentScan.value?.id === row.id) {
         currentScan.value = null
-        stopPoll()
+        endPoll()
         scanning.value = false
       }
       await loadHistory()
@@ -318,7 +306,7 @@ export function useRegisterScan(formRef: Ref<FormInstance | undefined>) {
   ]
 
   onMounted(loadHistory)
-  // Bug 178: 轮询卸载清理由 usePolling 内部 onUnmounted 负责，无需手动处理。
+  // Bug 178: 轮询卸载清理由 usePolledTask → usePolling 的 onUnmounted 负责，无需手动处理。
 
   return {
     busOptions,
