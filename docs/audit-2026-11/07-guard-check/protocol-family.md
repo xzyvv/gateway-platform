@@ -50,7 +50,7 @@
 | FINS-W4 | 写数值必须做类型范围校验 | 【无守护】 | — | 不成立：`gateway-core/src/south/protocol/fins/frames.rs:405-417` 用 `as` 强转，无用例 | 需产品口径 |
 | FINS-W5 | 写后协议层不读回，仅 API 层 uncertain 读回 | 【无守护】 | — | 无用例锁定协议层不读回 | 新增用例 |
 | FINS-E1 | FINS/TCP 报头错误码（`tcp_error != 0`）应映射为设备拒绝而非帧损坏 | 【无守护】 | — | 不成立：`gateway-core/src/south/protocol/fins/mod.rs:244-249` 返回 `InvalidFrame`，无用例 | 需产品口径 |
-| FINS-E2 | 读结束码应区分地址类错误与命令类错误 | 【无守护】 | — | 不成立：`gateway-core/src/south/protocol/fins/frames.rs:339-343` 统一 `InvalidFrame`，无用例 | 需产品口径 |
+| FINS-E2 | 读结束码**暂不分类**（决议 A） | 【有守护】 | `read_end_code_variants_all_map_to_invalid_frame` | **已落地（2026-11-26）**：0x01/0x02/0x40 均统一 `InvalidFrame`，错误文本带原始 MRES/SRES，`parse_read_end_code` 保留码值供调试面；结束码分类表到位后升 B（地址类 → `InvalidConfig`、命令类 → `DeviceRejected`/`Unsupported`） | 已关闭（待码表升级） |
 | S7-R1 | 地址解析支持 DB/M/I/Q 与位/字节/字/双字；DB 必须含 `.`，越界返回 `InvalidConfig` | 【有守护】 | `gateway-core/src/south/protocol/s7comm/tests/address_parse.rs:5-124`（`test_parse_addr_plain` 等共 14 例） | 14 个用例覆盖各区域合法形式与非法地址 | 保持 |
 | S7-R2 | TPKT 必须校验版本 `0x03 0x00` 且总长 ≥4；读取前必须有上限 | 【无守护】 | — | `gateway-core/src/south/protocol/s7comm/frames/link.rs:54-80` `read_tpkt_frame` 无总长上限，无用例 | 新增用例 |
 | S7-R3 | 响应校验 Protocol ID `0x32`、PDU type、`param_len/data_len` 切片边界，不得越界读 | 【有守护】 | `gateway-core/src/south/protocol/s7comm/tests/codec.rs:145` `test_parse_read_response_real`；`:176` `test_parse_read_response_error`；`tests/multi_read.rs:83` `test_parse_read_response_multi_all_ok`；`:129` `test_parse_read_response_multi_partial_failure`；`:171` `test_parse_read_response_multi_count_mismatch` | 断言读响应解析与切片边界 | 保持 |
@@ -106,6 +106,8 @@
 
 ## 待补守护清单
 
+> 2026-11-26：以下为 11-22 基线快照；所列条目均已随 W1/W2/G-T2a/P1 及本轮 FINS-E2 落地，现状见上方明细表。
+
 | 编号 | 缺什么 | 建议测试名 | 建议放置位置 |
 |---|---|---|---|
 | MC-R1 | 缺 0x00FF_FFFF 上限与 `InvalidConfig` 变体断言 | `fn parse_address_rejects_index_over_max_as_invalid_config` | `gateway-core/src/south/protocol/mc/tests/address_parse.rs` |
@@ -126,7 +128,7 @@
 | FINS-W4 | 实现用 `as` 强转，缺写值范围校验（先要产品口径） | `fn write_value_out_of_range_is_rejected` | `gateway-core/src/south/protocol/fins/tests.rs` |
 | FINS-W5 | 缺「协议层写后不读回」的锁定断言 | `fn write_does_not_read_back_at_protocol_layer` | `gateway-core/src/south/protocol/fins/tests.rs` |
 | FINS-E1 | `tcp_error != 0` 现映射为 `InvalidFrame`，缺设备拒绝口径断言（先要产品口径） | `fn tcp_header_error_maps_to_device_rejected` | `gateway-core/src/south/protocol/fins/tests.rs` |
-| FINS-E2 | 读结束码未区分地址类与命令类错误（先要产品口径） | `fn read_end_code_distinguishes_address_and_command_errors` | `gateway-core/src/south/protocol/fins/tests.rs` |
+| FINS-E2 | 已落地（决议 A）：三类结束码统一 `InvalidFrame`，码值可观测；待码表升级 | `read_end_code_variants_all_map_to_invalid_frame` | `gateway-core/src/south/protocol/fins/tests.rs` |
 | S7-R2 | 缺 TPKT 总长上限拒绝断言 | `fn read_tpkt_frame_rejects_oversized_length` | `gateway-core/src/south/protocol/s7comm/tests/codec.rs` |
 | S7-R5 | 只 `is_err`，缺 `InvalidFrame` 变体断言 | `fn decode_too_short_is_invalid_frame` | `gateway-core/src/south/protocol/s7comm/tests/codec.rs` |
 | S7-R9 | 协商 PDU 只挡 0，缺区间上下界（先要产品口径） | `fn negotiated_pdu_size_is_range_checked` | `gateway-core/src/south/protocol/s7comm/tests/e2e.rs` |

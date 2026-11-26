@@ -50,6 +50,8 @@
 
 ## 待补守护清单
 
+> 2026-11-26：以下为 11-22 基线快照；所列 U-2~U-7 均已落地（U-4 端到端已补），现状见上方明细表与文末复盘。
+
 （只列【部分守护】和【无守护】的条目，按编号排序）
 
 | 编号 | 缺什么 | 建议测试名 | 建议放置位置 |
@@ -68,8 +70,8 @@
 | 指标 | 11-22 基线 | 11-26 现状 |
 |---|---|---|
 | 条目总数 | 7 | 7 |
-| 【有守护】 | 1 | 6（U-1/U-2/U-3/U-5/U-6/U-7） |
-| 【部分守护】 | 2 | 1（U-4） |
+| 【有守护】 | 1 | 7（U-1~U-7） |
+| 【部分守护】 | 2 | 0 |
 | 【无守护】 | 4 | 0 |
 | 清单「现有测试」列已过时 | 2 | 0 |
 
@@ -79,7 +81,7 @@
 |---|---|---|
 | U-2 | `frame_sent` 进入写帧前置位，`TxnResponder::Drop` 保守回送 `WriteUncertain` | `gateway-core/src/south/bus/tests.rs` `aborted_during_write_all_reports_write_uncertain` |
 | U-3 | reload abort 主循环不打断在途事务；旧连接续命至事务结束、不重复下发 | `gateway-core/src/south/bus/tcp_task/tests.rs` `reload_does_not_duplicate_inflight_tcp_write` |
-| U-4 | `ConfigRefs.generation` + 写审计 ` [cfg:<n>]`，解析侧兼容 | `gateway-core/src/runtime/write_service.rs` `audit_detail_appends_config_generation`；`gateway-core/src/engine/write.rs` `parse_detail_ignores_config_generation_suffix` |
+| U-4 | `ConfigRefs.generation` + 写审计 ` [cfg:<n>]`，解析侧兼容；端到端断言已补 | 核心：`gateway-core/src/runtime/write_service.rs` `audit_detail_appends_config_generation`、`gateway-core/src/engine/write.rs` `parse_detail_ignores_config_generation_suffix`；端到端：`gateway-api/tests/points_write_unified.rs` `write_audit_records_current_config_generation`、`gateway-api/tests/config_reload_atomicity.rs` `reload_failure_leaves_memory_and_disk_untouched`（失败不推进代次、成功 +1） |
 | U-5 | `close_task` 先于 `open_bus` | `gateway-core/src/runtime/gateway/r36_tests.rs` `reload_closes_old_serial_port_before_opening_new_one` |
 | U-6 | 串口重开失败按旧配置自愈并返回 `Err` | `gateway-core/src/runtime/gateway/r36_tests.rs` `reload_serial_open_failure_restores_previous_config_and_errors` |
 | U-7 | 新增 `reload_cancelled_writes_total` / `reload_drain_timeout_total` | `gateway-core/src/engine/metrics/lifecycle.rs`；取消写计数由 U-2 用例断言 |

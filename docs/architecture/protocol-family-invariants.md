@@ -99,7 +99,7 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | FINS-W4 | 写数值必须做类型范围校验 | **不成立**：`fins/frames.rs:405-417` 用 `as` 强转 | 无 | 与 MC-W3 同：界面写成功、设备值是截断后的错值 |
 | FINS-W5 | 写后是否读回：协议层不读回；仅 API 层 uncertain 读回 | `fins/collector.rs:242-248` | 无 | 同 MC-W4 |
 | FINS-E1 | FINS/TCP 报头错误码（`tcp_error != 0`）应映射为「设备拒绝」而不是帧损坏 | **不成立**：`fins/mod.rs:244-249` 返回 `InvalidFrame` | 无 | 命令不支持/节点错等被显示为 `DECODE`，现场误判为噪声 |
-| FINS-E2 | 读结束码应能区分地址类错误与命令类错误 | **不成立**：`fins/frames.rs:339-343` 只有一句错误文本，统一 `InvalidFrame` | 无 | 地址越界与未定义命令在页面上无法区分 |
+| FINS-E2 | 读结束码**暂不分类**（决议 A）：0x01/0x02/0x40 等一律 `InvalidFrame`；原始码值经 `parse_read_end_code` 可观测。结束码分类表到位后升 B（地址类 → `InvalidConfig`、命令类 → `DeviceRejected`/`Unsupported`） | `fins/frames.rs:339-343`、`:352` | 有（`fins/tests.rs` `read_end_code_variants_all_map_to_invalid_frame`：三类结束码均 `InvalidFrame` 且文本带码值，`parse_read_end_code` 返回 `MRES<<8\|SRES`） | 地址越界与未定义命令在页面上暂无法区分；码值可在调试面查看 |
 
 **测试覆盖**：15 条中 8 条有守护，7 条是缺口。缺的是**TCP 长度边界、握手失败分支、UDP 串包、写值范围、错误码归类**。
 

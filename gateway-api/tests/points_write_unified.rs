@@ -756,6 +756,77 @@ async fn uncertain_write_audit_uses_timeout_prefix() {
     );
 }
 
+/// U-4（决议 A）：写审计必须记录「发起写入时的配置代次」，跨 reload 的写可事后归因；
+/// 代次只在配置成功生效（`ConfigRefs::store`）后推进。
+#[tokio::test]
+async fn write_audit_records_current_config_generation() {
+    let state = mock_app_state_with_collectors(collectors_bus0(true));
+    // 测试夹具 store 点位本身会推进一代，因此以写入前的实际代次为基准。
+    store(&state, point("p1", "bus0"));
+    let gen_before = state.config.generation();
+    let app = build_router(state.clone());
+
+    // 第 1 次写：必须记当前代次
+    let res = app
+        .clone()
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.5}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let expected_before = format!("[cfg:{gen_before}]");
+    let mut details = Vec::new();
+    for _ in 0..40 {
+        details = audit_details(&app).await;
+        if details.iter().any(|d| d.ends_with(&expected_before)) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        details.iter().any(|d| d.ends_with(&expected_before)),
+        "写审计必须带发起时的配置代次 {expected_before}，实际 {details:?}"
+    );
+
+    // 模拟一次成功 reload：store 新配置 → 代次 +1
+    let mut cfg = state.config.load_full().as_ref().clone();
+    cfg.points.push(point("p2", "bus0"));
+    state.config.store(Arc::new(cfg));
+    let gen_after = state.config.generation();
+    assert_eq!(gen_after, gen_before + 1, "成功 store 必须推进配置代次");
+
+    // 第 2 次写：必须记新一代代次
+    let res = app
+        .clone()
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":2.5}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let expected_after = format!("[cfg:{gen_after}]");
+    for _ in 0..40 {
+        details = audit_details(&app).await;
+        if details.iter().any(|d| d.ends_with(&expected_after)) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        details.iter().any(|d| d.ends_with(&expected_after)),
+        "reload 后的写必须记新代次 {expected_after}，实际 {details:?}"
+    );
+    assert!(
+        details.iter().any(|d| d.ends_with(&expected_before)),
+        "旧代次的审计记录必须保留，才能跨代归因"
+    );
+}
+
 async fn audit_logs(app: &axum::Router) -> serde_json::Value {
     let res = app
         .clone()
@@ -770,6 +841,19 @@ async fn audit_logs(app: &axum::Router) -> serde_json::Value {
         .await
         .unwrap();
     body_json(res).await
+}
+
+/// 取审计 detail 列表（U-4 用：断言代次后缀与历史保留）。
+async fn audit_details(app: &axum::Router) -> Vec<String> {
+    let v = audit_logs(app).await;
+    v["data"]["logs"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e["detail"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// 批写：读回全部一致 → 全部收敛为成功，uncertain 归零

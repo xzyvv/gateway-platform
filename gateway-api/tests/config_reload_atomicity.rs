@@ -83,6 +83,7 @@ async fn reload_failure_leaves_memory_and_disk_untouched() {
 
     let mem_before = state.config.load_full();
     let disk_before = disk_bytes(&state);
+    let gen_before = state.config.generation();
 
     // 模拟 core 重建总线失败（真实现返回 GatewayError，不应用任何分节）
     gw.fail_next_reload("bus rebuild failed");
@@ -125,6 +126,11 @@ async fn reload_failure_leaves_memory_and_disk_untouched() {
         disk_before,
         "失败路径不得写盘（磁盘配置必须逐字节不变）"
     );
+    assert_eq!(
+        state.config.generation(),
+        gen_before,
+        "失败路径不得推进配置代次（U-4：代次只在成功 store 后自增）"
+    );
 
     // 失败是一次性的：紧接着的同一份配置应能正常导入（模拟 core 恢复）
     let resp = app
@@ -137,6 +143,11 @@ async fn reload_failure_leaves_memory_and_disk_untouched() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "core 恢复后应可正常导入");
+    assert_eq!(
+        state.config.generation(),
+        gen_before + 1,
+        "成功导入必须推进一代，后续写审计才能归因到新配置"
+    );
 }
 
 /// 深层结构校验失败（通过了 handler 的浅校验）同样不得改动内存与磁盘。

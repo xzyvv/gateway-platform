@@ -186,7 +186,7 @@
 | NB-02 | 第 7 批 | `gateway-core/src/engine/model.rs` `PointValueCache::prune` | `prune` 没有任何地方调用，缓存只增不减 | 需改实现 | 小 | 中 | 已修复（DD-16） |
 | NB-03 | 第 7 批 | `gateway-api/src/web/api/points/handlers/mod.rs` | 统一写入口只记成功写，写失败不留审计、不计数 | 需改实现 | 中 | 高 | 已排入 ROI-35（DD-33） |
 | NB-04 | 守护核对 | 四份不变量清单「现有测试」列共 **31 条已过时** | 行号漂移 / 标注和代码对不上，读清单会得到假的安全感 | 补断言（顺手改清单） | 小 | 中 | 已关闭（2026-11-26 复核：四份清单原文已修正，07 分册保留 11-22 基线快照） |
-| NB-05 | 守护核对 | 全仓 **2 条**不变量没有完整测试（T0：FINS-E2；T1：U-4 端到端） | 见 [08-守护缺口总表.md](08-守护缺口总表.md) | 补断言 / 需产品口径 | 小 | 中 | 已排入 08 号文 T0/T1（T0 收尾后仅余 2 条） |
+| NB-05 | 守护核对 | 全仓 **0 条**不变量没有完整测试（216/216 有守护） | 见 [08-守护缺口总表.md](08-守护缺口总表.md) | — | — | — | ✅ 已关闭（2026-11-26；FINS-E2 按 A 保留「统一 InvalidFrame」，待码表升级） |
 | NB-06 | W-1（SEC-01） | `Cargo.lock` `heapless 0.7.17`；`async-opcua-server 0.19 → postcard 1.1.3` 依赖 `^0.7` | heapless 9 条公告无法靠依赖升级闭合，暂以 audit/deny 豁免兜住（公告点名的队列/链表类型不在本仓调用链） | 需改实现（等上游） | 小 | 中 | 待 postcard / async-opcua 升级后移除豁免 |
 | NB-07 | W4（G-T2a） | `gateway-core/src/south/protocol/s7comm/frames/link.rs` `read_tpkt_frame` | TPKT 总长只有 `≥4` 下限，没有业务上限；对端声明的长度会被直接用于读取预算 | 需产品口径 | 小 | 中 | 定了上限后补「超限拒绝」断言并加实现校验 |
 | NB-08 | W4（G-T2a） | `gateway-core/src/south/protocol/opcua/mod.rs`：`KEEPALIVE_MAX_CONSECUTIVE_FAILURES=2` × `KEEPALIVE_INTERVAL=5s`，`SESSION_TIMEOUT_MS=10_000` | keepalive 最坏判定窗口 `2×5s=10s` 恰好等于会话超时；边界上服务端可能先关会话、本端计数还差一次，出现「实际已掉线但页面仍显示连接中」 | 需产品定余量（判定窗口必须严格小于会话超时） | 小 | 中 | 定余量后调整常量（阈值/间隔/超时），并给 UA-R6 补「窗口 < 超时」断言 |

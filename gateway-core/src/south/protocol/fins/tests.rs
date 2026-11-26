@@ -89,6 +89,41 @@ fn test_parse_read_response_ok_and_error() {
     assert!(parse_read_response(&bad, 0x01, 0x01).is_err());
 }
 
+/// FINS-E2（决议 A）：读结束码暂不分类，0x01（命令类）/0x02（地址类）/0x40
+/// 等一律映射为 `InvalidFrame`；原始码值由 `parse_read_end_code` 保留给调试面。
+///
+/// 结束码分类表到位后升 B（地址类 → `InvalidConfig`、命令类 → `DeviceRejected`/
+/// `Unsupported`），届时本用例需按新分类改写。
+#[test]
+fn read_end_code_variants_all_map_to_invalid_frame() {
+    for (mres, sres) in [(0x01u8, 0x00u8), (0x00, 0x02), (0x40, 0x00)] {
+        let fr = fins_frame_resp(0x01, 0x01, mres, sres, &[]);
+
+        let err =
+            parse_read_response(&fr, 0x01, 0x01).expect_err("非零结束码必须报错，绝不能返回数据");
+        match err {
+            CollectorError::InvalidFrame(msg) => {
+                assert!(
+                    msg.contains(&format!("MRES={mres:02X}")),
+                    "错误文本必须带原始 MRES，实际: {msg}"
+                );
+                assert!(
+                    msg.contains(&format!("SRES={sres:02X}")),
+                    "错误文本必须带原始 SRES，实际: {msg}"
+                );
+            }
+            other => panic!("结束码错误必须统一映射为 InvalidFrame，实际: {other:?}"),
+        }
+
+        let code = parse_read_end_code(&fr).expect("调试面必须能读到原始结束码");
+        assert_eq!(
+            code,
+            (u16::from(mres) << 8) | u16::from(sres),
+            "parse_read_end_code 必须返回 MRES<<8|SRES"
+        );
+    }
+}
+
 #[test]
 fn test_decode_encode_words_big_endian() {
     assert_eq!(

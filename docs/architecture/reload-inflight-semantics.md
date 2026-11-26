@@ -173,12 +173,12 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 | U-1 | 串口 abort 落在「帧已写出」之后时，`BusClosed → Failed` 是否会造成现场重复写 | **已修复（ROI-20）**：`frame_sent` + `TxnResponder` Drop → `WriteUncertain`；用例 `south::bus::tests::aborted_in_flight_write_reports_write_uncertain` |
 | U-2 | 串口 `write_all` 被取消时实际写出多少字节 | **有守护（P2-1）**：驱动层实际字节数仍未知，但进入写帧前已置位 `frame_sent`，`TxnResponder::Drop` 保守回送 `WriteUncertain`；用例 `south::bus::tests::aborted_during_write_all_reports_write_uncertain`（`BlockingWritePort` 让 `poll_write` 恒 Pending）锁定「写到一半被取消」 |
 | U-3 | reload 后旧 TCP 连接还会存活多久、与新连接是否会向同一设备交叉写 | **有守护（P2-1）**：事务 task 被 detach（`tcp_task.rs:239` 独立事务 task，`:306` 记入 `in_flight`，`:313-314` 仅在 task 退出时 abort），旧 pool 由 `Arc` 续命至事务结束；用例 `tcp_task::tests::reload_does_not_duplicate_inflight_tcp_write` 断言旧连接上事务正常结束、服务端只收到 1 次写帧、应答前连接未被掐断 |
-| U-4 | 「新 collector + 旧点位」窗口内下发会造成什么现场后果 | **部分守护（决议 A：允许跨代写）**：`ConfigRefs.generation` 每次成功 `store` 自增；`WriteContext.config_generation` 写入审计 detail 末尾 ` [cfg:<n>]`，`parse_write_detail` 先剥离再解析（`write_service::tests` 覆盖）；「点位与 collector 属同一代次」的端到端断言仍缺 |
+| U-4 | 「新 collector + 旧点位」窗口内下发会造成什么现场后果 | **有守护（决议 A：允许跨代写）**：`ConfigRefs.generation` 每次成功 `store` 自增；`WriteContext.config_generation` 写入审计 detail 末尾 ` [cfg:<n>]`，`parse_write_detail` 先剥离再解析。用例：`write_service::tests` 两条、`points_write_unified::write_audit_records_current_config_generation`（写审计带当前代次、reload 后记新代次、旧记录保留）、`config_reload_atomicity::reload_failure_leaves_memory_and_disk_untouched`（失败不推进代次、成功 +1） |
 | U-5 | 同一串口被新旧两个 `SerialHandle` 同时打开的后果 | **有守护（P2-1）**：`apply_bus_plan` 先 `close_task` 再 `open_bus`；用例 `reload_closes_old_serial_port_before_opening_new_one` 以「旧端口 Drop 置标志」证明释放发生在打开新口之前；串口排他本身仍依赖 OS |
 | U-6 | reload 失败后运行态（managers/collectors）能否恢复 | **有守护（P2-1）**：commit 阶段串口重开失败走 `restore_serial_buses` 自愈，按旧配置重开总线并重建 collector，随后返回 `Err`；用例 `reload_serial_open_failure_restores_previous_config_and_errors` 断言 manager/collector 回到旧配置；API 侧回滚由 `gateway-api/tests/config_reload_atomicity.rs` 的 `reload_failure_leaves_memory_and_disk_untouched` 覆盖 |
 | U-7 | reload 期间被取消的写事务数量 | **有守护（P2-1）**：新增 `gateway_reload_cancelled_writes_total`（`TxnResponder::Drop` 计取消写）与 `gateway_reload_drain_timeout_total`（`BusManager::close_task` 排空超时）；取消写计数由 U-2 用例断言 |
 
-> **2026-11-26 复核**：P2-1 后 U-2/U-3/U-5/U-6/U-7 已有直接用例，U-4 按决议 A 落地（允许跨代写 + 审计记代次）；本表已无【无守护】项，仅 U-4 的「点位与 collector 同代」端到端断言待补。
+> **2026-11-26 复核**：P2-1 后 U-2/U-3/U-5/U-6/U-7 已有直接用例，U-4 按决议 A 落地（允许跨代写 + 审计记代次）；**U-4 的端到端断言已补**（API 写审计与 reload 代次推进，见上表）。本表 7 条全部【有守护】，无【部分/无守护】项。
 
 ---
 
