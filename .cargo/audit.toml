@@ -35,6 +35,27 @@ ignore = [
   "RUSTSEC-2026-0104",
   "RUSTSEC-2026-0382",
 
+  # ---- heapless 0.7.17（async-opcua-server 0.19 → postcard 1.1.3 固定 ^0.7）----
+  # 9 条公告：FindMutView::pop UAF / Spsc 内存序 / IndexMap 不变量 /
+  # Drop 期 panic 触发 UB / SortedLinkedList::zeroize 不变量 / Deque 边界与
+  # make_contiguous / Treiber 栈竞态 / IndexMap::insert 不变量。
+  # 修复版本均为 heapless >=0.9.4，但 postcard 1.1.3 是 crates.io 最新发布版，
+  # 仍依赖 heapless ^0.7（default 还启用了 heapless-cas）；async-opcua 0.19.0
+  # 同为最新发布版，无法在不 fork 上游的前提下升到 0.9。
+  # 影响面：本仓仅在 OPC UA 服务端序列化路径经 postcard 使用 heapless::{Vec,String}
+  # 作为 no_std 容器；公告点名的 SortedLinkedList / IndexMap / Deque / Spsc /
+  # Treiber 栈类型不在本仓调用链中构造或使用。
+  # 处置：等 postcard / async-opcua 上游升级后删除本条（邻居债 NB-06）。
+  "RUSTSEC-2026-0574",
+  "RUSTSEC-2026-0575",
+  "RUSTSEC-2026-0576",
+  "RUSTSEC-2026-0577",
+  "RUSTSEC-2026-0578",
+  "RUSTSEC-2026-0579",
+  "RUSTSEC-2026-0580",
+  "RUSTSEC-2026-0581",
+  "RUSTSEC-2026-0582",
+
   # ---- unmaintained（crate 停止维护，但无已知可利用漏洞）----
   # 这些不是「有漏洞」，而是「作者声明不再维护」。CI 用 `--deny warnings` 会把
   # unmaintained/unsound 一并当作失败，因此必须逐条写明来源与处置。
