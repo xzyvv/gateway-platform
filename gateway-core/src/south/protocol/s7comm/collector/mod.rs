@@ -8,6 +8,13 @@ use crate::south::protocol::{Collector, ResultSlots};
 mod read;
 mod write;
 
+/// 协商 PDU 允许下限（S7 常用 240 字节，待协议负责人确认）
+const NEGOTIATED_PDU_MIN: u16 = 240;
+/// 协商 PDU 允许上限（S7 常用 960 字节，待协议负责人确认）
+const NEGOTIATED_PDU_MAX: u16 = 960;
+/// 协商值越界时回退的默认 PDU（与采集器初始值一致）
+const NEGOTIATED_PDU_FALLBACK: u16 = 480;
+
 impl Collector for S7CommCollector {
     fn name(&self) -> &'static str {
         "s7comm"
@@ -108,9 +115,21 @@ impl Collector for S7CommCollector {
             // （典型 0x0001），使分片大小退化为 1 字节、请求近乎全失败。
             if setup_resp.len() >= 3 + 12 + 8 && setup_resp[3] == 0x32 && setup_resp[4] == PDU_ACK {
                 let pdu = u16::from_be_bytes([setup_resp[3 + 12 + 6], setup_resp[3 + 12 + 7]]);
-                if pdu > 0 {
+                // S7-R9：协商 PDU 必须落在合理区间（240..=960，暂时按协议常用值，
+                // 待协议负责人确认）。越界不采信：回退默认 480 并告警，避免分片
+                // 粒度退化成 1 字节（请求几乎全失败）或超出设备处理能力。
+                if (NEGOTIATED_PDU_MIN..=NEGOTIATED_PDU_MAX).contains(&pdu) {
                     *self.pdu_size.lock().await = pdu;
                     tracing::debug!("S7 negotiated PDU size: {}", pdu);
+                } else {
+                    *self.pdu_size.lock().await = NEGOTIATED_PDU_FALLBACK;
+                    tracing::warn!(
+                        "S7 negotiated PDU size {} out of range {}..={}, fallback to {}",
+                        pdu,
+                        NEGOTIATED_PDU_MIN,
+                        NEGOTIATED_PDU_MAX,
+                        NEGOTIATED_PDU_FALLBACK
+                    );
                 }
             }
 

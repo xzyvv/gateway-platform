@@ -544,7 +544,7 @@ impl Collector for McCollector {
             } else {
                 let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
                 // 写值与读路径对偶：北向下发的是一次侧值，需先除回变比与 scale/offset
-                let words = encode_words(reverse_convert(point, value), dt);
+                let words = encode_words(reverse_convert(point, value), dt)?;
                 self.write_words_txn(&device, &words)?
             };
             let (end_code, _) = self

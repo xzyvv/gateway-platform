@@ -39,10 +39,10 @@ fn test_decode_bit_nibbles() {
 #[test]
 fn test_encode_words_roundtrip() {
     for v in [0u16 as f64, 4660.0, 65535.0] {
-        let bytes = encode_words(v, PointDataType::U16);
+        let bytes = encode_words(v, PointDataType::U16).expect("范围内应可编码");
         assert_eq!(decode_words(&bytes, PointDataType::U16), Some(v));
     }
-    let bytes = encode_words(1.5, PointDataType::F32);
+    let bytes = encode_words(1.5, PointDataType::F32).expect("范围内应可编码");
     assert!((decode_words(&bytes, PointDataType::F32).unwrap() - 1.5).abs() < 1e-6);
 }
 

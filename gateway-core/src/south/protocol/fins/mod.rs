@@ -241,34 +241,67 @@ impl FinsCollector {
                 return Err(CollectorError::NoReply);
             }
         };
-        if resp.command != CMD_RESPONSE || resp.tcp_error != 0 {
+        // FINS-E1：命令码不符是「帧不对」（串包/错帧，结果未知），
+        // 而 tcp_error 非 0 是设备/网关的明确拒绝（确定未执行），两者必须分开。
+        if resp.command != CMD_RESPONSE {
             return Err(CollectorError::InvalidFrame(format!(
-                "fins tcp response error: cmd=0x{:08X} err=0x{:08X}",
-                resp.command, resp.tcp_error
+                "fins tcp response unexpected command: cmd=0x{:08X}",
+                resp.command
+            )));
+        }
+        if resp.tcp_error != 0 {
+            return Err(CollectorError::DeviceRejected(format!(
+                "fins tcp response error: err=0x{:08X}",
+                resp.tcp_error
             )));
         }
         Ok(resp.payload)
     }
 
     /// FINS/UDP 事务：数据报即 FINS 帧，无 TCP 报头。
+    ///
+    /// FINS-R8：只接受「源地址 = 本次连接对端」且「SID 回显请求值」的数据报；
+    /// 不匹配的（他站应答 / 上一次请求的迟到应答）丢弃后继续等，直到超时 → `NoReply`。
     async fn transact_udp(&self, fins_frame: &[u8]) -> CollectorResult<Vec<u8>> {
         let mut guard = self.udp.lock().await;
+        // 请求 SID 位于 FINS 头偏移 9；帧过短说明调用方给了非法请求，直接拒绝
+        let request_sid = *fins_frame.get(9).ok_or_else(|| {
+            CollectorError::InvalidFrame("fins/udp request shorter than FINS header".into())
+        })?;
         // 收发全程持有 socket 借用；借用结束后再按结果决定是否清链，避免对 guard 的双重借用
         let res = {
             let socket = match guard.as_mut() {
                 Some(s) => s,
                 None => return Err(CollectorError::IoError("fins/udp not connected".into())),
             };
+            let peer = socket
+                .peer_addr()
+                .map_err(|e| CollectorError::IoError(format!("fins/udp peer_addr: {e}")))?;
             match tokio::time::timeout(self.io_timeout, socket.send(fins_frame)).await {
                 Ok(Ok(_)) => {
-                    let mut buf = vec![0u8; 2048];
-                    match tokio::time::timeout(self.io_timeout, socket.recv(&mut buf)).await {
-                        Ok(Ok(n)) => {
-                            buf.truncate(n);
-                            Ok(buf)
+                    let deadline = tokio::time::Instant::now() + self.io_timeout;
+                    loop {
+                        let remaining =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+                        if remaining.is_zero() {
+                            break Err(CollectorError::NoReply);
                         }
-                        Ok(Err(e)) => Err(CollectorError::IoError(format!("fins/udp recv: {e}"))),
-                        Err(_) => Err(CollectorError::NoReply),
+                        let mut buf = vec![0u8; 2048];
+                        match tokio::time::timeout(remaining, socket.recv_from(&mut buf)).await {
+                            Ok(Ok((n, src))) => {
+                                buf.truncate(n);
+                                if frames::udp_reply_matches(&buf, src, peer, request_sid) {
+                                    break Ok(buf);
+                                }
+                                tracing::debug!(
+                                    "fins/udp discard mismatched reply: src={src} peer={peer} sid=0x{request_sid:02X}"
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                break Err(CollectorError::IoError(format!("fins/udp recv: {e}")))
+                            }
+                            Err(_) => break Err(CollectorError::NoReply),
+                        }
                     }
                 }
                 Ok(Err(e)) => Err(CollectorError::IoError(format!("fins/udp send: {e}"))),

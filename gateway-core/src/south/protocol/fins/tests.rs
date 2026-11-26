@@ -11,7 +11,7 @@ use super::frames::*;
 use super::{mode_from_variant, FinsCollector, FinsMode};
 use crate::config::PointConfig;
 use crate::engine::model::PointDataType;
-use crate::south::protocol::Collector;
+use crate::south::protocol::{Collector, CollectorError};
 
 // ============================================================
 // 纯函数单元测试
@@ -98,9 +98,9 @@ fn test_decode_encode_words_big_endian() {
     let f = decode_words(&[0x3F, 0xC0, 0x00, 0x00], PointDataType::F32).expect("f32");
     assert!((f - 1.5).abs() < 1e-6);
 
-    let bytes = encode_words(0x1234 as f64, PointDataType::U16);
+    let bytes = encode_words(0x1234 as f64, PointDataType::U16).expect("范围内应可编码");
     assert_eq!(bytes, vec![0x12, 0x34]);
-    let bytes = encode_words(1.5, PointDataType::F32);
+    let bytes = encode_words(1.5, PointDataType::F32).expect("范围内应可编码");
     assert_eq!(bytes, vec![0x3F, 0xC0, 0x00, 0x00]);
 }
 
@@ -126,6 +126,8 @@ enum FinsReply {
     Drop,
     /// 保持连接但不应答（用于制造读路径 IO 超时，区别于 Drop 的断链）
     Hang,
+    /// FINS/TCP 报头错误应答（command, tcp_error），用于锁定报头错误映射
+    TcpHeader(u32, u32),
 }
 
 fn tcp_wrap(command: u32, payload: &[u8]) -> Vec<u8> {
@@ -236,6 +238,7 @@ async fn spawn_fins_stub_counters(
                             0x0000_0002,
                             &fins_frame_resp(MRC_CPU_CONTROL, src, mres, sres, &[]),
                         ),
+                        FinsReply::TcpHeader(cmd, err) => tcp_wrap_err(cmd, err, &[]),
                         FinsReply::Drop => return,
                         // 不应答也不断开：让采集器的读超时生效
                         FinsReply::Hang => continue,
@@ -310,6 +313,58 @@ async fn test_e2e_write_over_tcp() {
     let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
     let p = point("p1", "D100", "u16");
     c.write(&p, 1234.0).await.expect("write ok");
+}
+
+/// FINS-W4：写值越界必须在上线前拒绝，不得 `as` 静默截断成另一个值。
+#[tokio::test]
+async fn write_value_out_of_range_is_rejected() {
+    let (addr, conns, reqs) = spawn_fins_stub_counters(vec![FinsReply::Write]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let p = point("p1", "D100", "u16");
+
+    let err = c.write(&p, 70000.0).await.expect_err("越界写值应被拒绝");
+    match err {
+        CollectorError::InvalidConfig(msg) => {
+            assert!(msg.contains("70000"), "原因需可辨识: {msg}");
+            assert!(msg.contains("U16"), "原因需点明数据类型: {msg}");
+        }
+        other => panic!("越界写值应报 InvalidConfig，实际 {other:?}"),
+    }
+    assert_eq!(
+        conns.load(Ordering::SeqCst),
+        0,
+        "越界值必须在上线前拒绝：不得建链/握手"
+    );
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        0,
+        "越界值必须在上线前拒绝：不得发出写帧"
+    );
+}
+
+/// FINS-E1：TCP 报头 `tcp_error != 0` 是设备/网关的明确拒绝 → `DeviceRejected`；
+/// 命令码不符才是帧错误 → `InvalidFrame`。
+#[tokio::test]
+async fn tcp_header_error_maps_to_device_rejected() {
+    let addr = spawn_fins_stub(vec![FinsReply::TcpHeader(CMD_RESPONSE, 0x0000_0001)]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let p = point("p1", "D100", "u16");
+    match c.read(&p).await.expect_err("报头错误码非 0 应失败") {
+        CollectorError::DeviceRejected(msg) => {
+            assert!(msg.contains("0x00000001"), "原因需可辨识: {msg}");
+        }
+        other => panic!("tcp_error 非 0 应映射 DeviceRejected，实际 {other:?}"),
+    }
+
+    // 命令码不符仍是帧错误：不能把「收到的不是应答」误判成设备拒绝
+    let addr = spawn_fins_stub(vec![FinsReply::TcpHeader(0x0000_0009, 0)]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    match c.read(&p).await.expect_err("命令码不符应失败") {
+        CollectorError::InvalidFrame(msg) => {
+            assert!(msg.contains("0x00000009"), "原因需可辨识: {msg}");
+        }
+        other => panic!("命令码不符应映射 InvalidFrame，实际 {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -622,6 +677,8 @@ async fn spawn_fins_udp_stub(replies: Vec<FinsReply>) -> String {
                 FinsReply::Drop => continue,
                 // UDP 无连接可保持，直接不回包即可模拟超时
                 FinsReply::Hang => continue,
+                // UDP 没有 TCP 报头，此类应答不适用于本模式
+                FinsReply::TcpHeader(..) => continue,
             };
             let _ = socket.send_to(&out, peer).await;
         }
@@ -658,6 +715,72 @@ async fn test_e2e_write_over_udp() {
     );
     let p = point("p1", "D100", "u16");
     c.write(&p, 4321.0).await.expect("udp write ok");
+}
+
+/// FINS-R8：UDP 应答必须同时满足「源地址 = 对端」与「SID 回显请求值」。
+#[test]
+fn udp_reply_must_match_request_source_and_echo() {
+    let peer: std::net::SocketAddr = "127.0.0.1:9600".parse().expect("peer");
+    let other: std::net::SocketAddr = "127.0.0.1:9601".parse().expect("other");
+    let reply = fins_frame_resp(0x01, 0x01, 0x00, 0x00, &[0x00, 0x01]);
+    assert_eq!(reply[9], 0x01, "构造应答的 SID 基线");
+
+    assert!(
+        udp_reply_matches(&reply, peer, peer, 0x01),
+        "源地址与 SID 都匹配才可接受"
+    );
+    assert!(
+        !udp_reply_matches(&reply, other, peer, 0x01),
+        "他站数据报必须丢弃（守护 FINS-R8）"
+    );
+    assert!(
+        !udp_reply_matches(&reply, peer, peer, 0x02),
+        "SID 不回显必须丢弃（迟到应答，守护 FINS-R8）"
+    );
+    assert!(
+        !udp_reply_matches(&reply[..9], peer, peer, 0x01),
+        "不足 10 字节（装不下 SID）不得匹配"
+    );
+}
+
+/// FINS-R8：错 SID 的迟到应答要先丢弃，继续等本次请求的正确应答。
+#[tokio::test]
+async fn udp_discards_mismatched_sid_and_accepts_next() {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.expect("bind udp");
+    let addr = socket.local_addr().expect("local").to_string();
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 2048];
+        let (n, peer) = match socket.recv_from(&mut buf).await {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        if n < 10 {
+            return;
+        }
+        // 先回上一请求的迟到应答（SID 不回显），再回本次正确应答
+        let mut stale = fins_frame_resp(0x01, 0x01, 0x00, 0x00, &[0xDE, 0xAD]);
+        stale[9] = buf[9].wrapping_add(1);
+        let _ = socket.send_to(&stale, peer).await;
+        let good = fins_frame_resp(0x01, 0x01, 0x00, 0x00, &[0x12, 0x34]);
+        let _ = socket.send_to(&good, peer).await;
+        // 保持存活到采集器读完，避免提前结束影响断言
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    });
+
+    let c = FinsCollector::new(
+        addr,
+        "fins-bus".into(),
+        Duration::from_secs(2),
+        Some("udp".into()),
+    );
+    let dp = c
+        .read(&point("p1", "D100", "u16"))
+        .await
+        .expect("错 SID 应答应被丢弃，继续等到正确应答");
+    assert_eq!(
+        dp.raw_value, 0x1234 as f64,
+        "必须取本次请求的应答，不得采用迟到应答的数据（守护 FINS-R8）"
+    );
 }
 
 /// UDP 缺少可用目标节点号时应报配置错误，且不得标记为已连接。
@@ -711,7 +834,7 @@ fn golden_fins_read_dm_words_request() {
 #[test]
 fn golden_fins_write_dm_words_request() {
     // 写 1 个字：值 0x1234（大端字序列）
-    let data = encode_words(0x1234 as f64, PointDataType::U16);
+    let data = encode_words(0x1234 as f64, PointDataType::U16).expect("范围内应可编码");
     let fins = build_write_frame(0x01, 0x02, 0x82, 0x0000, 0x0001, &data);
     let tcp = build_fins_frame_request(&fins);
     crate::south::protocol::golden::assert_golden("fins/write_dm_words_tcp_request.hex", &tcp);

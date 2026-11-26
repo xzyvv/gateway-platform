@@ -231,8 +231,21 @@ impl Collector for BacnetMstpCollector {
                     .map_err(|_| CollectorError::NoReply)??;
 
             // 7. 解析 MS/TP 响应帧
-            let (resp_type, _resp_dest, _resp_src, resp_data) =
+            let (resp_type, _resp_dest, resp_src, resp_data) =
                 parse_mstp_frame(&response, &self.metrics)?;
+
+            // MSTP-R6：应答源站必须等于目标站。MS/TP 是多站共享总线，他站的应答
+            // 与本站在同一时刻到达时会被总线事务当作本次应答返回；不比较源站就会
+            // 把别人的数据记到目标点位上。不一致即丢弃该帧、按本次尝试无应答处理
+            // （总线事务一次只返回一帧，由调度器下一轮重新轮询）。
+            if resp_src != dest_addr as u8 {
+                tracing::warn!(
+                    "bacnet_mstp: drop reply from station {} while waiting for station {}",
+                    resp_src,
+                    dest_addr
+                );
+                return Err(CollectorError::NoReply);
+            }
 
             // 只接受数据帧：Data Expecting Reply / Data Not Expecting Reply /
             // Reply Postponed。Token / Poll For Master / Test Request /

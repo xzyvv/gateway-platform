@@ -152,7 +152,10 @@ pub(crate) fn parse_app_value_from(
 ///
 /// 布局：ComplexACK(0x30) + invoke id + service(12) + objectIdentifier[0] +
 /// propertyIdentifier[1] + propertyValue[3](opening tag 3 + 应用值 + closing tag 3)。
-/// invoke id / 服务号不符一律报错，防止迟到或残留回包被当作本次结果。
+/// invoke id 不符一律报错，防止迟到或残留回包被当作本次结果。
+/// MSTP-R8：Error / Reject / Abort 是设备**明确拒绝**（不是帧损坏），映射
+/// [`CollectorError::DeviceRejected`]，便于上层区分「该点/该请求不被接受」
+/// 与「收到的不是可解析的应答」。
 pub(crate) fn parse_value_from_apdu(
     apdu: &[u8],
     expected_invoke_id: u8,
@@ -160,17 +163,32 @@ pub(crate) fn parse_value_from_apdu(
     if apdu.len() < 3 {
         return Err(CollectorError::InvalidFrame("BACnet APDU too short".into()));
     }
-    if apdu[0] != APDU_COMPLEX_ACK {
-        return Err(CollectorError::InvalidFrame(format!(
-            "expected ComplexACK 0x30, got 0x{:02X}",
-            apdu[0]
-        )));
-    }
+    // 先按 invoke id 排除迟到/残留回包，再判 PDU 类型：
+    // 别人的错误包不得被记成本次请求的「设备拒绝」。
     if apdu[1] != expected_invoke_id {
         return Err(CollectorError::InvalidFrame(format!(
             "BACnet invoke id mismatch: expected {}, got {}",
             expected_invoke_id, apdu[1]
         )));
+    }
+    match apdu[0] {
+        APDU_COMPLEX_ACK => {}
+        APDU_ERROR | APDU_REJECT | APDU_ABORT => {
+            let kind = match apdu[0] {
+                APDU_ERROR => "Error",
+                APDU_REJECT => "Reject",
+                _ => "Abort",
+            };
+            return Err(CollectorError::DeviceRejected(format!(
+                "BACnet ReadProperty rejected: APDU type 0x{:02X} ({})",
+                apdu[0], kind
+            )));
+        }
+        other => {
+            return Err(CollectorError::InvalidFrame(format!(
+                "expected ComplexACK 0x30, got 0x{other:02X}"
+            )))
+        }
     }
     if apdu[2] != SERVICE_READ_PROPERTY {
         return Err(CollectorError::InvalidFrame(format!(

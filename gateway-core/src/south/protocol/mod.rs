@@ -383,6 +383,43 @@ fn classify_write_uncertain(
     e
 }
 
+/// 写入值范围校验（MC / FINS 写路径共用）。
+///
+/// 两个协议都按点位数据类型用 `as` 把 f64 落到位宽——越界会被静默截断/饱和
+/// （如 70000 写 u16 变成 4464），现场很难发现。这里在**组帧之前**拒绝，
+/// 返回 [`CollectorError::InvalidConfig`]：请求本身不合法，写确定未下发，
+/// 属明确失败（`WriteOutcome::Failed`），调用方可安全重试。
+#[cfg(any(feature = "mc", feature = "fins"))]
+pub(crate) fn validate_write_value(
+    value: f64,
+    dt: crate::engine::model::PointDataType,
+) -> CollectorResult<()> {
+    use crate::engine::model::PointDataType::*;
+    // 非有限值无法表示成任何协议数值，直接拒绝
+    if !value.is_finite() {
+        return Err(CollectorError::InvalidConfig(format!(
+            "write value {value} is not finite ({dt:?})"
+        )));
+    }
+    let in_range = match dt {
+        U16 => (0.0..=u16::MAX as f64).contains(&value),
+        I16 => (i16::MIN as f64..=i16::MAX as f64).contains(&value),
+        U32 => (0.0..=u32::MAX as f64).contains(&value),
+        I32 => (i32::MIN as f64..=i32::MAX as f64).contains(&value),
+        U64 => (0.0..=u64::MAX as f64).contains(&value),
+        I64 => (i64::MIN as f64..=i64::MAX as f64).contains(&value),
+        F32 => (f32::MIN as f64..=f32::MAX as f64).contains(&value),
+        F64 => true,
+    };
+    if in_range {
+        Ok(())
+    } else {
+        Err(CollectorError::InvalidConfig(format!(
+            "write value {value} out of range for {dt:?}"
+        )))
+    }
+}
+
 /// 走总线总线的协议（modbus / dlt645 / cjt188）：metrics 从 `BusManager` 取。
 #[cfg(any(feature = "modbus", feature = "dlt645", feature = "cjt188"))]
 pub(crate) fn mark_write_uncertain_counted(

@@ -212,33 +212,33 @@ impl Collector for FinsCollector {
                     .map_err(|e| mark_write_uncertain_with(self.metrics.as_deref(), e));
             }
             let area = parse_address(&point.address)?;
+            // FINS-W4：先把写值按数据类型编码并校验范围，再建链——越界值不得
+            // 触发握手/上线（InvalidConfig 属明确失败，写确定未下发）。
+            let (area_code, count, data) =
+                if matches!(point.data_type.as_deref(), Some("bit") | Some("bool")) {
+                    let byte = if value != 0.0 { 0x01u8 } else { 0x00u8 };
+                    (area.bit_code, 1u16, vec![byte])
+                } else {
+                    let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
+                    // 写值与读路径对偶：北向下发的是一次侧值，需先除回变比与 scale/offset
+                    (
+                        area.word_code,
+                        dt.register_count(),
+                        encode_words(reverse_convert(point, value), dt)?,
+                    )
+                };
             // 先建链完成节点地址握手，server_node 才有效
             self.ensure_connected().await?;
             let server_node = self.server_node.load(Ordering::Relaxed);
 
-            let frame = if matches!(point.data_type.as_deref(), Some("bit") | Some("bool")) {
-                let data = [if value != 0.0 { 0x01u8 } else { 0x00u8 }];
-                build_write_frame(
-                    server_node,
-                    CLIENT_NODE,
-                    area.bit_code,
-                    area.address,
-                    1,
-                    &data,
-                )
-            } else {
-                let dt = point.data_type_enum().unwrap_or(PointDataType::U16);
-                // 写值与读路径对偶：北向下发的是一次侧值，需先除回变比与 scale/offset
-                let data = encode_words(reverse_convert(point, value), dt);
-                build_write_frame(
-                    server_node,
-                    CLIENT_NODE,
-                    area.word_code,
-                    area.address,
-                    dt.register_count(),
-                    &data,
-                )
-            };
+            let frame = build_write_frame(
+                server_node,
+                CLIENT_NODE,
+                area_code,
+                area.address,
+                count,
+                &data,
+            );
             let payload = self
                 .transact(&frame)
                 .await

@@ -651,7 +651,11 @@ pub(crate) fn decode_bit(data: &[u8], index: usize) -> Option<f64> {
 }
 
 /// 将 f64 编码为待写字的原始字节（小端），字数为 `dt` 所需寄存器数。
-pub(crate) fn encode_words(value: f64, dt: PointDataType) -> Vec<u8> {
+///
+/// MC-W3：先按数据类型做范围校验，越界（含 NaN/Inf）在组帧前返回
+/// [`CollectorError::InvalidConfig`]，不得用 `as` 静默截断成另一个值。
+pub(crate) fn encode_words(value: f64, dt: PointDataType) -> CollectorResult<Vec<u8>> {
+    crate::south::protocol::validate_write_value(value, dt)?;
     // 先按大端规范得到字节，再按字反转回小端
     let be = match dt {
         PointDataType::U16 => (value as u16).to_be_bytes().to_vec(),
@@ -666,7 +670,7 @@ pub(crate) fn encode_words(value: f64, dt: PointDataType) -> Vec<u8> {
     // 大端规范序整体反转即得到 MC 期望的「字内小端 + 低地址字在前」
     let mut out = be;
     out.reverse();
-    out
+    Ok(out)
 }
 
 /// 一次批量读片段的规划结果（决策表 #7：协议级批量读 + 超帧上限自动分片）

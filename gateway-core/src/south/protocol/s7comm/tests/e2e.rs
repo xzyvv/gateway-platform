@@ -85,6 +85,63 @@ async fn c13_reconnect_after_connection_drop() {
 }
 
 // ============================================================
+// S7-R9：协商 PDU 区间校验
+// ============================================================
+
+/// 只完成握手的 S7 桩：Setup 应答按参数协商 PDU，随后保持连接供查询。
+async fn spawn_s7_setup_pdu_stub(pdu: u16) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr").to_string();
+    tokio::spawn(async move {
+        let (mut sock, _) = match listener.accept().await {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        if read_tpkt_body(&mut sock).await.is_none() {
+            return;
+        }
+        if !write_tpkt(&mut sock, &s7_cotp_cc_body()).await {
+            return;
+        }
+        if read_tpkt_body(&mut sock).await.is_none() {
+            return;
+        }
+        let _ = write_tpkt(&mut sock, &s7_setup_ack_body_pdu(pdu)).await;
+        let mut sink = [0u8; 1];
+        let _ = sock.read(&mut sink).await;
+    });
+    addr
+}
+
+/// S7-R9：协商 PDU 必须落在 240..=960；越界不采信，回退默认 480 并告警。
+#[tokio::test]
+async fn negotiated_pdu_size_is_range_checked() {
+    // 区间内：原样采信（下界 / 典型值 / 上界）
+    for pdu in [240u16, 480, 960] {
+        let addr = spawn_s7_setup_pdu_stub(pdu).await;
+        let c = S7CommCollector::new(addr, "s7-bus".into(), Duration::from_secs(5));
+        c.connect().await.expect("握手应成功");
+        assert_eq!(
+            *c.pdu_size.lock().await,
+            pdu,
+            "区间内协商值 {pdu} 应原样采信（守护 S7-R9）"
+        );
+    }
+
+    // 区间外：回退默认 480，避免分片退化成 1 字节或超出设备能力
+    for pdu in [0u16, 100, 2000, u16::MAX] {
+        let addr = spawn_s7_setup_pdu_stub(pdu).await;
+        let c = S7CommCollector::new(addr, "s7-bus".into(), Duration::from_secs(5));
+        c.connect().await.expect("握手应成功");
+        assert_eq!(
+            *c.pdu_size.lock().await,
+            480,
+            "越界协商值 {pdu} 必须回退默认 480（守护 S7-R9）"
+        );
+    }
+}
+
+// ============================================================
 // 批次建链优化契约（read_batch 整批共享一次建链）
 // ============================================================
 

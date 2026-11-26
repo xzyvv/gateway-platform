@@ -244,6 +244,37 @@ async fn read_timeout_is_no_reply_and_clears_connection() {
 // G-T1b MC-W4 / MC-W5：写后不读回、写失败不重发
 // ============================================================
 
+/// MC-W3：写值越界必须在**上线前**拒绝，不得 `as` 静默截断成另一个值。
+///
+/// 70000 写 u16 若不校验会变成 4464，现场表现为「写进去了但值不对」，很难排查。
+#[tokio::test]
+async fn write_value_out_of_range_is_rejected_before_send() {
+    let (addr, conns, reqs) =
+        spawn_mc_stub_counters(vec![StubAction::Reply(mc_response(0, &[]))]).await;
+    let c = McCollector::new(addr, "mc-bus".into(), Duration::from_secs(5), None);
+    let mut p = point("p1", "D100", "u16");
+    p.address = "D100".to_string();
+
+    let err = c.write(&p, 70000.0).await.expect_err("越界写值应被拒绝");
+    match err {
+        crate::south::protocol::CollectorError::InvalidConfig(msg) => {
+            assert!(msg.contains("70000"), "原因需可辨识: {msg}");
+            assert!(msg.contains("U16"), "原因需点明数据类型: {msg}");
+        }
+        other => panic!("越界写值应报 InvalidConfig，实际 {other:?}"),
+    }
+    assert_eq!(
+        conns.load(Ordering::SeqCst),
+        0,
+        "越界值必须在上线前拒绝：不得建立连接"
+    );
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        0,
+        "越界值必须在上线前拒绝：不得发出写帧"
+    );
+}
+
 /// MC-W4：写成功后只发出一条写请求，**不得再补一次读回**。
 #[tokio::test]
 async fn mc_write_issues_single_request_without_readback() {

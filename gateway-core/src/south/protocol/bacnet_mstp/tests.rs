@@ -569,6 +569,99 @@ fn parse_mstp_frame_rejects_oversized_data_len_and_locks_variants() {
     }
 }
 
+/// 构造合法的 ReadProperty ComplexACK APDU（REAL 值），invoke id 由参数给出。
+fn read_property_ack_apdu(invoke_id: u8, value: f32) -> Vec<u8> {
+    let mut apdu = vec![
+        0x30, invoke_id, 0x0C, // ComplexACK / invoke / ReadProperty
+        0x0C, 0x00, 0x00, 0x00, 0x01, // ctx tag 0：Object ID
+        0x19, 0x55, // ctx tag 1：Property ID = 85
+        0x3E, 0x44, // ctx tag 3 opening + 应用 tag REAL(len=4)
+    ];
+    apdu.extend_from_slice(&value.to_be_bytes());
+    apdu.push(0x3F); // ctx tag 3 closing
+    apdu
+}
+
+/// MSTP-R6：应答源地址必须等于目标站；他站应答丢弃、按无应答处理。
+#[tokio::test]
+async fn mstp_reply_source_address_must_match_target() {
+    // 目标站 5，但应答来自站 9 → 不得采用（多站共享总线上的他站应答）
+    let mut payload = BacnetCollector::build_npdu_header().to_vec();
+    payload.extend_from_slice(&read_property_ack_apdu(1, 12.5));
+    let wrong_src = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 9, &payload);
+    let bus = fake_mstp_bus("mstp_r6_wrong_src", Some(wrong_src)).await;
+    let collector = BacnetMstpCollector::new(
+        "mstp_r6_wrong_src",
+        bus,
+        0,
+        std::sync::Arc::new(test_metrics()),
+    );
+    let mut p = mstp_point("ai-r6-wrong");
+    p.slave_id = Some(5);
+    let err = collector
+        .read(&p)
+        .await
+        .expect_err("他站应答不得返回数据点");
+    assert!(
+        matches!(err, CollectorError::NoReply),
+        "源站不一致必须丢弃并按无应答处理（守护 MSTP-R6），实际 {err:?}"
+    );
+
+    // 源站 = 目标站 5 → 正常解析，证明校验不是一刀切拒绝
+    let mut payload = BacnetCollector::build_npdu_header().to_vec();
+    payload.extend_from_slice(&read_property_ack_apdu(1, 12.5));
+    let right_src = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 5, &payload);
+    let bus = fake_mstp_bus("mstp_r6_right_src", Some(right_src)).await;
+    let collector = BacnetMstpCollector::new(
+        "mstp_r6_right_src",
+        bus,
+        0,
+        std::sync::Arc::new(test_metrics()),
+    );
+    let mut p = mstp_point("ai-r6-right");
+    p.slave_id = Some(5);
+    let dp = collector.read(&p).await.expect("源站一致应正常解析");
+    assert!((dp.value - 12.5).abs() < 1e-6, "got {}", dp.value);
+}
+
+/// MSTP-R8：BACnet Error / Reject / Abort PDU 是设备明确拒绝 → `DeviceRejected`；
+/// 未知 PDU 仍是帧错误 → `InvalidFrame`。
+#[test]
+fn bacnet_error_pdus_map_to_device_rejected() {
+    use crate::south::protocol::bacnet::{
+        parse_value_from_apdu, APDU_ABORT, APDU_ERROR, APDU_REJECT,
+    };
+
+    for (pdu, name) in [
+        (APDU_ERROR, "Error"),
+        (APDU_REJECT, "Reject"),
+        (APDU_ABORT, "Abort"),
+    ] {
+        match parse_value_from_apdu(&[pdu, 0x07, 0x0C], 0x07) {
+            Err(CollectorError::DeviceRejected(msg)) => {
+                assert!(msg.contains(name), "原因需点明 PDU 类型 {name}: {msg}");
+            }
+            other => {
+                panic!("PDU 0x{pdu:02X} 应映射 DeviceRejected（守护 MSTP-R8），实际 {other:?}")
+            }
+        }
+    }
+
+    // 未知 PDU 类型仍是「帧不对」
+    match parse_value_from_apdu(&[0x20, 0x07, 0x0C], 0x07) {
+        Err(CollectorError::InvalidFrame(_)) => {}
+        other => panic!("未知 PDU 类型应报 InvalidFrame，实际 {other:?}"),
+    }
+
+    // 迟到包（invoke id 不符）不得被记成本次请求的「设备拒绝」
+    match parse_value_from_apdu(&[APDU_ERROR, 0x08, 0x0C], 0x07) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("invoke id"), "原因需可辨识: {msg}");
+        }
+        other => panic!("invoke id 不符应先按帧错误拒绝，实际 {other:?}"),
+    }
+}
+
 fn mstp_point(id: &str) -> PointConfig {
     PointConfig {
         id: id.to_string(),

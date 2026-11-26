@@ -402,9 +402,16 @@ pub(crate) fn decode_words(data: &[u8], dt: crate::engine::model::PointDataType)
 }
 
 /// 将 f64 编码为大端字序列（FINS 数值大端）。
-pub(crate) fn encode_words(value: f64, dt: crate::engine::model::PointDataType) -> Vec<u8> {
+///
+/// FINS-W4：先按数据类型做范围校验，越界（含 NaN/Inf）在组帧前返回
+/// [`CollectorError::InvalidConfig`]，不得用 `as` 静默截断成另一个值。
+pub(crate) fn encode_words(
+    value: f64,
+    dt: crate::engine::model::PointDataType,
+) -> CollectorResult<Vec<u8>> {
     use crate::engine::model::PointDataType::*;
-    match dt {
+    crate::south::protocol::validate_write_value(value, dt)?;
+    Ok(match dt {
         U16 => (value as u16).to_be_bytes().to_vec(),
         I16 => (value as i16).to_be_bytes().to_vec(),
         U32 => (value as u32).to_be_bytes().to_vec(),
@@ -413,5 +420,19 @@ pub(crate) fn encode_words(value: f64, dt: crate::engine::model::PointDataType) 
         U64 => (value as u64).to_be_bytes().to_vec(),
         I64 => (value as i64).to_be_bytes().to_vec(),
         F64 => value.to_be_bytes().to_vec(),
-    }
+    })
+}
+
+/// FINS/UDP 应答匹配：源地址必须是本次连接的对端，且 SID 必须回显请求值。
+///
+/// UDP 无连接复用握手，同一网段多设备或上一次请求的迟到应答都可能落到同一
+/// 套接字上；不校验就会把别人/上次的数据当成本次结果（点位串值）。
+/// 帧长不足 10 字节（装不下 SID）一律视为不匹配。
+pub(crate) fn udp_reply_matches(
+    reply: &[u8],
+    src: std::net::SocketAddr,
+    peer: std::net::SocketAddr,
+    request_sid: u8,
+) -> bool {
+    src == peer && reply.get(9).copied() == Some(request_sid)
 }
