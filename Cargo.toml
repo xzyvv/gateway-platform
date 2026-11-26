@@ -75,7 +75,7 @@ async-opcua = { version = "0.19" }
 rcgen = "0.13"
 pem = "3"
 # S4: 加载系统 CA 证书（mTLS 场景下避免 ca 为空导致验证失败）
-rustls-native-certs = "0.6"
+rustls-native-certs = "0.8"
 x509-parser = "0.16"
 arc-swap = "1"
 ts-rs = { version = "10", features = ["chrono-impl", "no-serde-warnings"] }
