@@ -22,10 +22,14 @@ use tower::ServiceExt;
 const TOKEN: &str = "test-token-0123456789abcdef";
 
 fn req(method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
+    req_as(TOKEN, method, uri, body)
+}
+
+fn req_as(token: &str, method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
     let builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header(header::AUTHORIZATION, format!("Bearer {}", TOKEN));
+        .header(header::AUTHORIZATION, format!("Bearer {}", token));
     match body {
         Some(v) => builder
             .header(header::CONTENT_TYPE, "application/json")
@@ -43,7 +47,21 @@ async fn json_body(resp: axum::response::Response) -> Value {
 }
 
 async fn call(app: &axum::Router, method: &str, uri: &str, body: Option<Value>) -> Value {
-    let resp = app.clone().oneshot(req(method, uri, body)).await.unwrap();
+    call_as(app, TOKEN, method, uri, body).await
+}
+
+async fn call_as(
+    app: &axum::Router,
+    token: &str,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> Value {
+    let resp = app
+        .clone()
+        .oneshot(req_as(token, method, uri, body))
+        .await
+        .unwrap();
     json_body(resp).await
 }
 
@@ -260,16 +278,149 @@ async fn packet_capture_clear_is_idempotent() {
 }
 
 #[tokio::test]
+async fn replay_session_owner_isolation() {
+    let (_state, app) = app_with_bus().await;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let mut session = json!({
+        "id": "sess_iso_admin",
+        "name": "管理员会话",
+        "device_name": "1号表",
+        "duration_ms": 10,
+        "packet_count": 1,
+        "created_at_ms": now_ms,
+        "packets": [{ "id": "p", "time_ms": 0, "direction": "tx", "hex": "01", "parsed": "" }]
+    });
+    let body = call(
+        &app,
+        "POST",
+        "/api/protocol-tools/packet-replay/sessions",
+        Some(session.clone()),
+    )
+    .await;
+    assert_eq!(body["code"], 0, "管理员保存会话失败: {body}");
+
+    // 建一个只有 devices:write 的普通密钥
+    let created = call(
+        &app,
+        "POST",
+        "/api/access/api-keys",
+        Some(json!({ "name": "iso-key", "scopes": ["devices:write"] })),
+    )
+    .await;
+    assert_eq!(created["code"], 0, "创建 API 密钥失败: {created}");
+    let key_token = created["data"]["key"]
+        .as_str()
+        .expect("创建密钥应返回明文")
+        .to_string();
+    let key_id = created["data"]["id"].as_str().unwrap().to_string();
+
+    // DD-26：普通密钥看不到他人的会话
+    let body = call_as(
+        &app,
+        &key_token,
+        "GET",
+        "/api/protocol-tools/packet-replay/sessions",
+        None,
+    )
+    .await;
+    assert_eq!(body["code"], 0);
+    assert!(
+        !body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == "sess_iso_admin"),
+        "API 密钥不得看到他人会话: {body}"
+    );
+
+    // DD-26：普通密钥删不了他人的会话（403 / 8004）
+    let body = call_as(
+        &app,
+        &key_token,
+        "DELETE",
+        "/api/protocol-tools/packet-replay/sessions/sess_iso_admin",
+        None,
+    )
+    .await;
+    assert_eq!(body["code"], 8004, "越权删除应被拒绝: {body}");
+
+    // 密钥保存自己的会话：归属由服务端盖章为 key.id
+    session["id"] = json!("sess_iso_key");
+    let body = call_as(
+        &app,
+        &key_token,
+        "POST",
+        "/api/protocol-tools/packet-replay/sessions",
+        Some(session.clone()),
+    )
+    .await;
+    assert_eq!(body["code"], 0, "密钥保存会话失败: {body}");
+    assert_eq!(body["data"]["owner"], key_id);
+
+    // 密钥只看到自己的；管理员看到全部
+    let body = call_as(
+        &app,
+        &key_token,
+        "GET",
+        "/api/protocol-tools/packet-replay/sessions",
+        None,
+    )
+    .await;
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"sess_iso_key"));
+    assert!(!ids.contains(&"sess_iso_admin"));
+
+    let body = call(
+        &app,
+        "GET",
+        "/api/protocol-tools/packet-replay/sessions",
+        None,
+    )
+    .await;
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"sess_iso_admin") && ids.contains(&"sess_iso_key"));
+
+    // 清理
+    for id in ["sess_iso_admin", "sess_iso_key"] {
+        call(
+            &app,
+            "DELETE",
+            &format!("/api/protocol-tools/packet-replay/sessions/{id}"),
+            None,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
 async fn replay_session_save_list_delete() {
     let (_state, app) = app_with_bus().await;
 
+    // DD-26：TTL 以 created_at_ms 起算，夹具必须用「当前时间」，否则会被 30 天保留期清掉
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
     let session = json!({
         "id": "sess_it1",
         "name": "现场回放",
         "device_name": "1号表",
         "duration_ms": 120,
         "packet_count": 1,
-        "created_at_ms": 1700000000000i64,
+        "created_at_ms": now_ms,
         "packets": [{
             "id": "pk1",
             "time_ms": 0,
@@ -296,11 +447,14 @@ async fn replay_session_save_list_delete() {
     )
     .await;
     assert_eq!(body["code"], 0);
-    assert!(body["data"]
+    let saved = body["data"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|s| s["id"] == "sess_it1"));
+        .find(|s| s["id"] == "sess_it1")
+        .expect("保存的回放会话应出现在列表中");
+    // DD-26：归属由服务端盖章（主 token = admin），不采信请求体
+    assert_eq!(saved["owner"], "admin");
 
     let body = call(
         &app,

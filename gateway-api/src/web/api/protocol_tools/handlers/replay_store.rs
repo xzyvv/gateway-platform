@@ -20,6 +20,26 @@ fn sessions_path(config_dir: &Path) -> PathBuf {
     config_dir.join("replay_sessions.json")
 }
 
+/// 回放会话保留期：30 天（DD-26）。
+///
+/// 会话只是调试辅助数据，长期堆积既占磁盘也让列表越来越难找。过期采用
+/// 「读/写时惰性清理」而非后台定时器：TTL 精度要求天级，没必要为它常驻任务。
+pub const REPLAY_SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 移除超过保留期的会话，返回是否真的有删除（供调用方决定是否落盘）。
+fn purge_expired(lock: &mut Vec<ReplaySession>, now: i64) -> bool {
+    let before = lock.len();
+    lock.retain(|s| s.created_at_ms.saturating_add(REPLAY_SESSION_TTL_MS) > now);
+    lock.len() != before
+}
+
 /// 全局存储：进程启动后 lazy 初始化一次，之后所有 handler 共用同一实例。
 static STORE: Lazy<Mutex<Vec<ReplaySession>>> = Lazy::new(|| Mutex::new(Vec::new()));
 static LOADED: Once = Once::new();
@@ -86,19 +106,34 @@ fn persist(config_dir: &Path) {
     }
 }
 
-/// 列出全部持久化会话（预置由 handler 另行合并）
-pub fn list() -> Vec<ReplaySession> {
-    lock_store().clone()
+/// 列出全部持久化会话（预置由 handler 另行合并）；顺带清理过期会话。
+pub fn list(config_dir: &Path) -> Vec<ReplaySession> {
+    purge_and_collect(config_dir)
 }
 
-/// 按 id 查找持久化会话（找不到返回 None；预置由 handler 另行查找）
-pub fn get(id: &str) -> Option<ReplaySession> {
-    lock_store().iter().find(|s| s.id == id).cloned()
+/// 按 id 查找持久化会话（找不到返回 None；预置由 handler 另行查找）。
+/// 查找前同样先清理过期会话，避免「列表已看不到、按 id 还能取到」。
+pub fn get(config_dir: &Path, id: &str) -> Option<ReplaySession> {
+    purge_and_collect(config_dir)
+        .into_iter()
+        .find(|s| s.id == id)
+}
+
+fn purge_and_collect(config_dir: &Path) -> Vec<ReplaySession> {
+    let mut lock = lock_store();
+    let removed = purge_expired(&mut lock, now_ms());
+    let snapshot = lock.clone();
+    drop(lock);
+    if removed {
+        persist(config_dir);
+    }
+    snapshot
 }
 
 /// 保存或更新（id 已存在则替换）
 pub fn upsert(config_dir: &Path, session: ReplaySession) {
     let mut lock = lock_store();
+    purge_expired(&mut lock, now_ms());
     if let Some(existing) = lock.iter_mut().find(|s| s.id == session.id) {
         *existing = session;
     } else {
@@ -118,5 +153,45 @@ pub fn delete(config_dir: &Path, id: &str) {
         persist(config_dir);
     } else {
         drop(lock);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(id: &str, created_at_ms: i64) -> ReplaySession {
+        ReplaySession {
+            id: id.into(),
+            name: id.into(),
+            device_name: id.into(),
+            duration_ms: 0,
+            packet_count: 0,
+            created_at_ms,
+            owner: Some("admin".into()),
+            packets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ttl_只清理过期会话_到期即删() {
+        let now = 1_000_000_000_000i64;
+        let mut list = vec![
+            session("fresh", now),
+            // 恰好满 30 天即视为过期（保留期不含边界时刻）
+            session("edge", now - REPLAY_SESSION_TTL_MS),
+            session("expired", now - REPLAY_SESSION_TTL_MS - 1),
+        ];
+        assert!(purge_expired(&mut list, now), "有删除应返回 true");
+        let ids: Vec<&str> = list.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["fresh"]);
+    }
+
+    #[test]
+    fn ttl_无过期时不写盘() {
+        let now = 1_000_000_000_000i64;
+        let mut list = vec![session("a", now), session("b", now - 10)];
+        assert!(!purge_expired(&mut list, now), "无删除不得触发落盘");
+        assert_eq!(list.len(), 2);
     }
 }

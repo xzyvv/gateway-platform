@@ -16,6 +16,7 @@ pub(super) fn build_sessions() -> Vec<ReplaySession> {
             duration_ms: 5000,
             packet_count: 10,
             created_at_ms: now - 3600000,
+            owner: None,
             packets: vec![
                 ReplayPacket {
                     id: "p1".into(),
@@ -96,6 +97,7 @@ pub(super) fn build_sessions() -> Vec<ReplaySession> {
             duration_ms: 3000,
             packet_count: 6,
             created_at_ms: now - 7200000,
+            owner: None,
             packets: vec![
                 ReplayPacket {
                     id: "p1".into(),

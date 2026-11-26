@@ -207,6 +207,8 @@ async fn collect_replay_blocking(mut rx: mpsc::Receiver<ReplayEvent>) -> Respons
 
 pub(crate) async fn execute_replay(
     State(state): State<Arc<AppState>>,
+    main: Option<axum::extract::Extension<crate::web::middleware::AuthedMainToken>>,
+    key: Option<axum::extract::Extension<crate::web::middleware::AuthedApiKey>>,
     Path(id): Path<String>,
     headers: axum::http::HeaderMap,
     Json(body): Json<ReplayExecuteBody>,
@@ -220,8 +222,11 @@ pub(crate) async fn execute_replay(
         .to_path_buf();
     super::super::replay_store::ensure_loaded(&cfg_dir);
 
-    // 先查持久化，找不到回预置（仅 demo 开关开启时才命中预置）
-    let session = super::super::replay_store::get(&id)
+    // 先查持久化，找不到回预置（仅 demo 开关开启时才命中预置）。
+    // DD-26：别人的会话按不存在处理，避免越权回放与存在性泄露。
+    let caller = super::caller_of(main, key);
+    let session = super::super::replay_store::get(&cfg_dir, &id)
+        .filter(|s| caller.can_view(s))
         .or_else(|| {
             super::builtin_sessions(&state)
                 .into_iter()

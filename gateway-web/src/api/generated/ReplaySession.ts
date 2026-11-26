@@ -4,4 +4,9 @@ import type { ReplayPacket } from "./ReplayPacket";
 /**
  * 回放会话
  */
-export type ReplaySession = { id: string, name: string, device_name: string, duration_ms: number, packet_count: number, created_at_ms: number, packets: Array<ReplayPacket>, };
+export type ReplaySession = { id: string, name: string, device_name: string, duration_ms: number, packet_count: number, created_at_ms: number, 
+/**
+ * 会话归属（DD-26）：主 token 保存为 `"admin"`，API 密钥保存为 `key.id`；
+ * 升级前的历史会话为 null，只对管理员可见。保存时可省略，服务端按调用者盖章。
+ */
+owner?: string, packets: Array<ReplayPacket>, };

@@ -8,9 +8,83 @@ use futures::StreamExt;
 
 use super::engine::{spawn_replay, ReplayAudit, ReplayEvent};
 use super::replay_run::{judge_frame, pair_requests};
-use super::{builtin_sessions_for, ReplayPacket, ReplaySession};
+use super::{builtin_sessions_for, caller_of, Caller, ReplayPacket, ReplaySession};
 use crate::web::api::protocol_tools::DebugLease;
 use crate::web::debug_bus::{BusErrorKind, DebugBusTrait, ExchangeOutcome};
+use crate::web::middleware::{AuthedApiKey, AuthedMainToken};
+use axum::extract::Extension;
+
+fn key_record(id: &str, scopes: &[&str]) -> gateway_core::config::ApiKeyRecord {
+    gateway_core::config::ApiKeyRecord {
+        id: id.into(),
+        name: id.into(),
+        key_preview: "gwk_ab12…9f0e".into(),
+        scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
+        enabled: true,
+        expires_at: None,
+        created_at: 0,
+        last_used_at: None,
+        call_count: 0,
+    }
+}
+
+/// DD-26：主 token 才是管理员；普通密钥与匿名读都不是。
+#[test]
+fn caller_of_主token为管理员_普通密钥与匿名读不是() {
+    let admin = caller_of(Some(Extension(AuthedMainToken)), None);
+    assert!(admin.admin);
+    assert_eq!(admin.owner, "admin");
+
+    let plain = caller_of(
+        None,
+        Some(Extension(AuthedApiKey(key_record(
+            "k1",
+            &["devices:write"],
+        )))),
+    );
+    assert!(!plain.admin);
+    assert_eq!(plain.owner, "k1");
+
+    let wild = caller_of(
+        None,
+        Some(Extension(AuthedApiKey(key_record("k2", &["*"])))),
+    );
+    assert!(wild.admin, "带 * 的密钥等同管理员");
+
+    let anon = caller_of(None, None);
+    assert!(!anon.admin);
+    assert_eq!(anon.owner, "", "匿名读没有归属身份");
+}
+
+/// DD-26：普通密钥只看得到自己的会话；历史无主会话只对管理员可见。
+#[test]
+fn 归属过滤_普通密钥互相不可见_历史会话仅管理员可见() {
+    let mine = session_with(Vec::new());
+    let mut mine = mine;
+    mine.owner = Some("k1".into());
+    let mut others = mine.clone();
+    others.id = "o".into();
+    others.owner = Some("k2".into());
+    let mut legacy = mine.clone();
+    legacy.id = "legacy".into();
+    legacy.owner = None;
+
+    let k1 = Caller {
+        owner: "k1".into(),
+        admin: false,
+    };
+    assert!(k1.can_view(&mine));
+    assert!(!k1.can_view(&others));
+    assert!(!k1.can_view(&legacy), "升级前的无主会话不得泄露给普通密钥");
+
+    let admin = Caller {
+        owner: "admin".into(),
+        admin: true,
+    };
+    assert!(admin.can_view(&mine));
+    assert!(admin.can_view(&others));
+    assert!(admin.can_view(&legacy));
+}
 
 /// R1 回归：预置演示会话默认不注入，只有 demo 开关开启时才返回。
 #[test]
@@ -44,6 +118,7 @@ fn session_with(packets: Vec<ReplayPacket>) -> ReplaySession {
         duration_ms: 0,
         packet_count: packets.len() as i32,
         created_at_ms: 0,
+        owner: None,
         packets,
     }
 }

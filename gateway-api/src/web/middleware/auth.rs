@@ -18,6 +18,13 @@ use crate::web::types::AppState;
 #[derive(Debug, Clone)]
 pub(crate) struct AuthedApiKey(pub gateway_core::config::ApiKeyRecord);
 
+/// 已认证的主 token（鉴权中间件写入 request extensions）。
+///
+/// 主 token 没有 `ApiKeyRecord`，与「匿名读」一样都不带 `AuthedApiKey`；
+/// 用本标记把两者区分开：主 token 等同管理员（可管理全部回放会话），匿名读不行。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AuthedMainToken;
+
 /// 从请求头中提取 token：支持 `Authorization: Bearer <token>` 或 `X-API-Token: <token>`
 pub(crate) fn extract_token_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(auth) = headers.get(header::AUTHORIZATION) {
@@ -150,7 +157,10 @@ pub(crate) async fn require_auth(
     let path = req.uri().path().to_string();
     let headers = req.headers();
     match extract_token_from_headers(headers) {
-        Some(token) if token_matches(&token, &api_token(&state)) => next.run(req).await,
+        Some(token) if token_matches(&token, &api_token(&state)) => {
+            req.extensions_mut().insert(AuthedMainToken);
+            next.run(req).await
+        }
         // 主 token 未命中 → 尝试 API 密钥（写接口按路径域校验写权限 scope）
         Some(token) => match authenticate_api_key(&state, &token, Some((&method, &path))) {
             Ok(key) => {
@@ -441,9 +451,7 @@ pub(crate) async fn require_auth_if_anon_disabled(
 ) -> Response {
     let path = req.uri().path().to_string();
     // 匿名读模式下，敏感读接口仍强制鉴权（见 is_sensitive_read_path）
-    if allow_anon_read(&state) && !is_sensitive_read_path(&path) {
-        return next.run(req).await;
-    }
+    let anonymous_ok = allow_anon_read(&state) && !is_sensitive_read_path(&path);
     let headers = req.headers();
     // 浏览器 WebSocket 握手无法携带 Authorization 头，token 约定走
     // `bearer.<token>` Sec-WebSocket-Protocol 子协议；此处必须同样识别，
@@ -451,21 +459,35 @@ pub(crate) async fn require_auth_if_anon_disabled(
     // 子协议校验永远执行不到。
     let provided =
         extract_token_from_headers(headers).or_else(|| extract_token_from_ws_protocol(headers));
-    match provided {
-        Some(token) if token_matches(&token, &api_token(&state)) => next.run(req).await,
+    // DD-26：匿名读模式不能直接放行——带了 token 的请求仍要写入身份标记，
+    // 否则回放会话等「按用户隔离」的读接口会把管理员/密钥当成匿名用户。
+    if let Some(token) = provided {
+        if token_matches(&token, &api_token(&state)) {
+            req.extensions_mut().insert(AuthedMainToken);
+            return next.run(req).await;
+        }
         // 主 token 未命中 → 尝试 API 密钥（只读接口不校验 scope）
-        Some(token) => match authenticate_api_key(&state, &token, None) {
+        match authenticate_api_key(&state, &token, None) {
             Ok(key) => {
                 req.extensions_mut().insert(AuthedApiKey(key));
-                next.run(req).await
+                return next.run(req).await;
             }
-            Err(e) => e.into_response(),
-        },
-        None => ApiError::unauthorized(
-            "authentication required; provide Authorization: Bearer <token> or X-API-Token",
-        )
-        .into_response(),
+            Err(e) => {
+                // 匿名读模式下坏的 token 不阻断看板（与旧行为一致）；严格模式直接拒
+                if anonymous_ok {
+                    return next.run(req).await;
+                }
+                return e.into_response();
+            }
+        }
     }
+    if anonymous_ok {
+        return next.run(req).await;
+    }
+    ApiError::unauthorized(
+        "authentication required; provide Authorization: Bearer <token> or X-API-Token",
+    )
+    .into_response()
 }
 
 #[cfg(test)]
