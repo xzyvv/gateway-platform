@@ -165,13 +165,17 @@ fn record_rate(state: &mut HashMap<String, RateState>, point_id: &str, value: f6
     );
 }
 
+/// 规则快照与变化率上值表是进程级全局态，安装/复位规则的测试必须串行执行。
+///
+/// 本模块用例与 `pipeline::tests` 中「convert → 质量规则 → 虚拟点」阶段顺序用例
+/// 共用同一把锁：否则并行执行时一方的 `install_rules` / 复位会覆盖另一方的规则，
+/// 表现为随机失败。
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
-
-    /// 规则快照与上值表是进程级全局态，测试必须串行执行。
-    static TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     fn reset() {
         install_rules(Vec::new());

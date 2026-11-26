@@ -201,6 +201,77 @@ fn on_change_baseline_is_pruned_for_removed_points() {
         .is_some());
 }
 
+/// 构造保留非有限值的数据点。
+///
+/// 不能走 `DataPoint::good`：它在检测到 NaN/Inf 时会把数值替换为 0.0 并降级，
+/// 那样就测不到「非有限值穿过死区/变化节点」这条路径了。
+fn good_raw(id: &str, value: f64) -> DataPoint {
+    DataPoint {
+        point_id: id.to_string(),
+        device_id: "dev".to_string(),
+        value,
+        raw_value: value,
+        raw_type: "f32".to_string(),
+        quality: Quality::Good,
+        quality_reason: String::new(),
+        timestamp: 0,
+        source_ts: 0,
+        stale_count: 0,
+        value_text: None,
+    }
+}
+
+/// I-21：NaN/Inf 在死区节点直接放行，且不得写入基线。
+///
+/// 若把 NaN 写进基线，后续有限样本与 NaN 比较恒为 false，会被判成「变化」
+/// 而每条都上报，死区形同失效。
+#[test]
+fn non_finite_passes_deadband_without_updating_baseline() {
+    let node = DeadbandNode::new();
+    let p = make_point("nan_db", 1.0, false);
+
+    assert!(node.process(&p, good_raw("nan_db", 10.0)).is_some());
+    assert!(
+        node.process(&p, good_raw("nan_db", f64::NAN)).is_some(),
+        "NaN 必须放行（异常值要让平台看到）"
+    );
+    assert!(
+        node.process(&p, good_raw("nan_db", f64::INFINITY))
+            .is_some(),
+        "+Inf 必须放行"
+    );
+    assert!(
+        node.process(&p, good_raw("nan_db", f64::NEG_INFINITY))
+            .is_some(),
+        "-Inf 必须放行"
+    );
+    assert!(
+        node.process(&p, good_raw("nan_db", 10.0)).is_none(),
+        "非有限值不得写入基线：10 与故障前基线相同，应被死区过滤"
+    );
+}
+
+/// I-21：变化节点同样「放行但不写基线」，与死区节点口径一致。
+#[test]
+fn non_finite_passes_on_change_without_updating_baseline() {
+    let node = ChangeNode::new();
+    let p = make_point("nan_oc", 0.5, true);
+
+    assert!(node.process(&p, good_raw("nan_oc", 10.0)).is_some());
+    assert!(node.process(&p, good_raw("nan_oc", f64::NAN)).is_some());
+    assert!(node
+        .process(&p, good_raw("nan_oc", f64::INFINITY))
+        .is_some());
+    assert!(
+        node.process(&p, good_raw("nan_oc", 10.0)).is_none(),
+        "基线应仍是 10（未被 NaN 覆盖），同值应被变化阈值过滤"
+    );
+    assert!(
+        node.process(&p, good_raw("nan_oc", 12.0)).is_some(),
+        "真正变化仍必须上行"
+    );
+}
+
 /// 验证聚合节点作为标准 PipelineNode 接入统一节点循环
 ///
 /// 重构后 AggregationNode 不再被 EdgeProcessor 特殊对待，
@@ -412,5 +483,9 @@ fn test_add_to_buffer_catch_up_below_cap_is_exact() {
             "空窗占位 source_ts 必须等于窗口右边界"
         );
         assert!(dp.source_ts > 0);
+        // I-23：占位点必须是 Bad + 固定文案 + 0 值，下游才能把它和真实测量区分开。
+        assert_eq!(dp.quality, Quality::Bad, "空窗占位质量码必须为 Bad");
+        assert_eq!(dp.quality_reason, "aggregate:EMPTY_WINDOW");
+        assert_eq!(dp.value, 0.0, "空窗占位数值必须为 0");
     }
 }

@@ -409,10 +409,11 @@ fn record_enqueue_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ConvertRuleConfig, VirtualPoint};
+    use crate::config::{ConvertRuleConfig, QualityRule, VirtualPoint};
     use crate::engine::metrics::Metrics;
     use crate::engine::model::Quality;
     use crate::north::NorthFeed;
+    use crate::pipeline::edge::PipelineNode;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
@@ -501,10 +502,23 @@ mod tests {
         Arc<DataQueue>,
         mpsc::Receiver<Arc<Vec<DataPoint>>>,
     ) {
+        spawn_pipeline_with_edge(EdgeProcessor::new(), convert, vps)
+    }
+
+    /// 同上，但允许自定义边缘节点序列（用于验证「派生点不经过边缘阶段」）。
+    fn spawn_pipeline_with_edge(
+        edge: EdgeProcessor,
+        convert: Vec<ConvertRuleConfig>,
+        vps: Vec<VirtualPoint>,
+    ) -> (
+        Arc<ProcessingPipeline>,
+        Arc<DataQueue>,
+        mpsc::Receiver<Arc<Vec<DataPoint>>>,
+    ) {
         let queue = Arc::new(DataQueue::new_memory().expect("memory queue"));
         let (north_tx, north_rx) = NorthFeed::channel(16);
         let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
-            edge: Arc::new(EdgeProcessor::new()),
+            edge: Arc::new(edge),
             convert: ConvertEngine::new(convert),
             virtual_points: VirtualPointEngine::new(vps),
             queue: queue.clone(),
@@ -522,8 +536,14 @@ mod tests {
     /// - 正确顺序：原始差 0.2 被死区过滤 → 只上送 1 个点，值为 100；
     /// - 反过来先换算再过滤：差变成 2.0，两个点都会上送。
     /// 同时虚拟点 `{p1} + 1` 必须看到换算后的 100（得到 101），证明转换先于虚拟点。
+    // 测试内跨 await 持锁是有意为之：串行化进程级全局规则快照；
+    // 用例走 current_thread 运行时，future 无需 Send，不存在死锁/跨线程问题。
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn stage_order_is_edge_then_convert_then_virtual() {
+        // 与 I-52 质量规则用例串行：规则是进程级全局态，避免互相覆盖。
+        let _guard = quality_rules::TEST_LOCK.lock();
+        quality_rules::install_rules(Vec::new());
         let (pipeline, queue, mut north_rx) = spawn_pipeline(
             vec![linear_rule("p1")],
             vec![virtual_point("p2", "{p1} + 1")],
@@ -576,8 +596,11 @@ mod tests {
 
     /// I-35：采集失败点（Bad + last_good 值）必须原样进入上报/入队路径，
     /// 不能因为质量不为 Good 被边缘层过滤掉。
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn failed_points_reach_queue() {
+        let _guard = quality_rules::TEST_LOCK.lock();
+        quality_rules::install_rules(Vec::new());
         let (pipeline, queue, _north_rx) = spawn_pipeline(Vec::new(), Vec::new());
         let failed = DataPoint::failed(
             "p1",
@@ -603,5 +626,149 @@ mod tests {
             1,
             "失败点必须入队，否则平台感知不到设备异常"
         );
+    }
+
+    /// 构造一条「取值超过上限即降级为 Bad」的质量规则。
+    fn range_max_rule(max: f64) -> QualityRule {
+        QualityRule {
+            id: "qr_map".into(),
+            name: "map-range".into(),
+            condition: "range".into(),
+            min: None,
+            max: Some(max),
+            max_rate: None,
+            stale_seconds: None,
+            result_quality: "bad".into(),
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// I-52：完整阶段顺序必须是「convert → 质量规则 → 虚拟点」。
+    ///
+    /// 构造顺序敏感场景：p1 原始值 1.0，线性 ×10 换算为 10.0，质量规则上限 5。
+    /// - 若质量规则跑在转换之后：看到 10.0 > 5 → 降级 Bad；
+    /// - 若跑在转换之前：看到原始 1.0 ≤ 5 → 不命中，点位仍是 Good。
+    /// 再由虚拟点 `{p1} + 1` 验证：p1 已被降级 → 不进实时值缓存 → 虚拟点必须报错。
+    /// 一次断言同时锁住「转换先于质量规则」和「质量规则先于虚拟点」。
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn stage_order_convert_then_quality_rules_then_virtual() {
+        let _guard = quality_rules::TEST_LOCK.lock();
+        quality_rules::install_rules(vec![range_max_rule(5.0)]);
+
+        let (pipeline, _queue, mut north_rx) = spawn_pipeline(
+            vec![linear_rule("p1")],
+            vec![virtual_point("vp1", "{p1} + 1")],
+        );
+
+        pipeline
+            .submit(CollectedBatch::new(vec![(
+                point("p1", 0.0),
+                DataPoint::good("p1", "dev", 1.0, 1.0, "f32"),
+            )]))
+            .await;
+
+        let batch = tokio::time::timeout(Duration::from_secs(2), north_rx.recv())
+            .await
+            .expect("管道必须在超时前产出批次")
+            .expect("北向通道不应关闭");
+
+        let p1 = batch.iter().find(|d| d.point_id == "p1").expect("缺 p1");
+        assert!(
+            (p1.value - 10.0).abs() < 1e-9,
+            "转换必须先于质量规则，p1 值应为 10，实际 {}",
+            p1.value
+        );
+        assert_eq!(
+            p1.quality,
+            Quality::Bad,
+            "质量规则必须看到换算后的 10（>5）并降级，实际 {:?}",
+            p1.quality
+        );
+        assert_eq!(p1.quality_reason, "quality_rule:map-range");
+
+        let vp = batch
+            .iter()
+            .find(|d| d.point_id == "vp1")
+            .expect("虚拟点必须上报错误点");
+        assert_eq!(
+            vp.quality,
+            Quality::Uncertain,
+            "虚拟点求值必须晚于质量规则，降级点不得进入实时值缓存"
+        );
+        assert_eq!(vp.quality_reason, "virtual_point:ERROR");
+        assert_eq!(vp.value, 0.0);
+
+        quality_rules::install_rules(Vec::new());
+    }
+
+    /// 丢弃所有派生点（`raw_type == "virtual"`）的边缘节点。
+    struct DropVirtualNode;
+
+    impl PipelineNode for DropVirtualNode {
+        fn name(&self) -> &'static str {
+            "drop_virtual"
+        }
+
+        fn process(&self, _point: &PointConfig, dp: DataPoint) -> Option<DataPoint> {
+            if dp.raw_type == "virtual" {
+                None
+            } else {
+                Some(dp)
+            }
+        }
+    }
+
+    /// I-32：虚拟派生点不经过边缘阶段（死区/变化/自定义节点），
+    /// 且在派生时带上自洽的时间戳与清零的陈旧计数。
+    ///
+    /// 用一个「丢弃所有 virtual 点」的节点接管边缘阶段：若派生点真的走了边缘，
+    /// 它会被丢掉；实际必须仍能上报，证明它是在边缘之后追加的。
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn derived_point_bypasses_edge_stage() {
+        let _guard = quality_rules::TEST_LOCK.lock();
+        quality_rules::install_rules(Vec::new());
+
+        let queue = Arc::new(DataQueue::new_memory().expect("memory queue"));
+        let (north_tx, mut north_rx) = NorthFeed::channel(16);
+        let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
+            edge: Arc::new(EdgeProcessor::with_nodes(vec![Box::new(DropVirtualNode)])),
+            convert: ConvertEngine::empty(),
+            virtual_points: VirtualPointEngine::new(vec![virtual_point("vp1", "{p1} + 1")]),
+            queue: queue.clone(),
+            realtime_bus: None,
+            north_tx: Some(north_tx),
+            buffer: 16,
+            metrics: Arc::new(Metrics::default()),
+        });
+
+        pipeline
+            .submit(CollectedBatch::new(vec![(
+                point("p1", 0.0),
+                DataPoint::good("p1", "dev", 10.0, 10.0, "f32"),
+            )]))
+            .await;
+
+        let batch = tokio::time::timeout(Duration::from_secs(2), north_rx.recv())
+            .await
+            .expect("管道必须在超时前产出批次")
+            .expect("北向通道不应关闭");
+
+        let vp = batch
+            .iter()
+            .find(|d| d.point_id == "vp1")
+            .expect("派生点必须绕过边缘阶段直接上报");
+        assert_eq!(vp.value, 11.0);
+        assert_eq!(vp.quality, Quality::Good);
+        assert_eq!(vp.raw_type, "virtual");
+        assert_eq!(
+            vp.timestamp, vp.source_ts,
+            "派生点 timestamp 必须等于 source_ts"
+        );
+        assert!(vp.timestamp > 0);
+        assert_eq!(vp.stale_count, 0, "派生点不得携带陈旧计数");
     }
 }

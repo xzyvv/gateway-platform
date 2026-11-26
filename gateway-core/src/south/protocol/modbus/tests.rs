@@ -890,6 +890,31 @@ fn parse_point_value_out_of_range_is_bad_not_panic() {
     assert_eq!(dp.quality_reason, "modbus_decode_failed:DECODE");
 }
 
+/// I-12：公式求值失败只影响数值（回退 `scale*raw+offset`），质量码必须保持 Good。
+///
+/// 公式错是配置问题，不是采集故障：把它标成 Bad 会让平台误以为设备离线，
+/// 而实际数据链路是通的。此前 `decode.rs` 的该分支零断言。
+#[test]
+fn formula_failure_keeps_good_quality_with_linear_fallback() {
+    use crate::engine::model::Quality;
+
+    let mut point = mk_addr_point(0, "u16");
+    point.scale = 0.5;
+    point.offset = 1.0;
+    // 通过字符白名单但求值失败
+    point.formula = Some("1 +".into());
+
+    let dp = super::parse_point_value(&point, &[10], 0);
+    assert_eq!(dp.quality, Quality::Good, "公式失败不得把质量码降级");
+    assert_eq!(dp.quality_reason, "");
+    assert!(
+        (dp.value - 6.0).abs() < 1e-9,
+        "必须回退 raw*scale+offset（10*0.5+1=6），实际 {}",
+        dp.value
+    );
+    assert_eq!(dp.raw_value, 10.0, "原始值不受公式失败影响");
+}
+
 /// 写元件类型判定与 `write` 的功能码语义一致；其余功能码视为只读。
 #[test]
 fn write_kind_mapping_matches_function_code_semantics() {

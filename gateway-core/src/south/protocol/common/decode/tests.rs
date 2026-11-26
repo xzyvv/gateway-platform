@@ -237,6 +237,20 @@ fn test_convert_value_formula_takes_priority() {
     assert!((convert_value(&p, 100.0) - 1.0).abs() < 0.0001);
 }
 
+/// I-12：公式求值失败时必须回退到 `scale*raw+offset`，而不是丢点或归零。
+///
+/// `"1 +"` 能通过字符白名单但求值失败（同解码层公式白名单口径），
+/// 正好覆盖 `convert_value` 里此前零断言的 `Err(_) => raw*scale+offset` 分支。
+#[test]
+fn convert_value_formula_failure_falls_back_to_linear() {
+    let p = make_point_for_convert(0.1, 5.0, Some("1 +".into()), None, None);
+    let out = convert_value(&p, 100.0);
+    assert!(
+        (out - 15.0).abs() < 1e-9,
+        "公式失败必须回退 raw*scale+offset（100*0.1+5=15），实际 {out}"
+    );
+}
+
 #[test]
 fn test_parse_bcd_address_normal() {
     let bytes = parse_bcd_address("12345678", 4).unwrap();
@@ -328,6 +342,27 @@ fn reverse_convert_applies_offset_after_ratio() {
 fn reverse_convert_skips_non_positive_ratio() {
     let p = make_point_for_convert(1.0, 0.0, None, Some(0.0), Some(100.0));
     assert!((reverse_convert(&p, 5.0) - 5.0).abs() < 1e-9);
+}
+
+/// I-15：`scale=0` 时无法反解（除零），直接返回工程量值。
+#[test]
+fn reverse_convert_with_zero_scale_returns_engineering() {
+    let p = make_point_for_convert(0.0, 5.0, None, None, None);
+    assert!(
+        (reverse_convert(&p, 42.0) - 42.0).abs() < 1e-9,
+        "scale=0 时不得反解，应原样返回工程量"
+    );
+}
+
+/// I-15：反向换算不尝试反解公式（公式不可逆），只按 `scale/offset` 反推。
+#[test]
+fn reverse_convert_ignores_formula() {
+    // 读路径是公式 raw*3（不参与反推）；写路径只能按 scale=2/offset=5 反解。
+    let p = make_point_for_convert(2.0, 5.0, Some("raw*3".into()), None, None);
+    assert!(
+        (reverse_convert(&p, 25.0) - 10.0).abs() < 1e-9,
+        "反推必须忽略公式：(25-5)/2=10"
+    );
 }
 
 /// 读写往返一致：读到的值原样写回去应还原成原始寄存器值。

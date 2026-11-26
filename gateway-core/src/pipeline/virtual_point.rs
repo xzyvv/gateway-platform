@@ -182,7 +182,10 @@ impl VirtualPointEngine {
         // 级联求解：虚拟点位可引用其它虚拟点位，按固定点迭代。
         // `resolved` 记录已求出的虚拟点位值（键为虚拟点位 ID）。
         let mut resolved: HashMap<String, f64> = HashMap::new();
-        let mut pending: Vec<&Arc<VirtualPointRule>> = rules.iter().collect();
+        // I-34：禁用的虚拟点**不参与求值**。只从输出阶段跳过是不够的——它仍会被
+        // 求值并写入作用域，其它虚拟点便能照常引用它的数值，「停用」只挡住了自身的
+        // 上报，却仍在暗中参与计算。这里直接把它排除在求解集合之外。
+        let mut pending: Vec<&Arc<VirtualPointRule>> = rules.iter().filter(|r| r.enabled).collect();
         let mut errors: HashMap<String, String> = HashMap::new();
 
         for _ in 0..MAX_CASCADE_ROUNDS {
@@ -621,5 +624,87 @@ mod tests {
             engine.evaluate().is_empty(),
             "降级点不得把原始值 200 写进缓存（应保留 10.0）"
         );
+    }
+
+    /// I-30：求值失败的错误点必须是 `value == 0` + 固定文案。
+    ///
+    /// 下游（北向/控制历史/前端）靠 `quality_reason == "virtual_point:ERROR"`
+    /// 识别虚拟点异常，不能靠数值猜测；数值必须是确定的 0，而不是沿用旧值。
+    #[test]
+    fn error_point_has_zero_value_and_fixed_reason() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{missing} + 1")]);
+        let out = engine.evaluate();
+        assert_eq!(out.len(), 1, "错误状态首次出现必须上报一次");
+        let dp = &out[0];
+        assert_eq!(dp.value, 0.0, "错误点数值必须为 0");
+        assert_eq!(dp.raw_value, 0.0, "错误点原始值必须为 0");
+        assert_eq!(dp.quality, Quality::Uncertain);
+        assert_eq!(dp.quality_reason, "virtual_point:ERROR");
+        assert_eq!(dp.raw_type, "virtual");
+        assert_eq!(dp.stale_count, 0);
+    }
+
+    /// I-32：派生点由虚拟引擎直接构造，`timestamp == source_ts` 且 `stale_count == 0`
+    /// （不继承任何被引用点的陈旧计数）。
+    #[test]
+    fn derived_point_has_consistent_timestamps_and_zero_stale() {
+        let engine = VirtualPointEngine::new(vec![vp("vp1", "{p1} * 2")]);
+        let items = vec![item("p1", 21.0)];
+        engine.update_cache(
+            &items,
+            &items.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+        );
+        let out = engine.evaluate();
+        assert_eq!(out.len(), 1);
+        let dp = &out[0];
+        assert_eq!(
+            dp.timestamp, dp.source_ts,
+            "派生点 timestamp 必须等于 source_ts"
+        );
+        assert!(dp.timestamp > 0, "派生点必须带新鲜时间戳");
+        assert_eq!(dp.stale_count, 0, "派生点不得携带陈旧计数");
+        assert_eq!(dp.quality, Quality::Good);
+        assert_eq!(dp.raw_type, "virtual");
+    }
+
+    /// I-34：禁用的虚拟点不参与求值、不产出数据点，状态如实标记 `disabled`。
+    ///
+    /// 关键在级联：另一个虚拟点引用被禁用的点时必须求值失败，而不能拿到它
+    /// 「偷偷算出来」的数值——否则停用一个点，依赖它的派生量还在照常变化。
+    #[test]
+    fn disabled_virtual_point_is_not_evaluated() {
+        let mut disabled = vp("vp1", "{p1} * 2");
+        disabled.enabled = false;
+        let engine = VirtualPointEngine::new(vec![disabled, vp("vp2", "{vp1} + 1")]);
+        let items = vec![item("p1", 21.0)];
+        engine.update_cache(
+            &items,
+            &items.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+        );
+        let out = engine.evaluate();
+
+        assert!(
+            out.iter().all(|d| d.point_id != "vp1"),
+            "禁用点不得产出任何数据点，实际 {:?}",
+            out.iter().map(|d| &d.point_id).collect::<Vec<_>>()
+        );
+        let states = engine.states();
+        assert_eq!(states["vp1"].value, None);
+        assert_eq!(
+            states["vp1"].error.as_deref(),
+            Some("disabled"),
+            "禁用点状态必须标记 disabled"
+        );
+
+        // 依赖禁用点的虚拟点拿不到输入，必须报错，而不是沿用旧值/0
+        let vp2 = out
+            .iter()
+            .find(|d| d.point_id == "vp2")
+            .expect("vp2 应产出错误点");
+        assert_eq!(vp2.quality, Quality::Uncertain);
+        assert_eq!(vp2.quality_reason, "virtual_point:ERROR");
+        assert_eq!(vp2.value, 0.0);
+
+        assert_eq!(engine.rule_count(), 2, "禁用规则仍保留在规则集供界面展示");
     }
 }

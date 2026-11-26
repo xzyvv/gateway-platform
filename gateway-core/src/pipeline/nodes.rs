@@ -376,7 +376,7 @@ impl PipelineNode for ChangeNode {
         }
         // Bug 76 修复：NaN/Inf 与任何值比较都返回 false（包括 NaN != NaN），
         // 原实现会让 NaN 绕过变化检查并写入 last_values，导致后续比较全失效。
-        // NaN/Inf 视为变化：直接通过 + 更新 last_values。
+        // NaN/Inf 视为变化：直接通过，但**不写入基线**（I-21，见下方 insert 处）。
         let is_nan = !dp.value.is_finite();
         // 变化阈值复用死区：死区节点在前，正常路径下这里不会触发；但允许
         // 单独使用本节点（自定义管道）时也能按死区过滤，避免 f64::EPSILON
@@ -392,7 +392,12 @@ impl PipelineNode for ChangeNode {
                 return None; // 值未变化（或在死区内），过滤
             }
         }
-        last_values.insert(dp.point_id.clone(), dp.value);
+        // I-21：NaN/Inf 放行但不写基线。把非有限值当基线后，下一条有限样本
+        // 与 NaN 比较恒为 false，会被判成「变化」而每条都上报；且基线从此
+        // 失去参照意义。死区节点同样只在有限值时才更新基线，两处口径必须一致。
+        if dp.value.is_finite() {
+            last_values.insert(dp.point_id.clone(), dp.value);
+        }
         Some(dp)
     }
 
