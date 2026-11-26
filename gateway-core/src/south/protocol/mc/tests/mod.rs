@@ -39,10 +39,24 @@ enum StubAction {
 
 /// 同 `spawn_mc_stub`，额外返回已接受的连接次数（用于验证"批次只建链一次"）。
 async fn spawn_mc_stub_counted(actions: Vec<StubAction>) -> (String, Arc<AtomicUsize>) {
+    let (addr, conns, _) = spawn_mc_stub_counters(actions).await;
+    (addr, conns)
+}
+
+/// 同 `spawn_mc_stub_counted`，再额外返回已处理的请求帧数。
+///
+/// 用于钉住写路径的两条契约（G-T1b）：
+/// - 写成功后**不得再发读回**（请求数 == 1）；
+/// - 写失败**不得自动重发**（请求数仍 == 1）。
+async fn spawn_mc_stub_counters(
+    actions: Vec<StubAction>,
+) -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr").to_string();
     let conn_idx = Arc::new(AtomicUsize::new(0));
+    let req_count = Arc::new(AtomicUsize::new(0));
     let conn_count = conn_idx.clone();
+    let req_ret = req_count.clone();
     tokio::spawn(async move {
         loop {
             let (mut sock, _) = match listener.accept().await {
@@ -54,6 +68,7 @@ async fn spawn_mc_stub_counted(actions: Vec<StubAction>) -> (String, Arc<AtomicU
                 .get(idx)
                 .cloned()
                 .unwrap_or_else(|| actions.last().cloned().unwrap_or(StubAction::Close));
+            let req_count = req_count.clone();
             tokio::spawn(async move {
                 match action {
                     StubAction::Reply(bytes) => {
@@ -68,6 +83,7 @@ async fn spawn_mc_stub_counted(actions: Vec<StubAction>) -> (String, Arc<AtomicU
                             if sock.read_exact(&mut body).await.is_err() {
                                 return;
                             }
+                            req_count.fetch_add(1, Ordering::SeqCst);
                             if sock.write_all(&bytes).await.is_err() {
                                 return;
                             }
@@ -83,13 +99,14 @@ async fn spawn_mc_stub_counted(actions: Vec<StubAction>) -> (String, Arc<AtomicU
                         let len = u16::from_le_bytes([head[7], head[8]]) as usize;
                         let mut body = vec![0u8; len];
                         let _ = sock.read_exact(&mut body).await;
+                        req_count.fetch_add(1, Ordering::SeqCst);
                         drop(sock);
                     }
                 }
             });
         }
     });
-    (addr, conn_count)
+    (addr, conn_count, req_ret)
 }
 
 /// 手工构造 3E MC 响应帧（独立于生产构造逻辑）。

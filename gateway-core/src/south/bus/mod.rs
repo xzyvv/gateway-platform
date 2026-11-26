@@ -60,6 +60,35 @@ pub(crate) fn bus_retry_budget(
         .saturating_add(retry_delay.saturating_mul(retry_count))
 }
 
+/// 调用侧「等应答」预算：按本次事务**实际允许的重试次数**推导。
+///
+/// 写事务不允许重试，预算必须按 0 次重推导——否则串口/总线 task 早已放弃，
+/// 调用方还在按 `retry_count` 轮白等，把一次写失败拖成多倍响应时间
+/// （B-03 / RTU-12）。读事务维持 `bus_retry_budget(timeout, retry_count, delay)`。
+pub(crate) fn reply_deadline(
+    attempt_timeout: Duration,
+    retry_allowed: bool,
+    retry_count: u32,
+    retry_delay: Duration,
+) -> Duration {
+    let effective_retries = if retry_allowed { retry_count } else { 0 };
+    bus_retry_budget(attempt_timeout, effective_retries, retry_delay).saturating_add(REPLY_MARGIN)
+}
+
+/// 事务失败后是否应当重发（读/写策略的唯一来源）。
+///
+/// - 写事务（`retry_allowed = false`）**一律不重发**：写帧可能已被从站执行，
+///   重发会造成重复写（B-02 / RTU-12）；
+/// - 仅对 [`is_retryable`] 的瞬时错误、且还有重试预算时重发。
+pub(crate) fn should_retry_transaction(
+    e: &CollectorError,
+    attempt: u32,
+    retry_count: u32,
+    retry_allowed: bool,
+) -> bool {
+    retry_allowed && is_retryable(e) && attempt < retry_count
+}
+
 /// 控制（写）事务在并发池中保留的槽位数。
 ///
 /// 8 槽（默认）→ 留 2；2~3 槽 → 留 1；1 槽 → 不留（否则普通事务永远无法准入）。
@@ -387,9 +416,12 @@ impl BusManager {
         // 现按 [`bus_retry_budget`] 同一来源推导，并保留固定调度余量。
         // P1-2：预算按「本次有效超时」重新推导。放宽了单次读超时后，若仍用 spawn 时
         // 按配置值快照的 budget，调用方会先超时丢弃应答（重试成功也白搭，原 #107）。
-        let effective_retries = if retry_allowed { self.retry_count } else { 0 };
-        let reply_deadline = bus_retry_budget(attempt_timeout, effective_retries, self.retry_delay)
-            .saturating_add(REPLY_MARGIN);
+        let reply_deadline = reply_deadline(
+            attempt_timeout,
+            retry_allowed,
+            self.retry_count,
+            self.retry_delay,
+        );
         // 控制（写）走控制通道，采集轮询 / 调试直发走普通通道。
         // 两条通道共用同一套排队指标口径（深度、等待时长）。
         let sender = match priority {

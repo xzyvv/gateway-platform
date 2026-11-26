@@ -169,7 +169,25 @@ export interface WritePointsResponse {
   failed: number
   /** 结果未知条数（failed 的子集）：设备可能已执行，禁止自动重试 */
   uncertain?: number
+  /**
+   * ROI-09：批量写是否为「全成功才算数」。恒为 false——逐条独立生效，
+   * 成功的条目不会回滚，逐条结果才是真相。
+   */
+  atomic?: boolean
+  /**
+   * ROI-09：整批原样重发是否安全。仅当「没有任何条目成功、也没有结果未知」
+   * 时为 true；否则整批重发会重复写，必须按 results 逐条处理。
+   */
+  retryable?: boolean
   results: (BatchWriteResultItem | null)[]
+}
+
+/** 写请求的可选上下文（DD-56 操作人 / ROI-09 幂等键） */
+export interface WriteOptions {
+  /** 真实操作人；为空时后端审计回退到 `api` */
+  operator?: string
+  /** 幂等键：同一 key 在有效期内重复提交返回首次结果，不再重复下发 */
+  idempotencyKey?: string
 }
 
 /**
@@ -184,6 +202,17 @@ export interface WritePointsResponse {
  *
  * 三个写入口页（点位读写测试、远程控制、批量命令）统一调用本函数。
  */
-export function writePoints(writes: PointWriteEntry[]): Promise<WritePointsResponse> {
-  return request({ url: '/api/point-tools/write', method: 'POST', data: { writes } })
+export function writePoints(
+  writes: PointWriteEntry[],
+  opts: WriteOptions = {},
+): Promise<WritePointsResponse> {
+  return request({
+    url: '/api/point-tools/write',
+    method: 'POST',
+    data: {
+      writes,
+      operator: opts.operator || undefined,
+      idempotency_key: opts.idempotencyKey || undefined,
+    },
+  })
 }

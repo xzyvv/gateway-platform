@@ -57,8 +57,18 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import { formatTimeOfDay } from '@/utils/datetime'
 import { composeFailure } from '@/utils/errorHandler'
 
-const STATUS_LABEL: Record<string, string> = { success: '成功', failed: '失败', pending: '待执行' }
-const STATUS_COLOR: Record<string, string> = { success: 'success', failed: 'danger', pending: 'warning' }
+const STATUS_LABEL: Record<string, string> = {
+  success: '成功',
+  failed: '失败',
+  uncertain: '结果未知',
+  pending: '待执行',
+}
+const STATUS_COLOR: Record<string, string> = {
+  success: 'success',
+  failed: 'danger',
+  uncertain: 'warning',
+  pending: 'warning',
+}
 
 function statusColor(s: string): string { return STATUS_COLOR[s] ?? 'info' }
 function statusLabel(s: string): string { return STATUS_LABEL[s] ?? s }
@@ -67,7 +77,13 @@ function statusLabel(s: string): string { return STATUS_LABEL[s] ?? s }
 const commandColumns: ColumnDef<ControlCommand>[] = [
   { key: 'device_name', title: '设备', width: 110 },
   { key: 'point_name', title: '点位', width: 100 },
-  { key: 'write_value', title: '写入值', width: 80 },
+  {
+    key: 'write_value',
+    title: '写入值',
+    width: 80,
+    // 结果未知/解析失败时后端给 null，不能显示成 0
+    cell: (row) => h('span', row.write_value ?? '—'),
+  },
   { key: 'operator', title: '操作人', width: 80 },
   {
     key: 'status',
@@ -130,8 +146,9 @@ async function send() {
   sending.value = true
   lastResult.value = ''
   try {
-    // 统一写入口（B2/E2）：单点写也传单元素数组，单/批分发由后端决定
-    const outcome = await writeOnce(point.id, val)
+    // 统一写入口（B2/E2）：单点写也传单元素数组，单/批分发由后端决定。
+    // DD-56：把弹窗里的操作人一起上报，审计不再恒为 `api`。
+    const outcome = await writeOnce(point.id, val, operator.value)
     if (outcome.ok) {
       ElMessage.success('已下发')
       lastResult.value = `写入成功：${outcome.value ?? val}`

@@ -977,29 +977,47 @@ impl GatewayRuntime {
         self.scheduler.point_by_id(id)
     }
 
-    /// 北向写回入口：校验 `writable` 白名单后下发到南向采集器。
+    /// 北向写回入口（ROI-35）：与 Web 写入口共用同一套统一写服务。
     ///
-    /// 与 Web 写入口（`POST /api/point-tools/write`）共用同一白名单语义，区别只在
-    /// 调用来源与审计记录（审计由调用方按 `source` 落盘）。写结果指标
-    /// `point_write_total/failures` 在此统一记账，避免每个北向通道各写一份。
-    pub async fn write_point(&self, id: &str, value: f64) -> GatewayResult<()> {
-        let point = self
-            .scheduler
-            .point_by_id(id)
-            .ok_or_else(|| GatewayError::NotFound(format!("point {} not found", id)))?;
-        if !point.writable {
-            return Err(GatewayError::Config(format!(
-                "point {} 不在写入白名单中：需在点位配置中将 writable 置为 true 后方可写入",
-                point.id
-            )));
-        }
+    /// 白名单、`write_min/write_max` 范围校验、写结果三态、`Uncertain` 读回核实、
+    /// 审计与写指标全部在 [`super::write_service::execute_writes`] 内完成。此前这里
+    /// 自己实现了一遍并把三态压成 `GatewayError`（DD-34），OPC UA 因此既没有范围
+    /// 校验也没有读回核实。
+    pub async fn write_point_checked(
+        &self,
+        id: &str,
+        value: f64,
+        ctx: &crate::engine::write::WriteContext,
+        audit: &crate::engine::audit::AuditLog,
+    ) -> crate::engine::write::PointWriteResult {
+        use crate::engine::write::{PointWriteResult, RejectReason, WriteMode, WriteRequest};
+        let points = self.scheduler.points();
         let collectors = self.scheduler.collectors();
-        let collector = collectors.get(&point.bus).ok_or_else(|| {
-            GatewayError::NotFound(format!("collector for bus {} not found", point.bus))
-        })?;
-        let result = collector.write(&point, value).await;
-        self.metrics.record_point_write(result.is_ok());
-        result.map_err(|e| GatewayError::Protocol(e.to_string()))
+        let writes = [WriteRequest {
+            id: id.to_string(),
+            value,
+        }];
+        let mut results = super::write_service::execute_writes(
+            &points,
+            &collectors,
+            &self.metrics,
+            audit,
+            &writes,
+            WriteMode::Single,
+            ctx,
+        )
+        .await;
+        results.pop().unwrap_or_else(|| {
+            PointWriteResult::rejected(
+                id,
+                None,
+                None,
+                String::new(),
+                value,
+                RejectReason::NotFound,
+                format!("point {id} not found"),
+            )
+        })
     }
 }
 

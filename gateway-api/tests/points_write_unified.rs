@@ -566,6 +566,212 @@ async fn unified_write_multi_entry_readback_confirms_only_matching_items() {
     );
 }
 
+// === ROI-09：批量语义声明 + 幂等键 ===
+
+/// 可观测下发次数的 collector（幂等键用例）
+fn counting_collector() -> (Arc<MockCollector>, HashMap<String, Arc<dyn Collector>>) {
+    let c = Arc::new(MockCollector::new("bus0"));
+    let mut map: HashMap<String, Arc<dyn Collector>> = HashMap::new();
+    map.insert("bus0".to_string(), c.clone());
+    (c, map)
+}
+
+/// ROI-09：批量写响应显式声明 `atomic=false`，并按「是否所有条目明确失败」
+/// 给出 `retryable`——上游不必猜「整批重发安不安全」。
+#[tokio::test]
+async fn unified_write_declares_atomic_and_retryable_semantics() {
+    // 全部成功：有已生效条目，整批重发会重复写 → retryable=false
+    let state = mock_app_state_with_collectors(collectors_bus0(true));
+    store(&state, point("p1", "bus0"));
+    store(&state, point("p2", "bus0"));
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":2.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    let v = body_json(res).await;
+    let v = &v["data"];
+    assert_eq!(v["atomic"], false, "批量写逐条独立生效，不存在整批回滚");
+    assert_eq!(v["retryable"], false, "已成功条目重发会重复写");
+
+    // 全部明确失败（白名单外 + 点位不存在）：可安全整批重试 → retryable=true
+    let state = mock_app_state_with_collectors(collectors_bus0(true));
+    let mut locked = point("locked", "bus0");
+    locked.writable = false;
+    store(&state, locked);
+    let app = build_router(state);
+    let res = app
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"locked","value":1.0},{"id":"ghost","value":2.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    let v = body_json(res).await;
+    let v = &v["data"];
+    assert_eq!(v["succeeded"], 0);
+    assert_eq!(v["uncertain"], 0);
+    assert_eq!(v["atomic"], false);
+    assert_eq!(v["retryable"], true, "全部明确失败时整批重试是安全的");
+}
+
+/// ROI-09：同一幂等键重复提交返回首次结果，**不再次下发**。
+#[tokio::test]
+async fn unified_write_idempotency_key_does_not_dispatch_twice() {
+    let (collector, map) = counting_collector();
+    let state = mock_app_state_with_collectors(map);
+    store(&state, point("p1", "bus0"));
+    store(&state, point("p2", "bus0"));
+    let app = build_router(state);
+    let body = r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":2.0}],"idempotency_key":"order-42"}"#;
+
+    let first = app
+        .clone()
+        .oneshot(write_req(body, Some(TOKEN)))
+        .await
+        .unwrap();
+    let v1 = body_json(first).await;
+    assert_eq!(collector.write_calls(), 2, "首次请求应逐条下发");
+
+    let second = app.oneshot(write_req(body, Some(TOKEN))).await.unwrap();
+    let v2 = body_json(second).await;
+    assert_eq!(
+        collector.write_calls(),
+        2,
+        "命中幂等键不得再次下发（否则累加/脉冲类点位会重复动作）"
+    );
+    assert_eq!(v1["data"], v2["data"], "重复提交应返回首次结果");
+}
+
+/// DD-33：被拒（白名单外）的写此前完全不留痕；现在必须落审计且标记失败。
+#[tokio::test]
+async fn unified_write_rejected_still_leaves_audit_trace() {
+    let state = mock_app_state_with_collectors(collectors_bus0(true));
+    store(&state, point("p1", "bus0"));
+    let mut locked = point("p_locked", "bus0");
+    locked.writable = false;
+    store(&state, locked);
+    let app = build_router(state);
+
+    let res = app
+        .clone()
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p_locked","value":1.0},{"id":"p1","value":2.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let mut found = false;
+    for _ in 0..40 {
+        let v = audit_logs(&app).await;
+        if v.to_string().contains("写入白名单") {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(found, "被拒写必须落审计（DD-33），实际审计里找不到拒绝记录");
+}
+
+/// DD-56：请求带上操作人后，审计 `source` 记真实操作人而非恒为 `api`。
+#[tokio::test]
+async fn unified_write_records_operator_as_audit_source() {
+    let state = mock_app_state_with_collectors(collectors_bus0(true));
+    store(&state, point("p1", "bus0"));
+    let app = build_router(state);
+
+    let res = app
+        .clone()
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0}],"operator":"alice"}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let mut sources: Vec<String> = Vec::new();
+    for _ in 0..40 {
+        let v = audit_logs(&app).await;
+        sources = v["data"]["logs"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| e["source"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if sources.iter().any(|s| s == "alice") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        sources.iter().any(|s| s == "alice"),
+        "审计 source 应为真实操作人，实际 {sources:?}"
+    );
+}
+
+/// DD-35：结果未知的审计 detail 用 `[超时:` 前缀，与明确失败可区分。
+#[tokio::test]
+async fn uncertain_write_audit_uses_timeout_prefix() {
+    let state =
+        mock_app_state_with_collectors(collectors_bus0_outcome(MockWriteOutcome::Uncertain));
+    store(&state, point("p1", "bus0"));
+    store(&state, point("p2", "bus0"));
+    let app = build_router(state);
+
+    let res = app
+        .clone()
+        .oneshot(write_req(
+            r#"{"writes":[{"id":"p1","value":1.0},{"id":"p2","value":2.0}]}"#,
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let mut detail = String::new();
+    for _ in 0..40 {
+        let v = audit_logs(&app).await;
+        let s = v.to_string();
+        if s.contains("[超时: ") {
+            detail = s;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        detail.contains("[超时: "),
+        "结果未知必须以 [超时: 前缀落审计，控制历史才能显示「结果未知」"
+    );
+    assert!(
+        !detail.contains("[失败: mock write result uncertain"),
+        "结果未知不得被写成明确失败"
+    );
+}
+
+async fn audit_logs(app: &axum::Router) -> serde_json::Value {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/audit/logs?action=point.write")
+                .header("authorization", TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    body_json(res).await
+}
+
 /// 批写：读回全部一致 → 全部收敛为成功，uncertain 归零
 #[tokio::test]
 async fn unified_write_multi_entry_readback_confirms_all_when_values_match() {

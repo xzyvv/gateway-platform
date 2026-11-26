@@ -20,6 +20,7 @@ pub(crate) mod services;
 pub mod traits;
 pub mod types;
 pub mod uptime;
+pub mod write_idempotency;
 
 pub use traits::{
     DataQueueTrait, GatewayRuntimeTrait, OtaStateView, OtaStatusView, OtaTrait, SchedulerTrait,

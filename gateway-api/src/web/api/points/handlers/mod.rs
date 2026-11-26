@@ -1,21 +1,10 @@
 //! 点位 API 处理函数
 
-use std::collections::BTreeMap;
-
-use gateway_core::config::PointConfig;
 use gateway_core::config::PointTrashEntry;
-use gateway_core::engine::model::Quality;
-use gateway_core::engine::write::write_readback_matches;
+use gateway_core::engine::write::{PointWriteResult, RejectReason, WriteContext, WriteRequest};
 
 use super::*;
 use crate::web::api::config::{now_ms, push_trash};
-
-/// 写结果未知时，**单点**读回核实的超时预算（G-03）。
-///
-/// 默认总线超时 500ms，留出「写超时后的链路恢复 + 一次完整读事务」的余量。
-/// 读回本身就是为了把「未知」收敛成确定结论，预算再短会频繁落到「读也超时」，
-/// 等于白跑一次总线；再长则会拖慢运维操作的响应。
-const SINGLE_READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// 点位批量操作（统一入口）
 ///
@@ -208,7 +197,21 @@ pub async fn points_write_unified(
     } else {
         WriteMode::Batch
     };
-    let items = write_points_core(&state, &req.writes, mode).await?;
+
+    // ROI-09：幂等键命中直接返回首次结果，不再重复下发。上游「超时后整批重试」
+    // 不会把已经成功的点写第二遍（对累加/脉冲类点位是实质重复动作）。
+    let idempotency_key = req
+        .idempotency_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty());
+    if let Some(key) = idempotency_key {
+        if let Some(cached) = state.platform.write_idempotency.get(key) {
+            return Ok(Json(cached).into_response());
+        }
+    }
+
+    let items = write_points_core(&state, &req.writes, mode, req.operator.clone()).await?;
 
     // 单写：写失败沿用 send_command 的业务码，让前端统一走错误提示路径。
     // G-02：按写结果三态区分——5101 明确失败（可安全重试），
@@ -225,22 +228,28 @@ pub async fn points_write_unified(
             .into_response());
         }
     }
-    Ok(Json(write_summary_json(&items)).into_response())
+    let body = write_summary_json(&items);
+    if let Some(key) = idempotency_key {
+        state.platform.write_idempotency.put(key, body.clone());
+    }
+    Ok(Json(body).into_response())
 }
 
-/// 单写与批写的**唯一**业务实现（B2）
+/// 单写与批写的唯一业务实现（B2 · ROI-35）
 ///
-/// - `WriteMode::Single`：要求恰好 1 条；「点位不存在 / 白名单外 / collector 缺失」
-///   直接返回 [`ApiError`]（404/400），与 `send_command` 既有错误码完全一致；
-/// - `WriteMode::Batch`：逐条独立校验，失败项记为该项 error 并继续处理其余条，
-///   同一总线的点位一次 `write_multi` 下发。
+/// 执行全部委托给 `GatewayRuntime::execute_point_writes`（core 的
+/// `runtime::write_service`）：白名单 / 范围校验 / 三态 / 读回核实 / 审计 /
+/// 指标只有一份实现，OPC UA 写回与 Web 写入口走同一条路。
 ///
-/// 两种模式共用 [`ensure_writable`] 与 [`audit_point_write`]，
-/// 仓库内不再存在第二份白名单或 `point.write` 审计实现。
+/// 本函数只做 Web 层适配：
+/// - `WriteMode::Single`：被拒（点位不存在 / 不可写 / 越界 / 无 collector）
+///   映射成与 `send_command` 一致的 `ApiError`（404 / 400 / 4011）；
+/// - `WriteMode::Batch`：逐条独立，结果与入参**等长且逐位对应**。
 pub(crate) async fn write_points_core(
     state: &Arc<AppState>,
     writes: &[PointWriteEntry],
     mode: WriteMode,
+    operator: Option<String>,
 ) -> Result<Vec<WriteItemResult>, ApiError> {
     if writes.is_empty() {
         return Err(ApiError::bad_request("writes must not be empty"));
@@ -253,299 +262,61 @@ pub(crate) async fn write_points_core(
 
     let config = state.config.load_full();
     let collectors = state.south.scheduler.collectors();
+    let requests: Vec<WriteRequest> = writes
+        .iter()
+        .map(|w| WriteRequest {
+            id: w.id.clone(),
+            value: w.value,
+        })
+        .collect();
+    let ctx = WriteContext::new("api").with_operator(operator);
+    let env = crate::web::traits::WriteEnv {
+        points: &config.points,
+        collectors: &collectors,
+        metrics: state.platform.metrics.as_ref(),
+        audit: state.platform.audit.as_ref(),
+    };
+    let results = state
+        .north
+        .gateway
+        .execute_point_writes(env, requests, mode, ctx)
+        .await;
 
     if mode == WriteMode::Single {
-        let w = &writes[0];
-        let point = config
-            .points
-            .iter()
-            .find(|p| p.id == w.id)
-            .cloned()
-            .ok_or_else(|| ApiError::not_found(format!("point {} not found", w.id)))?;
-        ensure_writable(&point)?;
-        // ROI-06（W-1）：越界直接拒绝，不下发到设备。
-        // 只校验「能不能写」不校验「写的值合不合理」，一次手滑就能把设定值
-        // 写到 3000 kW；限幅会悄悄改写意图，因此这里选择显式报错。
-        if let Some(msg) = point.write_range_error(w.value) {
-            return Err(ApiError::with_code(
-                crate::web::error_codes::WRITE_OUT_OF_RANGE,
-                msg,
+        if let Some(reason) = results.first().and_then(|r| r.reject) {
+            return Err(reject_to_api_error(
+                reason,
+                results[0].message.clone().unwrap_or_default(),
             ));
         }
-        let collector = collectors.get(&point.bus).ok_or_else(|| {
-            ApiError::not_found(format!("collector for bus {} not found", point.bus))
-        })?;
-        let error = match collector.write(&point, w.value).await {
-            Ok(()) => {
-                audit_point_write(state, &point, w.value, None);
-                None
-            }
-            Err(e) => {
-                let outcome = e.write_outcome();
-                let mut message = write_error_message(&e.to_string(), outcome);
-                let quality = Some(e.to_quality());
-
-                // G-03：写结果未知时读回核实。只有读到**同样的值**才判定写已生效；
-                // 读到不同值或读不到，都保持「结果未知」——设备可能限幅、联锁复位、
-                // 或被其他主站改写，读回不等**证明不了**写没生效（W-03 / W-13）。
-                let mut confirmed = false;
-                if outcome.is_uncertain() {
-                    if let Ok(Ok(dp)) =
-                        tokio::time::timeout(SINGLE_READBACK_TIMEOUT, collector.read(&point)).await
-                    {
-                        if matches!(dp.quality, Quality::Good) {
-                            if write_readback_matches(w.value, dp.value, point.scale) {
-                                confirmed = true;
-                            } else {
-                                message = format!(
-                                    "{message}；读回值 {} 与写入值 {} 不一致，仍无法确认写入是否生效",
-                                    dp.value, w.value
-                                );
-                            }
-                        }
-                    }
-                }
-
-                if confirmed {
-                    tracing::info!(
-                        point = %point.id,
-                        value = w.value,
-                        "写结果未知，读回值与写入值一致，判定写入已生效"
-                    );
-                    audit_point_write(state, &point, w.value, None);
-                    None
-                } else {
-                    audit_point_write(state, &point, w.value, Some(&message));
-                    Some(WriteItemError {
-                        message,
-                        quality,
-                        outcome,
-                    })
-                }
-            }
-        };
-        return Ok(vec![write_item(&point, w.value, error)]);
     }
 
-    let mut results: Vec<Option<WriteItemResult>> = (0..writes.len()).map(|_| None).collect();
+    Ok(results.into_iter().map(to_write_item).collect())
+}
 
-    // 按 bus 分组（组内保持入参下标顺序），同总线点位一次 write_multi 下发
-    let mut by_bus: BTreeMap<String, Vec<(usize, PointConfig)>> = BTreeMap::new();
-    for (i, w) in writes.iter().enumerate() {
-        match config.points.iter().find(|p| p.id == w.id) {
-            Some(p) if p.writable => {
-                // ROI-06（W-1）：越界值不进下发队列，逐条记为该项失败
-                if let Some(message) = p.write_range_error(w.value) {
-                    results[i] = Some(write_item(
-                        p,
-                        w.value,
-                        Some(WriteItemError {
-                            message,
-                            quality: None,
-                            // 未下发 → 明确失败，修正值后可安全重试
-                            outcome: WriteOutcome::Failed,
-                        }),
-                    ));
-                } else {
-                    by_bus
-                        .entry(p.bus.clone())
-                        .or_default()
-                        .push((i, p.clone()));
-                }
-            }
-            // S11: 写入白名单——未标记 writable 的点位记为该项失败，不放行写入
-            Some(p) => {
-                let message = whitelist_error(p);
-                results[i] = Some(write_item(
-                    p,
-                    w.value,
-                    Some(WriteItemError {
-                        message,
-                        quality: None,
-                        // 白名单拒绝属于「未下发」→ 明确失败，可安全重试
-                        outcome: WriteOutcome::Failed,
-                    }),
-                ));
-            }
-            None => {
-                results[i] = Some(WriteItemResult {
-                    point_id: w.id.clone(),
-                    point_name: None,
-                    device_id: None,
-                    value: w.value,
-                    error: Some(WriteItemError {
-                        message: format!("point {} not found", w.id),
-                        quality: None,
-                        // 点位不存在属于「未下发」→ 明确失败，可安全重试
-                        outcome: WriteOutcome::Failed,
-                    }),
-                });
-            }
+/// 把统一写服务的「未下发」拒绝原因映射成既有 HTTP 语义。
+fn reject_to_api_error(reason: RejectReason, message: String) -> ApiError {
+    match reason {
+        RejectReason::NotFound | RejectReason::NoCollector => ApiError::not_found(message),
+        RejectReason::NotWritable => ApiError::bad_request(message),
+        RejectReason::OutOfRange => {
+            ApiError::with_code(crate::web::error_codes::WRITE_OUT_OF_RANGE, message)
         }
     }
-
-    for (bus_name, group) in by_bus {
-        let collector = match collectors.get(&bus_name) {
-            Some(c) => c,
-            None => {
-                for (i, p) in &group {
-                    results[*i] = Some(write_item(
-                        p,
-                        writes[*i].value,
-                        Some(WriteItemError {
-                            message: format!("collector for bus {} not found", bus_name),
-                            quality: None,
-                            // collector 缺失属于「未下发」→ 明确失败，可安全重试
-                            outcome: WriteOutcome::Failed,
-                        }),
-                    ));
-                }
-                continue;
-            }
-        };
-
-        let pairs: Vec<(&PointConfig, f64)> =
-            group.iter().map(|(i, p)| (p, writes[*i].value)).collect();
-        let outcomes = collector.write_multi(&pairs).await;
-
-        // 结果未知的条目先挂起，等本轮写完再统一读回一次（批量读，少占总线时隙）。
-        let mut pending_uncertain: Vec<(usize, PointConfig, f64, WriteItemError)> = Vec::new();
-
-        for ((i, p), outcome) in group.iter().zip(outcomes) {
-            let value = writes[*i].value;
-            match outcome {
-                Ok(()) => {
-                    audit_point_write(state, p, value, None);
-                    results[*i] = Some(write_item(p, value, None));
-                }
-                Err(e) => {
-                    let write_outcome = e.write_outcome();
-                    let message = write_error_message(&e.to_string(), write_outcome);
-                    let err = WriteItemError {
-                        message,
-                        quality: Some(e.to_quality()),
-                        outcome: write_outcome,
-                    };
-                    if write_outcome.is_uncertain() {
-                        pending_uncertain.push((*i, p.clone(), value, err));
-                    } else {
-                        audit_point_write(state, p, value, Some(&err.message));
-                        results[*i] = Some(write_item(p, value, Some(err)));
-                    }
-                }
-            }
-        }
-
-        // G-03：写结果未知的条目读回核实。只有读回值与写入值一致才判定写已生效；
-        // 不一致或读不到都保持「结果未知」，把读回值附到错误信息里交操作员判断。
-        if !pending_uncertain.is_empty() {
-            let probe_points: Vec<PointConfig> = pending_uncertain
-                .iter()
-                .map(|(_, p, _, _)| p.clone())
-                .collect();
-            let budget = collector.batch_timeout_budget(probe_points.len());
-            let readbacks = tokio::time::timeout(budget, collector.read_batch(&probe_points)).await;
-
-            let mut values: Vec<Option<f64>> = vec![None; pending_uncertain.len()];
-            if let Ok(list) = readbacks {
-                for (idx, r) in list.into_iter().enumerate() {
-                    if let Ok(dp) = r {
-                        if matches!(dp.quality, Quality::Good) && idx < values.len() {
-                            values[idx] = Some(dp.value);
-                        }
-                    }
-                }
-            }
-
-            for (idx, (i, p, value, mut err)) in pending_uncertain.into_iter().enumerate() {
-                match values[idx] {
-                    Some(rb) if write_readback_matches(value, rb, p.scale) => {
-                        tracing::info!(
-                            point = %p.id,
-                            value,
-                            readback = rb,
-                            "写结果未知，读回值与写入值一致，判定写入已生效"
-                        );
-                        audit_point_write(state, &p, value, None);
-                        results[i] = Some(write_item(&p, value, None));
-                    }
-                    Some(rb) => {
-                        err.message = format!(
-                            "{}；读回值 {} 与写入值 {} 不一致，仍无法确认写入是否生效",
-                            err.message, rb, value
-                        );
-                        audit_point_write(state, &p, value, Some(&err.message));
-                        results[i] = Some(write_item(&p, value, Some(err)));
-                    }
-                    None => {
-                        audit_point_write(state, &p, value, Some(&err.message));
-                        results[i] = Some(write_item(&p, value, Some(err)));
-                    }
-                }
-            }
-        }
-    }
-
-    // 每个入参下标都会在下面三个分支之一填入结果，理论上不存在 None；
-    // 万一遗漏也只记日志跳过，不 panic（handler panic 会带崩整个 web 服务）。
-    Ok(results
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, r)| {
-            if r.is_none() {
-                tracing::error!("write_points_core 漏填结果下标 i={}", i);
-            }
-            r
-        })
-        .collect())
 }
 
-/// S11 写入白名单校验（单写直接拒绝；批写在调用前据此标记该项失败）
-fn ensure_writable(point: &PointConfig) -> Result<(), ApiError> {
-    if point.writable {
-        Ok(())
-    } else {
-        Err(ApiError::bad_request(whitelist_error(point)))
-    }
-}
-
-/// 白名单拒绝文案（单写与批写共用，避免两处措辞漂移）
-fn whitelist_error(point: &PointConfig) -> String {
-    format!(
-        "point {} 不在写入白名单中：需在点位配置中将 writable 置为 true 后方可写入",
-        point.id
-    )
-}
-
-/// 单点下发 + 审计的代码内联在 [`write_points_core`] 单写分支：
-/// 这里不保留独立函数签名，避免 handler 层直接书写引擎内部类型
-/// `gateway_core::south::protocol::Collector`（arch_deps 分层规则禁止 web/api 触碰 south）。
-///
-/// 落写指标 + `point.write` 审计（成功/失败共用，仓库内唯一实现）
-///
-/// 失败记录 detail 带 ` [失败: ...]` 后缀，控制历史（list_commands）据此区分状态。
-fn audit_point_write(state: &Arc<AppState>, point: &PointConfig, value: f64, error: Option<&str>) {
-    state.platform.metrics.record_point_write(error.is_none());
-    let name = point.name.clone().unwrap_or_else(|| point.id.clone());
-    let detail = match error {
-        Some(e) => format!("{}={} [失败: {}]", name, value, e),
-        None => format!("{}={}", name, value),
-    };
-    state.platform.audit.log(
-        "point.write",
-        &point.device_id.clone().unwrap_or_else(|| point.bus.clone()),
-        &detail,
-        "api",
-    );
-}
-
-/// 用点位配置与下发结果组装单条写结果
-fn write_item(point: &PointConfig, value: f64, error: Option<WriteItemError>) -> WriteItemResult {
+/// 统一写结果 → Web 契约的单条结果。
+fn to_write_item(result: PointWriteResult) -> WriteItemResult {
+    let error = result.message.map(|message| WriteItemError {
+        message,
+        quality: result.quality,
+        outcome: result.outcome,
+    });
     WriteItemResult {
-        point_id: point.id.clone(),
-        point_name: point.name.clone(),
-        device_id: point.device_id.clone(),
-        value,
+        point_id: result.point_id,
+        point_name: result.point_name,
+        device_id: result.device_id,
+        value: result.value,
         error,
     }
 }
@@ -560,6 +331,13 @@ fn write_item(point: &PointConfig, value: f64, error: Option<WriteItemError>) ->
 ///
 /// 顶层 `failed` 沿用既有语义 = 未确认成功条数（含 uncertain），
 /// `uncertain` 是其中「结果未知」的子集计数，供上游一眼判断该不该重试。
+///
+/// ROI-09：显式声明批量语义，让上游不必猜——
+/// - `atomic = false`：批量写**不是**全成功才算数，成功的条目已经生效、不会回滚，
+///   逐条结果才是真相；
+/// - `retryable`：**整批原样重发是否会造成重复动作**。仅当「没有任何条目成功、
+///   也没有任何条目结果未知」时为 `true`（即全部明确失败，可安全整批重试）。
+///   只要有一条成功或结果未知，整批重发就会重复写，必须按 `results` 逐条处理。
 fn write_summary_json(items: &[WriteItemResult]) -> serde_json::Value {
     let mut results = Vec::with_capacity(items.len());
     let mut succeeded = 0usize;
@@ -599,12 +377,18 @@ fn write_summary_json(items: &[WriteItemResult]) -> serde_json::Value {
     } else {
         "partial"
     };
+    // 批量写逐条独立生效，不存在整批回滚
+    let atomic = false;
+    // 整批重发安全的唯一情形：全部明确失败（没有已生效、也没有结果未知）
+    let retryable = succeeded == 0 && uncertain == 0;
     serde_json::json!({
         "status": status,
         "total": items.len(),
         "succeeded": succeeded,
         "failed": failed,
         "uncertain": uncertain,
+        "atomic": atomic,
+        "retryable": retryable,
         "results": results,
     })
 }

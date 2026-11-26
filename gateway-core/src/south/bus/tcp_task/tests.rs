@@ -490,6 +490,46 @@ fn reconnect_backoff_resets_only_after_real_communication() {
     assert_eq!(advance_reconnect_backoff(5, true), 0);
 }
 
+// =========================================================
+// G-T1a TCP-04 / TCP-08：写通道串行额度
+// =========================================================
+
+/// TCP-04：多个写事务并发提交时，同一 socket 上同时下发的写最多 1 笔。
+#[tokio::test]
+async fn write_gate_serializes_concurrent_writes() {
+    let gate = Arc::new(write_gate());
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let gate = Arc::clone(&gate);
+        let active = Arc::clone(&active);
+        let peak = Arc::clone(&peak);
+        handles.push(tokio::spawn(async move {
+            let _permit = gate.acquire().await.expect("acquire");
+            let n = active.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(n, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+        }));
+    }
+    for h in handles {
+        h.await.expect("join");
+    }
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        1,
+        "写与写不得并发下发到同一 socket（否则同一设备的写会互相覆盖）"
+    );
+}
+
+/// TCP-08：写通道与采集共享同一 socket，写额度固定为 1 个槽位。
+#[test]
+fn write_gate_exposes_single_shared_slot() {
+    let gate = write_gate();
+    assert_eq!(gate.available_permits(), 1, "写通道只允许 1 个在途写");
+}
+
 /// 文本契约：`Ok(s)` 建连成功分支不得再直接动退避计数，清零必须经上述判定函数。
 #[test]
 fn connect_success_does_not_clear_backoff() {

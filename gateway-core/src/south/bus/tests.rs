@@ -1142,6 +1142,72 @@ fn bus_retry_budget_covers_all_attempts_and_retry_delays() {
     );
 }
 
+// ===== G-T1a B-03 / RTU-12 / TCP-04：写事务不重试、预算按 0 次重推导 =====
+
+#[test]
+fn write_reply_deadline_ignores_retry_budget() {
+    use std::time::Duration;
+
+    let t = Duration::from_millis(500);
+    let delay = Duration::from_millis(200);
+
+    // 写（retry_allowed=false）：不论配置几次重试，预算都只有 1T + 调度余量
+    assert_eq!(
+        reply_deadline(t, false, 2, delay),
+        t + REPLY_MARGIN,
+        "写事务预算必须按 0 次重推导，否则调用方会白等重试窗口"
+    );
+    assert_eq!(reply_deadline(t, false, 9, delay), t + REPLY_MARGIN);
+    // 读（retry_allowed=true）：覆盖首试 + 2 次重试 + 2 段间隔
+    // 3T + 2×delay + margin = 1500 + 400 + 100
+    assert_eq!(
+        reply_deadline(t, true, 2, delay),
+        Duration::from_millis(2000)
+    );
+}
+
+#[test]
+fn write_transaction_never_retries() {
+    use std::time::Duration;
+
+    let timeout = CollectorError::Timeout(Duration::from_millis(100));
+    // 写：即便还有重试预算也绝不重发（写帧可能已被从站执行）
+    assert!(!should_retry_transaction(&timeout, 0, 2, false));
+    // 读：同样的错误在同一预算下应当重发
+    assert!(should_retry_transaction(&timeout, 0, 2, true));
+    // 重试预算用尽
+    assert!(!should_retry_transaction(&timeout, 2, 2, true));
+    // 非瞬时错误（设备明确拒绝）不自动重试
+    let rejected = CollectorError::DeviceRejected("bad value".into());
+    assert!(!should_retry_transaction(&rejected, 0, 2, true));
+    // WriteUncertain 不能重试
+    let uncertain = CollectorError::WriteUncertain("no response".into());
+    assert!(!should_retry_transaction(&uncertain, 0, 2, true));
+}
+
+#[cfg(feature = "modbus")]
+#[test]
+fn tcp_write_timeout_not_retried_but_busy_is() {
+    use crate::south::bus::tcp_task::tcp_should_retry;
+    use crate::south::protocol::modbus::transaction::TransactionError;
+    use std::time::Duration;
+
+    let timeout = TransactionError::Timeout(Duration::from_millis(100));
+    // 写超时：不得重发（否则同一笔写会在 socket 上出现两次）
+    assert!(!tcp_should_retry(&timeout, 0, 2, false));
+    // 读超时：允许重发
+    assert!(tcp_should_retry(&timeout, 0, 2, true));
+    // Busy = 根本没提交，未下发，写也可以安全重试
+    assert!(tcp_should_retry(&TransactionError::Busy, 0, 2, false));
+    // 断链类错误交给重连路径，不走重试
+    assert!(!tcp_should_retry(
+        &TransactionError::Disconnected,
+        0,
+        2,
+        true
+    ));
+}
+
 #[test]
 fn config_defaults_match_shared_retry_constants() {
     // 运行期兜底常量必须与 BusConfig 默认保持一致，否则

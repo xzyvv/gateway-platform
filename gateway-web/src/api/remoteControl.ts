@@ -20,7 +20,7 @@ export type WritablePoint = WritablePointRaw
  * 仅覆盖两处视图差异——status 收窄为字面量联合、bigint 时间戳转 number。
  */
 export type ControlCommand = Omit<ControlCommandRaw, 'status' | 'created_at' | 'executed_at'> & {
-  status: 'success' | 'failed' | 'pending'
+  status: 'success' | 'failed' | 'uncertain' | 'pending'
   created_at: number
   executed_at: number | null
 }

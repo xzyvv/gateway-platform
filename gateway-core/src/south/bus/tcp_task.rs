@@ -97,7 +97,7 @@ pub(crate) async fn bus_task_tcp(
     // 注意：写事务最终仍要提交到同一个 `TransactionPool` 取响应，
     // 因此它与采集仍共享 pool 的槽位上限（tcp_concurrent）；本信号量额外保证的是
     // 「写与写之间串行」以及「写不必排在在途采集之后」。
-    let write_sem = Arc::new(tokio::sync::Semaphore::new(1));
+    let write_sem = Arc::new(write_gate());
 
     loop {
         // 控制（写）通道优先：`biased` 保证每轮先清写队列。
@@ -272,18 +272,10 @@ pub(crate) async fn bus_task_tcp(
                         let _ = tx.response_tx.send(Ok(rtu));
                         return;
                     }
-                    Err(TransactionError::Timeout(_))
-                        if attempt < retry_count && tx.retry_allowed =>
-                    {
-                        // 只有读/采集事务才允许因超时重发。
-                        // 写事务（retry_allowed=false）超时后**不得重发**：
-                        // 写帧已经写到 socket，从站可能已执行；重发会造成重复写。
-                        attempt += 1;
-                        tokio::time::sleep(retry_delay).await;
-                    }
-                    Err(TransactionError::Busy) if attempt < retry_count => {
-                        // Busy 表示事务根本没提交（本地并发池已满），未下发，
-                        // 因此重试是安全的——写事务同样可以重试。
+                    Err(e) if tcp_should_retry(&e, attempt, retry_count, tx.retry_allowed) => {
+                        // Timeout：只有读/采集事务才允许重发——写帧已经写到 socket，
+                        // 从站可能已执行，写事务（retry_allowed=false）重发会造成重复写。
+                        // Busy：事务根本没提交（本地并发池已满），未下发，写也可以重试。
                         attempt += 1;
                         tokio::time::sleep(retry_delay).await;
                     }
@@ -326,6 +318,31 @@ pub(crate) async fn bus_task_tcp(
         pool.shutdown();
     }
     tracing::info!("modbus tcp task {} ended", name);
+}
+
+/// TCP 事务重试策略（读写差异的唯一来源）。
+///
+/// - `Timeout`：写事务不重发（写帧已写到 socket，从站可能已执行，重发 = 重复写）；
+/// - `Busy`：事务根本没提交（并发池已满），未下发，读写都可安全重试。
+pub(super) fn tcp_should_retry(
+    e: &TransactionError,
+    attempt: u32,
+    retry_count: u32,
+    retry_allowed: bool,
+) -> bool {
+    match e {
+        TransactionError::Timeout(_) => retry_allowed && attempt < retry_count,
+        TransactionError::Busy => attempt < retry_count,
+        _ => false,
+    }
+}
+
+/// 写通道并发额度：1。
+///
+/// 写与写必须串行（同一设备并发写会互相覆盖）；写与读共享同一 socket 的
+/// 并发上限由单 task 主循环 + `TransactionPool` 共同保证（TCP-04/08）。
+pub(super) fn write_gate() -> tokio::sync::Semaphore {
+    tokio::sync::Semaphore::new(1)
 }
 
 /// 调试直发的帧尾判定空闲间隔（与串口侧 [`super::serial_task`] 同口径 50ms）。

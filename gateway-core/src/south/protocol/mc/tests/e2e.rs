@@ -161,3 +161,45 @@ async fn test_no_response_times_out() {
         "unexpected: {err:?}"
     );
 }
+
+// ============================================================
+// G-T1b MC-W4 / MC-W5：写后不读回、写失败不重发
+// ============================================================
+
+/// MC-W4：写成功后只发出一条写请求，**不得再补一次读回**。
+#[tokio::test]
+async fn mc_write_issues_single_request_without_readback() {
+    let (addr, _conns, reqs) =
+        spawn_mc_stub_counters(vec![StubAction::Reply(mc_response(0, &[]))]).await;
+    let c = McCollector::new(addr, "mc-bus".into(), Duration::from_secs(5), None);
+    let mut p = point("p1", "D100", "u16");
+    p.address = "D100".to_string();
+
+    c.write(&p, 1234.0).await.expect("write ok");
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        1,
+        "写成功后不得再发读回（协议层不做读回，读回只在结果未知时由统一写服务触发）"
+    );
+}
+
+/// MC-W5：设备明确拒绝（结束码非零）后**不得自动重发**——写帧可能已被执行。
+#[tokio::test]
+async fn mc_write_failure_is_not_retried() {
+    let (addr, _conns, reqs) =
+        spawn_mc_stub_counters(vec![StubAction::Reply(mc_response(0xC059, &[]))]).await;
+    let c = McCollector::new(addr, "mc-bus".into(), Duration::from_secs(5), None);
+    let mut p = point("p1", "D100", "u16");
+    p.address = "D100".to_string();
+
+    let err = c.write(&p, 1234.0).await.expect_err("结束码非零应失败");
+    assert!(matches!(
+        err,
+        crate::south::protocol::CollectorError::DeviceRejected(_)
+    ));
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        1,
+        "写失败必须原样上报，不得自动重发（重发会造成重复写）"
+    );
+}

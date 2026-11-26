@@ -8,9 +8,10 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use gateway_api::web::traits::VirtualPointStateView;
+use gateway_api::web::traits::{VirtualPointStateView, WriteEnv};
 use gateway_api::web::{
     AppState, DataQueueTrait, GatewayRuntimeTrait, OtaStateView, OtaStatusView, OtaTrait,
     SchedulerTrait,
@@ -26,6 +27,7 @@ use gateway_core::engine::error::{GatewayError, GatewayResult};
 use gateway_core::engine::metrics::Metrics;
 use gateway_core::engine::model::DataPoint;
 use gateway_core::engine::monitor::health::DiskHistoryStore;
+use gateway_core::engine::write::{PointWriteResult, WriteContext, WriteMode, WriteRequest};
 use gateway_core::engine::Diagnostics;
 use gateway_core::license::LicenseManager;
 use gateway_core::north::mqtt::MqttClient;
@@ -97,6 +99,8 @@ pub struct MockCollector {
     read_value: f64,
     /// read 是否恒失败（默认 false）。模拟写超时后链路仍未恢复、读回也失败。
     read_fails: bool,
+    /// 实际下发次数（ROI-09 幂等键用例验证「重复提交不重复下发」）。
+    write_calls: Arc<AtomicUsize>,
 }
 
 impl MockCollector {
@@ -106,7 +110,13 @@ impl MockCollector {
             write_outcome: MockWriteOutcome::Ok,
             read_value: 1.0,
             read_fails: false,
+            write_calls: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// 已发生的 write 调用次数。
+    pub fn write_calls(&self) -> usize {
+        self.write_calls.load(Ordering::SeqCst)
     }
 
     /// 设置 write 返回结果（false → 返回 Unsupported 错误，模拟写入失败）
@@ -166,6 +176,7 @@ impl Collector for MockCollector {
         _point: &'a PointConfig,
         _value: f64,
     ) -> Pin<Box<dyn Future<Output = CollectorResult<()>> + Send + 'a>> {
+        self.write_calls.fetch_add(1, Ordering::SeqCst);
         let outcome = self.write_outcome;
         Box::pin(async move {
             match outcome {
@@ -401,6 +412,27 @@ impl GatewayRuntimeTrait for MockGateway {
                 updated_at_ms: 0,
             },
         ))
+    }
+    fn execute_point_writes<'a>(
+        &'a self,
+        env: WriteEnv<'a>,
+        writes: Vec<WriteRequest>,
+        mode: WriteMode,
+        ctx: WriteContext,
+    ) -> Pin<Box<dyn Future<Output = Vec<PointWriteResult>> + Send + 'a>> {
+        // mock 不做额外校验，直接复用 core 的统一写执行器（与生产同一实现）
+        Box::pin(async move {
+            gateway_core::runtime::write_service::execute_writes(
+                env.points,
+                env.collectors,
+                env.metrics,
+                env.audit,
+                &writes,
+                mode,
+                &ctx,
+            )
+            .await
+        })
     }
 }
 
@@ -756,6 +788,9 @@ fn build_mock_state_with_devices(
             quality_rule_store,
             api_keys,
             sched_tasks,
+            write_idempotency: Arc::new(
+                gateway_api::web::write_idempotency::WriteIdempotencyStore::new(),
+            ),
         },
         web,
         rate_limiter: Arc::new(gateway_api::web::middleware::RateLimiter::default()),

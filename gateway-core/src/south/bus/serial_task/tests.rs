@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::{
-    do_transaction, shrink_ascii_buf, write_timeout_for, TransactionParams, ASCII_BUF_LIMIT,
+    do_transaction, rtu_inter_frame_gap, shrink_ascii_buf, write_timeout_for, TransactionParams,
+    ASCII_BUF_LIMIT, DE_SETUP_TIME,
 };
 #[cfg(feature = "modbus")]
 use crate::engine::codec::crc::crc16;
@@ -754,4 +755,80 @@ fn shrink_ascii_buf_drops_frame_start_too_far_back() {
         "合法 ASCII 帧最长约 515 字节，超上限的只能是垃圾"
     );
     assert_eq!(dropped, ASCII_BUF_LIMIT * 2 + 1);
+}
+
+// ============================================================
+// G-T1a RTU-07/08/09：DE 建立时间 + 3.5 字符帧间隔必须在读之前发生
+// ============================================================
+
+#[test]
+fn rtu_inter_frame_gap_quantizes_to_3_5_characters() {
+    // 3.5 字符 = 35 bit / baud，向上取整、至少 1ms
+    assert_eq!(rtu_inter_frame_gap(9600), Duration::from_millis(4));
+    assert_eq!(rtu_inter_frame_gap(19200), Duration::from_millis(2));
+    assert_eq!(rtu_inter_frame_gap(115200), Duration::from_millis(1));
+    // 非法/过低波特率按 300 兜底
+    assert_eq!(rtu_inter_frame_gap(0), Duration::from_millis(117));
+    assert!(rtu_inter_frame_gap(300) >= Duration::from_millis(1));
+}
+
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn de_setup_and_inter_frame_gap_happen_before_read() {
+    let port = MockPort::responding(modbus_fc03_response(1), 0);
+    let mut handle = SerialHandle::from_stream(port.clone());
+    let gpio = RecordingGpio::new();
+
+    let res = do_transaction(
+        &mut handle,
+        TransactionParams {
+            request: &[0x01, 0x03, 0x00, 0x00, 0x00, 0x01],
+            timeout: Duration::from_millis(500),
+            protocol: "modbus",
+            expected_count: Some(1),
+            de_pin: Some(DE_PIN),
+            modbus_mode: "rtu",
+            baud: 9600,
+            frame_sent: None,
+        },
+        &gpio,
+        None,
+    )
+    .await;
+    assert!(res.is_ok(), "正常响应应成功: {res:?}");
+
+    let events = gpio.events();
+    let de_high = events
+        .iter()
+        .find(|(p, on, _)| *p == DE_PIN && *on)
+        .map(|(_, _, t)| *t)
+        .expect("必须先拉高 DE");
+    let de_low = events
+        .iter()
+        .find(|(p, on, _)| *p == DE_PIN && !*on)
+        .map(|(_, _, t)| *t)
+        .expect("写完必须拉低 DE");
+
+    let st = port.lock();
+    let write_started = st.write_started.expect("应发生写");
+    let write_done = st.write_done.expect("写必须完成");
+    let first_read = st.first_read.expect("应读到响应");
+
+    // RTU-08：DE 拉高后必须等建立时间再开始写首字节
+    let setup = write_started.duration_since(de_high);
+    assert!(
+        setup + Duration::from_micros(200) >= DE_SETUP_TIME,
+        "DE 建立时间不足会吃掉首字节：实测 {setup:?}"
+    );
+    // RTU-09：DE 必须先拉低、再保持 3.5 字符静默，之后才开始读
+    assert!(de_low <= first_read, "必须在读之前把 DE 拉回接收态");
+    let gap = first_read.duration_since(write_done);
+    assert!(
+        gap + Duration::from_micros(500) >= rtu_inter_frame_gap(9600),
+        "读前静默不足 3.5 字符会丢掉回帧首字节：实测 {gap:?}"
+    );
+    assert!(
+        gap < Duration::from_millis(100),
+        "静默应是 3.5 字符量级，而不是等满整个读超时：实测 {gap:?}"
+    );
 }

@@ -17,7 +17,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use gateway_core::config::{BusConfig, GatewayConfig, PointConfig};
+use gateway_core::engine::audit::AuditLog;
 use gateway_core::engine::error::GatewayResult;
+use gateway_core::engine::metrics::Metrics;
+use gateway_core::engine::write::{PointWriteResult, WriteContext, WriteMode, WriteRequest};
 use gateway_core::north::mqtt::MqttClient;
 use gateway_core::platform::ota::OtaManager;
 use gateway_core::queue::DataQueue;
@@ -28,6 +31,18 @@ use gateway_core::south::scheduler::{DeviceStatus, ScheduleTimeline, Scheduler};
 pub use crate::web::dead_letter::{
     DeadLetterDto, DeadLetterTrait, NoopDeadLetter, SqliteDeadLetter,
 };
+
+/// 统一写执行器的输入环境（ROI-35）。
+///
+/// Web handler 侧的点位表来自当前配置、collector 来自调度器；北向侧来自运行态
+/// 调度器。执行逻辑本身在 core 的 `runtime::write_service`，这里只负责把依赖
+/// 打包过 trait 边界，避免 `web/api` 直接引用 `gateway_core::south`。
+pub struct WriteEnv<'a> {
+    pub points: &'a [PointConfig],
+    pub collectors: &'a HashMap<String, Arc<dyn Collector>>,
+    pub metrics: &'a Metrics,
+    pub audit: &'a AuditLog,
+}
 
 /// Scheduler trait（仅包含 web handler 实际调用的方法）
 pub trait SchedulerTrait: Send + Sync {
@@ -203,6 +218,18 @@ pub trait GatewayRuntimeTrait: Send + Sync {
     fn virtual_point_states(&self) -> HashMap<String, VirtualPointStateView>;
     /// 立即重算单个虚拟点位，返回最新状态（点不存在时 `None`）。
     fn recalc_virtual_point(&self, id: &str) -> Option<VirtualPointStateView>;
+
+    /// ROI-35：统一写执行器——Web 单写/批写与 OPC UA 写回共用同一实现。
+    ///
+    /// 返回与 `writes` 等长且逐位对应的结果；结果里带三态、拒绝原因、
+    /// 读回值，调用方据此映射 HTTP / OPC UA 语义。
+    fn execute_point_writes<'a>(
+        &'a self,
+        env: WriteEnv<'a>,
+        writes: Vec<WriteRequest>,
+        mode: WriteMode,
+        ctx: WriteContext,
+    ) -> Pin<Box<dyn Future<Output = Vec<PointWriteResult>> + Send + 'a>>;
 }
 
 /// C1: 协议转换命中记账的 Web 契约视图（与 core 的 `ConvertHit` 字段对齐）
@@ -470,6 +497,26 @@ impl GatewayRuntimeTrait for GatewayRuntime {
             value: s.value,
             error: s.error,
             updated_at_ms: s.updated_at_ms,
+        })
+    }
+    fn execute_point_writes<'a>(
+        &'a self,
+        env: WriteEnv<'a>,
+        writes: Vec<WriteRequest>,
+        mode: WriteMode,
+        ctx: WriteContext,
+    ) -> Pin<Box<dyn Future<Output = Vec<PointWriteResult>> + Send + 'a>> {
+        Box::pin(async move {
+            gateway_core::runtime::write_service::execute_writes(
+                env.points,
+                env.collectors,
+                env.metrics,
+                env.audit,
+                &writes,
+                mode,
+                &ctx,
+            )
+            .await
         })
     }
 }

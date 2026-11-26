@@ -1,6 +1,6 @@
 use super::{
     map_data_point_to_value, should_register_anonymous_none_endpoint, user_token_ids,
-    variant_to_f64, write_error_status, write_wait_budget, ActivePointSet, NorthServer,
+    variant_to_f64, write_result_status, write_wait_budget, ActivePointSet, NorthServer,
     OpcUaServer, OpcUaServerConfig,
 };
 
@@ -87,35 +87,66 @@ fn source_ts_maps_to_source_timestamp_not_epoch() {
     assert!(dv.server_timestamp.is_some());
 }
 
-/// 契约：写失败必须映射为可区分的 OPC UA 状态码，客户端据此判断原因
+/// 契约：统一写结果必须映射为可区分的 OPC UA 状态码，客户端据此判断原因。
+///
+/// 被拒（未下发）按拒绝原因映射；下发后按三态映射——结果未知是 `BadTimeout`
+/// 而不是普通设备故障（DD-34）。
 #[test]
-fn write_error_maps_to_specific_status_codes() {
-    use crate::engine::error::GatewayError;
+fn write_result_maps_to_specific_status_codes() {
+    use crate::engine::write::{PointWriteResult, RejectReason, WriteOutcome};
     use opcua::types::StatusCode;
 
+    fn result(outcome: WriteOutcome, reject: Option<RejectReason>) -> PointWriteResult {
+        PointWriteResult {
+            point_id: "p".into(),
+            point_name: None,
+            device_id: None,
+            bus: "b".into(),
+            value: 0.0,
+            outcome,
+            message: None,
+            quality: None,
+            readback: None,
+            reject,
+        }
+    }
+
     assert_eq!(
-        write_error_status(&GatewayError::Config("not writable".into())),
+        write_result_status(&result(WriteOutcome::Ok, None)),
+        StatusCode::Good
+    );
+    assert_eq!(
+        write_result_status(&result(
+            WriteOutcome::Failed,
+            Some(RejectReason::NotWritable)
+        )),
         StatusCode::BadNotWritable
     );
     assert_eq!(
-        write_error_status(&GatewayError::NotFound("no point".into())),
+        write_result_status(&result(WriteOutcome::Failed, Some(RejectReason::NotFound))),
         StatusCode::BadNodeIdUnknown
     );
     assert_eq!(
-        write_error_status(&GatewayError::Protocol("crc".into())),
+        write_result_status(&result(
+            WriteOutcome::Failed,
+            Some(RejectReason::OutOfRange)
+        )),
+        StatusCode::BadOutOfRange
+    );
+    assert_eq!(
+        write_result_status(&result(
+            WriteOutcome::Failed,
+            Some(RejectReason::NoCollector)
+        )),
         StatusCode::BadDeviceFailure
     );
     assert_eq!(
-        write_error_status(&GatewayError::Io("port closed".into())),
+        write_result_status(&result(WriteOutcome::Failed, None)),
         StatusCode::BadDeviceFailure
     );
     assert_eq!(
-        write_error_status(&GatewayError::NoReply),
+        write_result_status(&result(WriteOutcome::Uncertain, None)),
         StatusCode::BadTimeout
-    );
-    assert_eq!(
-        write_error_status(&GatewayError::Queue("db".into())),
-        StatusCode::BadInternalError
     );
 }
 

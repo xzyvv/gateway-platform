@@ -4,6 +4,7 @@
 //! 队列 / 北向分发器），是配置 reload 时统一替换组件的入口。
 
 mod gateway;
+pub mod write_service;
 
 pub use gateway::{ConfigApplyError, GatewayComponents, GatewayRuntime};
 

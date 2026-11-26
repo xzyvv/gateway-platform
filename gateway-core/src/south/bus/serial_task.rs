@@ -16,9 +16,7 @@ use crate::south::protocol::CollectorError;
 
 use super::frame_extract::extract_frame;
 use super::transport::{BusDeps, GpioOutput};
-use super::{
-    is_retryable, BusTransaction, SerialHandle, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_DELAY_MS,
-};
+use super::{BusTransaction, SerialHandle, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_DELAY_MS};
 
 // 后台自愈重连（热拔插）独立成模块：主循环只管「取事务 → 执行 → 回结果」，
 // 端口掉了怎么自愈是另一组关注点。见子模块内注释。
@@ -306,7 +304,9 @@ pub(crate) async fn run_serial_bus_task(
                     );
                     break;
                 }
-                Err(e) if is_retryable(e) && attempt < retry_count => {
+                Err(e)
+                    if super::should_retry_transaction(e, attempt, retry_count, retry_allowed) =>
+                {
                     // 修复(R-2)：控制通道有积压时放弃本次重试，立即回到主循环让写指令先下发。
                     // 重试只用于提升「偶发失败」的成功率，优先级低于现场控制指令的及时性；
                     // 否则一笔长采集事务的内部重试窗口会把写请求一起拖住
@@ -683,7 +683,16 @@ const RAW_IDLE_GAP: Duration = Duration::from_millis(50);
 /// 典型 RS485 收发器为 0.1~1ms，少数老转换器要求更长。建立时间不足时首字节
 /// 会被吃掉，表现为「写成功但从站只收到半帧 / 报 CRC 错」这类偶发问题。
 /// 取 1ms 保守值；仅在外部 DE 控制时生效（自动方向收发适配器无需等待）。
-const DE_SETUP_TIME: Duration = Duration::from_millis(1);
+pub(super) const DE_SETUP_TIME: Duration = Duration::from_millis(1);
+
+/// Modbus RTU 帧间静默（3.5 字符）。
+///
+/// 3.5 字符 = 35 bit / 波特率；向上取整且至少 1ms。9600bps ≈ 4ms，
+/// 115200bps ≈ 1ms。De 拉低后必须保持这段静默再开始读，否则老表会丢掉回帧首字节。
+pub(super) fn rtu_inter_frame_gap(baud: u32) -> Duration {
+    let gap_ms = 35_000u64.div_ceil(u64::from(baud.max(300))).max(1);
+    Duration::from_millis(gap_ms)
+}
 
 /// 写一帧（含 DE/RE 方向控制与按帧长/波特率自适应的写超时）。
 ///
@@ -733,8 +742,7 @@ async fn write_frame(
     // 表现为「偶发 CRC 错 → 重试又成功」这类难复现问题。
     // 静默时长 = 3.5 字符 × 10 bit / 波特率，向上取整并至少 1ms
     // （9600bps ≈ 4ms，115200bps ≈ 1ms，对整体采集周期影响可忽略）。
-    let gap_ms = 35_000u64.div_ceil(u64::from(baud.max(300))).max(1);
-    tokio::time::sleep(Duration::from_millis(gap_ms)).await;
+    tokio::time::sleep(rtu_inter_frame_gap(baud)).await;
 
     Ok(())
 }

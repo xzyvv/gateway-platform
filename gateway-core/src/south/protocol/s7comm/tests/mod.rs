@@ -185,12 +185,27 @@ async fn spawn_s7_stub_counted(
     value: Vec<u8>,
     transport_size: u8,
 ) -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let (addr, conns, writes, _reqs) =
+        spawn_s7_stub_req_counted(actions, value, transport_size).await;
+    (addr, conns, writes)
+}
+
+/// 同 `spawn_s7_stub_counted`，再额外返回握手后的 PDU 总数（读 + 写）。
+/// 用于验证 S7-W5：批量写后不补读回（总 PDU 数 == 写 PDU 数）。
+async fn spawn_s7_stub_req_counted(
+    actions: Vec<S7StubAction>,
+    value: Vec<u8>,
+    transport_size: u8,
+) -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr").to_string();
     let conn_idx = Arc::new(AtomicUsize::new(0));
     let conn_count = conn_idx.clone();
     let write_count = Arc::new(AtomicUsize::new(0));
     let write_hits = write_count.clone();
+    // 握手后的 PDU 总数（读 + 写），用于钉住「写后不读回」
+    let req_count = Arc::new(AtomicUsize::new(0));
+    let req_hits = req_count.clone();
     tokio::spawn(async move {
         loop {
             let (mut sock, _) = match listener.accept().await {
@@ -206,6 +221,7 @@ async fn spawn_s7_stub_counted(
             });
             let value = value.clone();
             let write_hits = write_hits.clone();
+            let req_hits = req_hits.clone();
             tokio::spawn(async move {
                 // 握手：COTP CR → CC
                 if read_tpkt_body(&mut sock).await.is_none() {
@@ -229,6 +245,7 @@ async fn spawn_s7_stub_counted(
                         };
                         // 请求功能码位于 body[13]（COTP 3 + S7 header 10）；
                         // PDU 类型位于 body[4]（COTP 3 + S7 协议 ID 1 之后）
+                        req_hits.fetch_add(1, Ordering::SeqCst);
                         let function = body.get(13).copied().unwrap_or(FUNC_READ);
                         let mut ack = if body.get(4).copied() == Some(PDU_USERDATA) {
                             // Userdata（Read SZL）→ 返回组件标识
@@ -253,6 +270,7 @@ async fn spawn_s7_stub_counted(
                             Some(b) => b,
                             None => return,
                         };
+                        req_hits.fetch_add(1, Ordering::SeqCst);
                         let function = body.get(13).copied().unwrap_or(FUNC_READ);
                         let mut ack = if function == FUNC_WRITE {
                             write_hits.fetch_add(1, Ordering::SeqCst);
@@ -270,7 +288,7 @@ async fn spawn_s7_stub_counted(
             });
         }
     });
-    (addr, conn_count, write_count)
+    (addr, conn_count, write_count, req_count)
 }
 
 /// ROI-26：桩按真实设备行为回显请求的 PDU reference（COTP 3 字节之后 `s7[4..6]`）。

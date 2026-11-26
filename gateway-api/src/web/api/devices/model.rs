@@ -24,7 +24,8 @@ pub struct ControlCommand {
     pub device_name: String,
     pub point_id: String,
     pub point_name: String,
-    pub write_value: f64,
+    /// 写入值：解析失败/结果未知时为 `None`（DD-35：绝不再回退成 0 冒充成功）
+    pub write_value: Option<f64>,
     pub operator: String,
     pub status: String,
     pub created_at: i64,

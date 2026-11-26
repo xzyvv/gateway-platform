@@ -14,7 +14,12 @@
 import { confirmAction } from '@/utils/confirm'
 import { extractErrorMessage } from '@/utils/errorHandler'
 import { ERR } from '@/utils/errorCodes'
-import { writePoints, type BatchWriteResultItem, type PointWriteEntry } from '@/api/points'
+import {
+  writePoints,
+  type BatchWriteResultItem,
+  type PointWriteEntry,
+  type WriteOptions,
+} from '@/api/points'
 
 /** 批量写结果；始终与入参等长（传输失败时逐条补 null） */
 export interface PointWriteOutcome {
@@ -79,10 +84,13 @@ export async function confirmPointWrite(
 
 export function usePointWrite() {
   /** 批量写；无论成功失败都返回结构化结果，不抛异常 */
-  async function writeBatch(entries: PointWriteEntry[]): Promise<PointWriteOutcome> {
+  async function writeBatch(
+    entries: PointWriteEntry[],
+    opts: WriteOptions = {},
+  ): Promise<PointWriteOutcome> {
     const total = entries.length
     try {
-      const resp = await writePoints(entries)
+      const resp = await writePoints(entries, opts)
       // uncertain 优先取后端顶层计数，缺失时按逐条 outcome 兜底
       const uncertain =
         resp.uncertain ??
@@ -114,9 +122,13 @@ export function usePointWrite() {
     }
   }
 
-  /** 单点写；只看第 1 条结果，语义与批量一致 */
-  async function writeOnce(id: string, value: number): Promise<PointWriteOnceOutcome> {
-    const outcome = await writeBatch([{ id, value }])
+  /** 单点写；只看第 1 条结果，语义与批量一致。`operator` 为真实操作人（DD-56）。 */
+  async function writeOnce(
+    id: string,
+    value: number,
+    operator?: string,
+  ): Promise<PointWriteOnceOutcome> {
+    const outcome = await writeBatch([{ id, value }], { operator })
     const item = outcome.results[0]
     const ok = item?.status === 'ok'
     const uncertain = !ok && (item?.outcome === 'uncertain' || outcome.uncertain > 0)

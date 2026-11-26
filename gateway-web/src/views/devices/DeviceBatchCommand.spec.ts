@@ -127,10 +127,14 @@ describe('BatchCommand.vue 冒烟', () => {
     await settle()
 
     expect(writePoints).toHaveBeenCalledTimes(1)
-    expect(writePoints).toHaveBeenCalledWith([
-      { id: 'dev_1_p1', value: 42 },
-      { id: 'dev_2_p1', value: 42 },
-    ])
+    // 第二个参数为写上下文（操作人/幂等键）；批量命令不填时为空对象
+    expect(writePoints).toHaveBeenCalledWith(
+      [
+        { id: 'dev_1_p1', value: 42 },
+        { id: 'dev_2_p1', value: 42 },
+      ],
+      {},
+    )
     expect(readPointNow).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('执行完成')
     wrapper.unmount()

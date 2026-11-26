@@ -160,11 +160,22 @@ async fn spawn_fins_stub(replies: Vec<FinsReply>) -> String {
 
 /// 同 `spawn_fins_stub`，额外返回已接受的连接次数（用于验证"批次只建链一次"）。
 async fn spawn_fins_stub_counted(replies: Vec<FinsReply>) -> (String, Arc<AtomicUsize>) {
+    let (addr, conns, _) = spawn_fins_stub_counters(replies).await;
+    (addr, conns)
+}
+
+/// 同 `spawn_fins_stub_counted`，再额外返回已处理的 FINS 事务数。
+///
+/// 用于钉住写路径契约（G-T1b）：写成功后不读回、写失败不自动重发。
+async fn spawn_fins_stub_counters(
+    replies: Vec<FinsReply>,
+) -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local").to_string();
     let tx_idx = Arc::new(AtomicUsize::new(0));
     let conn_count = Arc::new(AtomicUsize::new(0));
     let conn_ret = conn_count.clone();
+    let tx_ret = tx_idx.clone();
     tokio::spawn(async move {
         loop {
             let (mut sock, _) = match listener.accept().await {
@@ -232,7 +243,7 @@ async fn spawn_fins_stub_counted(replies: Vec<FinsReply>) -> (String, Arc<Atomic
             });
         }
     });
-    (addr, conn_ret)
+    (addr, conn_ret, tx_ret)
 }
 
 fn point(id: &str, address: &str, data_type: &str) -> PointConfig {
@@ -323,6 +334,43 @@ async fn test_write_end_code_nonzero_is_device_rejected() {
             crate::south::protocol::CollectorError::DeviceRejected(_)
         ),
         "unexpected: {err:?}"
+    );
+}
+
+// ===== G-T1b FINS-W5 / FINS-W3：写后不读回、写失败不重发 =====
+
+/// FINS-W5：写成功后只发出一条写事务，不得补读回。
+#[tokio::test]
+async fn fins_write_issues_single_transaction_without_readback() {
+    let (addr, _conns, reqs) = spawn_fins_stub_counters(vec![FinsReply::Write]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let p = point("p1", "D100", "u16");
+
+    c.write(&p, 1234.0).await.expect("write ok");
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        1,
+        "写成功后不得再发读回（读回只在结果未知时由统一写服务触发）"
+    );
+}
+
+/// FINS-W3：写应答结束码非零 → 明确失败，不得自动重发。
+#[tokio::test]
+async fn fins_write_failure_is_not_retried() {
+    let (addr, _conns, reqs) =
+        spawn_fins_stub_counters(vec![FinsReply::WriteEndCode(0x00, 0x11)]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let p = point("p1", "D100", "u16");
+
+    let err = c.write(&p, 1234.0).await.expect_err("结束码非零应失败");
+    assert!(matches!(
+        err,
+        crate::south::protocol::CollectorError::DeviceRejected(_)
+    ));
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        1,
+        "写失败必须原样上报，不得自动重发（重发会造成重复写）"
     );
 }
 

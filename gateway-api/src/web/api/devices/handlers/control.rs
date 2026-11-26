@@ -59,6 +59,8 @@ pub(crate) async fn list_commands(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<ControlCommand>>>, ApiError> {
     use gateway_core::engine::audit::AuditFilter;
+    use gateway_core::engine::write::{parse_write_detail, ParsedWriteStatus};
+    let cfg = state.config.load_full();
     let entries = state
         .platform
         .audit
@@ -75,24 +77,31 @@ pub(crate) async fn list_commands(
     let commands: Vec<ControlCommand> = entries
         .into_iter()
         .map(|e| {
-            // 失败后缀：send_command Err 分支补落审计时追加（含中文冒号与空格前缀）
-            let (status, detail) = match e.detail.find(" [失败: ") {
-                Some(pos) => ("failed".to_string(), e.detail[..pos].to_string()),
-                None => ("success".to_string(), e.detail.clone()),
-            };
-            // 从末尾拆 name=value：点位名可能含 '='，value 必是尾部数字
-            let (point_name, write_value) = match detail.rsplit_once('=') {
-                Some((name, v)) => (name.to_string(), v.parse::<f64>().unwrap_or(0.0)),
-                None => (detail.clone(), 0.0),
-            };
+            // ROI-35 / DD-35：统一解析写审计 detail（`[失败:` = 明确失败，
+            // `[超时:` = 结果未知）。解析失败的值不再回退成 0，而是标为未知。
+            let parsed = parse_write_detail(&e.detail);
+            let status = match parsed.status {
+                ParsedWriteStatus::Ok => "success",
+                ParsedWriteStatus::Failed => "failed",
+                ParsedWriteStatus::Uncertain => "uncertain",
+            }
+            .to_string();
+            let point_name = parsed.name;
+            // DD-36：「设备名称」列取真实设备名，而不是把 device_id 再抄一遍。
+            let device_name = cfg
+                .devices
+                .as_ref()
+                .and_then(|d| d.iter().find(|x| x.id == e.target))
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| e.target.clone());
             ControlCommand {
                 id: format!("cmd-{}", e.ts),
                 device_id: e.target.clone(),
-                device_name: e.target.clone(),
+                device_name,
                 // 审计未存 point_id（detail 只有点位名），point_id 暂以点位名填充
                 point_id: point_name.clone(),
                 point_name,
-                write_value,
+                write_value: parsed.value,
                 operator: e.source.clone(),
                 status,
                 created_at: e.ts,
@@ -122,7 +131,7 @@ pub(crate) async fn send_command(
         id: req.point_id.clone(),
         value: req.value,
     }];
-    let items = write_points_core(&state, &writes, WriteMode::Single).await?;
+    let items = write_points_core(&state, &writes, WriteMode::Single, None).await?;
     let item = &items[0];
 
     if let Some(err) = &item.error {
@@ -150,7 +159,7 @@ pub(crate) async fn send_command(
                 .point_name
                 .clone()
                 .unwrap_or_else(|| item.point_id.clone()),
-            write_value: req.value,
+            write_value: Some(req.value),
             operator: "api".to_string(),
             status: "success".to_string(),
             created_at: ts,

@@ -493,15 +493,17 @@ async fn opcua_write_returns_real_status_from_bus() {
         "设备确认写入时必须返回 Good"
     );
 
-    // 设备无应答（CollectorError::Timeout）：BadDeviceFailure，绝不能是 Good
+    // 设备无应答（CollectorError::Timeout → WriteOutcome::Uncertain）：
+    // 结果未知必须返回 BadTimeout，绝不能是 Good、也不能压成普通设备故障——
+    // 客户端据此知道「可能已写入，不要盲目重试」。
     let fail_handler = OpcUaWriteHandler {
         gateway: crate::runtime::gateway_runtime_with_fake_bus_for_test(false),
         audit: audit.clone(),
     };
     assert_eq!(
         OpcUaServer::execute_write(&fail_handler, "p1", "温度", "b1", 12.5),
-        StatusCode::BadDeviceFailure,
-        "下位机写入失败必须把真实失败码返回给客户端"
+        StatusCode::BadTimeout,
+        "写结果未知必须返回 BadTimeout（可能已写入，禁止盲目重试）"
     );
 
     // 点位不存在：BadNodeIdUnknown，而不是设备故障或 Good

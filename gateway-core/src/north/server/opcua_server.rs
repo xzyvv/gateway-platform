@@ -338,49 +338,62 @@ impl OpcUaServer {
         // 写回调持地址空间写锁，这段等待直接决定该 Server 读/订阅的阻塞时长。
         // 记录到指标，让「写回锁竞争」可被 Prometheus / 运维页观测。
         let wait_start = std::time::Instant::now();
-        let write = handler.gateway.write_point(pid, write_value);
+        // ROI-35（DD-34/35/36）：统一写服务负责白名单 / 范围校验 / 三态 / 读回核实 /
+        // 审计；这里只负责把结构化结果映射成 OPC UA 状态码。
+        let ctx = crate::engine::write::WriteContext::new("opcua");
+        let write = handler
+            .gateway
+            .write_point_checked(pid, write_value, &ctx, &handler.audit);
         let outcome = run_write_blocking(tokio::time::timeout(budget, write));
         let wait_us = wait_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
         let write_metrics = &handler.gateway.metrics.opcua_write;
-        let (status, detail) = match outcome {
-            Some(Ok(Ok(()))) => {
-                write_metrics.record(wait_us, false, false);
-                (
-                    StatusCode::Good,
-                    format!("{}={}", display_name, write_value),
-                )
-            }
-            Some(Ok(Err(e))) => {
-                write_metrics.record(wait_us, false, true);
-                (
-                    write_error_status(&e),
-                    format!("{}={} [失败: {}]", display_name, write_value, e),
-                )
+        match outcome {
+            Some(Ok(result)) => {
+                // 审计已在统一写服务内落盘（成功 / 失败 / 未知 / 被拒）。
+                write_metrics.record(wait_us, false, !result.is_ok());
+                if result.is_ok() {
+                    StatusCode::Good
+                } else {
+                    if result.outcome.is_uncertain() {
+                        tracing::warn!(
+                            "opcua 写结果未知: point={} value={} reason={:?}",
+                            pid,
+                            write_value,
+                            result.message
+                        );
+                    }
+                    write_result_status(&result)
+                }
             }
             Some(Err(_)) => {
                 write_metrics.record(wait_us, true, false);
                 // 超时只取消了「等待」，总线任务多半已把帧发给设备：真实结果
-                // 无法得知。审计必须如实标注，否则运维会当成「没写进去」重试，
-                // 造成重复写（对累计量/寄存器等点位是实质错误）。
+                // 无法得知。执行器的 future 已被 drop，这里补一条「结果未知」审计，
+                // 否则运维会当成「没写进去」重试，造成重复写。
                 tracing::warn!(
                     "opcua 写超时: point={} value={} 等待 {}ms 未返回，写命令可能已下发（结果未知）",
                     pid,
                     write_value,
                     budget.as_millis()
                 );
-                (
-                    StatusCode::BadTimeout,
-                    format!(
-                        "{}={} [超时: 等待写回 {}ms 未返回，结果未知（可能已写入，勿盲目重试）]",
-                        display_name,
-                        write_value,
+                let detail = crate::engine::write::write_audit_detail(
+                    display_name,
+                    write_value,
+                    crate::engine::write::WriteOutcome::Uncertain,
+                    Some(&format!(
+                        "等待写回 {}ms 未返回，结果未知（可能已写入，勿盲目重试）",
                         budget.as_millis()
-                    ),
-                )
+                    )),
+                );
+                handler
+                    .audit
+                    .log("point.write", audit_target, &detail, "opcua");
+                StatusCode::BadTimeout
             }
             None => {
                 // 单线程 runtime（如 #[tokio::test] 默认）不能安全阻塞等待：
                 // 退化为异步执行 + 乐观返回（生产 gatewayd 为 multi_thread）。
+                // 审计由执行器在真实结果出来后落盘。
                 tracing::warn!(
                     "opcua: 当前 runtime 不支持阻塞等待，写回 {} 转异步（返回 Good 不代表写入成功）",
                     pid
@@ -388,22 +401,15 @@ impl OpcUaServer {
                 let gateway = handler.gateway.clone();
                 let audit = handler.audit.clone();
                 let pid = pid.to_string();
-                let display_name = display_name.to_string();
-                let audit_target = audit_target.to_string();
                 tokio::spawn(async move {
-                    let detail = match gateway.write_point(&pid, write_value).await {
-                        Ok(()) => format!("{}={}", display_name, write_value),
-                        Err(e) => format!("{}={} [失败: {}]", display_name, write_value, e),
-                    };
-                    audit.log("point.write", &audit_target, &detail, "opcua");
+                    let ctx = crate::engine::write::WriteContext::new("opcua");
+                    gateway
+                        .write_point_checked(&pid, write_value, &ctx, &audit)
+                        .await;
                 });
-                return StatusCode::Good;
+                StatusCode::Good
             }
-        };
-        handler
-            .audit
-            .log("point.write", audit_target, &detail, "opcua");
-        status
+        }
     }
 
     /// 按活跃点位集裁剪地址空间（删除已下线节点）并刷新可写权限。
@@ -585,17 +591,22 @@ fn variant_to_f64(v: &Variant) -> Option<f64> {
     }
 }
 
-/// 把网关写回错误映射为 OPC UA 状态码，让客户端能区分失败原因。
+/// 把统一写结果映射为 OPC UA 状态码，让客户端能区分失败原因。
 ///
-/// 旧实现无论真实结果如何都返回 `Good`，客户端无法感知写失败；现在映射为
-/// 「不可写 / 点位不存在 / 设备失败 / 超时」，其余归为 `BadInternalError`。
-fn write_error_status(err: &GatewayError) -> StatusCode {
-    match err {
-        GatewayError::Config(_) => StatusCode::BadNotWritable,
-        GatewayError::NotFound(_) => StatusCode::BadNodeIdUnknown,
-        GatewayError::Protocol(_) | GatewayError::Io(_) => StatusCode::BadDeviceFailure,
-        GatewayError::NoReply => StatusCode::BadTimeout,
-        _ => StatusCode::BadInternalError,
+/// 三态与拒绝原因一一对应，不再把「结果未知」压成普通失败（DD-34）：
+/// 越界是 `BadOutOfRange`、不可写是 `BadNotWritable`、结果未知是 `BadTimeout`。
+fn write_result_status(result: &crate::engine::write::PointWriteResult) -> StatusCode {
+    use crate::engine::write::{RejectReason, WriteOutcome};
+    match result.reject {
+        Some(RejectReason::NotFound) => StatusCode::BadNodeIdUnknown,
+        Some(RejectReason::NotWritable) => StatusCode::BadNotWritable,
+        Some(RejectReason::OutOfRange) => StatusCode::BadOutOfRange,
+        Some(RejectReason::NoCollector) => StatusCode::BadDeviceFailure,
+        None => match result.outcome {
+            WriteOutcome::Ok => StatusCode::Good,
+            WriteOutcome::Failed => StatusCode::BadDeviceFailure,
+            WriteOutcome::Uncertain => StatusCode::BadTimeout,
+        },
     }
 }
 

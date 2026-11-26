@@ -63,6 +63,13 @@ pub struct PointsExportResp {
 #[derive(Debug, Deserialize)]
 pub struct PointsWriteBatchReq {
     pub writes: Vec<PointWriteEntry>,
+    /// DD-56：真实操作人（远程控制弹窗的输入框）。为空时审计回退到 `api`。
+    #[serde(default)]
+    pub operator: Option<String>,
+    /// ROI-09：幂等键。同一个 key 在有效期内重复提交返回首次结果，
+    /// 不再重复下发（上游超时重试不会把已成功的点写第二遍）。
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// 写入的单个条目：点位 id + 目标值（`id` / `point_id` 两种写法等价）
@@ -73,14 +80,8 @@ pub struct PointWriteEntry {
     pub value: f64,
 }
 
-/// 写入模式（B2 统一入口内部的分派口径）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WriteMode {
-    /// 单写：校验失败直接返回 ApiError（与 `send_command` 同一错误码）
-    Single,
-    /// 批写：逐条独立成败，单条失败不影响其它条
-    Batch,
-}
+/// 写入模式（单/批分派口径）——与 core 的统一写执行器共用同一枚举。
+pub(crate) use gateway_core::engine::write::WriteMode;
 
 /// 单条写结果（与入参逐位对应）
 #[derive(Debug)]
@@ -103,24 +104,6 @@ pub(crate) struct WriteItemError {
     /// 判据只有一条：能否证明写没有生效。见
     /// [`gateway_core::engine::write::WriteOutcome`]。
     pub outcome: WriteOutcome,
-}
-
-/// 写结果未知时的统一处置提示。
-///
-/// 提示文本同时用于逐条 `error` 与顶层业务码 message，让上游（前端 / MES /
-/// 集成方）无论从哪个字段读到这次失败，都能得到同一个结论：
-/// **先读回核实，不要自动重试**。
-pub(crate) const WRITE_UNCERTAIN_HINT: &str = "设备可能已执行，请先读回核实，不要自动重试";
-
-/// 按写结果三态生成面向用户的失败文案。
-///
-/// - `Uncertain`：追加 [`WRITE_UNCERTAIN_HINT`]，让调用方不会把它当成普通失败去重试；
-/// - `Failed` / `Ok`：原样透传后端原因（明确失败可安全重试，无需额外说明）。
-pub(crate) fn write_error_message(reason: &str, outcome: WriteOutcome) -> String {
-    match outcome {
-        WriteOutcome::Uncertain => format!("{reason}（{WRITE_UNCERTAIN_HINT}）"),
-        WriteOutcome::Failed | WriteOutcome::Ok => reason.to_string(),
-    }
 }
 
 /// 按写结果三态给出单条写失败的**业务码**（码值定义见 [`crate::web::error_codes`]）。

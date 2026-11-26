@@ -169,6 +169,8 @@ pub struct PlatformRefs {
     pub api_keys: Arc<gateway_core::config::ApiKeyStore>,
     /// 计划任务（SQLite；调度执行器轮询到期任务并回写执行结果）
     pub sched_tasks: Arc<gateway_core::config::ScheduledTaskStore>,
+    /// ROI-09：写请求幂等键缓存（同一 key 的重复提交返回首次结果）。
+    pub write_idempotency: Arc<crate::web::write_idempotency::WriteIdempotencyStore>,
 }
 
 /// 共享应用状态（按子系统分组：config / north / south / platform）

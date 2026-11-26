@@ -161,8 +161,8 @@ async fn write_var_over_tcp_reuses_connection() {
 #[tokio::test]
 async fn write_multi_merges_into_single_transaction() {
     let value = 0.0f32.to_be_bytes().to_vec();
-    let (addr, conns, writes) =
-        spawn_s7_stub_counted(vec![S7StubAction::Serve], value, TS_BYTE).await;
+    let (addr, conns, writes, reqs) =
+        spawn_s7_stub_req_counted(vec![S7StubAction::Serve], value, TS_BYTE).await;
     let c = S7CommCollector::new(addr, "s7-bus".into(), Duration::from_secs(5));
     let p1 = s7_point("p1", "DB1.DBD0", "real");
     let p2 = s7_point("p2", "MW0", "word");
@@ -179,6 +179,12 @@ async fn write_multi_merges_into_single_transaction() {
         writes.load(Ordering::SeqCst),
         1,
         "两个合法点位应合并成一次 Write Var 事务（默认扇出会是 2 次）"
+    );
+    // S7-W5：批量写完成后**不得再补读回**（握手后总 PDU 数 == 写 PDU 数）
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        1,
+        "批量写后不得补读回：协议层只发写 PDU，读回仅在结果未知时由统一写服务触发"
     );
 }
 

@@ -348,6 +348,9 @@ pub(crate) fn build_app_state(inputs: AppStateInputs<'_>) -> Arc<AppState> {
             quality_rule_store: deps.quality_rule_store.clone(),
             api_keys: deps.api_keys.clone(),
             sched_tasks: deps.sched_tasks.clone(),
+            write_idempotency: Arc::new(
+                gateway_api::web::write_idempotency::WriteIdempotencyStore::new(),
+            ),
         },
         web: web_cfg.clone(),
         rate_limiter: Arc::new(gateway_api::web::middleware::RateLimiter::default()),
