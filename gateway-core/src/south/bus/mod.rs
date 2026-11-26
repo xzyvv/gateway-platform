@@ -490,6 +490,9 @@ impl BusManager {
         let deadline = tokio::time::Instant::now() + timeout;
         while !handle.is_finished() {
             if tokio::time::Instant::now() >= deadline {
+                // U-7：排空超时意味着端口可能仍被旧任务占用，随后的 open_bus
+                // 有失败风险；单独计数供 reload 排障（与写取消分开归因）。
+                self.metrics.inc_reload_drain_timeout();
                 tracing::warn!(
                     "bus {} task did not stop within {:?} after abort",
                     self.name,

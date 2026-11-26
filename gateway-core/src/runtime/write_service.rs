@@ -478,6 +478,24 @@ fn whitelist_message(point: &PointConfig) -> String {
     )
 }
 
+/// 写审计 detail 的统一格式 + U-4 配置代次后缀。
+///
+/// 代次只追加在末尾（` [cfg:<n>]`），解析侧（[`crate::engine::write::parse_write_detail`]）
+/// 会先剥离再解析，不改变既有三态格式。
+fn audit_detail_with_generation(
+    name: &str,
+    value: f64,
+    outcome: WriteOutcome,
+    message: Option<&str>,
+    ctx: &WriteContext,
+) -> String {
+    let detail = write_audit_detail(name, value, outcome, message);
+    match ctx.config_generation {
+        Some(generation) => format!("{detail} [cfg:{generation}]"),
+        None => detail,
+    }
+}
+
 /// 落一条「成功 / 失败 / 未知」审计 + 写指标。
 #[allow(clippy::too_many_arguments)]
 fn audit_result(
@@ -491,7 +509,7 @@ fn audit_result(
 ) {
     metrics.record_point_write(matches!(outcome, WriteOutcome::Ok) && message.is_none());
     let name = point.name.clone().unwrap_or_else(|| point.id.clone());
-    let detail = write_audit_detail(&name, value, outcome, message);
+    let detail = audit_detail_with_generation(&name, value, outcome, message, ctx);
     let target = point.device_id.clone().unwrap_or_else(|| point.bus.clone());
     audit.log("point.write", &target, &detail, ctx.audit_source());
 }
@@ -512,7 +530,7 @@ fn audit_reject(
     let name = point
         .and_then(|p| p.name.clone())
         .unwrap_or_else(|| point_id.to_string());
-    let detail = write_audit_detail(&name, value, outcome, Some(message));
+    let detail = audit_detail_with_generation(&name, value, outcome, Some(message), ctx);
     let target = point
         .and_then(|p| p.device_id.clone().or_else(|| Some(p.bus.clone())))
         .unwrap_or_else(|| point_id.to_string());

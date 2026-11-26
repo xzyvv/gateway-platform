@@ -120,6 +120,20 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// U-7：记录一次被热重载取消的在途写（写帧已下发，结果未知）。
+    pub fn inc_reload_cancelled_writes(&self) {
+        self.lifecycle
+            .reload_cancelled_writes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// U-7：记录一次热重载排空旧总线任务超时。
+    pub fn inc_reload_drain_timeout(&self) {
+        self.lifecycle
+            .reload_drain_timeout
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// C-2 自检成功：端口收发链路正常，设备静默归因于设备自身。
     pub fn inc_bus_self_check_ok(&self) {
         self.bus.self_check_ok.fetch_add(1, Ordering::Relaxed);

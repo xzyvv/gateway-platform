@@ -724,6 +724,7 @@ fn build_mock_state_with_devices(
             version_store,
             templates: Arc::new(TemplateManager::new(&tpl_dir_str, &tpl_dir_str)),
             uplink_test_history,
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         },
         north: NorthRefs {
             ota: Arc::new(MockOta),

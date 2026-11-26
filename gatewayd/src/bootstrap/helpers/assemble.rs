@@ -303,6 +303,7 @@ pub(crate) fn build_app_state(inputs: AppStateInputs<'_>) -> Arc<AppState> {
             version_store: deps.version_store.clone(),
             templates: chain.templates.clone(),
             uplink_test_history: deps.uplink_test_history.clone(),
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         },
         north: NorthRefs {
             ota: deps.ota.clone(),

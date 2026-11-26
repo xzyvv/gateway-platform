@@ -269,7 +269,10 @@ pub(crate) async fn write_points_core(
             value: w.value,
         })
         .collect();
-    let ctx = WriteContext::new("api").with_operator(operator);
+    let ctx = WriteContext::new("api")
+        .with_operator(operator)
+        // U-4：记录写入时的配置代次，跨 reload 写可事后追溯（决议 A：允许跨代写）。
+        .with_config_generation(Some(state.config.generation()));
     let env = crate::web::traits::WriteEnv {
         points: &config.points,
         collectors: &collectors,

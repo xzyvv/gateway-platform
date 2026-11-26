@@ -1355,3 +1355,112 @@ async fn aborted_in_flight_read_still_reports_bus_closed() {
         "读事务被取消应保持 BusClosed，实际 {result:?}"
     );
 }
+
+/// 写帧「写到一半」的串口桩：`poll_write` 记录已开始下发后永远 Pending。
+///
+/// 用于覆盖 U-2 的极端窗口——`write_all` 尚未完成时任务被取消，无法证明
+/// 「一个字节都没发出去」，因此必须按结果未知上报，而不是明确失败。
+#[cfg(feature = "modbus")]
+struct BlockingWritePort {
+    attempted: Arc<AtomicBool>,
+}
+
+#[cfg(feature = "modbus")]
+impl tokio::io::AsyncWrite for BlockingWritePort {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.attempted.store(true, Ordering::SeqCst);
+        std::task::Poll::Pending
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(feature = "modbus")]
+impl tokio::io::AsyncRead for BlockingWritePort {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+}
+
+/// U-2：`write_all` 未完成即被取消，仍必须报 WriteUncertain（不得退化成 BusClosed）。
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn aborted_during_write_all_reports_write_uncertain() {
+    let attempted = Arc::new(AtomicBool::new(false));
+    let bus = BusConfig {
+        port_name: "bus_write_in_progress".into(),
+        protocol: "modbus".into(),
+        modbus_mode: "rtu".into(),
+        de_pin: None,
+        // 写超时足够长，确保任务停在 write_all 的 Pending 上而不是超时返回
+        timeout_ms: 5000,
+        retry_count: Some(0),
+        retry_delay_ms: Some(10),
+        ..Default::default()
+    };
+    let metrics = Arc::new(crate::engine::metrics::Metrics::new());
+    let bm = Arc::new(BusManager::spawn_with(
+        &bus,
+        Some(SerialHandle::from_stream(BlockingWritePort {
+            attempted: attempted.clone(),
+        })),
+        metrics.clone(),
+        BusDeps::production(),
+    ));
+
+    let bm2 = Arc::clone(&bm);
+    let task = tokio::spawn(async move {
+        bm2.transaction_no_retry(
+            modbus_fc06_write(1, 0x0001, 0x1234),
+            None,
+            BusPriority::Control,
+        )
+        .await
+    });
+
+    // 等写调用真正进入 poll_write（frame_sent 已在进入写帧前置位）
+    wait_until(
+        || attempted.load(Ordering::SeqCst),
+        2000,
+        "write_all 未开始下发",
+    )
+    .await;
+    bm.handle.as_ref().expect("总线任务句柄必须存在").abort();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .expect("取消后调用方必须立即返回")
+        .expect("写事务任务不应 panic");
+    assert!(
+        matches!(result, Err(CollectorError::WriteUncertain(_))),
+        "写一半被取消必须报结果未知，实际 {result:?}"
+    );
+    assert_eq!(
+        metrics
+            .lifecycle
+            .reload_cancelled_writes
+            .load(Ordering::Relaxed),
+        1,
+        "取消写应计入 reload_cancelled_writes_total"
+    );
+}

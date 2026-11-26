@@ -77,6 +77,13 @@ pub struct GatewayComponents {
 /// north 侧测试只调用本函数。
 #[cfg(test)]
 pub fn gateway_runtime_without_buses_for_test() -> Arc<GatewayRuntime> {
+    gateway_runtime_with_serial_mgr_for_test(SerialManager::new())
+}
+
+/// 测试专用：同 [`gateway_runtime_without_buses_for_test`]，但允许注入自定义
+/// [`SerialManager`]（U-5/U-6 需要假打开器验证串口交接顺序与失败自愈）。
+#[cfg(test)]
+pub fn gateway_runtime_with_serial_mgr_for_test(serial_mgr: SerialManager) -> Arc<GatewayRuntime> {
     use crate::config::NtpConfig;
     use crate::engine::metrics::Metrics;
     use crate::engine::monitor::health::DiskStatus;
@@ -113,7 +120,7 @@ pub fn gateway_runtime_without_buses_for_test() -> Arc<GatewayRuntime> {
         scheduler,
         queue,
         ntp: Arc::new(NtpManager::new(NtpConfig::default())),
-        serial_mgr: SerialManager::new(),
+        serial_mgr,
         metrics,
         disk_status: Arc::new(DiskStatus::new()),
         convert: ConvertEngine::empty(),

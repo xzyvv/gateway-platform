@@ -98,6 +98,9 @@ struct TxnResponder {
     response_tx: Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, CollectorError>>>,
     frame_sent: Arc<AtomicBool>,
     is_write: bool,
+    /// U-7：取消写计数（与总体 `write_uncertain_total` 分开，回答
+    /// 「这次 reload 打断了多少写」）。
+    metrics: Arc<Metrics>,
 }
 
 impl TxnResponder {
@@ -114,6 +117,7 @@ impl Drop for TxnResponder {
             return;
         };
         if self.is_write && self.frame_sent.load(Ordering::SeqCst) {
+            self.metrics.inc_reload_cancelled_writes();
             let _ = tx.send(Err(CollectorError::WriteUncertain(
                 "bus task cancelled after write frame sent".into(),
             )));
@@ -270,6 +274,7 @@ pub(crate) async fn run_serial_bus_task(
             response_tx: Some(response_tx),
             frame_sent: Arc::clone(&frame_sent),
             is_write: !retry_allowed,
+            metrics: Arc::clone(&metrics),
         };
         // P1-2：本次事务的单次超时由 BusManager 按帧长/波特率算好后随事务下发
         // （大块读在低波特率下需要更长时间收帧）。拿不到时才退回总线配置值。

@@ -105,16 +105,30 @@ impl SerialHandle {
 }
 
 /// 串口管理器（启动时打开所有总线）
-pub struct SerialManager;
+///
+/// `opener` 为打开策略的注入点：生产用 `RealSerialOpener` 转调
+/// [`SerialHandle::open`]；测试可注入假打开器验证热重载「先关旧口、再开新口」
+/// 与「新口失败回退旧口」的顺序语义（U-5 / U-6）。
+pub struct SerialManager {
+    opener: std::sync::Arc<dyn super::transport::SerialOpener>,
+}
 
 impl SerialManager {
     pub fn new() -> Self {
-        Self
+        Self {
+            opener: std::sync::Arc::new(super::transport::RealSerialOpener),
+        }
+    }
+
+    /// 测试专用：注入自定义打开器（**仅供测试**）。
+    #[doc(hidden)]
+    pub fn with_opener(opener: std::sync::Arc<dyn super::transport::SerialOpener>) -> Self {
+        Self { opener }
     }
 
     /// 打开一条总线
     pub fn open_bus(&self, bus: &BusConfig) -> Result<SerialHandle, std::io::Error> {
-        SerialHandle::open(bus)
+        self.opener.open(bus)
     }
 }
 

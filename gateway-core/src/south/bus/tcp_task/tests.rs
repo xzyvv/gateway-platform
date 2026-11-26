@@ -549,3 +549,145 @@ fn connect_success_does_not_clear_backoff() {
         "重连判定必须经过 had_successful_comm 判定函数"
     );
 }
+
+// =========================================================
+// U-3：reload 与 TCP 在途写并发——旧事务终态 / 旧连接存活 / 不重复下发
+// =========================================================
+//
+// reload 重建总线会 abort 主循环。TCP 的在途事务由独立 task 提交到 pool，
+// 主循环 abort 时这些 task 只是被 detach（不是 abort），因此：
+//   - 旧事务仍会在旧 socket 上收到应答并正常结束（不会退化成 BusClosed）；
+//   - 旧连接一直存活到该事务结束；
+//   - 写请求只下发一次（不会因 reload 被重复投递到新连接）。
+
+/// 构造合法 Modbus RTU FC06 单寄存器写请求（含真实 CRC）。
+fn modbus_fc06_write_local(slave: u8, addr: u16, value: u16) -> Vec<u8> {
+    let mut frame = vec![slave, 0x06];
+    frame.extend_from_slice(&addr.to_be_bytes());
+    frame.extend_from_slice(&value.to_be_bytes());
+    let crc = crc16(&frame);
+    frame.push((crc & 0xFF) as u8);
+    frame.push((crc >> 8) as u8);
+    frame
+}
+
+/// 构造 FC06 写响应：tx_id + proto(0) + length(6) + unit(1) + [fc=06, addr, value]
+fn fc06_response(tx_id: u16, addr: u16, value: u16) -> Vec<u8> {
+    let mut f = Vec::with_capacity(12);
+    f.extend_from_slice(&tx_id.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&6u16.to_be_bytes()); // unit(1) + pdu(5)
+    f.push(0x01);
+    f.push(0x06);
+    f.extend_from_slice(&addr.to_be_bytes());
+    f.extend_from_slice(&value.to_be_bytes());
+    f
+}
+
+#[tokio::test]
+async fn reload_does_not_duplicate_inflight_tcp_write() {
+    use std::sync::atomic::AtomicBool;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定本地假 Modbus TCP 端口");
+    let addr = listener.local_addr().expect("取本地端口").to_string();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let closed_before_reply = Arc::new(AtomicBool::new(false));
+    let (seen_tx, seen_rx) = oneshot::channel::<()>();
+
+    let requests_srv = Arc::clone(&requests);
+    let closed_srv = Arc::clone(&closed_before_reply);
+    let server = tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.expect("accept");
+        let (tx_id, _unit, _fc) = match read_request(&mut s).await {
+            Some(v) => v,
+            None => return,
+        };
+        requests_srv.fetch_add(1, Ordering::SeqCst);
+        let _ = seen_tx.send(());
+
+        // 应答前观察客户端是否已关闭（旧连接若被 reload 立即掐断，会读到 EOF/RST）。
+        let mut one = [0u8; 1];
+        match tokio::time::timeout(Duration::from_millis(300), s.read(&mut one)).await {
+            Ok(Ok(0)) | Ok(Err(_)) => closed_srv.store(true, Ordering::SeqCst),
+            _ => {}
+        }
+
+        let _ = s.write_all(&fc06_response(tx_id, 0x0001, 0x1234)).await;
+        // 保住连接一小段时间，供测试确认事务在旧连接上完成
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    });
+
+    let bus = BusConfig {
+        port_name: "bus_tcp_reload_write".into(),
+        timeout_ms: 1000,
+        retry_count: Some(0),
+        retry_delay_ms: Some(10),
+        tcp_concurrent: Some(2),
+        ..Default::default()
+    };
+    let (tx, rx) = mpsc::channel::<BusTransaction>(16);
+    let (_ctrl_tx, ctrl_rx) = mpsc::channel::<BusTransaction>(16);
+    let task = tokio::spawn(bus_task_tcp(
+        bus,
+        addr,
+        rx,
+        ctrl_rx,
+        std::sync::Arc::new(crate::engine::metrics::Metrics::default()),
+    ));
+
+    // 提交一笔写事务（不重发），等待服务端真正读到写帧
+    let write_req = modbus_fc06_write_local(1, 0x0001, 0x1234);
+    let mut caller = {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let (resp_tx, resp_rx) = oneshot::channel();
+            tx.send(BusTransaction {
+                request: write_req,
+                response_tx: resp_tx,
+                expected_count: None,
+                raw: false,
+                timeout_ms: None,
+                enqueued_at: std::time::Instant::now(),
+                priority: crate::south::bus::BusPriority::Control,
+                retry_allowed: false,
+                frame_sent: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            })
+            .await
+            .map_err(|_| CollectorError::BusClosed)?;
+            resp_rx.await.map_err(|_| CollectorError::BusClosed)?
+        })
+    };
+
+    tokio::time::timeout(Duration::from_secs(2), seen_rx)
+        .await
+        .expect("写请求应在 2s 内到达假服务端")
+        .expect("屏障通道不应被丢弃");
+
+    // 模拟 reload：abort 总线主循环（等价于 close_task 的 abort）
+    task.abort();
+
+    let result = tokio::time::timeout(Duration::from_secs(3), &mut caller)
+        .await
+        .expect("取消后旧事务仍应在超时内结束")
+        .expect("写事务任务不应 panic");
+    assert!(
+        result.is_ok(),
+        "在途写必须在旧连接上正常结束，不得退化成 BusClosed/WriteUncertain，实际 {result:?}"
+    );
+
+    drop(tx);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "写请求只应下发一次（reload 不得对同一设备重复下发）"
+    );
+    assert!(
+        !closed_before_reply.load(Ordering::SeqCst),
+        "旧连接必须存活到在途事务结束（应答前不得被掐断）"
+    );
+
+    server.abort();
+}

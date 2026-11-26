@@ -52,6 +52,11 @@ pub struct ConfigRefs {
     pub version_store: Arc<ConfigVersionStore>,
     pub templates: Arc<TemplateManager>,
     pub uplink_test_history: Arc<gateway_core::config::UplinkTestHistoryStore>,
+    /// U-4：配置代次。每次成功 `store` 新配置后自增。
+    ///
+    /// 写路径把它记入审计 detail，用于追溯「这次写是在哪一代配置下发起的」——
+    /// 跨 reload 的写被允许（决议 A），但必须可事后归因到配置代次。
+    pub generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Clone for ConfigRefs {
@@ -65,6 +70,7 @@ impl Clone for ConfigRefs {
             version_store: self.version_store.clone(),
             templates: self.templates.clone(),
             uplink_test_history: self.uplink_test_history.clone(),
+            generation: self.generation.clone(),
         }
     }
 }
@@ -141,6 +147,13 @@ impl ConfigRefs {
     }
     pub fn store(&self, new_cfg: std::sync::Arc<GatewayConfig>) {
         self.config.store(new_cfg);
+        // U-4：配置成功生效即进入新代次；写审计据此标注「写入时的配置代次」。
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// 当前配置代次（0 为启动时载入的初始配置）。
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

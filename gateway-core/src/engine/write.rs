@@ -193,6 +193,11 @@ pub struct WriteContext {
     pub source: String,
     /// 真实操作人（前端上报 / 认证主体）；为空时回退到 `source`。
     pub operator: Option<String>,
+    /// U-4：发起写入时的配置代次（跨 reload 写的追溯依据）。
+    ///
+    /// 允许跨代写（决议 A），但审计必须能回答「这次写发生在哪一代配置」。
+    /// 北向（OPC UA）路径没有此值时为 `None`，审计不追加代次标记。
+    pub config_generation: Option<u64>,
 }
 
 impl WriteContext {
@@ -200,11 +205,18 @@ impl WriteContext {
         Self {
             source: source.into(),
             operator: None,
+            config_generation: None,
         }
     }
 
     pub fn with_operator(mut self, operator: Option<String>) -> Self {
         self.operator = operator.filter(|s| !s.trim().is_empty());
+        self
+    }
+
+    /// U-4：记录本次写入所属的配置代次。
+    pub fn with_config_generation(mut self, generation: Option<u64>) -> Self {
+        self.config_generation = generation;
         self
     }
 
@@ -278,12 +290,33 @@ pub struct ParsedWriteDetail {
     pub status: ParsedWriteStatus,
 }
 
+/// 去掉 U-4 追加的配置代次后缀 ` [cfg:<n>]`。
+///
+/// 代次只用于追溯，不参与写结果解析；不先剥离会让 `rsplit_once('=')`
+/// 把值解析成 `12.5 [cfg:3` 而误判为未知。
+fn strip_config_generation(detail: &str) -> &str {
+    let trimmed = detail.trim_end();
+    let Some(rest) = trimmed.strip_suffix(']') else {
+        return trimmed;
+    };
+    let Some(pos) = rest.rfind(" [cfg:") else {
+        return trimmed;
+    };
+    let gen = &rest[pos + " [cfg:".len()..];
+    if !gen.is_empty() && gen.bytes().all(|b| b.is_ascii_digit()) {
+        rest[..pos].trim_end()
+    } else {
+        trimmed
+    }
+}
+
 /// 解析统一格式的写审计 detail。
 ///
 /// 兼容历史记录：`[失败:` 视为明确失败，`[超时:` 视为结果未知。
 /// 值解析失败时状态按「结果未知」处理并保留 `value = None`——把未知写显示成
 /// 「成功、值 0」是最危险的误报（DD-35）。
 pub fn parse_write_detail(detail: &str) -> ParsedWriteDetail {
+    let detail = strip_config_generation(detail);
     let (body, status) = if let Some(pos) = detail.find(" [失败: ") {
         (&detail[..pos], ParsedWriteStatus::Failed)
     } else if let Some(pos) = detail.find(" [超时: ") {
@@ -424,6 +457,24 @@ mod tests {
         let parsed = parse_write_detail("a=b=3");
         assert_eq!(parsed.name, "a=b");
         assert_eq!(parsed.value, Some(3.0));
+    }
+
+    /// U-4：审计 detail 追加的 ` [cfg:<n>]` 后缀不得影响写结果解析。
+    #[test]
+    fn parse_detail_ignores_config_generation_suffix() {
+        use super::{parse_write_detail, ParsedWriteStatus};
+        let ok = parse_write_detail("温度=12.5 [cfg:7]");
+        assert_eq!(ok.name, "温度");
+        assert_eq!(ok.value, Some(12.5));
+        assert_eq!(ok.status, ParsedWriteStatus::Ok);
+
+        let failed = parse_write_detail("温度=12.5 [失败: 设备拒绝] [cfg:7]");
+        assert_eq!(failed.value, Some(12.5));
+        assert_eq!(failed.status, ParsedWriteStatus::Failed);
+
+        let uncertain = parse_write_detail("温度=12.5 [超时: 无应答] [cfg:7]");
+        assert_eq!(uncertain.value, Some(12.5));
+        assert_eq!(uncertain.status, ParsedWriteStatus::Uncertain);
     }
 
     #[test]

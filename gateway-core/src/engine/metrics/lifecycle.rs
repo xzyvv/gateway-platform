@@ -35,6 +35,16 @@ pub struct LifecycleMetrics {
     pub config_reload_rejected_include: AtomicU64,
     /// Bug P1-B7：拒绝原因细分——其它 IO / 解析错误。
     pub config_reload_rejected_other: AtomicU64,
+    /// U-7：热重载取消的写事务数（写帧已下发、任务被 abort，结果未知）。
+    ///
+    /// 与 `bus.write_uncertain_total` 分开统计：后者含所有「写结果未知」
+    ///（超时 / 无应答 / 取消），本计数只回答「这次 reload 打断了多少写」。
+    pub reload_cancelled_writes: AtomicU64,
+    /// U-7：热重载等待旧总线任务退出（排空端口）超时次数。
+    ///
+    /// 非 0 说明 `close_task` 的等待窗口（300ms）内旧任务未结束，
+    /// 随后 `open_bus` 可能因端口仍被占用而失败——现场排障的首要信号。
+    pub reload_drain_timeout: AtomicU64,
 
     /// Bug r11-CERT8：Windows 私钥 ACL 加固（icacls）失败次数。
     pub cert_acl_hardening_failures: AtomicU64,
@@ -109,6 +119,17 @@ impl LifecycleMetrics {
             self.config_reload_rejected_validate.load(Ordering::Relaxed),
             self.config_reload_rejected_include.load(Ordering::Relaxed),
             self.config_reload_rejected_other.load(Ordering::Relaxed),
+        );
+        let _ = writeln!(
+            buf,
+            "# HELP gateway_reload_cancelled_writes_total In-flight writes cancelled by config reload (outcome uncertain)\n\
+             # TYPE gateway_reload_cancelled_writes_total counter\n\
+             gateway_reload_cancelled_writes_total {}\n\
+             # HELP gateway_reload_drain_timeout_total Bus task did not stop within the reload drain window\n\
+             # TYPE gateway_reload_drain_timeout_total counter\n\
+             gateway_reload_drain_timeout_total {}",
+            self.reload_cancelled_writes.load(Ordering::Relaxed),
+            self.reload_drain_timeout.load(Ordering::Relaxed),
         );
         let _ = writeln!(
             buf,
