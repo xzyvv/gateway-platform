@@ -1,7 +1,9 @@
 //! 读寄存器帧构造与单地址判定
 //!
 //! 帧构造统一走 core 单一实现；判定看「这个地址存不存在」，
-//! 异常帧（非法数据地址）判 `responded=false`（与从站扫描相反）。
+//! 异常帧（非法数据地址）判 `responded=false`。这不代表设备离线——
+//! 在线口径见 `handlers/frame_semantics.rs`（`device_online`，异常帧算在线），
+//! 两个问题共用同一份判定实现，避免两处各写一版。
 
 use crate::web::debug_bus::{verify_modbus_rtu, BusErrorKind, ExchangeOutcome, FrameCheck};
 use crate::web::services::modbus_read_request_frame as build_read_request;
@@ -165,7 +167,8 @@ pub(super) fn judge_cell(
     match outcome {
         Ok(out) => {
             let fc_byte = out.bytes.get(1).copied().unwrap_or(0);
-            match verify_modbus_rtu(&out.bytes) {
+            let check = verify_modbus_rtu(&out.bytes);
+            match &check {
                 FrameCheck::Ok => {
                     // 正常响应：FC03/04 → 2 字节寄存器值；FC01/02 → 1 字节，bit0 = 该线圈值
                     let value = if reg_type == "holding" || reg_type == "input" {
@@ -181,7 +184,8 @@ pub(super) fn judge_cell(
                     (
                         ScanCell {
                             address: addr,
-                            responded: true,
+                            // DD-32：地址存在口径统一走 frame_semantics::address_exists
+                            responded: super::super::frame_semantics::address_exists(&check),
                             value,
                             func_code: Some(fc_base),
                             error: None,
@@ -189,11 +193,12 @@ pub(super) fn judge_cell(
                         false,
                     )
                 }
-                // 异常帧：该地址寄存器不存在或无权限 → responded=false（与从站扫描相反）
+                // 异常帧：该地址寄存器不存在或无权限 → responded=false
+                // （设备仍在线；在线口径见 frame_semantics::device_online，与从站扫描共用）
                 FrameCheck::Exception { text, .. } => (
                     ScanCell {
                         address: addr,
-                        responded: false,
+                        responded: super::super::frame_semantics::address_exists(&check),
                         value: None,
                         func_code: Some(fc_byte as i32),
                         error: Some(format!("exception:{text}")),

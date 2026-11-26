@@ -126,12 +126,17 @@ describe('postSseStream 事件分发契约', () => {
   })
 
   it('半截 JSON 容错跳过该事件，不中断整条流', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.stubGlobal('fetch', sseFetch(['event: bad\ndata: {broken\n\nevent: good\ndata: {"x":1}\n\n']))
 
     const events: string[] = []
     await postSseStream('/api/x', {}, { onEvent: (e) => events.push(e) }, '失败')
 
     expect(events).toEqual(['good'])
+    // DD-25：跳过必须留痕，不能静默吞掉损坏事件
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('丢弃无法解析的 SSE 事件')
+    warn.mockRestore()
   })
 })
 

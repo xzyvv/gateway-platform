@@ -68,22 +68,24 @@
 
 ## 3. 从站模拟（真实 Modbus TCP 从站）
 
-`POST …/simulator/start` 启动后，网关在 `0.0.0.0:<port>` 监听 TCP，外部主站可直接连接
-并读写寄存器；`stop` / 进程退出即关闭监听。**仅 Modbus TCP（MBAP），不含 RTU/ASCII
-串口从站模拟**。
+`POST …/simulator/start` 启动后，网关默认在 `127.0.0.1:<port>` 监听 TCP（仅本机可连）：
+需要外部主站从 LAN 连接时，必须显式传 `listen_host`（仅接受 `0.0.0.0` / `::` 通配地址；
+回环与通配以外的具体网卡地址一律 400 拒绝，避免误把从站暴露到某块网卡）。`stop` /
+进程退出即关闭监听。**仅 Modbus TCP（MBAP），不含 RTU/ASCII 串口从站模拟**。
 
 ### 3.1 端点与字段（路由不变，仅字段扩展）
 
 | 端点 | 请求体 | 响应体 |
 |---|---|---|
-| `POST …/simulator/start` | `{ "slave_id": 1, "port": 1502 }`；`port` 可省略（缺省 `1502`），`0` 表示由系统分配（测试用） | `data: null`；绑定失败返回 HTTP 400 + 可读消息（如端口占用） |
+| `POST …/simulator/start` | `{ "slave_id": 1, "port": 1502, "listen_host": "0.0.0.0" }`；`port` 可省略（缺省 `1502`），`0` 表示由系统分配（测试用）；`listen_host` 可省略（缺省 `127.0.0.1`，仅本机） | `data: null`；绑定失败或 `listen_host` 非法返回 HTTP 400 + 可读消息（如端口占用） |
 | `POST …/simulator/stop` | 无 | `data: null`；abort 监听任务并等待退出，端口立即释放 |
 | `GET …/simulator/status` | — | `{ running, slave_id, port, listen_addr, requests, errors, started_at_ms }` |
 | `GET …/simulator/registers` | — | 寄存器表（含外部主站写入后的当前值） |
 | `PUT …/simulator/registers/:addr` | `{ "value": 500 }` | `data: null` |
 
 `status` 字段：`port` 为当前（或最近一次）监听端口，`port=0` 启动时为系统**实际分配**
-的端口；`listen_addr` 为运行中的监听地址（如 `0.0.0.0:1502`），停止后 `null`；
+的端口；`listen_addr` 为运行中的监听地址（缺省 `127.0.0.1:1502`，显式传
+`listen_host=0.0.0.0` 时为 `0.0.0.0:1502`），停止后 `null`；
 `requests` / `errors` 为本次启动以来的请求数与解析失败/异常响应数；`started_at_ms` 为
 启动毫秒时间戳，停止后 `null`。
 

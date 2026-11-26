@@ -6,6 +6,7 @@ use crate::web::api::protocol_tools::{DebugLease, IntoSseEvent};
 use crate::web::debug_bus::{parse_hex, to_hex, BusErrorKind};
 use axum::response::sse::Event;
 use futures::channel::mpsc;
+use futures::SinkExt;
 use std::sync::Arc;
 
 use super::now_ms;
@@ -109,20 +110,21 @@ pub(super) fn spawn_replay(
     interval_ms: u64,
     stop_on_mismatch: bool,
     max_duration: std::time::Duration,
-) -> mpsc::UnboundedReceiver<ReplayEvent> {
-    let (tx, rx) = mpsc::unbounded();
+) -> mpsc::Receiver<ReplayEvent> {
+    let (mut tx, rx) = crate::web::api::protocol_tools::sse::sse_channel();
     tokio::spawn(async move {
         // 租约整体使用：`session` 字段内已绑定互斥守卫，捕获它即连守卫一起进任务
         let started_at_ms = now_ms();
         let started = std::time::Instant::now();
         let planned = pairs.len() as i32;
         if tx
-            .unbounded_send(ReplayEvent::Started {
+            .send(ReplayEvent::Started {
                 session_id: session_id.clone(),
                 bus: bus_name.clone(),
                 total: planned,
                 started_at_ms,
             })
+            .await
             .is_err()
         {
             return; // 流建立前客户端已走：未下发任何帧，无需审计
@@ -207,7 +209,7 @@ pub(super) fn spawn_replay(
             let bus_offline = kind == Some(BusErrorKind::BusOffline.as_str());
             let status = frame.status.clone();
             results.push(frame.clone());
-            if tx.unbounded_send(ReplayEvent::Frame(frame)).is_err() {
+            if tx.send(ReplayEvent::Frame(frame)).await.is_err() {
                 // 发送失败 = 客户端已断开（契约 §4）
                 client_aborted = true;
                 break;
@@ -275,7 +277,7 @@ pub(super) fn spawn_replay(
             },
         };
         // 此刻客户端断开也允许：任务收尾即释放租约，发送失败无副作用
-        let _ = tx.unbounded_send(terminal);
+        let _ = tx.send(terminal).await;
     });
     rx
 }

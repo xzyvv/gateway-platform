@@ -1,8 +1,9 @@
 //! 从站模拟器 handler（真实 Modbus TCP 从站）
 //!
-//! **能力**：启动后在网关本机 `0.0.0.0:<port>` 监听 TCP，作为 Modbus TCP 从站供
-//! 外部主站连接并读写寄存器。寄存器值与 `GET /simulator/registers` 是同一份内存
-//! 数据——主站写入后页面上立即可见。
+//! **能力**：启动后在网关本机 `127.0.0.1:<port>` 监听 TCP（默认只对本机暴露；
+//! 需要让局域网主站连接时，必须在请求里显式传 `listen_host: "0.0.0.0"`），
+//! 作为 Modbus TCP 从站供外部主站连接并读写寄存器。寄存器值与
+//! `GET /simulator/registers` 是同一份内存数据——主站写入后页面上立即可见。
 //!
 //! **功能码支持**：
 //! - `0x03` 读保持寄存器、`0x04` 读输入寄存器（两者共用同一份寄存器表）
@@ -55,7 +56,7 @@ pub struct SimulatorStatus {
     pub slave_id: Option<i32>,
     /// 当前（或最近一次）监听端口；`port=0` 启动时为系统实际分配的端口
     pub port: u16,
-    /// 运行中的监听地址（如 `0.0.0.0:1502`）；停止后为 `null`
+    /// 运行中的监听地址（如 `127.0.0.1:1502`）；停止后为 `null`
     pub listen_addr: Option<String>,
     /// 已处理的 Modbus TCP 请求数（含异常与 unit_id 不匹配的请求）
     #[ts(type = "number")]
@@ -79,6 +80,10 @@ pub struct StartSimBody {
     /// 监听端口，缺省 1502；传 0 表示由系统分配（测试用）
     #[serde(default)]
     pub port: Option<u16>,
+    /// 监听地址，缺省 `127.0.0.1`（仅本机）。要对外暴露必须显式传
+    /// `0.0.0.0`（或 `::`），这是有安全含义的显式动作。
+    #[serde(default)]
+    pub listen_host: Option<String>,
 }
 
 struct SimState {
@@ -203,7 +208,7 @@ pub(crate) async fn start_simulator(
     State(_state): State<Arc<AppState>>,
     Json(body): Json<StartSimBody>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
-    start_impl(body.slave_id, body.port).await?;
+    start_impl(body.slave_id, body.port, body.listen_host).await?;
     Ok(Json(ApiResponse::ok(())))
 }
 
@@ -220,20 +225,46 @@ pub(crate) async fn get_simulator_status(
     Ok(Json(ApiResponse::ok(status_snapshot())))
 }
 
+/// 解析监听地址：缺省回环；只允许回环与显式通配（`0.0.0.0` / `::`），
+/// 其它网卡地址一律拒绝——避免一次误操作把从站暴露到整个局域网。
+fn resolve_listen_host(raw: Option<String>) -> Result<String, ApiError> {
+    let host = raw.unwrap_or_else(|| "127.0.0.1".into());
+    let ip: std::net::IpAddr = host
+        .trim()
+        .parse()
+        .map_err(|_| ApiError::bad_request(format!("listen_host 不是合法 IP 地址：{host}")))?;
+    if !ip.is_loopback() && !ip.is_unspecified() {
+        return Err(ApiError::bad_request(format!(
+            "listen_host 只允许回环地址或显式通配地址（0.0.0.0 / ::），当前 {ip}"
+        )));
+    }
+    Ok(ip.to_string())
+}
+
 /// 启动 Modbus TCP 从站。返回实际监听端口（`port=0` 时为系统分配值）。
-async fn start_impl(slave_id: i32, port: Option<u16>) -> Result<u16, ApiError> {
+///
+/// `listen_host` 缺省为 `127.0.0.1`；只接受回环地址与显式通配地址
+/// （`0.0.0.0` / `::`），避免误把从站暴露到任意网卡。
+async fn start_impl(
+    slave_id: i32,
+    port: Option<u16>,
+    listen_host: Option<String>,
+) -> Result<u16, ApiError> {
     if SIM.lock().running {
         return Err(ApiError::bad_request(
             "从站模拟器已在运行，请先停止后再启动",
         ));
     }
     let want = port.unwrap_or(DEFAULT_PORT);
-    let listener = TcpListener::bind(("0.0.0.0", want)).await.map_err(|e| {
-        ApiError::bad_request(format!(
-            "监听 0.0.0.0:{} 失败（端口可能已被占用）：{}",
-            want, e
-        ))
-    })?;
+    let host = resolve_listen_host(listen_host)?;
+    let listener = TcpListener::bind((host.as_str(), want))
+        .await
+        .map_err(|e| {
+            ApiError::bad_request(format!(
+                "监听 {}:{} 失败（端口可能已被占用）：{}",
+                host, want, e
+            ))
+        })?;
     let local = listener
         .local_addr()
         .map_err(|e| ApiError::internal(format!("读取监听地址失败：{}", e)))?;
@@ -508,7 +539,13 @@ mod tests {
     static TEST_GUARD: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
     async fn start(slave_id: i32, port: Option<u16>) -> u16 {
-        start_impl(slave_id, port)
+        start_impl(slave_id, port, None)
+            .await
+            .unwrap_or_else(|e| panic!("start simulator failed: {}", e.message))
+    }
+
+    async fn start_on(slave_id: i32, port: Option<u16>, host: &str) -> u16 {
+        start_impl(slave_id, port, Some(host.into()))
             .await
             .unwrap_or_else(|e| panic!("start simulator failed: {}", e.message))
     }
@@ -563,9 +600,10 @@ mod tests {
         let st = status_snapshot();
         assert!(st.running);
         assert_eq!(st.port, port);
+        // DD-31：缺省只绑回环地址，需要对外时调用方显式传 listen_host
         assert_eq!(
             st.listen_addr.as_deref(),
-            Some(format!("0.0.0.0:{}", port).as_str())
+            Some(format!("127.0.0.1:{}", port).as_str())
         );
         assert_eq!(st.slave_id, Some(1));
 
@@ -642,5 +680,61 @@ mod tests {
         // 停止后端口已释放，连接应被拒绝
         let err = TcpStream::connect(("127.0.0.1", port)).await;
         assert!(err.is_err(), "port should be closed after stop");
+    }
+
+    /// DD-31：默认只绑本机，不把从站暴露到局域网。
+    #[tokio::test]
+    async fn default_listen_host_is_loopback() {
+        let _guard = TEST_GUARD.lock().await;
+        reset().await;
+
+        let port = start(1, Some(0)).await;
+        let addr = status_snapshot().listen_addr.expect("listen_addr");
+        assert!(
+            addr.starts_with("127.0.0.1:"),
+            "缺省必须只监听回环地址，实际 {addr}"
+        );
+        assert_eq!(addr, format!("127.0.0.1:{port}"));
+
+        stop_impl().await;
+    }
+
+    /// DD-31：对外暴露必须由调用方显式传入通配地址。
+    #[tokio::test]
+    async fn explicit_wildcard_host_is_opt_in() {
+        let _guard = TEST_GUARD.lock().await;
+        reset().await;
+
+        let port = start_on(1, Some(0), "0.0.0.0").await;
+        let addr = status_snapshot().listen_addr.expect("listen_addr");
+        assert!(
+            addr.starts_with("0.0.0.0:"),
+            "显式传 0.0.0.0 才允许对外监听，实际 {addr}"
+        );
+        assert_eq!(addr, format!("0.0.0.0:{port}"));
+
+        stop_impl().await;
+    }
+
+    /// DD-31：非回环/非通配地址一律拒绝，防止误绑到某块网卡。
+    #[test]
+    fn listen_host_rejects_non_local_interfaces() {
+        assert_eq!(resolve_listen_host(None).ok().as_deref(), Some("127.0.0.1"));
+        assert_eq!(
+            resolve_listen_host(Some("0.0.0.0".into())).ok().as_deref(),
+            Some("0.0.0.0")
+        );
+        assert_eq!(
+            resolve_listen_host(Some("::1".into())).ok().as_deref(),
+            Some("::1")
+        );
+        assert!(
+            resolve_listen_host(Some("192.168.1.10".into())).is_err(),
+            "具体网卡地址必须拒绝"
+        );
+        assert!(
+            resolve_listen_host(Some("not-an-ip".into())).is_err(),
+            "非法 IP 必须拒绝"
+        );
     }
 }

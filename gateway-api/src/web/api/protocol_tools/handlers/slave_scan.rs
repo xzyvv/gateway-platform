@@ -9,6 +9,9 @@
 //! - CRC 错 / 截断帧 → 不在线，计入 summary.noise（把线路干扰与「无设备」区分开）；
 //! - 超时 → 不在线。
 //!
+//! 「正常帧 / 异常帧 → 在线」的口径由 `handlers/frame_semantics.rs`
+//! `device_online` 统一提供，与寄存器扫描的「地址是否存在」共用同一实现（DD-32）。
+//!
 //! 传输复用 p0-1b 的 SSE 范式（契约 p0-2 §2）：`Accept: text/event-stream` →
 //! 流式逐地址推送（started → slave×N → summary/aborted/failed）；缺省阻塞模式
 //! 返回既有 `ApiResponse<Vec<SlaveScanResult>>` 结构（字段不变，数据变真实）。
@@ -27,7 +30,7 @@ use axum::extract::State;
 use axum::response::sse::Event;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use futures::{channel::mpsc, StreamExt};
+use futures::{channel::mpsc, SinkExt, StreamExt};
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -119,11 +122,14 @@ fn judge_probe(
                 .get(1)
                 .map(|b| format!("{:02X}", b))
                 .unwrap_or_default();
-            match verify_modbus_rtu(&out.bytes) {
+            let check = verify_modbus_rtu(&out.bytes);
+            match &check {
                 FrameCheck::Ok | FrameCheck::Exception { .. } => (
                     SlaveScanResult {
                         slave_id,
-                        responded: true,
+                        // DD-32：在线口径统一走 frame_semantics::device_online，
+                        // 异常帧也算在线（有应答即证明设备物理在线）。
+                        responded: super::frame_semantics::device_online(&check),
                         device_name: None,
                         func_code: Some(fc),
                         latency_ms: Some(out.elapsed_ms as i32),
@@ -243,15 +249,15 @@ pub(crate) fn spawn_scan(
     timeout_ms: u64,
     interval_ms: u64,
     max_duration: std::time::Duration,
-) -> mpsc::UnboundedReceiver<ScanEvent> {
-    let (tx, rx) = mpsc::unbounded();
+) -> mpsc::Receiver<ScanEvent> {
+    let (mut tx, rx) = crate::web::api::protocol_tools::sse::sse_channel();
     tokio::spawn(async move {
         // 租约整体使用：`session` 字段内已绑定互斥守卫，捕获它即连守卫一起进任务
         let started_at_ms = now_ms();
         let started = std::time::Instant::now();
         let planned = (range_end as i64 - range_start as i64 + 1) as i32;
         if tx
-            .unbounded_send(ScanEvent::Started {
+            .send(ScanEvent::Started {
                 bus: bus_name.clone(),
                 range_start,
                 range_end,
@@ -260,6 +266,7 @@ pub(crate) fn spawn_scan(
                 interval_ms,
                 started_at_ms,
             })
+            .await
             .is_err()
         {
             return; // 流建立前客户端已走：未探测任何地址，无需审计
@@ -311,7 +318,7 @@ pub(crate) fn spawn_scan(
                 noise += 1;
             }
             results.push(result.clone());
-            if tx.unbounded_send(ScanEvent::Slave(result)).is_err() {
+            if tx.send(ScanEvent::Slave(result)).await.is_err() {
                 // 发送失败 = 客户端已断开（契约 §6.3）
                 client_aborted = true;
                 break;
@@ -370,7 +377,7 @@ pub(crate) fn spawn_scan(
             },
         };
         // 此刻客户端断开也允许：任务收尾即释放租约，发送失败无副作用
-        let _ = tx.unbounded_send(terminal);
+        let _ = tx.send(terminal).await;
     });
     rx
 }
@@ -378,7 +385,7 @@ pub(crate) fn spawn_scan(
 /// 阻塞模式：收集事件流汇总为一次性 JSON 响应。
 /// 提前收尾（硬上限/总线掉线）时返回 200 + 已扫部分结果——现场能看到
 /// 「扫到哪个地址断的」（已扫部分是地址连续前缀），契约 §4.5。
-async fn collect_scan_blocking(mut rx: mpsc::UnboundedReceiver<ScanEvent>) -> Response {
+async fn collect_scan_blocking(mut rx: mpsc::Receiver<ScanEvent>) -> Response {
     let mut results: Vec<SlaveScanResult> = Vec::new();
     while let Some(ev) = rx.next().await {
         match ev {

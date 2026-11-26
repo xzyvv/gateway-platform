@@ -140,7 +140,7 @@ pub(super) fn judge_frame(
 
 /// 阻塞模式（v1 行为）：收集事件流汇总为一次性 JSON 响应。
 /// 即使服务端提前收尾（硬上限/总线掉线），也按 v1 语义返回 200 + 已执行帧的部分结果。
-async fn collect_replay_blocking(mut rx: mpsc::UnboundedReceiver<ReplayEvent>) -> Response {
+async fn collect_replay_blocking(mut rx: mpsc::Receiver<ReplayEvent>) -> Response {
     let mut session_id = String::new();
     let mut bus = String::new();
     let mut started_at_ms = 0i64;

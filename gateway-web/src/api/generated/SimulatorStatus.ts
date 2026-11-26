@@ -9,7 +9,7 @@ export type SimulatorStatus = { running: boolean, slave_id: number | null,
  */
 port: number, 
 /**
- * 运行中的监听地址（如 `0.0.0.0:1502`）；停止后为 `null`
+ * 运行中的监听地址（如 `127.0.0.1:1502`）；停止后为 `null`
  */
 listen_addr: string | null, 
 /**

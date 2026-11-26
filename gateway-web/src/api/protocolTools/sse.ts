@@ -75,7 +75,7 @@ export async function postSseStream(
   }
 }
 
-/** 解析单个 SSE 事件块并回调；心跳注释行（`:...`）按契约无需处理；半截 JSON 容错跳过 */
+/** 解析单个 SSE 事件块并回调；心跳注释行（`:...`）按契约无需处理；半截 JSON 容错跳过但留痕 */
 function dispatchSseBlock(raw: string, onEvent: SseStreamHandlers['onEvent']): void {
   let event = ''
   const dataLines: string[] = []
@@ -88,6 +88,7 @@ function dispatchSseBlock(raw: string, onEvent: SseStreamHandlers['onEvent']): v
   try {
     onEvent(event, JSON.parse(dataLines.join('\n')) as Record<string, unknown>)
   } catch {
-    // 半截 JSON 容错：跳过该事件，不中断流
+    // 半截 JSON 容错：跳过该事件、不中断流；但不能静默，否则事件流损坏无从排查（DD-25）
+    console.warn('[protocolTools] 丢弃无法解析的 SSE 事件', event, dataLines.join('\n'))
   }
 }
