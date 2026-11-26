@@ -35,8 +35,8 @@
     </el-card>
 
     <!-- C4：在线响应与离线样本共用同一套解析内核与同一个结果组件。
-         总线协议可被内核解析时（modbus-rtu / dlt645 / cjt188），把本次真实回帧逐字段展开；
-         其它协议（如 modbus-tcp 的 MBAP 结构）不假装解析，仍以上方后端 `parsed` 文案为准。 -->
+         总线协议可被内核解析时（serial modbus-rtu / dlt645 / cjt188），把本次真实回帧逐字段展开；
+         Modbus TCP（带 MBAP 头）与其它协议不假装解析，以上方后端 `parsed` 文案为准（DD-29）。 -->
     <FrameParseResult
       v-if="onlineParse"
       :result="onlineParse"
@@ -85,6 +85,8 @@ const hexInvalid = computed(() => inputInvalid.value || !isValidHex(hex.value))
 watch(hex, () => { inputInvalid.value = false })
 /** 当前总线协议：决定能否用帧解析内核展开回帧（modbus-tcp 等结构不同，不映射） */
 const busProtocol = computed(() => buses.value.find((b) => b.port_name === bus.value)?.protocol)
+/** 当前总线是否走 TCP：Modbus 配置里 TCP/RTU 都是 protocol=modbus，靠 tcp_addr 区分（DD-29） */
+const busIsTcp = computed(() => !!buses.value.find((b) => b.port_name === bus.value)?.tcp_addr)
 /** E1：最近一次发送因总线被采集占用而失败 → 展示暂停采集入口 */
 const busBusy = ref(false)
 /** 请求模板：后端唯一定义（P3-4，前端不再硬编码副本）；拉取失败时只是没有快捷按钮 */
@@ -138,8 +140,10 @@ async function send() {
   try {
     result.value = await sendFrame(hex.value, bus.value, timeoutMs.value)
     busBusy.value = result.value?.error === 'bus_busy'
-    // 真实回帧交给同一个解析内核；解析失败也不会抛（内核内部返回 valid=false）
-    const p = inferParseProtocol(busProtocol.value)
+    // 真实回帧交给同一个解析内核；解析失败也不会抛（内核内部返回 valid=false）。
+    // Modbus TCP 帧带 MBAP 头，RTU 内核会把事务号当从站地址——这类总线交给后端
+    // `parsed`（已按 tcp_addr 正确区分），前端不重复猜（DD-29）。
+    const p = busIsTcp.value ? null : inferParseProtocol(busProtocol.value)
     const response = result.value?.responseHex?.trim()
     onlineParse.value = p && response ? parseFrame(p, response) : null
   } finally {

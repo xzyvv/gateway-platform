@@ -9,16 +9,17 @@
 //! 直接返回 400 + `missing_bus`；前端已全量显式传 `bus`。
 
 use crate::web::api::protocol_tools::{acquire_bus, audit_send, error_response};
-use crate::web::debug_bus::{
-    clamp_timeout_ms, parse_hex, to_hex, verify_modbus_rtu, BusErrorKind, FrameCheck,
-};
+use crate::web::debug_bus::{clamp_timeout_ms, parse_hex, to_hex, BusErrorKind};
 use crate::web::types::{ApiResponse, AppState};
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use gateway_core::config::BusConfig;
 use serde::Serialize;
 use std::sync::Arc;
 use ts_rs::TS;
+
+use super::frame_desc::{self, FrameVerdict};
 
 /// 发送结果
 #[derive(Debug, Clone, Serialize, TS)]
@@ -110,26 +111,33 @@ pub(crate) async fn send_frame(
             return Ok(error_response(e.kind, e.detail));
         }
     };
-    let is_modbus = lease.bus.protocol.starts_with("modbus");
+    let is_modbus = lease
+        .bus
+        .protocol
+        .to_ascii_lowercase()
+        .starts_with("modbus");
+    let is_tcp = lease.bus.tcp_addr.is_some();
 
     // ── 真实下发
     match lease.session.exchange(&request, timeout_ms).await {
         Ok(out) => {
             let response_hex = to_hex(&out.bytes);
             let result = if is_modbus {
-                judge_modbus(&request, &out.bytes, out.elapsed_ms)
+                judge_modbus(&lease.bus, &request, &out.bytes, out.elapsed_ms)
             } else {
-                // 非 Modbus 协议目前只做字节级回显：各协议的校验和规则差异大，
-                // 在没有对应分帧器的情况下贸然判 CRC 会把正常帧误报为坏帧。
+                // 非 Modbus 协议没有各自的分帧/校验器，不贸然判 CRC；
+                // 能给出解读的（dlt645 / cjt188）走同一份 frame_desc，其余明确标注暂无解析器（DD-29）
                 SendResult {
                     request_hex: to_hex(&request),
                     response_hex,
                     success: true,
                     latency_ms: out.elapsed_ms as i32,
-                    parsed: format!(
-                        "{} 协议收到 {} 字节响应",
-                        lease.bus.protocol,
-                        out.bytes.len()
+                    parsed: frame_desc::describe(
+                        &lease.bus.protocol,
+                        is_tcp,
+                        lease.bus.effective_variant().as_deref(),
+                        &out.bytes,
+                        false,
                     ),
                     error: None,
                 }
@@ -163,82 +171,39 @@ pub(crate) async fn send_frame(
     }
 }
 
-/// Modbus 响应判定：先 CRC 后异常码（详见 `verify_modbus_rtu` 的注释）
-fn judge_modbus(request: &[u8], response: &[u8], elapsed_ms: u64) -> SendResult {
+/// Modbus 响应判定：RTU 先 CRC 后异常码，TCP 先 MBAP 头后异常码（DD-29 统一口径）。
+fn judge_modbus(bus: &BusConfig, request: &[u8], response: &[u8], elapsed_ms: u64) -> SendResult {
+    let is_tcp = bus.tcp_addr.is_some();
+    let parsed = frame_desc::describe_exchange(
+        &bus.protocol,
+        is_tcp,
+        bus.effective_variant().as_deref(),
+        request,
+        response,
+    );
     let base = SendResult {
         request_hex: to_hex(request),
         response_hex: to_hex(response),
         success: false,
         latency_ms: elapsed_ms as i32,
-        parsed: String::new(),
+        parsed,
         error: None,
     };
-    match verify_modbus_rtu(response) {
-        FrameCheck::Ok => SendResult {
+    match frame_desc::modbus_verdict(is_tcp, response) {
+        FrameVerdict::Ok => SendResult {
             success: true,
-            parsed: describe_modbus(request, response),
             ..base
         },
-        FrameCheck::Crc => SendResult {
-            parsed: format!(
-                "响应帧校验失败：收到 {} 字节但不满足 CRC16。常见原因：波特率/校验位不匹配、线路干扰、其它从站同时应答",
-                response.len()
-            ),
-            error: Some("crc".into()),
-            ..base
-        },
-        FrameCheck::Exception { code, text } => SendResult {
-            parsed: format!("设备返回异常响应：异常码 0x{:02X}（{}）", code, text),
+        FrameVerdict::Exception { .. } => SendResult {
             error: Some("exception".into()),
             ..base
         },
-    }
-}
-
-/// 面向现场的一行解读：从站地址、功能码、地址与数据
-fn describe_modbus(request: &[u8], response: &[u8]) -> String {
-    let slave = response.first().copied().unwrap_or(0);
-    let fc = response.get(1).copied().unwrap_or(0);
-    // 数据区 = 去掉 addr/fc 与尾部 CRC16
-    let data = if response.len() > 4 {
-        &response[2..response.len() - 2]
-    } else {
-        &[][..]
-    };
-    match fc {
-        // 读保持/输入寄存器：数据为 u16 大端字数组
-        0x03 | 0x04 => {
-            let addr = request
-                .get(2)
-                .zip(request.get(3))
-                .map(|(h, l)| u16::from_be_bytes([*h, *l]))
-                .unwrap_or(0);
-            let words: Vec<String> = data
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|c| u16::from_be_bytes(*c).to_string())
-                .collect();
-            let kind = if fc == 0x03 {
-                "保持寄存器"
-            } else {
-                "输入寄存器"
-            };
-            format!(
-                "从站{} {} addr={} 返回 {} 个值: [{}]",
-                slave,
-                kind,
-                addr,
-                words.len(),
-                words.join(", ")
-            )
-        }
-        0x01 | 0x02 => {
-            let kind = if fc == 0x01 { "线圈" } else { "离散输入" };
-            format!("从站{} {} 返回 {} 字节位图", slave, kind, data.len())
-        }
-        0x05 | 0x06 | 0x0F | 0x10 => format!("从站{} 写操作已确认（功能码 0x{:02X}）", slave, fc),
-        _ => format!("从站{} 功能码 0x{:02X} 返回 {} 字节", slave, fc, data.len()),
+        FrameVerdict::Invalid(_) => SendResult {
+            // RTU 结构错误的既有分类是 crc；TCP 没有 CRC，parsed 已说明 MBAP 具体问题，
+            // 不强行套用 crc 标签（避免把「帧被截断」误报成「校验失败」）。
+            error: if is_tcp { None } else { Some("crc".into()) },
+            ..base
+        },
     }
 }
 

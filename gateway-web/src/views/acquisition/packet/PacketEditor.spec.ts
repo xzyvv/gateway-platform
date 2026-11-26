@@ -2,7 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-const { routeQuery } = vi.hoisted(() => ({ routeQuery: {} as Record<string, string> }))
+const { routeQuery, targetBuses } = vi.hoisted(() => ({
+  routeQuery: {} as Record<string, string>,
+  targetBuses: {
+    list: [{ port_name: '/dev/ttyUSB0', protocol: 'modbus' }] as Array<{
+      port_name: string
+      protocol: string
+      tcp_addr?: string | null
+    }>,
+  },
+}))
 
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery }) }))
 vi.mock('@/api/protocolTools', () => ({
@@ -14,10 +23,10 @@ vi.mock('@/composables/acquisition/useDebugTargets', async () => {
   const { ref } = await vi.importActual<typeof import('vue')>('vue')
   return {
     useDebugTargets: () => ({
-      buses: ref([{ port_name: '/dev/ttyUSB0', protocol: 'modbus' }]),
-      busOptions: ref([{ label: '调试总线', value: '/dev/ttyUSB0' }]),
+      buses: ref(targetBuses.list),
+      busOptions: ref(targetBuses.list.map((b) => ({ label: '调试总线', value: b.port_name }))),
       loading: ref(false),
-      selectedBus: ref('/dev/ttyUSB0'),
+      selectedBus: ref(targetBuses.list[0]?.port_name ?? ''),
     }),
   }
 })
@@ -76,6 +85,8 @@ describe('PacketEditor 报文编辑', () => {
     vi.clearAllMocks()
     localStorage.clear()
     delete routeQuery.hex
+    // 默认串口总线（RTU）：在线回帧走前端解析内核
+    targetBuses.list = [{ port_name: '/dev/ttyUSB0', protocol: 'modbus' }]
     vi.mocked(sendFrame).mockResolvedValue(okResult)
     vi.mocked(confirmAction).mockResolvedValue(true)
   })
@@ -119,6 +130,19 @@ describe('PacketEditor 报文编辑', () => {
     expect(result).toContain('通信成功')
     // 在线回帧也走同一解析内核，逐字段展示
     expect(wrapper.find('.online-parse').text()).toContain('响应帧解析')
+  })
+
+  it('Modbus TCP 总线：回帧不按 RTU 内核硬解，交给后端 parsed（DD-29）', async () => {
+    // 配置里 TCP/RTU 都是 protocol=modbus，只有 tcp_addr 能区分；
+    // 若仍按 RTU 解析，MBAP 事务号会被当成从站地址，页面给出错误字段。
+    targetBuses.list = [{ port_name: '/dev/ttyUSB0', protocol: 'modbus', tcp_addr: '127.0.0.1:502' }]
+    const wrapper = await mountPage()
+
+    await button(wrapper, '发送').trigger('click')
+    await settle()
+
+    expect(wrapper.find('.result').text()).toContain('读 2 个寄存器 = 42')
+    expect(wrapper.find('.online-parse').exists()).toBe(false)
   })
 
   /**

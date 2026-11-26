@@ -53,12 +53,17 @@
 | 参数探测 | `POST /api/protocol-tools/auto-detect/run`、`POST …/run/:id/stop`、`GET …/run/:id` | 真实发只读帧，逐项判定连通性 / 从站地址 / 功能码 / 耗时 / 字节序；start 返回 id 后轮询 |
 | 从站扫描 | `POST /api/protocol-tools/slave-scan` | 逐地址探测从站是否存在，请求内同步返回结果 |
 | 寄存器扫描 | `POST /api/protocol-tools/register-scan`、`GET /api/protocol-tools/register-scan`、`GET …/:id`、`DELETE …/:id`、`POST …/:id/suggestions` | 逐地址读寄存器/线圈；DELETE 内含「先中止再移除」语义 |
-| 抓包 | `GET /api/protocol-tools/packet-capture/packets`、`POST …/packet-capture/clear` | 读取/清空 frame_log 环形日志 |
+| 抓包 | `GET /api/protocol-tools/packet-capture/packets`、`POST …/packet-capture/clear` | 读取/清空 frame_log 环形日志；`parsed` 由后端统一解读（见下） |
 | 回放 | `GET …/packet-replay/sessions`、`GET …/sessions/:id`、`POST …/sessions`、`DELETE …/sessions/:id`、`POST …/sessions/:id/execute` | 会话 CRUD 落盘（见 §5）；预置会话仅在 `web.demo_replay_sessions=true` 时存在且不可覆盖/删除；execute 为真实逐帧重发 |
-| 报文编辑 | `GET …/packet-editor/presets`、`POST …/packet-editor/send` | 预置帧模板 + 真实下发单帧 |
+| 报文编辑 | `GET …/packet-editor/presets`、`POST …/packet-editor/send` | 预置帧模板 + 真实下发单帧；`parsed` 与抓包同一解读 |
 | 协议转换 | `GET/POST …/convert/rules`、`PUT/DELETE …/convert/rules/:id`、`POST …/convert/rules/:id/toggle` | 值变换规则，落配置并热加载 |
 | 从站模拟 | `GET …/simulator/registers`、`GET …/simulator/status`、`PUT …/simulator/registers/:addr`、`POST …/simulator/start`、`POST …/simulator/stop` | **真实 Modbus TCP 从站**：启动后在网关本机监听 TCP 端口，外部主站可连接读写寄存器；寄存器为内存态（见 §3） |
 | IEC104 直读 | `POST /api/protocol-tools/iec104/ioa-read` | **未建点位也能按 IOA 读到实时值**：一次总召唤取全站快照，返回命中 IOA 与全量快照（见 §4） |
+
+`parsed` 的统一口径（DD-29）：后端按**总线配置**的协议取解读实现，Modbus 的
+TCP/RTU 由 `tcp_addr` 是否存在决定（不再从帧字节猜测 MBAP 头）。当前支持
+modbus（TCP/RTU）、dlt645（含 1997/2007 地址字节序）、cjt188；其它协议明确返回
+「本协议暂无解析器」，不会输出可能误导的猜测。
 
 已下线的能力（**不再有路由，勿按旧文档调用**）：`packet-capture/buses`（总线列表统一走
 `GET /api/config`）、`register-scan/:id/stop`（DELETE 已含中止语义）、`step-debug`

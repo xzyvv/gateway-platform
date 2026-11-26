@@ -2,6 +2,7 @@
 //! 路由见 `routes.rs` 各能力分组
 
 pub mod auto_detect;
+pub mod frame_desc;
 pub mod frame_semantics;
 pub mod iec104_ioa_read;
 pub mod packet_capture;

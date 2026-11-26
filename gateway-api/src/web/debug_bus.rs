@@ -214,7 +214,7 @@ pub fn verify_modbus_rtu(resp: &[u8]) -> FrameCheck {
 
 /// 异常码 → 中文释义。
 #[cfg(feature = "modbus")]
-fn exception_text(code: u8) -> String {
+pub(crate) fn exception_text(code: u8) -> String {
     gateway_core::south::protocol::ModbusExceptionCode::from_code(code)
         .description()
         .to_string()
@@ -225,7 +225,7 @@ fn exception_text(code: u8) -> String {
 /// 该构建里 core 的 `ModbusExceptionCode` 释义表整体被剥离，调试工具仍能判出
 /// 「异常帧 + 异常码」，只是没有标准释义可查——这种构建本身不含 Modbus 协议实现。
 #[cfg(not(feature = "modbus"))]
-fn exception_text(_code: u8) -> String {
+pub(crate) fn exception_text(_code: u8) -> String {
     "本构建未编译 Modbus 协议，无异常码释义".to_string()
 }
 

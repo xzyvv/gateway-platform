@@ -135,7 +135,7 @@ describe('postSseStream 事件分发契约', () => {
     expect(events).toEqual(['good'])
     // DD-25：跳过必须留痕，不能静默吞掉损坏事件
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0][0]).toContain('丢弃无法解析的 SSE 事件')
+    expect(warn.mock.calls[0]?.[0]).toContain('丢弃无法解析的 SSE 事件')
     warn.mockRestore()
   })
 })
