@@ -132,6 +132,9 @@ async fn derived_virtual_point_reaches_queue_and_northbound() {
         edge: Arc::new(EdgeProcessor::new()),
         convert: ConvertEngine::empty(),
         virtual_points: engine.clone(),
+        quality_rules: Arc::new(
+            gateway_core::pipeline::quality_rules::QualityRuleRuntime::default(),
+        ),
         queue: queue.clone(),
         realtime_bus: Some(bus.clone()),
         north_tx: Some(north_tx),
@@ -198,6 +201,9 @@ async fn derived_value_is_not_re_emitted_when_input_unchanged() {
         edge: Arc::new(EdgeProcessor::new()),
         convert: ConvertEngine::empty(),
         virtual_points: engine.clone(),
+        quality_rules: Arc::new(
+            gateway_core::pipeline::quality_rules::QualityRuleRuntime::default(),
+        ),
         queue: queue.clone(),
         realtime_bus: None,
         north_tx: None,

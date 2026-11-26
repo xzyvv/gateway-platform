@@ -712,6 +712,9 @@ pub async fn real_scheduler(
         edge: Arc::new(EdgeProcessor::new()),
         convert: ConvertEngine::empty(),
         virtual_points: gateway_core::pipeline::VirtualPointEngine::empty(),
+        quality_rules: Arc::new(
+            gateway_core::pipeline::quality_rules::QualityRuleRuntime::default(),
+        ),
         queue: queue.clone(),
         realtime_bus: None,
         north_tx: None,

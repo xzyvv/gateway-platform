@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use gateway_api::web::AppState;
 use gateway_core::config::{ConfigLoader, GatewayConfig, WebConfig};
@@ -68,22 +68,13 @@ pub(crate) fn build_app_state_dependencies(
         gateway_core::config::RateRuleStore::new(default_version_db())
             .with_context(|| format!("打开限流规则库失败: {}", default_version_db()))?,
     );
-    // 数据质量规则：与版本库共用同一 SQLite 文件。启用规则在此安装到处理管道快照——
-    // 读取失败只记 error 日志、不阻断启动（网关仍可按既有质量码运行）。
+    // 数据质量规则：与版本库共用同一 SQLite 文件。规则在 Step 8-11 装配
+    // （`init_north_and_processing`）时读入运行时实例，并与 pipeline 共享；
+    // 此处只保留 store 供 Web CRUD 使用。
     let quality_rule_store = Arc::new(
         gateway_core::config::QualityRuleStore::new(default_version_db())
             .with_context(|| format!("打开质量规则库失败: {}", default_version_db()))?,
     );
-    match quality_rule_store.list_enabled_rules() {
-        Ok(rules) => {
-            let count = rules.len();
-            gateway_core::pipeline::quality_rules::install_rules(rules);
-            info!("quality rules installed at startup: {}", count);
-        }
-        Err(e) => {
-            error!("failed to load quality rules at startup: {}", e);
-        }
-    }
     let api_keys = Arc::new(
         gateway_core::config::ApiKeyStore::new(default_version_db())
             .with_context(|| format!("打开 API 密钥库失败: {}", default_version_db()))?,
@@ -346,6 +337,8 @@ pub(crate) fn build_app_state(inputs: AppStateInputs<'_>) -> Arc<AppState> {
             audit,
             rate_rules: deps.rate_rules.clone(),
             quality_rule_store: deps.quality_rule_store.clone(),
+            // DD-14：与 pipeline 共享同一质量规则运行时，写接口经此重装规则。
+            quality_rule_installer: north.quality_rules.clone(),
             api_keys: deps.api_keys.clone(),
             sched_tasks: deps.sched_tasks.clone(),
             write_idempotency: Arc::new(

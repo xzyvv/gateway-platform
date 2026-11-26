@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use gateway_core::config::{GatewayConfig, PointConfig};
 use gateway_core::crypto::cert::{CertManager, CertPair};
@@ -19,7 +19,9 @@ use gateway_core::pipeline::{EdgeProcessor, PipelineSpawnInputs, ProcessingPipel
 use gateway_core::queue::DataQueue;
 use gateway_core::runtime::GatewayRuntime;
 
-use gateway_core::shared::{default_cert_dir, default_db_path, default_outbox_db};
+use gateway_core::shared::{
+    default_cert_dir, default_db_path, default_outbox_db, default_version_db,
+};
 
 use super::super::{CollectionChain, NorthProcessing};
 use super::NorthChannel;
@@ -304,10 +306,16 @@ pub(crate) async fn init_north_and_processing(
         );
     }
 
+    // 数据质量规则运行时：启动时读取已启用规则构造实例。读取/打开失败只记 error
+    // 日志并降级为空规则（网关仍可按既有质量码运行），不阻断启动。
+    // 同一实例交给 pipeline（执行）与 PlatformRefs（Web 写接口重装），规则变更即时生效。
+    let quality_rules = Arc::new(build_quality_rule_runtime());
+
     let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
         edge: edge.clone(),
         convert: convert.clone(),
         virtual_points: virtual_points.clone(),
+        quality_rules: quality_rules.clone(),
         queue: queue.clone(),
         realtime_bus: Some(realtime_bus.clone()),
         north_tx: Some(north_tx),
@@ -340,10 +348,36 @@ pub(crate) async fn init_north_and_processing(
         pipeline,
         convert,
         virtual_points,
+        quality_rules,
         realtime_bus,
         north_dispatcher,
         channels,
     })
+}
+
+/// 构造质量规则运行时：打开规则库读取已启用规则。
+///
+/// DD-14：规则快照不再是进程级全局 static，而是由装配点创建、pipeline 与 Web
+/// 写接口共享的实例。读取失败降级为空规则并记 error，不阻断启动。
+fn build_quality_rule_runtime() -> gateway_core::pipeline::quality_rules::QualityRuleRuntime {
+    let runtime = match gateway_core::config::QualityRuleStore::new(default_version_db()) {
+        Ok(store) => match store.list_enabled_rules() {
+            Ok(rules) => {
+                let count = rules.len();
+                info!("quality rules installed at startup: {}", count);
+                gateway_core::pipeline::quality_rules::QualityRuleRuntime::new(rules)
+            }
+            Err(e) => {
+                error!("failed to load quality rules at startup: {}", e);
+                gateway_core::pipeline::quality_rules::QualityRuleRuntime::default()
+            }
+        },
+        Err(e) => {
+            error!("failed to open quality rule store at startup: {}", e);
+            gateway_core::pipeline::quality_rules::QualityRuleRuntime::default()
+        }
+    };
+    runtime
 }
 
 /// 证书初始化失败时的处置策略：`require_external` 为 true 时必须阻断启动。

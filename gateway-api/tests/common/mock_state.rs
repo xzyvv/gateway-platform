@@ -786,6 +786,9 @@ fn build_mock_state_with_devices(
             audit: Arc::new(AuditLog::new(audit_log_path)),
             rate_rules,
             quality_rule_store,
+            quality_rule_installer: Arc::new(
+                gateway_core::pipeline::quality_rules::QualityRuleRuntime::default(),
+            ),
             api_keys,
             sched_tasks,
             write_idempotency: Arc::new(

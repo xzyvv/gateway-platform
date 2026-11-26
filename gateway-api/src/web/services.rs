@@ -243,23 +243,21 @@ pub(crate) fn render_template(template: &str, vars: &TemplateVars) -> Result<Str
     Ok(engine.render(vars))
 }
 
-/// 安装已启用的数据质量规则到处理管道快照（range / rate / nan 的真实执行入口）。
+/// 安装已启用的数据质量规则到处理管道运行时（range / rate / nan 的真实执行入口）。
 ///
-/// `web/api` 分层规则不允许直接引用 `gateway_core::pipeline`，故由本门面承接。
+/// `web/api` 分层规则不允许直接引用 `gateway_core::pipeline`，故由本门面经
+/// `QualityRuleInstaller` 端口承接（DD-14：运行时实例由装配点创建，pipeline 与
+/// Web 写接口共享同一个 `Arc`，不再有进程级全局 static）。
 ///
 /// DD-41：返回真实安装结果。旧实现把读取/安装失败吞成一条 error 日志，
 /// 写接口照样返回 200——现场看到「保存成功」，实际规则根本没生效。
 /// 现在调用方拿到 Err 后返回 5xx，并明确告知「已保存但未生效」。
 pub(crate) fn install_quality_rules(
-    store: &gateway_core::config::QualityRuleStore,
+    state: &crate::web::types::PlatformRefs,
 ) -> Result<usize, String> {
-    let rules = store
-        .list_enabled_rules()
-        .map_err(|e| format!("读取已启用质量规则失败: {e}"))?;
-    let count = rules.len();
-    gateway_core::pipeline::quality_rules::install_rules(rules);
-    tracing::info!("quality rules re-installed: {}", count);
-    Ok(count)
+    state
+        .quality_rule_installer
+        .install_from_store(&state.quality_rule_store)
 }
 
 /// 协议描述符（已序列化为 API 响应形状），供 GET /api/protocols 使用。

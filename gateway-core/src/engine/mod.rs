@@ -14,6 +14,7 @@ pub mod model;
 pub mod monitor;
 pub mod ports;
 pub mod priority;
+pub mod quality_rule_port;
 pub mod shutdown;
 pub mod supervision;
 pub mod write;

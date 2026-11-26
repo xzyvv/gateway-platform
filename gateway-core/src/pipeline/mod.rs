@@ -91,6 +91,8 @@ pub struct ProcessingPipeline {
     convert: Arc<ConvertEngine>,
     /// 虚拟点位引擎（协议转换之后、广播/入队之前求值公式派生量）
     virtual_points: Arc<VirtualPointEngine>,
+    /// 数据质量规则运行时（与 Web 写接口共享同一实例，规则变更即时生效）
+    quality_rules: Arc<quality_rules::QualityRuleRuntime>,
     queue: Arc<DataQueue>,
     realtime_bus: Option<Arc<RealtimeBus>>,
     /// 北向专用无损队列发送端（队列满时在此 await 施加背压）。
@@ -113,6 +115,8 @@ pub struct PipelineSpawnInputs {
     pub convert: Arc<ConvertEngine>,
     /// 虚拟点位引擎（无配置时传 `VirtualPointEngine::empty()`）
     pub virtual_points: Arc<VirtualPointEngine>,
+    /// 数据质量规则运行时（无规则时传 `Arc::new(QualityRuleRuntime::default())`）
+    pub quality_rules: Arc<quality_rules::QualityRuleRuntime>,
     pub queue: Arc<DataQueue>,
     pub realtime_bus: Option<Arc<RealtimeBus>>,
     /// 北向专用无损队列发送端（`None` = 无北向 fan-out，仅广播）
@@ -131,6 +135,7 @@ impl ProcessingPipeline {
             edge,
             convert,
             virtual_points,
+            quality_rules,
             queue,
             realtime_bus,
             north_tx,
@@ -143,6 +148,7 @@ impl ProcessingPipeline {
             edge,
             convert,
             virtual_points,
+            quality_rules,
             queue,
             realtime_bus,
             north_tx: parking_lot::Mutex::new(north_tx),
@@ -323,10 +329,10 @@ impl ProcessingPipeline {
         self.convert.apply(&mut to_upload);
 
         // 2.1 数据质量规则（range / rate / nan）。
-        //     规则快照由启动装配与 API 写接口经 `install_rules` 维护；
+        //     运行时实例由装配点创建，与 Web 写接口共享；写规则即装到本实例。
         //     `stale` 由调度器的连续失败/超时机制负责，此处不重复判定。
         //     无规则时 `apply` 直接返回，不改变现有行为。
-        quality_rules::apply(&mut to_upload, DataPoint::now());
+        self.quality_rules.apply(&mut to_upload, DataPoint::now());
 
         // 2.6 虚拟点位求值（公式派生量）。
         //     先用本批数据刷新点位实时值缓存，再对虚拟点位求值；派生出的
@@ -502,14 +508,21 @@ mod tests {
         Arc<DataQueue>,
         mpsc::Receiver<Arc<Vec<DataPoint>>>,
     ) {
-        spawn_pipeline_with_edge(EdgeProcessor::new(), convert, vps)
+        spawn_pipeline_with_edge(
+            EdgeProcessor::new(),
+            convert,
+            vps,
+            Arc::new(quality_rules::QualityRuleRuntime::default()),
+        )
     }
 
-    /// 同上，但允许自定义边缘节点序列（用于验证「派生点不经过边缘阶段」）。
+    /// 同上，但允许自定义边缘节点序列（用于验证「派生点不经过边缘阶段」）
+    /// 与质量规则运行时（用于验证阶段顺序）。
     fn spawn_pipeline_with_edge(
         edge: EdgeProcessor,
         convert: Vec<ConvertRuleConfig>,
         vps: Vec<VirtualPoint>,
+        qr: Arc<quality_rules::QualityRuleRuntime>,
     ) -> (
         Arc<ProcessingPipeline>,
         Arc<DataQueue>,
@@ -521,6 +534,7 @@ mod tests {
             edge: Arc::new(edge),
             convert: ConvertEngine::new(convert),
             virtual_points: VirtualPointEngine::new(vps),
+            quality_rules: qr,
             queue: queue.clone(),
             realtime_bus: None,
             north_tx: Some(north_tx),
@@ -536,14 +550,8 @@ mod tests {
     /// - 正确顺序：原始差 0.2 被死区过滤 → 只上送 1 个点，值为 100；
     /// - 反过来先换算再过滤：差变成 2.0，两个点都会上送。
     /// 同时虚拟点 `{p1} + 1` 必须看到换算后的 100（得到 101），证明转换先于虚拟点。
-    // 测试内跨 await 持锁是有意为之：串行化进程级全局规则快照；
-    // 用例走 current_thread 运行时，future 无需 Send，不存在死锁/跨线程问题。
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn stage_order_is_edge_then_convert_then_virtual() {
-        // 与 I-52 质量规则用例串行：规则是进程级全局态，避免互相覆盖。
-        let _guard = quality_rules::TEST_LOCK.lock();
-        quality_rules::install_rules(Vec::new());
         let (pipeline, queue, mut north_rx) = spawn_pipeline(
             vec![linear_rule("p1")],
             vec![virtual_point("p2", "{p1} + 1")],
@@ -596,11 +604,8 @@ mod tests {
 
     /// I-35：采集失败点（Bad + last_good 值）必须原样进入上报/入队路径，
     /// 不能因为质量不为 Good 被边缘层过滤掉。
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn failed_points_reach_queue() {
-        let _guard = quality_rules::TEST_LOCK.lock();
-        quality_rules::install_rules(Vec::new());
         let (pipeline, queue, _north_rx) = spawn_pipeline(Vec::new(), Vec::new());
         let failed = DataPoint::failed(
             "p1",
@@ -652,15 +657,16 @@ mod tests {
     /// - 若跑在转换之前：看到原始 1.0 ≤ 5 → 不命中，点位仍是 Good。
     /// 再由虚拟点 `{p1} + 1` 验证：p1 已被降级 → 不进实时值缓存 → 虚拟点必须报错。
     /// 一次断言同时锁住「转换先于质量规则」和「质量规则先于虚拟点」。
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn stage_order_convert_then_quality_rules_then_virtual() {
-        let _guard = quality_rules::TEST_LOCK.lock();
-        quality_rules::install_rules(vec![range_max_rule(5.0)]);
-
-        let (pipeline, _queue, mut north_rx) = spawn_pipeline(
+        let qr = Arc::new(quality_rules::QualityRuleRuntime::new(vec![
+            range_max_rule(5.0),
+        ]));
+        let (pipeline, _queue, mut north_rx) = spawn_pipeline_with_edge(
+            EdgeProcessor::new(),
             vec![linear_rule("p1")],
             vec![virtual_point("vp1", "{p1} + 1")],
+            qr,
         );
 
         pipeline
@@ -700,8 +706,6 @@ mod tests {
         );
         assert_eq!(vp.quality_reason, "virtual_point:ERROR");
         assert_eq!(vp.value, 0.0);
-
-        quality_rules::install_rules(Vec::new());
     }
 
     /// 丢弃所有派生点（`raw_type == "virtual"`）的边缘节点。
@@ -726,18 +730,15 @@ mod tests {
     ///
     /// 用一个「丢弃所有 virtual 点」的节点接管边缘阶段：若派生点真的走了边缘，
     /// 它会被丢掉；实际必须仍能上报，证明它是在边缘之后追加的。
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn derived_point_bypasses_edge_stage() {
-        let _guard = quality_rules::TEST_LOCK.lock();
-        quality_rules::install_rules(Vec::new());
-
         let queue = Arc::new(DataQueue::new_memory().expect("memory queue"));
         let (north_tx, mut north_rx) = NorthFeed::channel(16);
         let pipeline = ProcessingPipeline::spawn(PipelineSpawnInputs {
             edge: Arc::new(EdgeProcessor::with_nodes(vec![Box::new(DropVirtualNode)])),
             convert: ConvertEngine::empty(),
             virtual_points: VirtualPointEngine::new(vec![virtual_point("vp1", "{p1} + 1")]),
+            quality_rules: Arc::new(quality_rules::QualityRuleRuntime::default()),
             queue: queue.clone(),
             realtime_bus: None,
             north_tx: Some(north_tx),

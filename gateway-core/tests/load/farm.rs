@@ -89,6 +89,9 @@ impl Farm {
             edge: Arc::new(EdgeProcessor::new()),
             convert: ConvertEngine::empty(),
             virtual_points: gateway_core::pipeline::VirtualPointEngine::empty(),
+            quality_rules: Arc::new(
+                gateway_core::pipeline::quality_rules::QualityRuleRuntime::default(),
+            ),
             queue: queue.clone(),
             realtime_bus: Some(realtime_bus.clone()),
             north_tx: Some(north_tx),

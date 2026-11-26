@@ -165,6 +165,11 @@ pub struct PlatformRefs {
     pub rate_rules: Arc<gateway_core::config::RateRuleStore>,
     /// 数据质量规则（SQLite 持久化；启用规则安装到处理管道快照后真实执行）
     pub quality_rule_store: Arc<gateway_core::config::QualityRuleStore>,
+    /// 质量规则安装端口（与处理管道共享同一运行时实例）。
+    /// DD-14：替代进程级全局 static——写接口经此把规则装到运行时实例上，
+    /// `web/api` 无需引用 `gateway_core::pipeline`。
+    pub quality_rule_installer:
+        Arc<dyn gateway_core::engine::quality_rule_port::QualityRuleInstaller>,
     /// API 密钥（SQLite，仅存哈希与预览；鉴权中间件查表）
     pub api_keys: Arc<gateway_core::config::ApiKeyStore>,
     /// 计划任务（SQLite；调度执行器轮询到期任务并回写执行结果）

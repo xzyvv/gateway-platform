@@ -93,6 +93,9 @@ pub(crate) struct NorthProcessing {
     pub(crate) convert: Arc<gateway_core::pipeline::ConvertEngine>,
     /// 虚拟点位引擎（与 pipeline 共享同一实例；GatewayRuntime 持有用于热重载 swap 与 API 查询）
     pub(crate) virtual_points: Arc<gateway_core::pipeline::VirtualPointEngine>,
+    /// 数据质量规则运行时（与 pipeline 共享同一实例；PlatformRefs 把它作为
+    /// `QualityRuleInstaller` 交给 Web 写接口重装规则）
+    pub(crate) quality_rules: Arc<gateway_core::pipeline::quality_rules::QualityRuleRuntime>,
     pub(crate) realtime_bus: Arc<gateway_core::pipeline::RealtimeBus>,
     pub(crate) north_dispatcher: Arc<gateway_core::north::NorthDispatcher>,
     /// P3：北向 run 循环通道表（webhook 等，非 Clone 的 JoinHandle）；
