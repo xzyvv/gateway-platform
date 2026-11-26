@@ -63,6 +63,60 @@ fn test_check_end_code_is_device_rejected() {
     }
 }
 
+/// MC-E2：1E 帧的状态码与 3E/4E 结束码必须同口径映射。
+///
+/// 1E 只有 1 字节状态码，3E/4E 是 2 字节结束码；同一「设备拒绝」语义下，
+/// 读/写路径都必须落到 `DeviceRejected`，且原因格式不得因帧格式而漂移。
+#[test]
+fn decode_1e_status_code_maps_like_3e_end_code() {
+    use crate::south::protocol::CollectorError;
+
+    // 1E 状态码 0x59：读响应头解析直接给出该状态码，且非零时不再要求后续数据
+    let (status_1e, data_len) =
+        parse_response_header_1e(&[0x81, 0x59], FC_BATCH_WORD_READ, true, false, 1)
+            .expect("1E 状态码应可解析");
+    assert_eq!(data_len, 0, "非零状态码不应要求后续数据");
+    assert_eq!(
+        status_1e, 0x0059,
+        "1E 状态码按 u16 参与结束码校验（守护 MC-E2）"
+    );
+
+    // 3E/4E 结束码：帧体前两字节小端，同一错误码数值必须与 1E 状态码一致
+    let end_code_3e = u16::from_le_bytes([0x59, 0x00]);
+    assert_eq!(
+        end_code_3e, status_1e,
+        "同一错误码在 1E 与 3E/4E 帧下数值必须一致"
+    );
+
+    // 读路径：两种帧格式的错误映射完全一致（变体 + 原因文本）
+    match (check_end_code(status_1e), check_end_code(end_code_3e)) {
+        (Err(CollectorError::DeviceRejected(m1)), Err(CollectorError::DeviceRejected(m2))) => {
+            assert_eq!(
+                m1, m2,
+                "1E 状态码与 3E/4E 结束码的原因必须同口径（守护 MC-E2）"
+            );
+            assert!(m1.contains("0x0059"), "原因需可辨识: {m1}");
+        }
+        other => panic!("1E 状态码与 3E/4E 结束码都应映射为 DeviceRejected，实际 {other:?}"),
+    }
+
+    // 真实 3E 结束码 0xC059（高字节为出错网络号）同样是设备拒绝，且低字节可辨识
+    match check_end_code(0xC059) {
+        Err(CollectorError::DeviceRejected(m)) => {
+            assert!(m.contains("0xC059"), "真实结束码原因需可辨识: {m}");
+        }
+        other => panic!("3E 结束码 0xC059 应为 DeviceRejected，实际 {other:?}"),
+    }
+
+    // 写路径必须与读路径同口径，不得各自漂移
+    match check_write_end_code(end_code_3e) {
+        Err(CollectorError::DeviceRejected(m)) => {
+            assert_eq!(m, "mc end code 0x0059", "写路径结束码映射不得与读路径漂移");
+        }
+        other => panic!("写路径非零结束码应为 DeviceRejected，实际 {other:?}"),
+    }
+}
+
 /// ROI-26：3E 响应固定头必须回显请求的网络号 / PC 号 / 模块 I/O 号 / 站号。
 #[test]
 fn test_3e_response_header_echo_mismatch_rejected() {

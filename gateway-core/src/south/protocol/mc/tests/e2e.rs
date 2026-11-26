@@ -162,6 +162,84 @@ async fn test_no_response_times_out() {
     );
 }
 
+/// 首个连接「读走请求后静默不应答」、后续连接正常应答的 MC 从站桩。
+///
+/// 用「静默挂起」而非直接断开，才能只触发采集器的 IO 超时分支（断开会得到 IoError）；
+/// 后续连接正常应答用于验证「超时清链后下次惰性重建」。
+async fn spawn_mc_silent_then_reply_stub(data: [u8; 2]) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr").to_string();
+    let conns = Arc::new(AtomicUsize::new(0));
+    let conns_srv = conns.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let idx = conns_srv.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                // 读走一个完整请求帧（9 字节头 + 数据长度）
+                let mut head = [0u8; 9];
+                if sock.read_exact(&mut head).await.is_err() {
+                    return;
+                }
+                let len = u16::from_le_bytes([head[7], head[8]]) as usize;
+                let mut body = vec![0u8; len];
+                if sock.read_exact(&mut body).await.is_err() {
+                    return;
+                }
+                if idx == 0 {
+                    // 首个连接：保持打开但不应答，等采集器自己超时放弃
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    return;
+                }
+                if sock.write_all(&mc_response(0, &data)).await.is_err() {
+                    return;
+                }
+                let _ = sock.flush().await;
+                // 保持连接直到对端关闭
+                let mut sink = [0u8; 1];
+                let _ = sock.read(&mut sink).await;
+            });
+        }
+    });
+    (addr, conns)
+}
+
+/// MC-R7：单次 IO 超时取 `bus.timeout_ms`，读请求超时 → `NoReply`，并清空连接、下次惰性重建。
+///
+/// 现有 `test_no_response_times_out` 断言的是 `IoError(_) | NoReply`，过宽：
+/// 对端断链与「对端在线但不回」是两种现场故障，必须区分。本用例只制造后者。
+#[tokio::test]
+async fn read_timeout_is_no_reply_and_clears_connection() {
+    let (addr, conns) = spawn_mc_silent_then_reply_stub([0x11, 0x22]).await;
+    let c = McCollector::new(addr, "mc-bus".into(), Duration::from_millis(150), None);
+    let p = point("p1", "D100", "u16");
+
+    let err = c.read(&p).await.expect_err("无应答应超时失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::NoReply),
+        "读超时必须精确映射为 NoReply（守护 MC-R7：超时既不是 IoError 也不是 InvalidFrame），实际 {err:?}"
+    );
+    assert!(
+        !c.is_connected(),
+        "超时后必须清空连接并标记未连接（守护 MC-R7：下次请求惰性重建）"
+    );
+
+    // 再次读取必须走新连接并成功：证明旧连接确实被清空，而不是残留半死连接
+    let dp = c.read(&p).await.expect("超时清链后应能重建并读成功");
+    assert_eq!(
+        dp.raw_value, 0x2211 as f64,
+        "重建后必须读到第二个连接的数据"
+    );
+    assert_eq!(
+        conns.load(Ordering::SeqCst),
+        2,
+        "超时清链后必须重建新连接（守护 MC-R7）"
+    );
+}
+
 // ============================================================
 // G-T1b MC-W4 / MC-W5：写后不读回、写失败不重发
 // ============================================================

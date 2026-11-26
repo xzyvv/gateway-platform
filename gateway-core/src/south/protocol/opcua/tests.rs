@@ -367,6 +367,68 @@ fn ua_roi25_bad_status_without_value_is_device_rejected() {
     assert!(rejected_status(&dv).is_none());
 }
 
+/// UA-E1：值提取的错误分类必须可辨识。
+///
+/// - 不支持的 Variant → `Unsupported`（能力不支持，不是帧错误）；
+/// - 无值 / 非数字字符串 → `InvalidFrame`（报文解码问题）；
+/// - Bad/Uncertain 且无值 → `DeviceRejected`（已由 `ua_roi25_*` 覆盖）。
+#[test]
+fn ua_e1_value_extraction_maps_unsupported_and_invalid_frame() {
+    // Byte 不在 extract_value 支持的数值类型白名单内 → Unsupported
+    let dv = DataValue {
+        value: Some(opcua::types::Variant::Byte(0x12)),
+        ..Default::default()
+    };
+    match extract_value(&dv) {
+        Err(CollectorError::Unsupported(msg)) => {
+            assert!(
+                msg.contains("unsupported"),
+                "不支持的 Variant 原因需可辨识: {msg}"
+            );
+        }
+        other => panic!("不支持的 Variant 应报 Unsupported（守护 UA-E1），实际 {other:?}"),
+    }
+
+    // 无值：属于报文解码错误，不能冒充设备拒绝
+    let dv = DataValue {
+        value: None,
+        status: Some(StatusCode::Good),
+        ..Default::default()
+    };
+    match extract_value(&dv) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("no value"), "无值原因需可辨识: {msg}");
+        }
+        other => panic!("无值应报 InvalidFrame（守护 UA-E1），实际 {other:?}"),
+    }
+
+    // 非数字字符串：可解析为数值的字符串是合法值，非数字则属帧内容无法解码
+    let dv = DataValue {
+        value: Some(opcua::types::Variant::String(opcua::types::UAString::from(
+            "abc",
+        ))),
+        ..Default::default()
+    };
+    match extract_value(&dv) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(
+                msg.contains("abc"),
+                "非数字字符串原因需带原值便于排查: {msg}"
+            );
+        }
+        other => panic!("非数字字符串应报 InvalidFrame（守护 UA-E1），实际 {other:?}"),
+    }
+
+    // 反证：数值字符串仍应正常取值，避免把「非数字」规则扩大成「字符串一律失败」
+    let dv = DataValue {
+        value: Some(opcua::types::Variant::String(opcua::types::UAString::from(
+            "7.5",
+        ))),
+        ..Default::default()
+    };
+    assert_eq!(extract_value(&dv).expect("数值字符串应可解析"), 7.5);
+}
+
 /// 原因前缀不得命中北向 OPC UA 服务端的细分关键字（小写子串匹配）。
 #[test]
 fn ua_e2_reason_does_not_trip_north_status_classifier() {

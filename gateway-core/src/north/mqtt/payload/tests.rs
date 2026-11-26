@@ -368,3 +368,88 @@ fn test_payload_label_matches_convert_apply_output() {
         s
     );
 }
+
+// ============================================================================
+// I-47 / I-48：默认 JSON 报文的顺序与时间戳语义
+// ============================================================================
+
+/// I-47（第一部分）：同一 topic 分组内的点位顺序必须等于出队顺序。
+///
+/// 组间（按 device_id）用 HashMap 收集，组内用 Vec 顺次 push——组内顺序即
+/// `dequeue` 的输出顺序。一旦有人把组内改成 HashSet / 排序，平台侧看到的
+/// 点位序列就会与入队顺序不一致（纯展示层或许无感，但按序去重/对齐的上游
+/// 会错位）。
+#[test]
+fn payload_groups_keep_dequeue_order() {
+    let mut items = Vec::new();
+    for i in 0..8 {
+        let point_id = format!("p{}", i);
+        items.push(make_item("dev1", &point_id, i as f64));
+    }
+
+    let bytes = build_payload_default(&items, None);
+    let v: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("默认 JSON 模式报文必须是合法 JSON");
+    let reports = v.as_array().expect("顶层必须是设备报文数组");
+    assert_eq!(reports.len(), 1, "单一 device_id 应只产生 1 个设备分组");
+    let points = reports[0]["points"]
+        .as_array()
+        .expect("设备分组必须含 points 数组");
+
+    let got: Vec<&str> = points
+        .iter()
+        .map(|p| p["point_id"].as_str().expect("point_id 必须是字符串"))
+        .collect();
+    let want: Vec<String> = (0..8).map(|i| format!("p{}", i)).collect();
+    let want: Vec<&str> = want.iter().map(String::as_str).collect();
+    assert_eq!(
+        got, want,
+        "I-47：同一 topic 分组内的点位顺序必须严格等于出队顺序"
+    );
+}
+
+/// I-48：报文顶层 `ts` 是**构建时刻**，采样时刻只保留在每点的 `source_ts`。
+///
+/// 若把顶层 ts 写成某个点位的采样时间，平台会把「补发的旧数据」当成
+/// 刚刚采集的新数据（断网恢复后批量补传时尤其明显），时间序列与计费口径
+/// 都会错位。这里用一个明显早于构建时刻的 source_ts 来守护该语义。
+#[test]
+fn payload_top_level_ts_is_build_time_not_sample_time() {
+    use crate::engine::model::DataPoint;
+
+    // 2020-09-13 的采样时刻，远早于今天的构建时刻
+    const SAMPLE_TS: i64 = 1_600_000_000_000;
+    let mut item = make_item("dev1", "p1", 1.0);
+    item.source_ts = SAMPLE_TS;
+    item.timestamp = SAMPLE_TS;
+
+    let build_started_at = DataPoint::now();
+    let bytes = build_payload_default(std::slice::from_ref(&item), None);
+    let v: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("默认 JSON 模式报文必须是合法 JSON");
+
+    let top_ts = v[0]["ts"].as_i64().expect("报文顶层 ts 必须是整数");
+    assert!(
+        top_ts >= build_started_at,
+        "I-48：报文顶层 ts 必须是构建时刻（>= 构建前时刻 {}），实际 {}",
+        build_started_at,
+        top_ts
+    );
+
+    let point_ts = v[0]["points"][0]["source_ts"]
+        .as_i64()
+        .expect("点位 source_ts 必须是整数");
+    assert_eq!(
+        point_ts, SAMPLE_TS,
+        "I-48：点的 source_ts 必须原样保留采样时刻"
+    );
+    assert_ne!(
+        top_ts, point_ts,
+        "I-48：顶层 ts 不得被写成采样时刻（两者语义不同）"
+    );
+    assert!(
+        top_ts - point_ts > 60_000,
+        "I-48：旧采样补发时顶层 ts 与 source_ts 的差值应体现真实采样间隔，实际差 {}ms",
+        top_ts - point_ts
+    );
+}

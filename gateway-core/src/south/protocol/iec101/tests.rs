@@ -155,6 +155,9 @@ struct StubState {
     class2_queue: Vec<Vec<u8>>,
     /// 已处理的二级数据请求（功能码 11）次数，用于断言轮询上限
     class2_polls: usize,
+    /// 已处理的主站请求（总召唤 / 二级数据请求）控制域字节（按发送顺序），
+    /// 用于断言 FCB 逐次翻转
+    link_controls: Vec<u8>,
 }
 
 fn ack() -> Vec<u8> {
@@ -253,10 +256,15 @@ async fn run_stub(mut dev: tokio::io::DuplexStream, st: Arc<Mutex<StubState>>) {
             let reply: Option<Vec<u8>> = {
                 let mut g = st.lock().unwrap();
                 match frame.first().copied() {
-                    Some(0x68) => Some(g.interrogation_reply.clone()),
+                    Some(0x68) => {
+                        // 总召唤（用户数据帧）同样消耗一次 FCB 翻转
+                        g.link_controls.push(frame[4]);
+                        Some(g.interrogation_reply.clone())
+                    }
                     Some(0x10) => {
                         if frame[1] & 0x0F == 11 {
                             g.class2_polls += 1;
+                            g.link_controls.push(frame[1]);
                             Some(if g.class2_queue.is_empty() {
                                 ack()
                             } else {
@@ -313,6 +321,7 @@ fn stub_state() -> Arc<Mutex<StubState>> {
         interrogation_reply: ack(),
         class2_queue: Vec::new(),
         class2_polls: 0,
+        link_controls: Vec::new(),
     }))
 }
 
@@ -750,6 +759,68 @@ async fn interrogation_polling_stops_at_max_polls() {
     assert_eq!(
         polls, 8,
         "MAX_POLLS=8：应恰好轮询 8 次后停止，实际 {polls} 次"
+    );
+}
+
+/// IEC-R10：主站请求的 FCB 必须逐次翻转。
+///
+/// `golden_iec101_link_control_frames` 只做静态两帧对比；本用例走真实运行时连续
+/// 三轮轮询，从设备桩侧抓取**实际发出**的主站请求控制域（总召唤 + 二级数据请求）。
+/// 两个请求方向共享同一个 FCB，故必须按发送顺序整体校验；非平衡模式下从站应答
+/// （单字符 ACK / 可变帧）不回显 FCB，因此不校验应答方向。
+#[tokio::test]
+async fn request_fcb_toggles_across_consecutive_polls() {
+    let st = stub_state();
+    {
+        let mut g = st.lock().unwrap();
+        // 每轮：1 个数据帧 + 1 个激活终止帧，保证每轮至少发出两次二级数据请求
+        for _ in 0..3 {
+            g.class2_queue.push(test_var_frame(&float_asdu(100, 1.0)));
+            g.class2_queue.push(test_var_frame(&termination_asdu()));
+        }
+    }
+    let bus = spawn_bus(st.clone());
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    for round in 0..3 {
+        let dp = c
+            .read(&point("p1", 100))
+            .await
+            .unwrap_or_else(|e| panic!("第 {} 轮读取失败: {e}", round + 1));
+        assert!(
+            (dp.raw_value - 1.0).abs() < 1e-6,
+            "第 {} 轮值错误",
+            round + 1
+        );
+    }
+
+    let controls = st.lock().unwrap().link_controls.clone();
+    assert!(
+        controls.len() >= 4,
+        "三轮轮询应捕获 ≥4 个主站请求，实际 {} 个",
+        controls.len()
+    );
+    for (i, control) in controls.iter().enumerate() {
+        assert_eq!(
+            control & (C_PRM | C_FCV),
+            C_PRM | C_FCV,
+            "第 {i} 个主站请求必须是 PRM=1/FCV=1 的用户数据类请求（守护 IEC-R10 的校验前提），实际 0x{control:02X}"
+        );
+    }
+    for (i, pair) in controls.windows(2).enumerate() {
+        // 总召唤与二级数据请求的功能码不同，故只比较 FCB 位本身是否翻转
+        assert_ne!(
+            pair[0] & C_FCB,
+            pair[1] & C_FCB,
+            "第 {i}→{} 个相邻主站请求的 FCB 位必须翻转（守护 IEC-R10），实际控制域 0x{:02X} → 0x{:02X}",
+            i + 1,
+            pair[0],
+            pair[1]
+        );
+    }
+    assert!(
+        controls.iter().any(|c| c & 0x0F == FUNC_REQUEST_CLASS2),
+        "翻转序列必须包含二级数据请求，否则未覆盖实际轮询路径"
     );
 }
 

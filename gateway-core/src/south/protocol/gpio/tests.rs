@@ -229,6 +229,30 @@ fn test_write_do_out_of_range() {
     assert!(crate::platform::gpio::write_do(8, true).is_err());
 }
 
+/// W-15：GPIO 写硬件失败必须映射为 `CollectorError::IoError`。
+///
+/// 守护规则：地址已合法（DO 线号 4）却写不进去时，错误只能是 IoError
+/// （驱动/权限/平台能力不足），**不得**被误报成 InvalidConfig——那会把运维
+/// 引向「改配置」，而真实原因是硬件或权限。
+///
+/// 测试环境（非 Linux / Linux 无 gpiochip）必然写入失败；若运行环境恰好具备
+/// 真实可写 GPIO，则写入成功、W-15 的失败映射无从触发，此时不做误报。
+#[tokio::test]
+async fn gpio_write_hardware_failure_maps_to_io_error() {
+    let c = GpioCollector::new("gpio");
+    // 线号 4 = DO0，地址解析必然通过，失败只可能来自硬件写入
+    let p = make_point("do_hw_fail", "4", None);
+    match c.write(&p, 1.0).await {
+        Err(e) => assert!(
+            matches!(e, CollectorError::IoError(_)),
+            "GPIO 写硬件失败必须映射为 IoError（不得误报为 InvalidConfig），实际: {e:?}"
+        ),
+        Ok(()) => {
+            // 真实 GPIO 可用：写入成功，没有失败可映射
+        }
+    }
+}
+
 /// `DiMode::from_data_type` 映射
 #[test]
 fn test_di_mode_from_data_type() {

@@ -624,3 +624,119 @@ async fn mstp_rejects_station_address_over_127() {
         other => panic!("主站号 128 应报 InvalidConfig，实际 {other:?}"),
     }
 }
+
+// ============================================================
+// MSTP-R3 / MSTP-R7 / MSTP-E1：帧类型白名单、读超时与错误变体
+// ============================================================
+
+/// MSTP-R3：只接受 DataExpectingReply / DataNotExpectingReply / ReplyPostponed。
+///
+/// 令牌帧 / 管理帧都是链路层控制帧，不携带应用数据；若被当数据解析会让点位
+/// 随机错值。这里覆盖管理帧（Poll For Master / Test Request），断言按无应答处理。
+#[tokio::test]
+async fn mstp_ignores_non_data_frame_types() {
+    // 0x01 = Poll For Master，0x03 = Test Request
+    for (i, frame_type) in [0x01u8, 0x03u8].into_iter().enumerate() {
+        let bus_name = format!("mstp_ctrl_{i}");
+        let reply = build_mstp_frame(frame_type, 0, 1, &[]);
+        let bus = fake_mstp_bus(&bus_name, Some(reply)).await;
+        let collector =
+            BacnetMstpCollector::new(&bus_name, bus, 0, std::sync::Arc::new(test_metrics()));
+
+        let err = collector
+            .read(&mstp_point("ai-ctrl"))
+            .await
+            .expect_err("控制帧不得被当数据应答");
+        assert!(
+            matches!(err, CollectorError::NoReply),
+            "帧类型 0x{frame_type:02X} 必须按无应答处理（守护 MSTP-R3），实际 {err:?}"
+        );
+    }
+}
+
+/// MSTP-R7：单点一次事务，超时取 `bus.io_timeout()`，超时 → `NoReply`。
+#[tokio::test]
+async fn mstp_read_timeout_is_no_reply() {
+    let bus = fake_mstp_bus("mstp_read_timeout", None).await;
+    let io_timeout = bus.io_timeout();
+    let collector = BacnetMstpCollector::new(
+        "mstp_read_timeout",
+        bus,
+        0,
+        std::sync::Arc::new(test_metrics()),
+    );
+
+    let started = std::time::Instant::now();
+    let err = collector
+        .read(&mstp_point("ai-timeout"))
+        .await
+        .expect_err("设备不回应报无应答");
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(err, CollectorError::NoReply),
+        "读超时必须映射为 NoReply（守护 MSTP-R7），实际 {err:?}"
+    );
+    // 桩会保持链路存活到事务超时之后；耗时落在总线超时量级说明单点只等一次 io_timeout，
+    // 既没有提前放弃，也没有按点位重复重试。
+    assert!(
+        elapsed >= io_timeout / 2,
+        "读路径必须等待 bus.io_timeout()（≈{io_timeout:?}），实际仅 {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "单点事务不得反复重试（守护 MSTP-R7），实际耗时 {elapsed:?}"
+    );
+}
+
+/// MSTP-E1：CRC 错 → `ChecksumError`（已有用例）；结构/长度错 → `InvalidFrame`；
+/// 无数据帧 → `NoReply`。本用例补齐后两个分支。
+#[tokio::test]
+async fn parse_mstp_frame_maps_structure_errors_and_empty_to_variants() {
+    let m = test_metrics();
+
+    // 结构错误一：不足最小帧长（8 字节）→ InvalidFrame
+    match parse_mstp_frame(&PREAMBLE, &m) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("too short"), "原因需可辨识: {msg}");
+        }
+        other => panic!("过短帧应报 InvalidFrame（守护 MSTP-E1），实际 {other:?}"),
+    }
+
+    // 结构错误二：前导码不是 55 FF → InvalidFrame
+    match parse_mstp_frame(&[0x54, 0xFE, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00], &m) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("preamble"), "原因需可辨识: {msg}");
+        }
+        other => panic!("前导码错误应报 InvalidFrame（守护 MSTP-E1），实际 {other:?}"),
+    }
+
+    // 结构错误三：声明长度大于实收字节（帧被截断，头 CRC 本身正确）→ InvalidFrame
+    let full = build_mstp_frame(
+        FRAME_DATA_NOT_EXPECTING_REPLY,
+        0,
+        1,
+        &[0x01, 0x02, 0x03, 0x04],
+    );
+    let truncated = &full[..full.len() - 1];
+    match parse_mstp_frame(truncated, &m) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("truncated"), "原因需可辨识: {msg}");
+        }
+        other => panic!("截断帧应报 InvalidFrame（守护 MSTP-E1），实际 {other:?}"),
+    }
+
+    // 无数据帧：令牌帧是控制帧且无负载，读路径必须按无应答处理而不是解码
+    let reply = build_mstp_frame(FRAME_TOKEN, 0, 1, &[]);
+    let bus = fake_mstp_bus("mstp_e1_empty", Some(reply)).await;
+    let collector =
+        BacnetMstpCollector::new("mstp_e1_empty", bus, 0, std::sync::Arc::new(test_metrics()));
+    let err = collector
+        .read(&mstp_point("ai-empty"))
+        .await
+        .expect_err("无数据帧不得返回数据点");
+    assert!(
+        matches!(err, CollectorError::NoReply),
+        "无数据帧必须按无应答处理（守护 MSTP-E1），实际 {err:?}"
+    );
+}

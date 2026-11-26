@@ -152,6 +152,27 @@ describe('usePointWrite', () => {
     expect(outcome.error).toContain('不要自动重试')
   })
 
+  it('uncertain_write_is_not_automatically_retried', async () => {
+    // 守护 W-07：结果未知（5102）的上游禁止自动重试——设备可能已执行，
+    // 重发会造成重复写（累加/脉冲类点位直接出错）。
+    vi.useFakeTimers()
+    try {
+      const err = new Error('写入结果未知：no reply（设备可能已执行，请先读回核实，不要自动重试）')
+      ;(err as Error & { bizCode?: number }).bizCode = 5102
+      m.writePoints.mockRejectedValue(err)
+      const { writeOnce } = usePointWrite()
+      const outcome = await writeOnce('p1', 1)
+      expect(outcome.uncertain).toBe(true)
+      expect(outcome.status).toBe('uncertain')
+      expect(m.writePoints).toHaveBeenCalledTimes(1)
+      // 推进足够长的定时器窗口：任何自动重发/退避都会在此窗口内触发
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(m.writePoints).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('单写 5101 明确失败不算 uncertain', async () => {
     const err = new Error('写入失败：点位不可写')
     ;(err as Error & { bizCode?: number }).bizCode = 5101

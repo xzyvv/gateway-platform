@@ -139,6 +139,42 @@ fn test_decode_too_short() {
     assert!(frames::decode_value(&[0x01], S7DataType::Real).is_err());
 }
 
+/// S7-R5：值数据长度小于数据类型期望字节数 → `InvalidFrame` 变体（不是笼统的 is_err）。
+#[test]
+fn decode_too_short_is_invalid_frame() {
+    use crate::south::protocol::CollectorError;
+
+    // Real 期望 4 字节，只给 1 字节：原因必须指明实际与期望字节数
+    match frames::decode_value(&[0x01], S7DataType::Real) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("too short"), "原因需可辨识为长度不足: {msg}");
+            assert!(
+                msg.contains("got 1") && msg.contains("expected 4"),
+                "原因必须指明实际与期望字节数: {msg}"
+            );
+        }
+        other => panic!("值数据过短必须报 InvalidFrame（守护 S7-R5），实际 {other:?}"),
+    }
+
+    // DInt 期望 4 字节，只给 2 字节
+    assert!(
+        matches!(
+            frames::decode_value(&[0x01, 0x02], S7DataType::DInt),
+            Err(CollectorError::InvalidFrame(_))
+        ),
+        "DInt 数据不足 4 字节必须报 InvalidFrame（守护 S7-R5）"
+    );
+
+    // 空数据同样属于长度不足，不能解出 0
+    assert!(
+        matches!(
+            frames::decode_value(&[], S7DataType::Word),
+            Err(CollectorError::InvalidFrame(_))
+        ),
+        "空数据必须报 InvalidFrame（守护 S7-R5）"
+    );
+}
+
 // ===== 响应解析测试 =====
 
 #[test]

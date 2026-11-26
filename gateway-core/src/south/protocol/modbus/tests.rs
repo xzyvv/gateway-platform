@@ -308,7 +308,7 @@ fn test_encode_register_values_roundtrip_with_read_path() {
 
 use crate::config::BusConfig;
 use crate::engine::metrics::Metrics;
-use crate::south::bus::{BusDeps, BusManager};
+use crate::south::bus::{BusDeps, BusManager, SerialHandle};
 use crate::south::protocol::modbus::transaction::TransactionPool;
 use crate::south::protocol::Collector;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1268,4 +1268,196 @@ fn roi11_read_group_key_separates_different_timeouts() {
         super::collector::read_group_key(&point(2, Some(500))),
         super::collector::read_group_key(&point(3, Some(500)))
     );
+}
+
+// =========================================================================
+// W-05：协议写路径必须以 `BusPriority::Control` 高优先级入队
+//
+// 观测方式：串口桩逐帧记录「上线的顺序」。先让一笔静默采集事务占住总线，
+// 再把第二笔采集事务排入普通通道，最后经 Modbus 协议写入口下发写事务。
+// 总线 task 用 `biased` select 优先消费控制通道，因此控制优先级的写帧必须
+// 插到「已排队的采集事务」之前；若写路径误用 Normal，写帧只会排在它后面。
+// =========================================================================
+
+/// 优先级观测串口桩：
+/// - 记录每一帧上线字节（断言下发顺序的唯一观测点）；
+/// - 仅对 8 字节的 FC05/FC06 写请求原样回显，读请求保持静默，使该事务占满
+///   一个 timeout，形成稳定的排队窗口，「谁先被消费」可被确定性观测。
+struct PriorityProbePort {
+    frames: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+    pending: std::collections::VecDeque<u8>,
+}
+
+impl tokio::io::AsyncWrite for PriorityProbePort {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        let frame = buf.to_vec();
+        this.frames
+            .lock()
+            .expect("port frames mutex poisoned")
+            .push(frame.clone());
+        // 写请求回显（FC05/FC06 响应与请求等长等值），保证写事务能拿到合法应答
+        if frame.len() == 8 && (frame[1] == 0x05 || frame[1] == 0x06) {
+            this.pending.extend(frame);
+        }
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncRead for PriorityProbePort {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.pending.is_empty() {
+            return std::task::Poll::Pending;
+        }
+        let n = buf.remaining().min(this.pending.len());
+        for _ in 0..n {
+            if let Some(b) = this.pending.pop_front() {
+                buf.put_slice(&[b]);
+            }
+        }
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+/// 轮询直到串口桩记录到至少 `n` 帧，超时按 `what` 报错
+async fn wait_for_frames(frames: &Arc<std::sync::Mutex<Vec<Vec<u8>>>>, n: usize, what: &str) {
+    let start = std::time::Instant::now();
+    while frames.lock().expect("port frames mutex poisoned").len() < n {
+        assert!(start.elapsed() < Duration::from_secs(5), "{what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// 轮询直到条件成立，超时按 `what` 报错
+async fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !cond() {
+        assert!(start.elapsed() < Duration::from_secs(5), "{what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
+async fn protocol_write_submits_with_control_priority() {
+    let frames = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let cfg = BusConfig {
+        port_name: "modbus_prio".into(),
+        protocol: "modbus".into(),
+        timeout_ms: 600,
+        retry_count: Some(0),
+        retry_delay_ms: Some(0),
+        ..Default::default()
+    };
+    let metrics = Arc::new(Metrics::new());
+    let bus = Arc::new(BusManager::spawn_with(
+        &cfg,
+        Some(SerialHandle::from_stream(PriorityProbePort {
+            frames: frames.clone(),
+            pending: std::collections::VecDeque::new(),
+        })),
+        metrics.clone(),
+        BusDeps::production(),
+    ));
+    let c = Arc::new(super::ModbusCollector::new("modbus_prio", bus.clone()));
+
+    // 1) 采集事务 R1 先上线并占住总线（静默桩 → 等满一个 timeout）
+    let r1 = {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let p = mk_poll_point("r1", 0);
+            let _ = c.read(&p).await;
+        })
+    };
+    wait_for_frames(&frames, 1, "首笔采集事务未上总线").await;
+    // 帧已上线说明 R1 已出队，排队深度必须归零，后续观测才有基准
+    wait_until("首笔采集事务未出队", || {
+        metrics.bus.queue_depth.load(Ordering::Relaxed) == 0
+    })
+    .await;
+
+    // 2) 采集事务 R2 排入普通通道：排队深度 +1 即证明它已排在 R1 之后
+    let r2 = {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let p = mk_poll_point("r2", 2);
+            let _ = c.read(&p).await;
+        })
+    };
+    wait_until("第二笔采集事务未进入普通队列", || {
+        metrics.bus.queue_depth.load(Ordering::Relaxed) >= 1
+    })
+    .await;
+
+    // 3) 经协议写入口下发 FC06 写事务（实现应投递 Control 优先级）
+    let w = {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let mut p = mk_typed_point("U16");
+            p.id = "w1".into();
+            p.address = "5".into();
+            p.address_num = Some(5);
+            let _ = c.write(&p, 1.0).await;
+        })
+    };
+
+    // 4) 三帧全部上线后核对顺序
+    wait_for_frames(
+        &frames,
+        3,
+        "写帧未在排队窗口内上线：若写路径以 Normal 入队，会排在采集事务之后并被调用方超时丢弃（W-05）",
+    )
+    .await;
+    let written = frames.lock().expect("port frames mutex poisoned").clone();
+    assert_eq!(
+        written[0][1], 0x03,
+        "首帧必须是最先发起的采集读事务，实际 {:02X?}",
+        written[0]
+    );
+    assert_eq!(
+        written[1][1], 0x06,
+        "写事务必须以控制优先级入队，先于已排队的采集事务下发（W-05），实际写入顺序 {:02X?}",
+        written
+    );
+    assert_eq!(
+        &written[1][2..4],
+        &[0x00, 0x05],
+        "第二帧必须是写事务本身的 FC06 帧（地址 5）"
+    );
+    assert_eq!(
+        written[2][1], 0x03,
+        "后入队的采集事务应排在写事务之后，实际写入顺序 {:02X?}",
+        written
+    );
+    assert_eq!(
+        &written[2][2..4],
+        &[0x00, 0x02],
+        "第三帧必须是后入队的采集事务（地址 2）"
+    );
+
+    let _ = r1.await;
+    let _ = r2.await;
+    let _ = w.await;
 }

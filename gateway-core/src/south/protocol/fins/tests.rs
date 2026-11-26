@@ -124,6 +124,8 @@ enum FinsReply {
     CpuControl(u8, u8, u8),
     /// 不回复直接断开
     Drop,
+    /// 保持连接但不应答（用于制造读路径 IO 超时，区别于 Drop 的断链）
+    Hang,
 }
 
 fn tcp_wrap(command: u32, payload: &[u8]) -> Vec<u8> {
@@ -235,6 +237,8 @@ async fn spawn_fins_stub_counters(
                             &fins_frame_resp(MRC_CPU_CONTROL, src, mres, sres, &[]),
                         ),
                         FinsReply::Drop => return,
+                        // 不应答也不断开：让采集器的读超时生效
+                        FinsReply::Hang => continue,
                     };
                     if sock.write_all(&out).await.is_err() {
                         return;
@@ -388,6 +392,33 @@ async fn test_write_no_reply_is_uncertain() {
         ),
         "unexpected: {err:?}"
     );
+}
+
+// ============================================================
+// FINS-R6：读路径 IO 超时 → NoReply + 丢弃连接
+// ============================================================
+
+/// FINS-R6：读路径的发送/接收超时必须映射 `NoReply`，并丢弃当前连接；
+/// 下次请求必须重新建链（握手）而不是复用半死连接。
+#[tokio::test]
+async fn read_timeout_is_no_reply_and_drops_connection() {
+    // 第 1 次事务静默挂起（触发读超时），第 2 次事务正常应答（验证重建成功）
+    let addr = spawn_fins_stub(vec![FinsReply::Hang, FinsReply::Read(vec![0xAB, 0xCD])]).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_millis(150), None);
+    let p = point("p1", "D100", "u16");
+
+    let err = c.read(&p).await.expect_err("无应答应超时失败");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::NoReply),
+        "读超时必须精确映射为 NoReply（守护 FINS-R6），实际 {err:?}"
+    );
+    assert!(
+        !c.is_connected(),
+        "读超时后必须丢弃连接并标记未连接（守护 FINS-R6：下次惰性重建）"
+    );
+
+    let dp = c.read(&p).await.expect("超时丢链后应重新建链并读成功");
+    assert_eq!(dp.raw_value, 0xABCD as f64, "重建后必须读到新连接的数据");
 }
 
 #[tokio::test]
@@ -589,6 +620,8 @@ async fn spawn_fins_udp_stub(replies: Vec<FinsReply>) -> String {
                     fins_frame_resp(MRC_CPU_CONTROL, src, mres, sres, &[])
                 }
                 FinsReply::Drop => continue,
+                // UDP 无连接可保持，直接不回包即可模拟超时
+                FinsReply::Hang => continue,
             };
             let _ = socket.send_to(&out, peer).await;
         }

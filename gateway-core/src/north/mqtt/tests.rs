@@ -695,6 +695,66 @@ fn r53_publish_batch_does_not_check_replay_in_progress() {
     );
 }
 
+// ===== I-46：NorthConnector::publish_batch 是幂等空实现 =====
+//
+// 不变量：数据入队由 `ProcessingPipeline` 唯一负责（N-1 修复）。MqttClient
+// 实现的北向 SPI `publish_batch` 只允许返回 Ok，**不得**二次入队、不得登记
+// 发布槽位、不得向 outbox 写待发送记录——任何一项被加回来都会让同一批点位
+// 在队列中出现多行、broker 收到重复 PUBLISH（重复上报计费）。
+
+/// I-46：连续两次调用 `publish_batch` 不得改变队列长度 / 槽位 / outbox。
+#[tokio::test]
+async fn mqtt_publish_batch_is_idempotent_noop() {
+    use crate::engine::metrics::Metrics;
+    use crate::engine::model::DataPoint;
+    use crate::queue::DataQueue;
+    use tokio::sync::mpsc;
+
+    let queue = Arc::new(DataQueue::new_memory().expect("内存队列初始化失败"));
+    let points = vec![
+        DataPoint::good("p1", "dev1", 1.0, 1.0, "u16"),
+        DataPoint::good("p2", "dev1", 2.0, 2.0, "u16"),
+    ];
+    queue.enqueue(points.clone()).await.expect("入队失败");
+    let before = queue.len().await;
+    assert_eq!(before, 2, "前置条件：队列中应有 2 条待发数据");
+
+    // 不可达 broker：构造不失败，且不会有真实发布（本测试也不应触发发布）
+    let config = MqttConfig {
+        enabled: true,
+        broker: "tcp://127.0.0.1:1".to_string(),
+        ..MqttConfig::default()
+    };
+    let client = MqttClient::new(config, queue.clone(), None, None, Arc::new(Metrics::new()))
+        .expect("MqttClient 构造失败（broker 不可达不应影响构造）");
+
+    // 接管 outbox 命令通道：若 publish_batch 真去落库/发布，这里会收到 Persist
+    let (outbox_tx, mut outbox_rx) = mpsc::channel::<OutboxCmd>(8);
+    client.outbox_cmd_tx.store(Some(Arc::new(outbox_tx)));
+
+    for round in 0..2 {
+        <MqttClient as crate::north::NorthConnector>::publish_batch(&client, &points)
+            .await
+            .expect("I-46：publish_batch 空实现必须返回 Ok");
+        assert_eq!(
+            queue.len().await,
+            before,
+            "I-46：第 {} 次 publish_batch 不得产生入队（重复入队 = broker 收到重复 PUBLISH）",
+            round + 1
+        );
+        assert!(
+            client.pending_ack.lock().is_empty(),
+            "I-46：publish_batch 不得登记发布槽位（空实现不应触发任何发布）"
+        );
+        assert!(
+            outbox_rx.try_recv().is_err(),
+            "I-46：publish_batch 不得向 outbox 写入待发送记录"
+        );
+    }
+
+    client.request_stop();
+}
+
 /// 契约：replay_pending_outbox 仍保留 function-level `replay_in_progress`
 /// 单飞保护（防两路并发 replay 重复读同一 outbox 页）。这是修复后
 /// `replay_in_progress` 唯一合法用途，不能被未来「统一清理」误删。

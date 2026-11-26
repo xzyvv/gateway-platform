@@ -30,13 +30,15 @@
 | 11 | **ROI-09** | 旧清单 | 批量写要声明「能不能整批重试」 | M→S | 中 | B | → 并入 ROI-35 后降为 S |
 | 12 | **ROI-43** | 04 清单 | 固件升级要验签，验不过就别装 | L | **高** | B | **需产品定签名方案** |
 | 13 | **G-T2b** | 08 守护 | 数据链路与总线边界 21 条（容量 / 淘汰 / 帧长 / 写回显 / 总线观测） | L | 中 | C | 无 |
-| 14 | **G-T3** | 08 守护 | 观测与一致性 16 条（指标因果、错误变体、北向契约细节） | S-M | 中 | C | 穿插顺手做 |
+| 14 | **G-T3** | 08 守护 | 观测与一致性 16 条（指标因果、错误变体、北向契约细节） | S-M | 中 | C | 已清掉（W6 批次） |
 | 15 | **ROI-15** | 旧清单 | 写属性建模：区分「设定值 / 增量 / 脉冲」 | L | 中 | C | → 与 G-T0 的 **W-09/G-04** 是同一个决定 |
 | 16 | **ROI-14** | 旧清单 | 让 Modbus 的多个从站组同时干活 | L | 中 | C | → 与 G-T0 的 **TCP-09/G-05** 同源；需确认现场从站数 |
 | 17 | **ROI-13** | 旧清单 | 改了配置文件就自动生效，不用重启 | XL | 中 | D | 需评估嵌入式功耗 / 文件系统 |
 | 18 | **SEC-01** | 新增（CI） | 三条依赖安全告警让 `security` workflow 一直红（cookie / url / heapless） | S-M | 中高 | **A** | 无，升级依赖即可 |
 
 **合计**：改代码 8 项 + 补测试 9 批（覆盖 93 条缺口 + 31 处清单纠偏）+ 门禁 1 项。
+
+> **2026-11-26 已清掉（W6 批次）**：G-T3（观测与一致性 16 条）全部补齐并通过。北向契约：I-46/47/48/49；协议观测：MC-R7/E2、FINS-R6、S7-R5、UA-E1、MSTP-R3/R7/E1、IEC-R10；写入口：W-05（协议写以 Control 优先级投递）、W-07（前端 5102 不自动重试）、W-15（GPIO 写失败→`IoError`）。本批只补测试，生产代码零改动。FINS/MSTP/UA 用例分别在 `--features fins` / `bacnet-mstp` / `opcua-server` 下通过。
 
 > **2026-11-26 已清掉（W5 批次）**：DD-14（质量规则改为运行时实例持有）。`pipeline/quality_rules.rs` 的进程级 `static RULES` / `RATE_STATE` 与自由函数 `install_rules` / `apply` 删除，改为 `QualityRuleRuntime { rules, rate_state }` 实例（`new` / `install` / `apply`）；`ProcessingPipeline` 与 `PipelineSpawnInputs` 持有 `Arc<QualityRuleRuntime>`；新增 `engine::quality_rule_port::QualityRuleInstaller` 端口，`gateway-api` 的 `PlatformRefs.quality_rule_installer` 注入同一实例，写接口经 `services::install_quality_rules(&state.platform)` 重装；`gatewayd` 启动时读库构造一次并同时交给 pipeline 与 Web。测试串行锁 `TEST_LOCK` 随之删除，新增「两个运行时互不影响」实例隔离用例。
 
@@ -247,6 +249,7 @@
 
 - **16 条是**：I-46/I-47/I-48/I-49、MC-R7/MC-E2、FINS-R6、S7-R5、UA-E1、MSTP-R3/R7/E1、IEC-R10、W-05/W-07/W-15。
 - **做法**：成本最低，建议穿插在 W1~W4 里顺手做，不单独占一波。
+- **状态**：✅ 2026-11-26 已补 16 条（W6 批次，测试位置见 08 的 4.2）。仅补测试，未改生产代码。
 
 ### G-DOC · 清单标注纠偏 31 条（S · 中 · B）
 
