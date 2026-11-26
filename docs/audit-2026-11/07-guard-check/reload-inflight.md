@@ -1,5 +1,7 @@
 # 热重载与在途操作不变量 —— 测试守护核对
 
+> **2026-11-26 复核**：P2-1 已为 U-2/U-3/U-5/U-6/U-7 补直接用例、U-4 按决议 A 落地，本分册原文（2026-11-22 基线）的「无守护 / 需产品口径」结论已不再代表现状。最新状态见文末「2026-11-26 复核」；清单原文 `docs/architecture/reload-inflight-semantics.md` §5.2 已同步修正，NB-04 关闭。
+
 核对基线：当前工作区代码（2026-11-22）
 
 核对对象：`docs/architecture/reload-inflight-semantics.md` §5.2「尚未证明 / 存在窗口」表（U-1 ~ U-7，行 171-179）。
@@ -58,3 +60,26 @@
 | U-5 | 缺「reload 开新串口前旧端口已释放（`close_task` 先于 `open_bus`）」的顺序断言——现无任何用例守护该交接顺序 | `fn commit_reload_closes_old_serial_task_before_opening_new_port` | `gateway-core/src/runtime/gateway/r36_tests.rs`（覆盖 `apply_bus_plan` 而非 `reset_serial_buses`） |
 | U-6 | 缺 commit 阶段串口重开失败后运行态自愈的直接断言：`restore_serial_buses` 须按旧配置重开总线、重建 collector、重建受影响采集组，且 commit 返回 `Err` | `fn commit_reload_restores_runtime_when_serial_reopen_fails` | `gateway-core/src/runtime/gateway/r36_tests.rs`（需能注入 `open_bus` 失败） |
 | U-7 | 缺「reload 期间被取消写事务数 / drain 等待数 / 超时数」的指标与断言；指标本身不存在，需先定名与口径（含是否与 `write_uncertain_total` 区分） | `fn reload_cancelled_write_transactions_are_counted` | `gateway-core/src/engine/metrics/lifecycle.rs` + `gateway-core/src/runtime/gateway/r36_tests.rs`（口径确定后新增） |
+
+---
+
+## 2026-11-26 复核（P2-1 后）
+
+| 指标 | 11-22 基线 | 11-26 现状 |
+|---|---|---|
+| 条目总数 | 7 | 7 |
+| 【有守护】 | 1 | 6（U-1/U-2/U-3/U-5/U-6/U-7） |
+| 【部分守护】 | 2 | 1（U-4） |
+| 【无守护】 | 4 | 0 |
+| 清单「现有测试」列已过时 | 2 | 0 |
+
+新增证据：
+
+| 编号 | 落地 | 用例 / 指标 |
+|---|---|---|
+| U-2 | `frame_sent` 进入写帧前置位，`TxnResponder::Drop` 保守回送 `WriteUncertain` | `gateway-core/src/south/bus/tests.rs` `aborted_during_write_all_reports_write_uncertain` |
+| U-3 | reload abort 主循环不打断在途事务；旧连接续命至事务结束、不重复下发 | `gateway-core/src/south/bus/tcp_task/tests.rs` `reload_does_not_duplicate_inflight_tcp_write` |
+| U-4 | `ConfigRefs.generation` + 写审计 ` [cfg:<n>]`，解析侧兼容 | `gateway-core/src/runtime/write_service.rs` `audit_detail_appends_config_generation`；`gateway-core/src/engine/write.rs` `parse_detail_ignores_config_generation_suffix` |
+| U-5 | `close_task` 先于 `open_bus` | `gateway-core/src/runtime/gateway/r36_tests.rs` `reload_closes_old_serial_port_before_opening_new_one` |
+| U-6 | 串口重开失败按旧配置自愈并返回 `Err` | `gateway-core/src/runtime/gateway/r36_tests.rs` `reload_serial_open_failure_restores_previous_config_and_errors` |
+| U-7 | 新增 `reload_cancelled_writes_total` / `reload_drain_timeout_total` | `gateway-core/src/engine/metrics/lifecycle.rs`；取消写计数由 U-2 用例断言 |

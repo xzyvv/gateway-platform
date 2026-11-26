@@ -536,3 +536,38 @@ fn audit_reject(
         .unwrap_or_else(|| point_id.to_string());
     audit.log("point.write", &target, &detail, ctx.audit_source());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// U-4：写审计 detail 必须带上发起写入时的配置代次。
+    #[test]
+    fn audit_detail_appends_config_generation() {
+        let ctx = WriteContext::new("api").with_config_generation(Some(7));
+        let ok = audit_detail_with_generation("温度", 12.5, WriteOutcome::Ok, None, &ctx);
+        assert_eq!(ok, "温度=12.5 [cfg:7]");
+
+        let failed = audit_detail_with_generation(
+            "温度",
+            12.5,
+            WriteOutcome::Failed,
+            Some("设备拒绝"),
+            &ctx,
+        );
+        assert_eq!(failed, "温度=12.5 [失败: 设备拒绝] [cfg:7]");
+
+        // 解析侧必须剥离代次后缀，值/状态不受影响
+        let parsed = crate::engine::write::parse_write_detail(&ok);
+        assert_eq!(parsed.value, Some(12.5));
+        assert_eq!(parsed.status, crate::engine::write::ParsedWriteStatus::Ok);
+    }
+
+    /// 北向（OPC UA）等不提供代次的通道保持原格式，不追加后缀。
+    #[test]
+    fn audit_detail_omits_generation_when_absent() {
+        let ctx = WriteContext::new("opcua");
+        let detail = audit_detail_with_generation("温度", 1.0, WriteOutcome::Ok, None, &ctx);
+        assert_eq!(detail, "温度=1");
+    }
+}

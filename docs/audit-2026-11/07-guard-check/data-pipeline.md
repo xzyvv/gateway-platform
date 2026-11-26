@@ -1,5 +1,7 @@
 # 数据处理链路不变量 —— 测试守护核对
 
+> **2026-11-26 复核**：本分册列的 8 处「清单该列已过时」（I-02、I-04、I-30、I-33、I-38、I-40、I-43、I-44）已在 `docs/architecture/data-pipeline-invariants.md` 原文修正。本文件保留为 2026-11-22 基线快照，汇总计数不再代表现状（NB-04 已关闭）。
+
 核对基线：当前工作区代码（2026-11-22）
 
 核对对象：`docs/architecture/data-pipeline-invariants.md`（I-01 ~ I-58）。

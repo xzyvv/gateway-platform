@@ -1,5 +1,7 @@
 # 协议族不变量 —— 测试守护核对
 
+> **2026-11-26 复核**：本分册列的 10 处「清单该列已过时」（MC-R4、MC-R7、MC-W1、MC-W2、MC-W4、MC-W5、MSTP-R5、UA-R7、UA-E2、IEC-R4）已在 `docs/architecture/protocol-family-invariants.md` 原文修正。本文件保留为 2026-11-22 基线快照，汇总计数不再代表现状（NB-04 已关闭）。
+
 核对基线：当前工作区代码（2026-11-22）
 
 ## 汇总
