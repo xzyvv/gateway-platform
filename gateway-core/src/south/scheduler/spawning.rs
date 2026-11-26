@@ -426,4 +426,54 @@ mod due_tests {
             Duration::from_secs(60)
         ));
     }
+
+    /// TCP-09 / G-05（决议 A）：不做 per-slave 限流，靠「总线重试上限 + 设备退避」
+    /// 保证单台不应答设备不会每轮占满总线槽位。
+    ///
+    /// 单台连续超时后：3 次失败 → 5× 基础间隔、8 次 → 15×、13 次 → 60× 封顶；
+    /// 基础周期到点时它不再到期（不会每轮重试），而同总线的健康点仍按基础间隔到期。
+    #[test]
+    fn single_slave_timeout_is_bounded_by_retry_and_backoff() {
+        use crate::south::scheduler::device_state::DeviceState;
+
+        let base = Duration::from_secs(1);
+        let t0 = Instant::now();
+
+        // 健康点：同一时刻按基础间隔到期。
+        let good = DeviceState::new(base);
+        assert!(
+            point_due(Some(t0), t0 + base, good.current_interval),
+            "健康点必须按基础间隔继续采集"
+        );
+
+        // 单台连续超时：退避逐级放大，且基础周期到点也不再重试。
+        let mut bad = DeviceState::new(base);
+        for _ in 0..3 {
+            bad.record_failure();
+        }
+        assert_eq!(bad.current_interval, base * 5, "3 次失败应退避到 5×");
+        assert_eq!(bad.current_reason(), "device_backoff");
+        assert!(
+            !point_due(Some(t0), t0 + base, bad.current_interval),
+            "退避中的设备不得每轮重试、占满总线槽位"
+        );
+        assert!(
+            point_due(Some(t0), t0 + base * 5, bad.current_interval),
+            "仅在自身退避间隔到期后才再次尝试"
+        );
+
+        for _ in 0..5 {
+            bad.record_failure();
+        }
+        assert_eq!(bad.current_interval, base * 15, "8 次失败应退避到 15×");
+
+        for _ in 0..5 {
+            bad.record_failure();
+        }
+        assert_eq!(
+            bad.current_interval,
+            base * 60,
+            "退避倍率封顶 60×，不会无限增长"
+        );
+    }
 }

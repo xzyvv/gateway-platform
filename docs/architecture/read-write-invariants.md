@@ -111,7 +111,7 @@
 | TCP-06 | 写超时必须作废在途事务并强制重连，且**不得重发**该写 | ✅ | `abort_all()` + `retry_allowed=false` |
 | TCP-07 | 断链/写超时的原因与作废数量必须可观测 | ✅ | `abort_all` 返回计数 + 原因日志；测试 `abort_reason_and_count_are_recorded`（`south/bus/tcp_task/tests.rs`）。备注：`abort_all` 本身无 reason 参数，原因由调用方 `warn!` 记录，测试以源码契约断言 |
 | TCP-08 | 写与读共享同一 socket 时的并发上限必须一致 | ✅ | 池槽位 = `tcp_concurrent`，写保留槽位 |
-| TCP-09 | 单台不应答设备不得占满整条总线的槽位 | ❌ | **缺口 G-05**：无 per-slave 限流/熔断/观测 |
+| TCP-09 | 单台不应答设备不得占满整条总线的槽位 | ✅（决议 A） | **不做 per-slave 限流/熔断**：依赖「总线每事务 `retry_count` 上限 + 设备退避（3 次→5×、8 次→15×、13 次→60× 封顶）」；测试 `single_slave_timeout_is_bounded_by_retry_and_backoff`（`south/scheduler/spawning.rs`）断言退避中的设备不按基础周期重试、同总线健康点仍按基础间隔到期。若现场出现「一台坏设备拖垮整条总线」实测案例，再按 ROI-14 立项 per-slave 熔断 |
 
 ## 6. 缺口清单（按 ROI）
 
@@ -121,7 +121,7 @@
 | G-02 | API 契约未区分 `WriteUncertain`（错误码 / `outcome` 字段 / 前端文案） | — | — | **已关闭**：双轨契约（`results[].outcome` 三态 + 业务码 5102）+ 前端仅提示不阻断 |
 | G-03 | 写超时读回消歧 | — | — | **已关闭**：单写 `read` / 批写 `read_batch` 读回，仅「读回值 == 写入值」正向收敛为成功；不一致保持 5102 并附读回值（不做反向判定，避免设备限幅/联锁导致误判可重试） |
 | G-04 | 点位写入属性（写值 / 增量 / 脉冲）未建模 | ~~M~~ | 已关闭 | 决议 A（2026-11-26）：**不建模**。写属性由配置的 `function_code` 与 `data_type` 推导，写入值为绝对值；如现场出现增量/脉冲点位，再按 ROI-15 立项 |
-| G-05 | TCP 单设备拖垮总线（无 per-slave 观测/熔断） | M~L | 中高 | 建议先加 per-slave NoReply 观测再定方案 |
+| G-05 | TCP 单设备拖垮总线（无 per-slave 观测/熔断） | ~~M~L~~ 已关闭 | 中高 → 不做 | 决议 A（2026-11-26）：不建模 per-slave 限流/熔断，沿用总线级退避；由 TCP-09 的用例与文档标注守护（ROI-14 保留为现场实测后升级项） |
 | G-06 | RTU ASCII 缓冲溢出整段丢弃 | — | — | **已关闭**：`ASCII_BUF_LIMIT` + 收缩保留末段 + `inc_ascii_frame_dropped()`（`ab44c3d`） |
 | G-07 | 写路径错误分级分散在各协议（无统一入口） | — | — | **已关闭**：统一走 `mark_write_uncertain` / `mark_write_uncertain_counted` |
 | G-08 | 自研协议（s7comm / fins / mc / iec104 / bacnet）写结果未知**不计数** | — | — | **已关闭**：`mark_write_uncertain_with(metrics, e)`，5 个 collector 均注入 `Option<Arc<Metrics>>`（`9748c60`）；Prom 名 `gateway_bus_write_uncertain_total` |

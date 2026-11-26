@@ -86,12 +86,12 @@
 | TCP-06 | 写超时须中止在途事务且不重发 | 【有守护】 | `gateway-core/src/south/protocol/modbus/transaction/tests.rs:60` `fn write_timeout_aborts_pool_and_returns_disconnected`；`gateway-core/src/south/protocol/modbus/tests.rs:607` `fn write_timeout_is_not_resent_and_reports_uncertain` | 前者断言超时清空在途事务，后者断言不重发 | 保持 |
 | TCP-07 | 中止原因须可观测 | 【部分守护】 | `gateway-core/src/south/bus/tcp_task/tests.rs:388` `fn disconnect_aborts_pool_and_triggers_reconnect` | 实现侧已有可观测性：`gateway-core/src/south/protocol/modbus/transaction.rs:417-429` `abort_all` 返回作废事务数 `count`，`:400` 对 unit_id 不匹配有 warn 原因日志；但测试只断言 `conns==2` 与 `io_errors>0`，未断言计数与中止原因被记录 | 补断言 |
 | TCP-08 | 写与读共享同一 socket 的并发上限 | 【部分守护】 | `gateway-core/src/south/bus/tests.rs:535` `fn read_concurrency_reserves_slots_for_control` | 只覆盖读并发与控制预留的槽位计算，未断言「写占用同一 socket 时与读共享同一上限」 | 补断言 |
-| TCP-09 | 单台不应答设备不得占满整条总线槽位 | 【无守护】 | — | 与 G-05 同源，真实含义是「缺 per-slave 限流/熔断/观测：单台不应答设备会反复占用槽位、拖垮整条总线」，不是「单从站 TCP 写串行化」；实现与测试均无该能力；清单该列标 ❌ 未实现，口径与清单描述不同 | 需产品口径 |
+| TCP-09 | 单台不应答设备不得占满整条总线槽位 | 【有守护（决议 A）】 | `single_slave_timeout_is_bounded_by_retry_and_backoff` | **已落地（2026-11-26）**：不做 per-slave 限流/熔断，沿用「总线每事务 `retry_count` 上限 + 设备退避 5×/15×/60×」；用例断言退避中的设备不按基础周期重试、同总线健康点仍按基础周期到期 | 已关闭 |
 | G-01 | Modbus TCP 响应 unit_id 必须与请求一致 | 【有守护】 | `gateway-core/src/south/protocol/modbus/tests.rs:392` `fn pool_rejects_response_with_mismatched_unit_id` | 缺口关闭后行为由该用例守护：断言 unit_id 不匹配的响应被拒绝（同 TCP-03） | 保持 |
 | G-02 | 上游必须能区分「写失败」与「结果不确定」 | 【有守护】 | `gateway-api/tests/points_write_unified.rs:239` `fn unified_write_single_entry_uncertain_returns_5102`；`:292` `fn unified_write_multi_entry_reports_per_item_outcome` | 缺口关闭后由接口用例守护：5102 与 5101 区分、逐条带 outcome（同 W-06） | 保持 |
 | G-03 | 写路径需可回读核实 | 【有守护】 | `gateway-api/tests/points_write_unified.rs:483` `fn unified_write_single_entry_uncertain_readback_confirms_success`；`:508` `fn unified_write_single_entry_uncertain_readback_mismatch_stays_5102` | 缺口关闭后由回读用例守护：匹配才成功、不匹配仍 5102（同 W-08） | 保持 |
 | G-04 | 点位写入属性（设定值/增量/脉冲）未建模 | 【已关闭（不做）】 | 同 W-09 | **决议 A（P2-2）：不建模**。写属性由 `function_code` + `data_type` 推导，写入值为绝对值；如现场出现增量/脉冲点位，再按 ROI-15 立项 | 已关闭 |
-| G-05 | 单台不应答设备不得占满整条总线槽位 | 【无守护】 | — | 与 TCP-09 同源，真实含义是「缺 per-slave 限流/熔断/观测」，不是「单从站 TCP 写串行化」；代码与测试均无覆盖；清单该列标 ❌ 未实现且描述有误 | 需产品口径 |
+| G-05 | 单台不应答设备不得占满整条总线槽位 | 【已关闭（不做 per-slave 限流）】 | 同 TCP-09 | **决议 A（2026-11-26）**：不建模 per-slave 限流/熔断，沿用总线级退避；ROI-14 保留为现场实测后升级项 | 已关闭 |
 | G-06 | RTU ASCII 溢出保最后段起始 | 【有守护】 | `gateway-core/src/south/bus/serial_task/tests.rs:723` `fn shrink_ascii_buf_keeps_last_frame_start`；`:677` `fn ascii_overflow_keeps_started_frame_and_completes_after_next_read` | 缺口关闭后由 ASCII 溢出用例守护最后段起始位保留（同 RTU-13） | 保持 |
 | G-07 | 写路径统一定级 | 【有守护】 | `gateway-core/src/south/protocol/write_semantics_tests.rs:51` `fn definite_failures_keep_their_variant`；`:24` `fn uncertain_errors_become_write_uncertain` | 缺口关闭后由写语义定级用例逐变体守护（同 W-03/W-03b） | 保持 |
 | G-08 | 不确定写必须计数 | 【有守护】 | `gateway-core/src/south/protocol/write_semantics_tests.rs:151` `fn injected_metrics_counts_write_uncertain` | 缺口关闭后由指标用例守护：仅不确定变体递增计数（同 W-04） | 保持 |
@@ -121,6 +121,6 @@
 | TCP-04 | 缺「两个写事务不得并发下发到同一 TCP socket」的断言（实现有 `Semaphore::new(1)`，无测试） | `fn write_transactions_are_serialized_per_connection` | `gateway-core/src/south/bus/tcp_task/tests.rs` |
 | TCP-07 | 缺「中止数量与中止原因被记录」的可观测性断言 | `fn abort_reason_and_count_are_recorded` | `gateway-core/src/south/bus/tcp_task/tests.rs` |
 | TCP-08 | 缺「写与读共享同一 socket 并发上限」的断言 | `fn write_and_read_share_the_same_concurrency_limit` | `gateway-core/src/south/bus/tcp_task/tests.rs` |
-| TCP-09 | 缺「单台不应答设备不得占满整条总线槽位」的 per-slave 限流/熔断/观测断言（实现也未做，先要产品口径，与 G-05 同源） | `fn unresponsive_slave_cannot_monopolize_bus_slots` | `gateway-core/src/south/bus/tcp_task/tests.rs` |
+| TCP-09 | 已落地（决议 A）：不做 per-slave 限流，设备退避 + 总线重试上限保证不被单台占满 | `single_slave_timeout_is_bounded_by_retry_and_backoff` | `gateway-core/src/south/scheduler/spawning.rs` |
 | G-04 | 已关闭（决议 A：不建模，与 W-09 合并） | `write_function_code_is_configured_and_value_is_absolute` | `gateway-core/src/south/protocol/modbus/tests.rs` |
-| G-05 | 缺「per-slave 限流/熔断/观测」断言（同 TCP-09，先要产品口径） | `fn per_slave_backpressure_is_enforced` | `gateway-core/src/south/bus/tcp_task/tests.rs` |
+| G-05 | 已关闭（决议 A：不建模 per-slave 限流，与 TCP-09 合并） | `single_slave_timeout_is_bounded_by_retry_and_backoff` | `gateway-core/src/south/scheduler/spawning.rs` |
