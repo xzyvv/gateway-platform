@@ -86,6 +86,74 @@ fn test_3e_response_header_echo_mismatch_rejected() {
     assert!(parse_response_header_3e(&head, 0).is_err());
 }
 
+/// 构造一个只填「固定头 + 数据长度」的 3E 响应头（网络号/PC 号/IO 号/站号均为本站约定值）。
+fn head_3e_with_body_len(body_len: u16) -> Vec<u8> {
+    let mut head = vec![0xD0, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x00];
+    head.extend_from_slice(&body_len.to_le_bytes());
+    head
+}
+
+/// MC-R4：「结束码 + 数据」长度必须落在 2..=960 字节，越界帧在读取前即被拒，
+/// 不得按对端声明的长度直接分配缓冲区。
+#[test]
+fn decode_rejects_body_len_out_of_2_to_960() {
+    // 下界：装不下 2 字节结束码
+    match parse_response_header_3e(&head_3e_with_body_len(1), 0) {
+        Err(crate::south::protocol::CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("too small"), "原因需可辨识: {msg}");
+        }
+        other => panic!("长度 1 应为 InvalidFrame，实际 {other:?}"),
+    }
+    // 上界：961 超过单帧最大 960 字节
+    match parse_response_header_3e(&head_3e_with_body_len(961), 0) {
+        Err(crate::south::protocol::CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("too large"), "原因需可辨识: {msg}");
+        }
+        other => panic!("长度 961 应为 InvalidFrame，实际 {other:?}"),
+    }
+    // 边界内可解析
+    assert_eq!(
+        parse_response_header_3e(&head_3e_with_body_len(2), 0).expect("长度 2 应可解析"),
+        2
+    );
+    assert_eq!(
+        parse_response_header_3e(&head_3e_with_body_len(960), 0).expect("长度 960 应可解析"),
+        960
+    );
+}
+
+/// MC-R6：1E 响应功能码必须等于请求功能码 | 0x80，数据长度由点数推导且 ≤ 512 字节。
+#[test]
+fn decode_1e_rejects_function_code_mismatch_and_over_512() {
+    // 正常：字读 1 点 → 功能码 0x81、状态 0、2 字节数据
+    assert_eq!(
+        parse_response_header_1e(&[0x81, 0x00], FC_BATCH_WORD_READ, true, false, 1)
+            .expect("0x81 应匹配字读"),
+        (0, 2)
+    );
+
+    // 功能码不匹配（0x80 对 0x01 字读）
+    match parse_response_header_1e(&[0x80, 0x00], FC_BATCH_WORD_READ, true, false, 1) {
+        Err(crate::south::protocol::CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("func"), "原因需可辨识: {msg}");
+        }
+        other => panic!("功能码不匹配应为 InvalidFrame，实际 {other:?}"),
+    }
+
+    // 257 字 → 514 字节，超过 512 上限；256 字 = 512 恰好在界内
+    match parse_response_header_1e(&[0x81, 0x00], FC_BATCH_WORD_READ, true, false, 257) {
+        Err(crate::south::protocol::CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("too large"), "原因需可辨识: {msg}");
+        }
+        other => panic!("514 字节应为 InvalidFrame，实际 {other:?}"),
+    }
+    assert_eq!(
+        parse_response_header_1e(&[0x81, 0x00], FC_BATCH_WORD_READ, true, false, 256)
+            .expect("512 字节应可解析"),
+        (0, 512)
+    );
+}
+
 /// ROI-26：4E 响应除序列号外，固定头回显同样必须比对。
 #[test]
 fn test_4e_response_header_echo_mismatch_rejected() {

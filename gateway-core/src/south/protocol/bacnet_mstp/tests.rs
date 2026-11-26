@@ -3,7 +3,9 @@
 use super::*;
 use crate::south::bus::frame_buffer::FrameBuffer;
 
+use crate::config::PointConfig;
 use crate::engine::metrics::Metrics;
+use crate::south::protocol::{Collector, CollectorError};
 
 fn test_metrics() -> Metrics {
     Metrics::new()
@@ -504,4 +506,121 @@ fn mstp_frame_type_constants_match_ashrae_135_table_9_1() {
         "Data Not Expecting Reply"
     );
     assert_eq!(FRAME_REPLY_POSTPONED, 0x07, "Reply Postponed");
+}
+
+// ============================================================
+// MSTP-R1 / MSTP-R4：帧校验错误变体与站号上限
+// ============================================================
+
+/// MSTP-R1：帧头 `0x55 0xFF`、`data_len <= 512`、头 CRC8 与数据 CRC16 必须正确。
+///
+/// 不只断言 `is_err`，而是锁死每个失败分支的错误变体。
+#[test]
+fn parse_mstp_frame_rejects_oversized_data_len_and_locks_variants() {
+    let m = test_metrics();
+
+    // 头 CRC 错 → ChecksumError
+    let mut bad_header = build_mstp_frame(FRAME_TOKEN, 5, 1, &[]);
+    bad_header[7] ^= 0xFF;
+    assert!(
+        matches!(
+            parse_mstp_frame(&bad_header, &m),
+            Err(CollectorError::ChecksumError)
+        ),
+        "头 CRC 错应报 ChecksumError"
+    );
+
+    // 数据 CRC 错 → ChecksumError
+    let data = [0x01u8, 0x02, 0x03];
+    let mut bad_data = build_mstp_frame(FRAME_DATA_NOT_EXPECTING_REPLY, 0, 1, &data);
+    let n = bad_data.len();
+    bad_data[n - 1] ^= 0xFF; // 破坏数据 CRC 高字节
+    assert!(
+        matches!(
+            parse_mstp_frame(&bad_data, &m),
+            Err(CollectorError::ChecksumError)
+        ),
+        "数据 CRC 错应报 ChecksumError"
+    );
+
+    // 过短（不足最小帧长 8）→ InvalidFrame
+    assert!(
+        matches!(
+            parse_mstp_frame(&PREAMBLE, &m),
+            Err(CollectorError::InvalidFrame(_))
+        ),
+        "过短帧应报 InvalidFrame"
+    );
+
+    // data_len = 513 > 512 → InvalidFrame（头 CRC 本身正确，仅长度越界）
+    let mut oversized = Vec::new();
+    oversized.extend_from_slice(&PREAMBLE);
+    oversized.push(FRAME_DATA_NOT_EXPECTING_REPLY);
+    oversized.push(0x00); // DADDR
+    oversized.push(0x01); // SADDR
+    oversized.extend_from_slice(&513u16.to_be_bytes());
+    let header_crc = crc8_header(&oversized[2..7]);
+    oversized.push(header_crc);
+    match parse_mstp_frame(&oversized, &m) {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("513"), "原因需可辨识: {msg}");
+        }
+        other => panic!("data_len=513 应被 InvalidFrame 拒绝，实际 {other:?}"),
+    }
+}
+
+fn mstp_point(id: &str) -> PointConfig {
+    PointConfig {
+        id: id.to_string(),
+        bus: "mstp-bus".to_string(),
+        protocol: "bacnet_mstp".to_string(),
+        address: "analog-input:1".to_string(),
+        ..Default::default()
+    }
+}
+
+/// MSTP-R4：目标站号与主站号必须 <=127，越界一律 `InvalidConfig`。
+#[tokio::test]
+async fn mstp_rejects_station_address_over_127() {
+    // 目标站号 127：合法地址，不得被判为配置错误（总线无应答时如实报其它错）
+    let bus = fake_mstp_bus("mstp_addr_127", None).await;
+    let collector =
+        BacnetMstpCollector::new("mstp_addr_127", bus, 0, std::sync::Arc::new(test_metrics()));
+    let mut p = mstp_point("ai-127");
+    p.slave_id = Some(127);
+    let err = collector.read(&p).await.expect_err("总线无应答应报错");
+    assert!(
+        !matches!(err, CollectorError::InvalidConfig(_)),
+        "站号 127 是合法地址，不得报 InvalidConfig: {err:?}"
+    );
+
+    // 目标站号 128：越界 → InvalidConfig，且在校验阶段即返回
+    let bus = fake_mstp_bus("mstp_addr_128", None).await;
+    let collector =
+        BacnetMstpCollector::new("mstp_addr_128", bus, 0, std::sync::Arc::new(test_metrics()));
+    let mut p = mstp_point("ai-128");
+    p.slave_id = Some(128);
+    match collector.read(&p).await {
+        Err(CollectorError::InvalidConfig(msg)) => {
+            assert!(msg.contains("128"), "原因需可辨识: {msg}");
+        }
+        other => panic!("目标站号 128 应报 InvalidConfig，实际 {other:?}"),
+    }
+
+    // 主站号 128：同样越界 → InvalidConfig
+    let bus = fake_mstp_bus("mstp_master_128", None).await;
+    let collector = BacnetMstpCollector::new(
+        "mstp_master_128",
+        bus,
+        128,
+        std::sync::Arc::new(test_metrics()),
+    );
+    let mut p = mstp_point("ai-master-128");
+    p.slave_id = Some(1);
+    match collector.read(&p).await {
+        Err(CollectorError::InvalidConfig(msg)) => {
+            assert!(msg.contains("master"), "原因需可辨识: {msg}");
+        }
+        other => panic!("主站号 128 应报 InvalidConfig，实际 {other:?}"),
+    }
 }

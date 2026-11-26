@@ -183,6 +183,111 @@ async fn mc_write_issues_single_request_without_readback() {
     );
 }
 
+// ============================================================
+// G-T2a MC-R11：同连接流锁串行化，批量分片与诊断并发不交叉
+// ============================================================
+
+/// 请求感知 + 延迟应答的 3E 字读桩：按请求首地址与点数回显「每字 = 首地址 + 序号」，
+/// 读请求后停顿数毫秒以放大并发窗口（若同连接未串行化，应答会被另一路先读走）。
+async fn spawn_mc_delayed_echo_stub() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr").to_string();
+    let reqs = Arc::new(AtomicUsize::new(0));
+    let reqs_srv = reqs.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let reqs = reqs_srv.clone();
+            tokio::spawn(async move {
+                loop {
+                    let mut head = [0u8; 9];
+                    if sock.read_exact(&mut head).await.is_err() {
+                        return;
+                    }
+                    let len = u16::from_le_bytes([head[7], head[8]]) as usize;
+                    let mut body = vec![0u8; len];
+                    if sock.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    if body.len() < 12 {
+                        return;
+                    }
+                    // body: 定时器(2) 命令(2) 子命令(2) 软元件码(1) 首地址(3) 点数(2)
+                    let start = u32::from_le_bytes([body[7], body[8], body[9], 0]);
+                    let points = u16::from_le_bytes([body[10], body[11]]) as u32;
+                    let mut data = Vec::with_capacity(points as usize * 2);
+                    for i in 0..points {
+                        data.extend_from_slice(&((start + i) as u16).to_le_bytes());
+                    }
+                    reqs.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    if sock.write_all(&mc_response(0, &data)).await.is_err() {
+                        return;
+                    }
+                    let _ = sock.flush().await;
+                }
+            });
+        }
+    });
+    (addr, reqs)
+}
+
+/// MC-R11：同一 TCP 连接下，批量读（会自动分片）与诊断并发时，流锁必须串行化事务，
+/// 任一方都不得读到对方的应答（帧不交叉）。
+#[tokio::test]
+async fn concurrent_batch_and_diag_do_not_cross_frames() {
+    let (addr, reqs) = spawn_mc_delayed_echo_stub().await;
+    let c = Arc::new(McCollector::new(
+        addr,
+        "mc-bus".into(),
+        Duration::from_secs(5),
+        None,
+    ));
+
+    // 480 个相邻字（D1000..=D1479）→ 超 479 上限，切为 2 个分片帧；
+    // 值与诊断探针 D0 的预期值 0 不同，便于识别串包。
+    let batch_pts: Vec<PointConfig> = (0..480)
+        .map(|i| point(&format!("p{i}"), &format!("D{}", 1000 + i), "u16"))
+        .collect();
+
+    let c_batch = c.clone();
+    let c_diag = c.clone();
+    let (batch_rs, diag_msgs) = tokio::join!(
+        async move { c_batch.read_batch(&batch_pts).await },
+        async move {
+            let mut msgs = Vec::new();
+            for _ in 0..3 {
+                msgs.push(c_diag.diag().await);
+            }
+            msgs
+        }
+    );
+
+    assert_eq!(batch_rs.len(), 480);
+    for (i, r) in batch_rs.iter().enumerate() {
+        let dp = r
+            .as_ref()
+            .unwrap_or_else(|e| panic!("并发下 D{} 读取失败: {e:?}", 1000 + i));
+        assert_eq!(
+            dp.raw_value,
+            (1000 + i) as f64,
+            "并发下 D{} 读到了他人应答（帧交叉）",
+            1000 + i
+        );
+    }
+    for msg in &diag_msgs {
+        assert!(msg.contains("D0 回读值=0"), "诊断应答被批量帧污染: {msg}");
+    }
+    assert_eq!(
+        reqs.load(Ordering::SeqCst),
+        5,
+        "2 个批量分片 + 3 次诊断，共 5 次事务"
+    );
+}
+
 /// MC-W5：设备明确拒绝（结束码非零）后**不得自动重发**——写帧可能已被执行。
 #[tokio::test]
 async fn mc_write_failure_is_not_retried() {

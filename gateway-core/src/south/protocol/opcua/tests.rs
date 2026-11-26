@@ -558,3 +558,197 @@ async fn ua_r2_read_connects_lazily_before_first_read() {
         "read 入口必须先惰性建链"
     );
 }
+
+// ============================================================
+// 审计批 G-T2a：UA-R2 / UA-R5 / UA-R6 边界与关系断言
+// ============================================================
+
+/// UA-R2：重复 connect 不得重建会话。
+///
+/// 实现 `mod.rs:619-620` 在 session 槽位已有会话时直接返回 `Ok(())`。本用例用两个
+/// 可观测点锁定该幂等行为：
+/// 1) `Arc::as_ptr` 身份不变——槽位里仍是同一个 `Arc<Session>` 实例；
+/// 2) 服务端 `CurrentSessionCount` 仍为 1——没有在服务端登记第二个会话。
+/// 若实现改成「先拆再建」，两项断言都会失败。
+#[cfg(feature = "opcua-server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ua_r2_repeated_connect_does_not_rebuild_session() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定本地端口");
+    let port = listener.local_addr().expect("取本地端口").port();
+    let endpoint = format!("opc.tcp://127.0.0.1:{port}/");
+    let (server, handle) = ServerBuilder::new_anonymous("gw-opcua-ua-r2-repeat")
+        .application_uri("urn:gateway:opcua-ua-r2-repeat-server")
+        .create_sample_keypair(true)
+        .trust_client_certs(true)
+        .discovery_urls(vec![endpoint.clone()])
+        .diagnostics_enabled(true)
+        .build()
+        .expect("构建测试服务端");
+    tokio::spawn(server.run_with(listener));
+
+    let collector = OpcUaCollector::new(endpoint, "bus_opcua_ua_r2_repeat".into());
+    tokio::time::timeout(Duration::from_secs(10), collector.connect())
+        .await
+        .expect("首次 connect 超时")
+        .expect("首次真实建链必须成功");
+    assert!(
+        collector.connected.load(Ordering::Relaxed),
+        "首次建链成功后 connected 必须为 true（connect 内部已等到 wait_for_connection 成功）"
+    );
+
+    // 服务端登记 1 个会话：证明首次建链真实生效，也确认该计数可作后续判据
+    let mut counted = false;
+    for _ in 0..100 {
+        if server_session_count(&handle) == 1 {
+            counted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        counted,
+        "首次建链后服务端会话数应为 1，实际 {}",
+        server_session_count(&handle)
+    );
+
+    let ptr_before = {
+        let guard = collector.session.lock().await;
+        let session = guard.as_ref().expect("首次建链后 session 必须存在");
+        Arc::as_ptr(session)
+    };
+
+    // 重复 connect：实现应在槽位已有会话时直接返回 Ok，不得重建
+    tokio::time::timeout(Duration::from_secs(10), collector.connect())
+        .await
+        .expect("重复 connect 超时")
+        .expect("重复 connect 必须幂等成功");
+
+    let ptr_after = {
+        let guard = collector.session.lock().await;
+        let session = guard.as_ref().expect("重复 connect 后 session 不得丢失");
+        Arc::as_ptr(session)
+    };
+    assert_eq!(
+        ptr_before, ptr_after,
+        "重复 connect 不得替换会话对象（必须仍是同一个 Arc<Session> 实例）"
+    );
+    assert_eq!(
+        server_session_count(&handle),
+        1,
+        "重复 connect 不得在服务端新建第二个会话"
+    );
+    assert!(
+        collector.connected.load(Ordering::Relaxed),
+        "重复 connect 后仍应保持已连接状态"
+    );
+}
+
+/// UA-R5：读失败阈值必须在会话超时之前到达。
+///
+/// 阈值是「连续读失败次数」，会话超时是毫秒；把阈值按采集最快 1s/次 换算成
+/// 最长判定耗时，必须严格小于会话超时——否则会出现「会话先掉、计数还没到」，
+/// 整站离线但页面仍显示连接中。
+// 契约守门：断言对象就是常量之间的关系本身，常量断言属预期，不简化
+#[allow(clippy::assertions_on_constants)]
+#[test]
+fn ua_r5_threshold_is_below_session_timeout() {
+    // 采集周期最快按 1s 计（现场最小配置粒度），阈值次失败的总耗时必须早于会话超时。
+    let worst_case_ms = u64::from(READ_FAILURE_THRESHOLD) * 1_000;
+    assert!(
+        worst_case_ms < u64::from(SESSION_TIMEOUT_MS),
+        "读失败阈值 {} 次 × 1s = {}ms 必须小于会话超时 {}ms，否则会话先掉、计数还没到",
+        READ_FAILURE_THRESHOLD,
+        worst_case_ms,
+        SESSION_TIMEOUT_MS
+    );
+}
+
+/// UA-R6：keepalive 失败达阈值必须拆会话；`try_lock` 抢不到必须跳过、不得阻塞采集。
+///
+/// 一个用例覆盖两个可观测行为：
+/// 1) 锁竞争跳过：测试持有 `session` 锁跨越一个完整 `KEEPALIVE_INTERVAL`。supervisor
+///    醒来时 `try_lock` 立即返回 `Err`（`mod.rs:347-355` 的跳过分支），烧掉一个周期
+///    而不拆会话；同时 `try_lock` 本身不阻塞（耗时 < 100ms），说明探测不会卡住读路径。
+/// 2) 达阈值拆会话：让当前 session 失效（直接 `disconnect`，模拟半开会话），
+///    supervisor 连续 `KEEPALIVE_MAX_CONSECUTIVE_FAILURES` 次探测失败后必须清空
+///    session 槽位并置 `connected=false`。
+#[cfg(feature = "opcua-server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ua_r6_keepalive_threshold_tears_down_and_skips_on_lock_contention() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定本地端口");
+    let port = listener.local_addr().expect("取本地端口").port();
+    let endpoint = format!("opc.tcp://127.0.0.1:{port}/");
+    let (server, _handle) = ServerBuilder::new_anonymous("gw-opcua-ua-r6-test")
+        .application_uri("urn:gateway:opcua-ua-r6-test-server")
+        .create_sample_keypair(true)
+        .trust_client_certs(true)
+        .discovery_urls(vec![endpoint.clone()])
+        .diagnostics_enabled(true)
+        .build()
+        .expect("构建测试服务端");
+    tokio::spawn(server.run_with(listener));
+
+    let collector = OpcUaCollector::new(endpoint, "bus_opcua_ua_r6".into());
+    tokio::time::timeout(Duration::from_secs(10), collector.connect())
+        .await
+        .expect("connect 超时")
+        .expect("真实建链必须成功");
+    assert!(
+        collector.connected.load(Ordering::Relaxed),
+        "建链后 connected 应为 true"
+    );
+
+    // ---- 阶段 1：session 锁被读路径占用 → 本周期 try_lock 跳过，不阻塞 ----
+    // 持锁等价于 read 正在使用 session；supervisor 此时必须跳过而不是排队等待。
+    let guard = collector.session.lock().await;
+
+    let t0 = std::time::Instant::now();
+    let busy = collector.session.try_lock().is_err();
+    assert!(
+        busy,
+        "锁被占用时 try_lock 必须返回 Err（supervisor 据此跳过本周期）"
+    );
+    assert!(
+        t0.elapsed() < Duration::from_millis(100),
+        "try_lock 抢不到必须立即返回，不得阻塞采集（实测耗时 {:?}）",
+        t0.elapsed()
+    );
+
+    // 跨过一个完整探测周期：supervisor 应跳过，会话不得被拆除
+    tokio::time::sleep(KEEPALIVE_INTERVAL + Duration::from_secs(1)).await;
+    assert!(
+        collector.connected.load(Ordering::Relaxed),
+        "锁竞争导致跳过时，supervisor 不得把连接置为断连"
+    );
+    assert!(guard.is_some(), "锁竞争导致跳过时，session 槽位不得被清空");
+
+    // ---- 阶段 2：探测连续失败达阈值 → 拆会话 ----
+    // 直接断开当前 session（模拟半开会话），让后续 keepalive 探测必然失败；
+    // 槽位仍由 collector 持有，由 supervisor 在达到阈值后负责拆除。
+    let dead_session = guard.as_ref().expect("session 仍应存在").clone();
+    let _ = dead_session.disconnect().await;
+    drop(guard);
+
+    // 等 supervisor 累积到阈值次数后拆会话：留出 ≥2 个探测周期 + 单次响应超时的余量
+    let mut torn_down = false;
+    for _ in 0..300 {
+        if !collector.connected.load(Ordering::Relaxed) {
+            torn_down = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        torn_down,
+        "keepalive 连续失败达阈值 {} 次后必须置 connected=false",
+        KEEPALIVE_MAX_CONSECUTIVE_FAILURES
+    );
+    assert!(
+        collector.session.lock().await.is_none(),
+        "达阈值拆会话后 session 槽位必须被清空（否则下一次 read 会复用死会话）"
+    );
+}

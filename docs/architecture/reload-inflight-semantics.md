@@ -172,10 +172,10 @@ collector，而 collector 持有 `Arc<BusManager>`（工厂签名见
 |---|---|---|
 | U-1 | 串口 abort 落在「帧已写出」之后时，`BusClosed → Failed` 是否会造成现场重复写 | **已修复（ROI-20）**：`frame_sent` + `TxnResponder` Drop → `WriteUncertain`；用例 `south::bus::tests::aborted_in_flight_write_reports_write_uncertain` |
 | U-2 | 串口 `write_all` 被取消时实际写出多少字节 | 驱动层仍未知，但对外口径已保守统一为 `WriteUncertain`（ROI-20），不再声称明确失败 |
-| U-3 | reload 后旧 TCP 连接还会存活多久、与新连接是否会向同一设备交叉写 | 事务 task 被 detach（`tcp_task.rs:300-304`），旧 pool 由 `Arc` 续命；无观测指标 |
+| U-3 | reload 后旧 TCP 连接还会存活多久、与新连接是否会向同一设备交叉写 | 事务 task 被 detach（`tcp_task.rs:239` 独立事务 task，`:306` 记入 `in_flight`，`:313-314` 仅在 task 退出时 abort），旧 pool 由 `Arc` 续命；无观测指标，也无 reload × 在途写用例 |
 | U-4 | 「新 collector + 旧点位」窗口内下发会造成什么现场后果 | 代次不一致由代码结构证明，无测试、无版本号约束 |
 | U-5 | 同一串口被新旧两个 `SerialHandle` 同时打开的后果 | `serial.rs:116-118` 无排他；Windows/Linux 行为不同，未验证 |
-| U-6 | reload 失败后运行态（managers/collectors）能否恢复 | `gateway.rs:493-509` 先替换再重建组，失败时只回滚 API 侧磁盘与内存；managers 无回滚路径 |
+| U-6 | reload 失败后运行态（managers/collectors）能否恢复 | `commit_reload` 先替换再重建组；commit 阶段串口重开失败走 `restore_serial_buses`（`gateway.rs:668`、`:694`）自愈，按旧配置重开总线并重建 collector（ROI-12 已推翻「managers 无回滚路径」），但该自愈路径无直接用例；API 侧回滚由 `gateway-api/tests/config_reload_atomicity.rs` 的 `reload_failure_leaves_memory_and_disk_untouched` 覆盖 |
 | U-7 | reload 期间被取消的写事务数量 | 无指标、无日志；`abort_all` 不被 reload 调用 |
 
 ---

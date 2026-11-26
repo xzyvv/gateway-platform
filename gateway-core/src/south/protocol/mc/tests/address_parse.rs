@@ -42,3 +42,19 @@ fn test_parse_address_errors() {
     assert!(parse_address("D").is_err());
     assert!(parse_address("D0x10").is_err());
 }
+
+/// MC-R1：软元件编号为 24 位，上限 0x00FF_FFFF；越界必须在建链前返回 `InvalidConfig`。
+#[test]
+fn parse_address_rejects_index_over_max_as_invalid_config() {
+    // 上限本身可解析
+    let max = parse_address("D16777215").expect("0x00FF_FFFF 应可解析");
+    assert_eq!(max.head, 0x00FF_FFFF, "上限编号应原样保留");
+
+    // 上限 +1 必须被拒，且锁定错误变体为 InvalidConfig（而非任意 is_err）
+    match parse_address("D16777216") {
+        Err(crate::south::protocol::CollectorError::InvalidConfig(msg)) => {
+            assert!(msg.contains("16777216"), "原因需可辨识越界编号: {msg}");
+        }
+        other => panic!("越界编号应为 InvalidConfig，实际 {other:?}"),
+    }
+}

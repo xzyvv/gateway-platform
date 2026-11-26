@@ -191,6 +191,33 @@ async fn batch_read_splits_when_over_frame_limit() {
     );
 }
 
+/// MC-R10：批量解码数据区不足时，只把越界点标 `InvalidFrame`，不得整批丢弃。
+///
+/// D100 与 D108 的地址空洞在合并阈值内 → 同一帧；桩只回 1 字数据，
+/// 首点仍在数据区内，第二点（偏移 8 字）越界。
+#[tokio::test]
+async fn batch_decode_overflow_marks_only_that_point_invalid_frame() {
+    let data = [0x34, 0x12]; // 仅 1 个字
+    let (addr, _conns, reqs) =
+        spawn_mc_stub_counters(vec![StubAction::Reply(mc_response(0, &data))]).await;
+    let c = McCollector::new(addr, "mc-bus".into(), Duration::from_secs(5), None);
+    let pts = vec![point("p1", "D100", "u16"), point("p2", "D108", "u16")];
+
+    let rs = c.read_batch(&pts).await;
+    assert_eq!(rs.len(), 2, "整批不得因单点越界而丢结果");
+    assert_eq!(
+        rs[0].as_ref().expect("数据区内首点应成功").raw_value,
+        0x1234 as f64
+    );
+    match &rs[1] {
+        Err(crate::south::protocol::CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("D108"), "错误需指明失败点位: {msg}");
+        }
+        other => panic!("越界点应为 InvalidFrame，实际 {other:?}"),
+    }
+    assert_eq!(reqs.load(Ordering::SeqCst), 1, "两点应合并为同一帧");
+}
+
 /// 契约五：1E 帧单帧上限 256 → 300 个相邻点应回退为 2 帧
 #[tokio::test]
 async fn batch_read_1e_splits_at_256_units() {

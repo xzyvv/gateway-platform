@@ -22,8 +22,8 @@
 | # | 不变量 | 状态 | 守点 |
 |---|---|---|---|
 | B-01 | 写事务失败后**不得自动重发**（写帧可能已被从站执行） | ✅ | `BusTransaction.retry_allowed` + `transaction_no_retry`；测试 `write_timeout_is_not_resent_and_reports_uncertain` |
-| B-02 | 读/采集事务允许按 `retry_count` 重发 | ✅ | `bus/mod.rs` 重试循环 |
-| B-03 | 写事务的应答预算按「不重试」推导，不白等重试轮次 | ✅ | `transaction_inner` 中 `effective_retries` |
+| B-02 | 读/采集事务允许按 `retry_count` 重发 | 🟡 | `bus/mod.rs` 重试循环；测试 `bus_retry_budget_covers_all_attempts_and_retry_delays` 只锁预算算术、`write_transaction_never_retries` 只锁读可重试的谓词，均未断言读路径实际重发次数 |
+| B-03 | 写事务的应答预算按「不重试」推导，不白等重试轮次 | ✅ | `transaction_inner` 中 `effective_retries`；测试 `write_reply_deadline_ignores_retry_budget` 断言写事务预算恒为 `1T + 余量`，与配置的重试轮次无关 |
 | B-04 | 调用方已放弃（超时/断开）的事务**不得下发** | ✅ | `prepare_dequeued` |
 | B-05 | 写（控制）事务的出队优先级高于读 | ✅ | 双通道 + `select!{biased}` |
 | B-06 | 写事务不得因采集占满配额而拿不到槽位 | ✅ | `reserved_control_slots`（唯一公式来源）；测试 `pool_control_transaction_reserves_slots_under_pressure` |
@@ -67,8 +67,8 @@
 | W-11b | 写回显**不匹配** → 应答无法解析 → 结果未知（写很可能已执行），不得报成普通失败 | ✅ | Modbus `verify_write_echo` 失败 → `mark_write_uncertain`；测试 `write_echo_mismatch_is_write_uncertain` |
 | W-12 | 自研客户端协议（s7comm / fins / mc / iec104 / bacnet）的写路径必须套用同一套定级 | ✅ | 各协议写路径 `mark_write_uncertain`；测试 `s7comm/mc/fins/iec104/bacnet` 写语义用例 |
 | W-13 | **未下发**的失败（地址解析失败、参数非法、建链失败、`BusBusy`、不可写功能码）不得算「结果未知」 | ✅ | 这些路径不套 `mark_write_uncertain`；不可写 FC → `Unsupported`；测试 `write_unsupported_function_code_is_not_uncertain` |
-| W-14 | 同一协议的**读**路径不得因写语义改造而改变错误口径 | ✅ | mc 读路径保留 `check_end_code`（`InvalidFrame`），写路径另用 `check_write_end_code` |
-| W-15 | 本地 IO 写（GPIO）不参与本分级（写生效与否确定） | ✅ | `gpio/mod.rs` 保持 `IoError`；仅文档说明 |
+| W-14 | 同一协议的**读**路径不得因写语义改造而改变错误口径 | ✅ | mc 读路径保留 `check_end_code`、写路径另用 `check_write_end_code`；ROI-25 后两者均返回 `DeviceRejected`，由测试 `test_check_end_code_is_device_rejected` 锁定读写同口径 |
+| W-15 | 本地 IO 写（GPIO）不参与本分级（写生效与否确定） | 🟡 | `gpio/mod.rs` 把硬件失败 `map_err` 为 `CollectorError::IoError`；现有用例只有 `test_gpio_write_rejects_di_pin`、`test_gpio_write_rejects_invalid_address`（均为 `InvalidConfig`），无 `IoError` 断言 |
 | W-16 | 总线协议（modbus / dlt645 / cjt188）的写响应状态字非 0 → `DeviceRejected` | ✅ | dlt645 / cjt188 `parse_write_*_response`；测试 `write_status_nonzero_is_device_rejected` |
 
 ## 3. 读语义（跨协议）
@@ -94,9 +94,9 @@
 | RTU-07 | 帧间静默 ≥ 3.5 字符（写后、读前） | ✅ | `write_frame` 尾部 `gap_ms` |
 | RTU-08 | DE 拉高后必须有建立时间再发字节 | ✅ | `DE_SETUP_TIME`（1ms，仅外部 DE 控制时生效） |
 | RTU-09 | DE 拉低后不得立即进入读（避免吃首字节） | ✅ | 同 RTU-07 |
-| RTU-10 | 读超时必须 ≥ 帧长 × 10bit / 波特率 + 余量 | ✅ | `effective_attempt_timeout`；测试 `adaptive_timeout_covers_frame_time_at_low_baud` |
-| RTU-11 | 帧长估算只在 Modbus 总线启用（其它协议第 2 字节不是功能码） | ✅ | `BusManager.is_modbus`；测试 `adaptive_timeout_is_disabled_for_non_modbus_protocol` |
-| RTU-12 | 写超时预算按不重试推导（不白等 `retry_count` 轮） | ✅ | `transaction_inner` |
+| RTU-10 | 读超时必须 ≥ 帧长 × 10bit / 波特率 + 余量 | ✅ | `BusManager::attempt_timeout_for`（`south/bus/mod.rs`）；测试 `adaptive_timeout_covers_frame_time_at_low_baud`（`south/bus/tests.rs`） |
+| RTU-11 | 帧长估算只在 Modbus 总线启用（其它协议第 2 字节不是功能码） | ✅ | `BusManager::attempt_timeout_for` 的协议隔离（`south/bus/mod.rs`）；测试 `adaptive_timeout_is_disabled_for_non_modbus_protocol`（`south/bus/tests.rs`） |
+| RTU-12 | 写超时预算按不重试推导（不白等 `retry_count` 轮） | ✅ | `transaction_inner`；测试 `write_reply_deadline_ignores_retry_budget`（写事务预算恒为 `1T + 余量`，不叠加重试轮次） |
 | RTU-13 | ASCII 缓冲溢出不得整段丢弃（应保留末段） | ✅ | `serial_task.rs` 超过 `ASCII_BUF_LIMIT` 时保留末段并 `inc_ascii_frame_dropped()` —— **缺口 G-06 已关闭** |
 
 ## 5. Modbus TCP 特有

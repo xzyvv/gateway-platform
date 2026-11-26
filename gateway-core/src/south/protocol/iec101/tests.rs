@@ -153,6 +153,8 @@ struct StubState {
     interrogation_reply: Vec<u8>,
     /// 依次响应二级数据请求；耗尽后回单字符 ACK
     class2_queue: Vec<Vec<u8>>,
+    /// 已处理的二级数据请求（功能码 11）次数，用于断言轮询上限
+    class2_polls: usize,
 }
 
 fn ack() -> Vec<u8> {
@@ -254,6 +256,7 @@ async fn run_stub(mut dev: tokio::io::DuplexStream, st: Arc<Mutex<StubState>>) {
                     Some(0x68) => Some(g.interrogation_reply.clone()),
                     Some(0x10) => {
                         if frame[1] & 0x0F == 11 {
+                            g.class2_polls += 1;
                             Some(if g.class2_queue.is_empty() {
                                 ack()
                             } else {
@@ -309,6 +312,7 @@ fn stub_state() -> Arc<Mutex<StubState>> {
         reset_reply: ack(),
         interrogation_reply: ack(),
         class2_queue: Vec::new(),
+        class2_polls: 0,
     }))
 }
 
@@ -693,6 +697,60 @@ fn malformed_iec101_fixed_and_ack_frames_are_rejected() {
     ));
     // 未知起始字节
     assert!(parse_frame(&[0xFF, 0x00, 0x00, 0x00, 0x16]).is_err());
+}
+
+// ============================================================
+// IEC-R4 / IEC-R5：变长帧长度边界与轮询上限
+// ============================================================
+
+/// IEC-R4：变长帧两个 L 字节必须一致且 `L>=2`；ASDU 长度上限 253。
+#[test]
+fn variable_frame_rejects_l_lt_2_and_asdu_over_253() {
+    // 两个 L 字节一致但 L<2：L 至少需容纳 C、A 两字节，属结构非法。
+    for l in [0u8, 1u8] {
+        let l = l as usize;
+        let body = vec![0x08u8; l]; // C + A 占位
+        let mut f = vec![0x68u8, l as u8, l as u8, 0x68];
+        f.extend_from_slice(&body);
+        let cs = body.iter().fold(0u8, |a, &b| a.wrapping_add(b));
+        f.push(cs);
+        f.push(0x16);
+        assert_eq!(f.len(), 6 + l, "构造帧总长应为 6+L");
+        match parse_frame(&f) {
+            Err(crate::south::protocol::CollectorError::InvalidFrame(_)) => {}
+            other => panic!("L={l} 的变长帧应被 InvalidFrame 拒绝，实际 {other:?}"),
+        }
+    }
+
+    // ASDU 长度 254 > 253：构造端必须拒绝（返回空帧，供发送端判定失败）。
+    let over = build_variable_frame(0x08, 1, &vec![0u8; 254]);
+    assert!(over.is_empty(), "ASDU 长度 254 超过上限 253，应拒绝构造");
+
+    // ASDU 长度恰好 253：上限内，必须可构造且可解析。
+    let edge = build_variable_frame(0x08, 1, &vec![0u8; 253]);
+    assert_eq!(edge.len(), 6 + 255, "ASDU 253 字节对应 L=255");
+    assert!(parse_frame(&edge).is_ok(), "ASDU 长度 253 是合法上限");
+}
+
+/// IEC-R5：总召唤后轮询二级数据必须在 `MAX_POLLS=8` 轮后停止，不得多问。
+#[tokio::test]
+async fn interrogation_polling_stops_at_max_polls() {
+    let st = stub_state();
+    // 总召唤回 ACK、二级数据队列始终为空：设备每轮只回 ACK。
+    let bus = spawn_bus(st.clone());
+    let c = Iec101Collector::new("iec101-bus", bus);
+
+    let err = c.read(&point("p1", 100)).await.expect_err("无数据应报错");
+    assert!(
+        matches!(err, crate::south::protocol::CollectorError::NoReply),
+        "unexpected: {err:?}"
+    );
+
+    let polls = st.lock().unwrap().class2_polls;
+    assert_eq!(
+        polls, 8,
+        "MAX_POLLS=8：应恰好轮询 8 次后停止，实际 {polls} 次"
+    );
 }
 
 // ============================================================

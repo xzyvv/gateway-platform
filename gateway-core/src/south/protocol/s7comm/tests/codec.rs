@@ -387,3 +387,57 @@ fn test_check_pdu_ref_echo() {
 fn test_check_pdu_ref_rejects_short_frame() {
     assert!(frames::check_pdu_ref(&[0u8; 5], 1).is_err());
 }
+
+// ===== TPKT 报头边界（S7-R2）=====
+
+/// 回环 TCP：服务端写入 `bytes` 后关闭，返回客户端可读流。
+async fn tpkt_stream_with_server_bytes(bytes: Vec<u8>) -> tokio::net::TcpStream {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local");
+    tokio::spawn(async move {
+        if let Ok((mut sock, _)) = listener.accept().await {
+            let _ = sock.write_all(&bytes).await;
+        }
+    });
+    tokio::net::TcpStream::connect(addr).await.expect("connect")
+}
+
+/// S7-R2：TPKT 必须校验版本 `0x03 0x00` 且总长 ≥4。
+///
+/// 阻塞项：当前实现与文档均未给出 TPKT 总长的业务上限（长度字段本身是 u16，
+/// 65535 只是位宽上限，不能当作业务上限），故此处不臆造上限，只钉住版本与下限；
+/// 「声明长度远大于实际数据」时只能靠读满失败返回 IO 错误，不得 panic。
+#[tokio::test]
+async fn read_tpkt_frame_rejects_oversized_length() {
+    use crate::south::protocol::CollectorError;
+
+    // 版本字节错误（0x02 0x00）
+    let mut stream = tpkt_stream_with_server_bytes(vec![0x02, 0x00, 0x00, 0x08]).await;
+    match frames::read_tpkt_frame(&mut stream).await {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("TPKT header"), "版本错误原因应可辨识: {msg}")
+        }
+        other => panic!("TPKT 版本错误应判帧错误，实际 {:?}", other.map(|v| v.len())),
+    }
+
+    // 总长 < 4（声明 3）
+    let mut stream = tpkt_stream_with_server_bytes(vec![0x03, 0x00, 0x00, 0x03]).await;
+    match frames::read_tpkt_frame(&mut stream).await {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("too short"), "长度过短原因应可辨识: {msg}")
+        }
+        other => panic!("TPKT 总长 <4 应判帧错误，实际 {:?}", other.map(|v| v.len())),
+    }
+
+    // 声明 65535 但实际无数据：当前无总长上限，读满失败必须报 IO 错误而不是 panic
+    let mut stream = tpkt_stream_with_server_bytes(vec![0x03, 0x00, 0xFF, 0xFF]).await;
+    match frames::read_tpkt_frame(&mut stream).await {
+        Err(CollectorError::IoError(msg)) => {
+            assert!(msg.contains("TPKT body"), "读满失败原因应可辨识: {msg}")
+        }
+        other => panic!(
+            "声明超长且无数据时应报 IO 错误，实际 {:?}",
+            other.map(|v| v.len())
+        ),
+    }
+}

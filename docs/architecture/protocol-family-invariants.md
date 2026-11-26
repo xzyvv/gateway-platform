@@ -52,19 +52,19 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | MC-R1 | 地址前缀必须能映射到软元件码，编号必须可解析且 ≤ `0x00FF_FFFF`；不合法在**建链前**返回 `InvalidConfig` | `mc/frames.rs:108-131`、`:155-181` | 有（`mc/tests/address_parse.rs:39`） | 配错点位整批不采集，日志报「unsupported device prefix」；不会发无效帧 |
 | MC-R2 | 3E/4E 响应必须校验子头、固定头长度，以及网络号 / PC 号 / 模块 I/O 号 / 站号回显 | `mc/frames.rs:407-467` | 有（`mc/tests/codec.rs:68`、`:91`） | 串到上一帧、别站应答或非 MC 报文时被读成长度巨大的垃圾包，点位值串台 |
 | MC-R3 | 4E 响应必须回显请求序列号，不匹配即判帧错 | `mc/frames.rs:435-440` | 有（`mc/tests/serial_4e.rs:87`） | 迟到应答被当成当前请求结果，点位值错位（典型「多台设备值相同」） |
-| MC-R4 | 「结束码 + 数据」长度必须落在 2..=960 字节；禁止按对端给的长度直接分配 | `mc/frames.rs:387-398`、`:492` | 无（仅 fuzz `fuzz/fuzz_targets/mc_decode.rs:37` 调用，无单测） | 异常设备/扫描噪声返回超大长度时内存被一次性占满，进程可能 OOM |
+| MC-R4 | 「结束码 + 数据」长度必须落在 2..=960 字节；禁止按对端给的长度直接分配 | `mc/frames.rs:387-398`、`:492` | 有（`mc/tests/codec.rs:99` `decode_rejects_body_len_out_of_2_to_960`：长度 1/961 均被 `InvalidFrame` 拒绝，2/960 可解析） | 异常设备/扫描噪声返回超大长度时内存被一次性占满，进程可能 OOM |
 | MC-R5 | 读结束码非 0 → `DeviceRejected`（PLC 明确拒绝），不得当成有效数据 | `mc/frames.rs:556-569`、`mc/mod.rs:464` | 有（`mc/tests/e2e.rs:66`、`mc/tests/codec.rs:57`） | 地址不存在时上送 0 或垃圾值，质量仍为 Good |
 | MC-R6 | 1E 响应功能码必须等于请求功能码 \| 0x80；数据长度由请求点数推导且 ≤ 512 字节 | `mc/frames.rs:448-485` | 有（`mc/tests/frame_1e.rs:11`、`:25`、`:55`） | 1E 老设备上错帧被当成有效值；或读数据与点位错位 |
-| MC-R7 | 单次 IO 超时取 `bus.timeout_ms`；发送/接收超时 → `NoReply` 并清空连接，下次惰性重建 | `mc/mod.rs:299-348` | 有（`mc/tests/e2e.rs:147`、`:78`） | 半开 TCP 不清理时整条通道永久卡死，后续所有点位一起超时 |
+| MC-R7 | 单次 IO 超时取 `bus.timeout_ms`；发送/接收超时 → `NoReply` 并清空连接，下次惰性重建 | `mc/mod.rs:299-348` | 有（`mc/tests/e2e.rs:150` `test_no_response_times_out`、`:81` `test_reconnect_after_connection_drop`） | 半开 TCP 不清理时整条通道永久卡死，后续所有点位一起超时 |
 | MC-R8 | 批量读按软元件分组、地址升序合并；单帧上限 479 字 / 1916 位 / 1E 256 单元，超限自动分片 | `mc/frames.rs:90-94`、`:646`；`mc/batch.rs:97-112` | 有（`mc/tests/batch.rs:81`、`:172`、`:196`） | 点位跨区或超限时整帧被设备拒绝，表现为「一批点全错、单点读正常」 |
 | MC-R9 | 批量片段失败只污染该片段的点位：建帧失败逐点回填同因错误，建链失败整批同因 `IoError`，不得逐点重复等建链超时 | `mc/batch.rs:112-150` | 有（`mc/tests/batch.rs:33`、`:12`） | 设备离线时批量刷新耗时 = 点位数 × 建链超时，轮询周期被拖垮 |
 | MC-R10 | 批量解码越界（数据区不足）只能让该点位 `InvalidFrame`，不得整批丢弃 | `mc/batch.rs:170-194` | 无 | 一个点位数据异常导致同帧其它好点也被判错，故障面被放大 |
 | MC-R11 | TCP 读用定长 `read_exact`，不存在半包/粘包；同一连接由流锁串行化，分片帧不交叉 | `mc/frames.rs:490-500`、`mc/mod.rs:294`、`:492` | 无（`batch.rs:12` 只断言「只建链一次」） | 批量与诊断并发下发时读到对方的应答，值串台 |
-| MC-W1 | 写结束码非 0 → `DeviceRejected`（明确失败，可安全重试） | `mc/frames.rs:574-582`、`mc/mod.rs:539` | 有（`mc/tests/e2e.rs:114`） | 设备拒绝被报成「结果未知」，操作员被迫读回核实或人工确认 |
-| MC-W2 | 写传输失败/无应答 → `WriteUncertain`，且不自动重发 | `mc/mod.rs:535-538` | 有（`mc/tests/e2e.rs:131`） | 上层若自动重试，累加/脉冲类点位翻倍执行 |
+| MC-W1 | 写结束码非 0 → `DeviceRejected`（明确失败，可安全重试） | `mc/frames.rs:574-582`、`mc/mod.rs:539` | 有（`mc/tests/e2e.rs:117` `test_write_end_code_nonzero_is_device_rejected`） | 设备拒绝被报成「结果未知」，操作员被迫读回核实或人工确认 |
+| MC-W2 | 写传输失败/无应答 → `WriteUncertain`，且不自动重发 | `mc/mod.rs:535-538` | 有（`mc/tests/e2e.rs:134` `test_write_no_reply_is_uncertain`） | 上层若自动重试，累加/脉冲类点位翻倍执行 |
 | MC-W3 | 写值必须做类型范围校验；越界应在上线前拒绝 | **不成立**：`mc/frames.rs:608-624` 用 `as` 强转，越界静默截断 | 无 | 下发 70000 到 U16 点位写成 4464，界面显示「写成功」但设备值是错的 |
-| MC-W4 | 写后是否读回：协议层**不读回**，读回只由 API 层在 `outcome == uncertain` 时触发 | `mc/mod.rs:520-540`；API 层 `gateway-api/src/web/api/points/handlers/mod.rs:297`、`:462` | 无（`e2e.rs:101` 只验证写出帧正确） | 设备收到写但应答丢失时，只能靠上层读回消除不确定；纯协议层无法自证 |
-| MC-W5 | 写事务不得自动重发（继承 W-01/W-02 口径） | `mc/mod.rs:535-538`（无重试分支） | 无（`e2e.rs:131` 只验定级，未验重发次数） | 一次超时被重发两次，脉冲输出触发两次 |
+| MC-W4 | 写后是否读回：协议层**不读回**，读回只由 API 层在 `outcome == uncertain` 时触发 | `mc/mod.rs:520-540`；API 层 `gateway-api/src/web/api/points/handlers/mod.rs:297`、`:462` | 有（`mc/tests/e2e.rs:171` `mc_write_issues_single_request_without_readback`：写成功后请求计数恒为 1，不补读回） | 设备收到写但应答丢失时，只能靠上层读回消除不确定；纯协议层无法自证 |
+| MC-W5 | 写事务不得自动重发（继承 W-01/W-02 口径） | `mc/mod.rs:535-538`（无重试分支） | 有（`mc/tests/e2e.rs:293` `mc_write_failure_is_not_retried`：设备拒绝后请求计数恒为 1，不重发） | 一次超时被重发两次，脉冲输出触发两次 |
 | MC-E1 | 读结束码应可区分「地址不存在/设备拒绝」与「帧损坏」 | **成立**：`mc/frames.rs:556-569` 结束码非 0 → `DeviceRejected`；`mc/batch.rs:160-169` 批量逐点保留该变体 | 有（`mc/tests/e2e.rs:66`、`mc/tests/codec.rs:57`） | —— |
 | MC-E2 | 1E 状态码应与 3E/4E 结束码同口径映射 | `mc/frames.rs:468-484`、`mc/mod.rs:464` | 无 | 1E 站点地址错误显示为帧错误，排障方向跑偏 |
 
@@ -155,11 +155,11 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | UA-R4 | 单节点 `StatusCode` 必须影响质量：Good/Uncertain/Bad，且非 Good 必须带可辨识原因 | `opcua/mod.rs:120-146`（映射）、`:475`（批量）、`:814`（单点） | 有（`opcua/tests.rs:312`、`:335`；映射函数单测，两条读路径共用） | 见 UA-E2：Bad 以 `Ok(DataPoint)` 上送且无原因，现场无法区分「配错/权限/设备没值」 |
 | UA-R5 | 读失败阈值必须小于会话超时，避免「会话先掉、计数还没到」 | `opcua/mod.rs:89`（`READ_FAILURE_THRESHOLD`）、`:104`（`KEEPALIVE_MAX_CONSECUTIVE_FAILURES`）、`:189-207` | 有（`opcua/tests.rs:35`、`:47`，只锁阈值取值范围） | 阈值配错时会话永不重建，整站离线但页面显示「连接中」 |
 | UA-R6 | keepalive 探测失败达阈值必须拆会话并标记断连；`try_lock` 抢不到时必须跳过，不得阻塞采集 | `opcua/mod.rs:241-338` | 有（`opcua/tests.rs:65`、`:87`） | 半开会话不重建；或 keepalive 与采集争锁导致轮询周期抖动 |
-| UA-R7 | 读失败必须清零/累加计数，成功即清零；单点问题不得累加链路失败 | `opcua/mod.rs:210-218`（计数）、`:440`/`:804`（成功清零）、`:384`/`:431`/`:795`（仅链路级失败累加） | 有（`opcua/tests.rs:371`：连续读不到值的点不计链路失败、不拆会话） | 偶发失败累计到阈值后误拆健康会话，出现周期性「闪断」 |
+| UA-R7 | 读失败必须清零/累加计数，成功即清零；单点问题不得累加链路失败 | `opcua/mod.rs:210-218`（计数）、`:440`/`:804`（成功清零）、`:384`/`:431`/`:795`（仅链路级失败累加） | 有（`opcua/tests.rs:396` `ua_e2_bad_point_does_not_trip_session_teardown`：连续读不到值的点不计链路失败、不拆会话；另 `:312`、`:335`） | 偶发失败累计到阈值后误拆健康会话，出现周期性「闪断」 |
 | UA-R8 | 批量读必须一次请求多节点，并按原下标回填；单点解析失败不得改变其它点位下标 | `opcua/mod.rs:154-224`（`fill_batch_results`） | 有（`ua_r8_batch_values_keep_request_order`） | 一个坏地址让后续点位整体错位 |
 | UA-W1 | 该协议不支持写，写请求必须是「明确失败」（`Unsupported`），不得伪装成未知 | `protocol/mod.rs:502-511`；`opcua/mod.rs` 无 `fn write` | 有（`registry/tests.rs:387`，跨协议能力位一致性） | 前端显示可写而实际必失败（已被能力位测试挡住） |
 | UA-E1 | 值提取错误必须给出可区分的原因：不支持的 Variant → `Unsupported`，无值/字符串非数字 → `InvalidFrame`；Bad/Uncertain 且无值 → `DeviceRejected` | `opcua/frames.rs:69-92`；`opcua/mod.rs:142-152`（`rejected_status`）、`:477-485`/`:819-825`（两读路径） | 有（`opcua/tests.rs:347`） | 点位类型不匹配时只看到 `DECODE`，无法区分「配错类型」「设备没值」与「设备拒绝」 |
-| UA-E2 | 单节点 Bad / 取不到值不得被计为「链路读失败」；Bad/Uncertain 必须带可辨识 `quality_reason` | **成立**：`opcua/mod.rs:439-440`（server 已响应即 `record_read_ok`，先于取值）、`:795-809`（取不到值只降级该点，不再 `record_read_failure`）；`:120-146` 生成 `opcua_status_<StatusCode>:OTHER` | 有（`opcua/tests.rs:312`、`:335`、`:347`、`:371`） | 一个节点被设备拒绝（权限/不存在）时，连续刷新不再拆会话；页面可按 `quality_reason` 区分具体 StatusCode |
+| UA-E2 | 单节点 Bad / 取不到值不得被计为「链路读失败」；Bad/Uncertain 必须带可辨识 `quality_reason` | **成立**：`opcua/mod.rs:439-440`（server 已响应即 `record_read_ok`，先于取值）、`:795-809`（取不到值只降级该点，不再 `record_read_failure`）；`:120-146` 生成 `opcua_status_<StatusCode>:OTHER` | 有（`opcua/tests.rs:396` `ua_e2_bad_point_does_not_trip_session_teardown`、`:312` `ua_e2_bad_and_uncertain_carry_identifiable_reason`、`:335` `ua_e2_good_has_no_reason_and_missing_status_is_bad`，另 `:347`） | 一个节点被设备拒绝（权限/不存在）时，连续刷新不再拆会话；页面可按 `quality_reason` 区分具体 StatusCode |
 
 **测试覆盖**：11 条中 10 条有守护（UA-R2 为部分守护：惰性建链已断言，「重复 connect 不重建」仍缺桩服务用例），UA-R7 由 ROI-21 补齐，UA-E1 由 ROI-25 补齐；UA-R3/R8 由 ROI-27 补齐。
 读服务剩余缺口仅剩 UA-R2 的「重复 connect 不重建」断言。
@@ -183,7 +183,7 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | MSTP-R2 | 帧提取器必须在前导噪声、伪前导（数据中出现 `0x55 0xFF`）下逐字节重同步，且不得 panic | `bacnet_mstp/frames.rs:149-207` | 有（`tests.rs:224`、`:234`、`:249`、`:269`、`:293`、`:440`） | 一次串口噪声后整条总线永久错帧，只能重启进程 |
 | MSTP-R3 | 只接受 DataExpectingReply / DataNotExpectingReply / ReplyPostponed；其它帧类型按无应答处理 | `bacnet_mstp/mod.rs:237-245` | 无 | 令牌帧被当数据解析 → 点位随机错值 |
 | MSTP-R4 | 目标站号与主站号必须 ≤127，否则 `InvalidConfig` | `bacnet_mstp/mod.rs:178-191` | 无（`tests.rs:195`、`:201` 只测 `parse_master_addr`） | 站号配错时发不出合法帧，全部点位超时 |
-| MSTP-R5 | 应答 APDU 的 `invoke_id` 必须与请求一致 | `bacnet/frames/decode.rs:169-174`（`bacnet_mstp/mod.rs:257` 调用） | 无 | 串包时把别的请求结果当本次值 |
+| MSTP-R5 | 应答 APDU 的 `invoke_id` 必须与请求一致 | `bacnet/frames/decode.rs:169-174`（`bacnet_mstp/mod.rs:257` 调用） | 有（`bacnet/tests/golden.rs:141` `test_parse_value_from_apdu_rejects_invoke_id_mismatch`；`:170` `read_ignores_stale_response_with_mismatched_invoke_id`） | 串包时把别的请求结果当本次值 |
 | MSTP-R6 | 应答源地址必须与目标站一致（防他站应答） | **不成立**：`bacnet_mstp/mod.rs:234` 解出 `_resp_src` 后丢弃，不比较 | 无 | 多主站/重复地址现场：值来自别的设备，且无任何告警 |
 | MSTP-R7 | 单点一次事务，超时取 `bus.io_timeout()`；超时 → `NoReply` | `bacnet_mstp/mod.rs:228-231` | 无（无读路径 e2e） | 从站掉线时每个点都要等满超时，轮询周期被点位数放大 |
 | MSTP-R8 | BACnet Error / Reject / Abort PDU 必须映射为「设备明确拒绝」 | **不成立**：`bacnet/frames/decode.rs:163-167` 只认 ComplexACK，其它一律 `InvalidFrame` | 无 | 设备拒绝读写属性时显示为 `DECODE`，现场去查 CRC/接线 |
@@ -211,7 +211,7 @@ OPC UA 由 async-opcua 会话栈负责重连，协议层无原始帧重试。
 | IEC-R1 | 三种帧型必须校验长度与结束符：单字节 `0xE5`、固定帧 5 字节且 `0x16` 结尾、变长帧 `6+L` 且 `0x16` 结尾 | `iec101/frames.rs:131-206` | 有（`tests.rs:61`、`:73`、`:101`、`:614`、`:660`） | 截断帧被当完整帧，后续字节全部错位 |
 | IEC-R2 | 校验和（字节累加 mod 256）必须校验，错误 → `ChecksumError` | `iec101/frames.rs:63-65`、`:154-156`、`:191-194` | 有（`tests.rs:91`、`:660`） | 噪声帧被采纳为有效数据 |
 | IEC-R3 | 帧提取器必须丢弃前导噪声并重同步；不完整帧返回 `None` 等待更多字节 | `iec101/frames.rs:212-267` | 有（`tests.rs:108`、`:116`、`:126`、`:134`） | 长帧被切碎后永久错位，整站数据不刷新 |
-| IEC-R4 | 变长帧两个 L 字节必须一致且 `L≥2`；ASDU 长度 ≤253 | `iec101/frames.rs:168-185`、`:46`、`:78-84` | 无（`tests.rs:45` 只测构帧布局） | 长度字段错误时整帧被丢弃并重同步，表现为偶发丢一轮数据 |
+| IEC-R4 | 变长帧两个 L 字节必须一致且 `L≥2`；ASDU 长度 ≤253 | `iec101/frames.rs:168-185`、`:46`、`:78-84` | 有（`tests.rs:708` `variable_frame_rejects_l_lt_2_and_asdu_over_253`：L=0/1 拒绝、ASDU 254 拒绝构造、253 可解析；`tests.rs:629` `malformed_iec101_variable_frame_is_rejected_without_panic` 覆盖两个 L 字节矛盾） | 长度字段错误时整帧被丢弃并重同步，表现为偶发丢一轮数据 |
 | IEC-R5 | 总召唤后必须轮询二级数据直到激活终止，最多 `MAX_POLLS=8` 轮；收到数据后遇空确认即结束 | `iec101/mod.rs:104-221` | 有（`tests.rs:378`、`:412`） | 轮询不结束 → 每轮采集都超时；或数据未收全就返回，点位缺失 |
 | IEC-R6 | 应答的链路地址与 ASDU 公共地址（CA）必须与本站配置一致 | `iec101/mod.rs:116-186`（收发两处比对）、`common/asdu.rs:528-538` | 有（`tests.rs:720`、`:743`、`:766`、`:790`） | 同总线多站/错站应答按 IOA 覆盖本设备缓存，出现「值来自别的站」 |
 | IEC-R7 | ASDU 解码失败必须能上报为可辨识错误，不得静默丢弃 | `common/asdu.rs:326-514`（`parse_asdu_checked`）、`iec101/mod.rs:195-206`、`:254-281` | 有（`tests.rs:808`、`:855`） | 数据格式不符时点位一直 `NoReply`，现场以为设备没回，实际是解码失败 |

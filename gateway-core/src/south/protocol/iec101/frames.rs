@@ -171,6 +171,13 @@ pub(crate) fn parse_frame(frame: &[u8]) -> CollectorResult<Ft12Frame> {
                     "iec101 variable frame length bytes mismatch".into(),
                 ));
             }
+            // IEC-R4：L 必须至少容纳 C、A 两个字节；L<2 的帧结构非法，
+            // 若不在此拦下，下面的 ASDU 切片会得到 start > end 而 panic。
+            if l < 2 {
+                return Err(CollectorError::InvalidFrame(format!(
+                    "iec101 variable frame length {l} < 2"
+                )));
+            }
             if frame[3] != FT12_START_VAR {
                 return Err(CollectorError::InvalidFrame(
                     "iec101 variable frame missing second start byte".into(),

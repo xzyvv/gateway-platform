@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, UdpSocket};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 use super::frames::*;
 use super::{mode_from_variant, FinsCollector, FinsMode};
@@ -788,4 +788,144 @@ fn malformed_fins_node_addr_response_is_rejected() {
         parse_node_addr_response(&[0x00, 0x00, 0x00, 0x07]).expect("4 字节应可解析"),
         0x07
     );
+}
+
+// ============================================================
+// FINS-R2 / FINS-R5：TCP 报头长度边界与节点地址握手校验
+// ============================================================
+
+/// 回环 TCP：服务端写入 `bytes` 后保持连接，返回客户端可读流。
+async fn tcp_stream_with_server_bytes(bytes: Vec<u8>) -> TcpStream {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local");
+    tokio::spawn(async move {
+        if let Ok((mut sock, _)) = listener.accept().await {
+            let _ = sock.write_all(&bytes).await;
+            let mut sink = [0u8; 1];
+            let _ = sock.read(&mut sink).await;
+        }
+    });
+    TcpStream::connect(addr).await.expect("connect")
+}
+
+/// 构造 FINS/TCP 报头（"FINS" 魔数 + 大端长度）。
+fn fins_tcp_header(len: u32) -> Vec<u8> {
+    let mut f = b"FINS".to_vec();
+    f.extend_from_slice(&len.to_be_bytes());
+    f
+}
+
+/// 构造带自定义错误码的 FINS/TCP 应答（用于握手失败分支）。
+fn tcp_wrap_err(command: u32, tcp_error: u32, payload: &[u8]) -> Vec<u8> {
+    let mut f = b"FINS".to_vec();
+    f.extend_from_slice(&((8 + payload.len()) as u32).to_be_bytes());
+    f.extend_from_slice(&command.to_be_bytes());
+    f.extend_from_slice(&tcp_error.to_be_bytes());
+    f.extend_from_slice(payload);
+    f
+}
+
+/// 握手桩：读掉节点地址请求后原样回 `reply`，随后保持连接等采集器读完。
+async fn spawn_handshake_stub(reply: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local").to_string();
+    tokio::spawn(async move {
+        if let Ok((mut sock, _)) = listener.accept().await {
+            let mut head = [0u8; 8];
+            if sock.read_exact(&mut head).await.is_err() {
+                return;
+            }
+            let len = u32::from_be_bytes([head[4], head[5], head[6], head[7]]) as usize;
+            let mut body = vec![0u8; len];
+            if sock.read_exact(&mut body).await.is_err() {
+                return;
+            }
+            if sock.write_all(&reply).await.is_err() {
+                return;
+            }
+            let mut sink = [0u8; 1];
+            let _ = sock.read(&mut sink).await;
+        }
+    });
+    addr
+}
+
+/// FINS-R2：TCP 报头长度必须在 `8..=2048`，越界直接判帧错误，边界值则按长度读满。
+#[tokio::test]
+async fn tcp_header_length_out_of_range_is_rejected() {
+    use crate::south::protocol::CollectorError;
+
+    // 长度 7（小于下限 8）与 2049（超过上限 2048）必须直接拒绝，不得先按长度分配
+    for bad_len in [7u32, 2049u32] {
+        let mut stream = tcp_stream_with_server_bytes(fins_tcp_header(bad_len)).await;
+        match read_tcp_response(&mut stream).await {
+            Err(CollectorError::InvalidFrame(msg)) => {
+                assert!(msg.contains("length"), "长度越界原因应可辨识: {msg}")
+            }
+            Ok(_) => panic!("长度 {bad_len} 应被拒绝，实际读到了应答"),
+            Err(e) => panic!("长度 {bad_len} 应判帧错误，实际: {e:?}"),
+        }
+    }
+
+    // 边界值 8 与 2048 必须可接受，并按声明长度读满（最小体 = 命令 + 错误码 8 字节）
+    for ok_len in [8u32, 2048u32] {
+        let mut body = vec![0u8; ok_len as usize];
+        body[0..4].copy_from_slice(&CMD_RESPONSE.to_be_bytes());
+        let mut wire = fins_tcp_header(ok_len);
+        wire.extend_from_slice(&body);
+        let mut stream = tcp_stream_with_server_bytes(wire).await;
+        let resp = read_tcp_response(&mut stream)
+            .await
+            .unwrap_or_else(|e| panic!("长度 {ok_len} 应可接受: {e:?}"));
+        assert_eq!(resp.command, CMD_RESPONSE);
+        assert_eq!(resp.tcp_error, 0);
+        assert_eq!(
+            resp.payload.len(),
+            ok_len as usize - 8,
+            "长度 {ok_len} 时应按声明长度读满负载"
+        );
+    }
+}
+
+/// FINS-R5：握手必须校验 `command == 0x0000_0002` 且 `tcp_error == 0`，
+/// 成功后取 4 字节载荷低字节作为服务端节点。
+#[tokio::test]
+async fn node_addr_handshake_rejects_bad_command_and_error() {
+    use crate::south::protocol::CollectorError;
+
+    // 失败分支一：应答命令码不是 0x0000_0002
+    let addr = spawn_handshake_stub(tcp_wrap(0x0000_0009, &[0x00, 0x00, 0x00, 0x01])).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let err = c.connect().await.expect_err("命令码不符应拒绝握手");
+    assert!(
+        matches!(err, CollectorError::InvalidFrame(_)),
+        "unexpected: {err:?}"
+    );
+    assert!(!c.is_connected(), "握手失败不得标记为已连接");
+
+    // 失败分支二：tcp_error 非 0
+    let addr = spawn_handshake_stub(tcp_wrap_err(
+        CMD_RESPONSE,
+        0x0000_0001,
+        &[0x00, 0x00, 0x00, 0x01],
+    ))
+    .await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    let err = c.connect().await.expect_err("tcp_error 非 0 应拒绝握手");
+    assert!(
+        matches!(err, CollectorError::InvalidFrame(_)),
+        "unexpected: {err:?}"
+    );
+    assert!(!c.is_connected(), "握手失败不得标记为已连接");
+
+    // 正常路径：4 字节载荷的低字节即服务端节点地址
+    let addr = spawn_handshake_stub(tcp_wrap(CMD_RESPONSE, &[0x00, 0x00, 0x12, 0x2A])).await;
+    let c = FinsCollector::new(addr, "fins-bus".into(), Duration::from_secs(5), None);
+    c.connect().await.expect("合法握手应成功");
+    assert_eq!(
+        c.server_node.load(Ordering::Relaxed),
+        0x2A,
+        "服务端节点应取 4 字节载荷的低字节"
+    );
+    assert!(c.is_connected());
 }
