@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::{
-    do_transaction, rtu_inter_frame_gap, shrink_ascii_buf, write_timeout_for, TransactionParams,
-    ASCII_BUF_LIMIT, DE_SETUP_TIME,
+    do_transaction, rtu_inter_frame_gap, run_serial_bus_task, shrink_ascii_buf, write_timeout_for,
+    TransactionParams, ASCII_BUF_LIMIT, DE_SETUP_TIME,
 };
 #[cfg(feature = "modbus")]
 use crate::engine::codec::crc::crc16;
@@ -831,4 +831,229 @@ async fn de_setup_and_inter_frame_gap_happen_before_read() {
         gap < Duration::from_millis(100),
         "静默应是 3.5 字符量级，而不是等满整个读超时：实测 {gap:?}"
     );
+}
+
+// ============================================================
+// B-12：串口在途事务不可被抢占 / 交错（RS485 半双工硬约束）
+// ============================================================
+
+/// 门控串口桩：写侧照常落帧，读侧在 `open()` 前恒 Pending。
+///
+/// 用来把「一个事务正在等应答」的窗口拉长，验证此时新到的控制事务
+/// 不会抢先写帧（不会与在途事务交错）。
+#[derive(Clone)]
+struct GatedPort {
+    st: Arc<Mutex<GatedState>>,
+}
+
+#[derive(Default)]
+struct GatedState {
+    write_acc: Vec<u8>,
+    requests: Vec<Vec<u8>>,
+    response: Vec<u8>,
+    pos: usize,
+    open: bool,
+    waker: Option<std::task::Waker>,
+}
+
+impl GatedPort {
+    fn new(response: Vec<u8>) -> Self {
+        Self {
+            st: Arc::new(Mutex::new(GatedState {
+                response,
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn request_count(&self) -> usize {
+        self.st.lock().expect("port poisoned").requests.len()
+    }
+
+    fn requests(&self) -> Vec<Vec<u8>> {
+        self.st.lock().expect("port poisoned").requests.clone()
+    }
+
+    fn open(&self) {
+        let mut st = self.st.lock().expect("port poisoned");
+        st.open = true;
+        if let Some(w) = st.waker.take() {
+            w.wake();
+        }
+    }
+}
+
+impl AsyncWrite for GatedPort {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.st
+            .lock()
+            .expect("port poisoned")
+            .write_acc
+            .extend_from_slice(buf);
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let mut st = self.st.lock().expect("port poisoned");
+        let frame = std::mem::take(&mut st.write_acc);
+        st.requests.push(frame);
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncRead for GatedPort {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let mut st = self.st.lock().expect("port poisoned");
+        if !st.open {
+            st.waker = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+        let remain = st.response.len().saturating_sub(st.pos);
+        if remain == 0 {
+            return Poll::Pending;
+        }
+        let n = remain.min(buf.remaining());
+        let start = st.pos;
+        st.pos += n;
+        buf.put_slice(&st.response[start..start + n]);
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(feature = "modbus")]
+fn rtu_request(slave: u8, fc: u8, addr: u16, tail: &[u8]) -> Vec<u8> {
+    let mut f = vec![slave, fc];
+    f.extend_from_slice(&addr.to_be_bytes());
+    f.extend_from_slice(tail);
+    let crc = crc16(&f);
+    f.push((crc & 0xFF) as u8);
+    f.push((crc >> 8) as u8);
+    f
+}
+
+#[cfg(feature = "modbus")]
+async fn wait_until(mut cond: impl FnMut() -> bool, label: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !cond() {
+        assert!(Instant::now() < deadline, "等待超时：{label}");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+/// B-12（决议 A）：串口同一时刻只允许一帧在途；读事务等应答期间，
+/// 后到的控制写不得抢占下发，必须等当前事务结束后再写。
+#[cfg(feature = "modbus")]
+#[tokio::test]
+async fn in_flight_serial_transaction_is_not_preempted() {
+    use crate::south::bus::{BusPriority, BusTransaction};
+    use std::sync::atomic::AtomicBool;
+    use tokio::sync::{mpsc, oneshot};
+
+    // FC03 单寄存器读响应：slave=1, fc=03, byte_count=2, value=0x002A
+    let mut response = vec![1u8, 0x03, 0x02, 0x00, 0x2A];
+    let crc = crc16(&response);
+    response.push((crc & 0xFF) as u8);
+    response.push((crc >> 8) as u8);
+
+    let port = GatedPort::new(response);
+    let cfg = crate::config::BusConfig {
+        port_name: "serial_b12".into(),
+        protocol: "modbus".into(),
+        timeout_ms: 3000,
+        retry_count: Some(0),
+        retry_delay_ms: Some(0),
+        ..Default::default()
+    };
+    let (tx, rx) = mpsc::channel::<BusTransaction>(8);
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<BusTransaction>(8);
+    let task = tokio::spawn(run_serial_bus_task(
+        cfg,
+        Some(SerialHandle::from_stream(port.clone())),
+        rx,
+        ctrl_rx,
+        Arc::new(crate::engine::metrics::Metrics::default()),
+        crate::south::bus::transport::BusDeps::production(),
+    ));
+
+    let txn = |request: Vec<u8>,
+               priority: BusPriority,
+               retry_allowed: bool|
+     -> (
+        BusTransaction,
+        oneshot::Receiver<crate::south::protocol::CollectorResult<Vec<u8>>>,
+    ) {
+        let (response_tx, response_rx) = oneshot::channel();
+        (
+            BusTransaction {
+                request,
+                response_tx,
+                expected_count: None,
+                raw: false,
+                timeout_ms: None,
+                enqueued_at: Instant::now(),
+                priority,
+                retry_allowed,
+                frame_sent: Arc::new(AtomicBool::new(false)),
+            },
+            response_rx,
+        )
+    };
+
+    // 1) 先投一笔普通读（请求 FC03），等它真正落线并停在「等应答」
+    let (read_txn, read_rx) = txn(
+        rtu_request(1, 0x03, 0, &[0x00, 0x01]),
+        BusPriority::Normal,
+        true,
+    );
+    tx.send(read_txn).await.expect("提交读事务");
+    wait_until(|| port.request_count() == 1, "读事务首帧未下发").await;
+
+    // 2) 读未完成时投控制写（FC06）
+    let (write_txn, _write_rx) = txn(
+        rtu_request(1, 0x06, 0, &[0x12, 0x34]),
+        BusPriority::Control,
+        false,
+    );
+    ctrl_tx.send(write_txn).await.expect("提交控制写事务");
+
+    // 3) 给足调度窗口后，线上仍应只有读帧——控制写不得抢占/交错
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        port.request_count(),
+        1,
+        "读事务在途时，控制写不得抢先下发（串口半双工不可交错）"
+    );
+
+    // 4) 放开应答：读完成 → 控制写才落到线上
+    port.open();
+    let read_result = tokio::time::timeout(Duration::from_secs(2), read_rx)
+        .await
+        .expect("读事务应在超时内结束")
+        .expect("读事务 oneshot 不应断开");
+    assert!(read_result.is_ok(), "读事务应成功：{read_result:?}");
+
+    wait_until(|| port.request_count() == 2, "控制写未在读结束后下发").await;
+    let reqs = port.requests();
+    assert_eq!(reqs[0][1], 0x03, "第一帧必须是读");
+    assert_eq!(reqs[1][1], 0x06, "读完成后才允许下发控制写");
+
+    task.abort();
 }

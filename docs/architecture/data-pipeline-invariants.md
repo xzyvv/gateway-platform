@@ -107,7 +107,7 @@
 | I-37 | 出队必须按 `id` 升序（入库顺序 FIFO），不得按 `timestamp`/`source_ts` 排序；`in_flight=1` 或 `delivered=1` 的行不得被再次选中。 | `gateway-core/src/queue/storage/sqlite/limit.rs:483-499` | 【有守护】`gateway-core/src/queue/tests.rs:23-48`、`:618-650` | 迟到的旧样本覆盖新值；已送达行重复上报。 |
 | I-38 | 容量淘汰只选 `in_flight=0` 的行，按 `timestamp ASC, id ASC` 删除；在途（待 ACK）行受保护。 | `gateway-core/src/queue/storage/sqlite/db_init.rs:239-247` | 【部分守护】`gateway-core/src/queue/storage/sqlite/limit/limit_tests.rs` 的 `in_flight_rows_are_never_pruned`、`mixed_rows_pruned_oldest_first` 断言在途行受保护、最旧优先；同一 `timestamp` 下的 `id ASC` 次序仍无断言 | 淘汰把正在发送的行删掉，ACK 失败后再也找不到原行。 |
 | I-39 | `enqueue()` 返回 Ok 只代表命令已交给队列 actor，不代表已落盘；SQLite 写失败在 actor 内部回退 fallback，不向调用方返回错误。 | `gateway-core/src/queue/mod.rs:346-355`、`gateway-core/src/queue/core/task.rs:380-453` | 【有守护】`gateway-core/src/queue/tests.rs:1311-1453` | 调用方误以为已持久化；重启后最后一批数据丢失且无错误日志。 |
-| I-40 | pipeline 的 `persist_failed` 只在 `enqueue` 返回 Err（队列 actor 已退出或通道发送失败）时递增，不等价于 SQLite 写失败次数。 | `gateway-core/src/pipeline/mod.rs:183-192`、`:371-387`、`gateway-core/src/queue/mod.rs:351-355` | 【部分守护】`gateway-core/src/pipeline/mod.rs` 的 `enqueue_failure_increments_persist_failed_counter`、`every_enqueue_path_is_checked` 守护入队通道失败计数；反证 `gateway-core/src/queue/core/task/tests.rs` 的 `dequeue_db_error_is_reported_not_masked_as_empty_batch`、`release_db_error_increments_failure_metric` 断言 SQLite 读写失败同样递增 `persist_failed`，与本条「不等价于 SQLite 写失败次数」口径冲突，需先裁定 | 磁盘/IO 写失败期间 `persist_failed` 不动，运维误判「入队健康」。 |
+| I-40 | `persist_failed` 是「持久化失败总数」：队列入队失败（actor 退出 / 通道发送失败）与 SQLite 读写失败都计入同一计数；**成功入队不递增**（决议 A，2026-11-26）。 | `gateway-core/src/pipeline/mod.rs:183-192`、`:371-387`、`gateway-core/src/queue/mod.rs:351-355` | 【有守护】`pipeline::tests::successful_enqueue_does_not_increment_persist_failed` 断言成功入队不递增；`enqueue_failure_increments_persist_failed_counter`、`every_enqueue_path_is_checked` 守护入队通道失败计数；`queue/core/task/tests.rs` 的 `dequeue_db_error_is_reported_not_masked_as_empty_batch`、`release_db_error_increments_failure_metric` 守护 SQLite 读写失败同样计入 | 指标语义已统一；若现场看板需要区分「通道失败 / 落盘失败」两类，再拆独立指标（当前无依赖）。 |
 | I-41 | fallback 容量为 5000；超容必须按优先级淘汰：Good(3) > Uncertain(2) > Stale(1) > Bad(0)，同质量下 `stale_count` 越大优先级越低。 | `gateway-core/src/queue/mod.rs:44`、`gateway-core/src/queue/helpers.rs:19-30`、`:47-88` | 【有守护】`gateway-core/src/queue/tests.rs:90-131`、`:1111-1147` | 真正的最新 Good 数据被旧的 Bad 数据挤掉，或反过来丢坏值掩盖故障。 |
 | I-42 | 非磁盘满错误反复回写失败的批次最多重试 5 轮，超限整批丢弃并计入 `persist_dropped`；磁盘满/unsent overflow 路径使用哨兵计数，不消耗重试预算。 | `gateway-core/src/queue/mod.rs:46-52`、`:297-304`、`gateway-core/src/queue/core/task.rs:390-452`、`gateway-core/src/queue/helpers.rs:53-58` | 【有守护】`gateway-core/src/queue/tests.rs:133-198`、`:1311-1453` | 病态错误导致写失败→回退→再写的无限反弹，占满 CPU/IO；或磁盘满恢复后数据被误丢。 |
 | I-43 | 入队前必须按 10ms / 500 点做 micro-batch 合并；退出信号与定时 tick 都必须 flush 残留数据。 | `gateway-core/src/pipeline/mod.rs:206-235`、`:244-260` | 【部分守护】`gateway-core/src/pipeline/mod.rs` 的 `stage_order_is_edge_then_convert_then_virtual` 以不足 500 点的批次轮询 `queue.len() >= 2`，间接证明 10ms tick 会 flush 残留；500 点满批立即入队、退出信号 flush 均无断言 | 末尾不足 500 点的数据长期滞留内存，进程退出前不落库。 |
@@ -161,7 +161,7 @@
 | §3 虚拟点 | I-33 | 无 error 状态保留、删除规则状态清理、缓存不重置的测试 |
 | §3 虚拟点 | I-34 | 无禁用虚拟点不产出、状态为 disabled 的测试 |
 | §4 队列入队 | I-35 | 已补端到端「失败点也落库」测试（ROI-27 第一批） |
-| §4 队列入队 | I-40 | 无 `persist_failed` 与 SQLite 写失败关系的断言 |
+| §4 队列入队 | I-40 | 已补（决议 A，2026-11-26）：`persist_failed` 统一为「持久化失败总数」，新增「成功入队不递增」断言 |
 | §4 队列入队 | I-43 | 无 micro-batch 残留 flush 的测试 |
 | §5 北向分发 | I-48 | 无「顶层 ts=构建时刻」契约测试 |
 | §6 跨阶段 | I-52 | 已补「边缘→换算→虚拟点」顺序断言（ROI-27 第一批）；质量规则段仍待补 |
@@ -170,4 +170,4 @@
 
 1. I-10 → 已补（ROI-27 第二批）：原因统一为 `<场景>:<码>` 并加源码字面量契约测试；新增原因必须遵守编码表。
 2. I-52 → 已补（ROI-27 第一批）；质量规则段仍可单独加断言。
-3. I-35 → 已补（ROI-27 第一批）；剩余可补 I-40（`persist_failed` 与 SQLite 写失败）与 I-43（micro-batch 残留 flush）。
+3. I-35 → 已补（ROI-27 第一批）；I-40 → 已补（决议 A，2026-11-26）；剩余可补 I-43（micro-batch 残留 flush）。

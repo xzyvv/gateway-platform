@@ -32,7 +32,7 @@
 | B-09 | 池满/本地拥塞必须报 `BusBusy`，不得伪装成「设备不应答」 | ✅ | `map_txn_err`：`Busy → BusBusy` |
 | B-10 | 事务前的陈旧字节必须排空 | ✅ | 串口 `clear_input()` |
 | B-11 | 排空的陈旧字节必须可观测（非 0 = 上一帧没收完整） | ✅ | `gateway_bus_stale_bytes_dropped_total` + warn 日志 |
-| B-12 | 串口在途事务不可被抢占（物理约束，非缺陷） | ⚠️ 约束 | RS485 半双工；需秒级写响应只能配独立串口 |
+| B-12 | 串口在途事务不可被抢占（物理约束，非缺陷） | ✅ | 串口 task 单事务串行，控制通道只在当前事务结束后消费；测试 `in_flight_serial_transaction_is_not_preempted` 断言读事务等应答期间控制写不落线、两帧不交错 |
 | B-13 | 串口故障分级：设备级失败不得重开端口 | ✅ | `serial_task` 自检帧 + `MIN_REOPEN_INTERVAL` |
 | B-14 | 广播地址（slave=0）不得记为「成功通信过的从站」 | ✅ | `last_good_slave` 过滤 `slave == 0` |
 
@@ -61,7 +61,7 @@
 | W-06 | 写不确定的错误必须传到 API 层可见 | ✅ | `CollectorError::write_outcome()` → `engine::write::WriteOutcome`（中立层）；API 层 `results[].outcome` + 业务码 5102 |
 | W-07 | 上游（前端 / MES）不得对 `WriteUncertain` 自动重试 | ✅ | 业务码 **5102**（结果未知）+ `outcome: "uncertain"` + 统一提示「设备可能已执行，请先读回核实，不要自动重试」；前端仅提示不阻断重试 |
 | W-08 | 写超时后应能读回核实（消除「未知」） | ✅ | API 写入口在 `outcome == uncertain` 时自动读回：单写 `read`（5s 预算），批写按总线 `read_batch`（`batch_timeout_budget`）；**只做正向收敛**——读回值与写入值一致（容差 = 半量化单位 `|scale|/2`）才判定写已生效，不一致或读不到都保持 5102 并把读回值附给操作员（`write_readback_matches`） |
-| W-09 | 点位应标记「写值 / 增量 / 脉冲」，以决定能否读回消歧 | ❌ | **缺口 G-04**：点位模型无写入属性。当前读回判据只覆盖「设定值」语义：增量/脉冲写若被上层用多次写模拟，读回比对可能落空 → 保守地保持「未知」，不会误判成功 |
+| W-09 | 点位**不建模**「写值 / 增量 / 脉冲」写属性（决议 A）：写通道由 `function_code` 决定，寄存器宽度由 `data_type` 决定，写入值为绝对值 | ✅ | 测试 `write_function_code_is_configured_and_value_is_absolute`：fc=6→FC06、fc 缺省→FC06、f32→自动升 FC16、fc=1→FC05，且写入值为绝对值（无累加语义） |
 | W-10 | Modbus 写异常响应必须保留 `ModbusException` 语义 | ✅ | `trait_impl.rs` 先判 5 字节异常帧；测试 `write_exception_frame_maps_to_modbus_exception` |
 | W-11 | 写响应按**语义字段**校验（slave/fc/addr/值），不得整帧比对 | ✅ | `verify_write_echo`（CRC 由定帧层负责） |
 | W-11b | 写回显**不匹配** → 应答无法解析 → 结果未知（写很可能已执行），不得报成普通失败 | ✅ | Modbus `verify_write_echo` 失败 → `mark_write_uncertain`；测试 `write_echo_mismatch_is_write_uncertain` |
@@ -120,7 +120,7 @@
 | G-01 | TCP 响应 `unit_id` 不校验 | — | — | **已关闭**：`TransactionPool::deliver` 校验 `pending.slave_id == unit_id`，不一致丢弃并记原因（`ab44c3d`） |
 | G-02 | API 契约未区分 `WriteUncertain`（错误码 / `outcome` 字段 / 前端文案） | — | — | **已关闭**：双轨契约（`results[].outcome` 三态 + 业务码 5102）+ 前端仅提示不阻断 |
 | G-03 | 写超时读回消歧 | — | — | **已关闭**：单写 `read` / 批写 `read_batch` 读回，仅「读回值 == 写入值」正向收敛为成功；不一致保持 5102 并附读回值（不做反向判定，避免设备限幅/联锁导致误判可重试） |
-| G-04 | 点位写入属性（写值 / 增量 / 脉冲）未建模 | M | 中高 | 增量点位的正确性前提；也是 G-03 读回判据能否覆盖脉冲/增量写的前提（当前只覆盖设定值语义） |
+| G-04 | 点位写入属性（写值 / 增量 / 脉冲）未建模 | ~~M~~ | 已关闭 | 决议 A（2026-11-26）：**不建模**。写属性由配置的 `function_code` 与 `data_type` 推导，写入值为绝对值；如现场出现增量/脉冲点位，再按 ROI-15 立项 |
 | G-05 | TCP 单设备拖垮总线（无 per-slave 观测/熔断） | M~L | 中高 | 建议先加 per-slave NoReply 观测再定方案 |
 | G-06 | RTU ASCII 缓冲溢出整段丢弃 | — | — | **已关闭**：`ASCII_BUF_LIMIT` + 收缩保留末段 + `inc_ascii_frame_dropped()`（`ab44c3d`） |
 | G-07 | 写路径错误分级分散在各协议（无统一入口） | — | — | **已关闭**：统一走 `mark_write_uncertain` / `mark_write_uncertain_counted` |

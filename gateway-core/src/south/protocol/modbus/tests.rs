@@ -1461,3 +1461,93 @@ async fn protocol_write_submits_with_control_priority() {
     let _ = r2.await;
     let _ = w.await;
 }
+
+// =========================================================================
+// W-09 / G-04（决议 A）：不建模「设定值 / 增量 / 脉冲」写属性
+// =========================================================================
+//
+// 口径：写通道（线圈 vs 寄存器）由点位 `function_code` 决定；寄存器宽度由
+// `data_type` 决定（多寄存器自动升级 FC16）；写入值为**绝对值**，没有累加 /
+// 脉冲语义。本用例直接抓取线上请求帧，锁定这三件事。
+
+/// 抓取首个写请求 PDU，并按写功能码回显应答。
+async fn spawn_write_capture_stub() -> (String, Arc<std::sync::Mutex<Vec<u8>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定本地假 Modbus TCP 端口");
+    let addr = listener.local_addr().expect("取本地端口").to_string();
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let cap = Arc::clone(&captured);
+
+    tokio::spawn(async move {
+        let (mut stream, _) = match listener.accept().await {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let mut header = [0u8; 7];
+        if stream.read_exact(&mut header).await.is_err() {
+            return;
+        }
+        let tx_id = u16::from_be_bytes([header[0], header[1]]);
+        let unit_id = header[6];
+        let body_len = usize::from(u16::from_be_bytes([header[4], header[5]])).saturating_sub(1);
+        let mut body = vec![0u8; body_len];
+        if body_len > 0 && stream.read_exact(&mut body).await.is_err() {
+            return;
+        }
+        *cap.lock().expect("capture poisoned") = body.clone();
+
+        // 写响应统一是请求 PDU 的前 5 字节（fc/addr/qty 或 fc/addr/value）
+        let pdu = body[..5.min(body.len())].to_vec();
+        let mut resp = Vec::with_capacity(7 + pdu.len());
+        resp.extend_from_slice(&tx_id.to_be_bytes());
+        resp.extend_from_slice(&0u16.to_be_bytes());
+        resp.extend_from_slice(&((pdu.len() + 1) as u16).to_be_bytes());
+        resp.push(unit_id);
+        resp.extend_from_slice(&pdu);
+        let _ = stream.write_all(&resp).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    });
+
+    (addr, captured)
+}
+
+async fn write_and_capture(point: crate::config::PointConfig, value: f64) -> Vec<u8> {
+    let (addr, captured) = spawn_write_capture_stub().await;
+    let collector = super::ModbusCollector::new("modbus_write_attr", modbus_tcp_bus(addr, 1000));
+    collector.write(&point, value).await.expect("写应成功");
+    let body = captured.lock().expect("capture poisoned").clone();
+    assert!(!body.is_empty(), "必须抓到写请求帧");
+    body
+}
+
+#[tokio::test]
+async fn write_function_code_is_configured_and_value_is_absolute() {
+    // 1) function_code=6 + u16 → FC06，写入绝对原始值 0x1234
+    let body = write_and_capture(mk_typed_point("u16"), f64::from(0x1234u16)).await;
+    assert_eq!(body[0], 0x06, "fc=6 必须走 FC06");
+    assert_eq!(&body[3..5], &[0x12, 0x34], "写入值必须是绝对值");
+
+    // 2) function_code 缺省（默认 3）→ 仍是 FC06
+    let mut default_fc = mk_typed_point("u16");
+    default_fc.function_code = None;
+    let body = write_and_capture(default_fc, 7.0).await;
+    assert_eq!(body[0], 0x06, "缺省功能码按 3 处理，单寄存器写仍是 FC06");
+
+    // 3) 同一 fc=6，但 data_type=f32 占 2 寄存器 → 自动升级 FC16
+    let body = write_and_capture(mk_typed_point("f32"), 123.5).await;
+    assert_eq!(body[0], 0x10, "多寄存器类型必须升级为 FC16");
+    assert_eq!(&body[3..5], &[0x00, 0x02], "FC16 应写 2 个寄存器");
+    assert_eq!(
+        &body[6..10],
+        &[0x42, 0xF7, 0x00, 0x00],
+        "f32 123.5 应编码为 0x42F70000（绝对值，非增量）"
+    );
+
+    // 4) function_code=1 → 写单线圈 FC05（写属性仍不存在：只按配置的功能码走）
+    let mut coil = mk_typed_point("u16");
+    coil.function_code = Some(1);
+    let body = write_and_capture(coil, 1.0).await;
+    assert_eq!(body[0], 0x05, "fc=1 必须走 FC05");
+    assert_eq!(&body[3..5], &[0xFF, 0x00], "线圈值 True 编码为 0xFF00");
+}

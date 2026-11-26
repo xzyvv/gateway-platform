@@ -125,7 +125,7 @@
 | I-34 | 缺禁用虚拟点不参与求值、不产出数据点、`error == "disabled"` 的全链路断言 | `fn disabled_virtual_point_is_skipped_and_reports_disabled` | `gateway-core/src/pipeline/virtual_point.rs` 内 `mod tests` |
 | I-37 | 缺「时间戳乱序时仍按 `id` 升序出队」的负向断言 | `fn dequeue_uses_id_order_not_timestamp_order` | `gateway-core/src/queue/tests.rs` |
 | I-38 | 缺同一 `timestamp` 下按 `id ASC` 删除的次序断言 | `fn capacity_prune_orders_by_timestamp_then_id` | `gateway-core/src/queue/storage/sqlite/limit/limit_tests.rs` |
-| I-40 | 口径冲突：实现与 `queue/core/task/tests.rs:229-273` 都把 SQLite 写失败计入同一 `persist_failed`，与本条「不等价于 SQLite 写失败次数」矛盾；需先裁定语义，再补「成功入队不递增 / 非 enqueue Err 路径不递增」的断言 | `fn persist_failed_only_counts_enqueue_channel_errors` | `gateway-core/src/pipeline/mod.rs` 内 `mod tests`（裁定后按最终口径编写） |
+| I-40 | 已落地（决议 A，P2-2）：`persist_failed` 统一为「持久化失败总数」（通道失败 + 落盘失败），新增「成功入队不递增」断言 | `successful_enqueue_does_not_increment_persist_failed` | `gateway-core/src/pipeline/mod.rs` 内 `mod tests` |
 | I-42 | 缺磁盘满 / unsent overflow 走哨兵计数、不消耗 5 轮重试预算的断言 | `fn disk_full_path_does_not_consume_retry_budget` | `gateway-core/src/queue/tests.rs` |
 | I-43 | 缺 500 点满批立即入队、以及退出信号 flush 残留数据的断言 | `fn micro_batch_flushes_at_500_points`、`fn shutdown_flushes_pending_micro_batch` | `gateway-core/src/pipeline/mod.rs` 内 `mod tests` |
 | I-44 | 缺「先投 RealtimeBus 再投 NorthFeed」的次序、以及两路共享同一份 `Arc<Vec<DataPoint>>` 的断言 | `fn pipeline_publishes_bus_before_feed`、`fn pipeline_shares_same_arc_between_bus_and_feed` | `gateway-core/src/pipeline/mod.rs` 内 `mod tests`（需构造真实 `RealtimeBus` 订阅端） |

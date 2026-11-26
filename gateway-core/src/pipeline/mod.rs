@@ -457,6 +457,24 @@ mod tests {
         );
     }
 
+    /// I-40（决议 A）：`persist_failed` 是「持久化失败总数」（通道失败 + 落盘失败），
+    /// 成功入队不得递增；只有 `enqueue` 返回 Err 才计一次。
+    #[tokio::test]
+    async fn successful_enqueue_does_not_increment_persist_failed() {
+        let (pipeline, _queue, _rx) = spawn_pipeline(vec![], vec![]);
+        let metrics = Arc::clone(&pipeline.metrics);
+
+        pipeline
+            .enqueue_checked(vec![DataPoint::good("p1", "dev", 1.0, 1.0, "u16")])
+            .await;
+
+        assert_eq!(
+            metrics.queue_persist.persist_failed.load(Ordering::Relaxed),
+            0,
+            "成功入队不得递增 persist_failed"
+        );
+    }
+
     // ===== ROI-27：数据管道不变量 I-52 / I-35 =====
 
     fn point(id: &str, deadband: f64) -> PointConfig {
