@@ -6,14 +6,14 @@
  * 既能单测每一项的边界，也能让 `selfCheck.ts` 只剩下编排职责。
  */
 import type { GatewayConfig } from '@/api/types'
-import type { HealthReport, HealthBusRow } from '@/api/status'
-import type { ProtocolCapabilityEntry } from '@/api/protocols'
-import type { NorthStatus } from '@/api/uplink'
-import type { NtpStatus } from '@/api/network'
-import type { Certificate } from '@/api/certificates'
-import type { ServiceInfo } from '@/api/watchdog'
-import { formatDateTime } from '@/utils/datetime'
-import { DELIVERY_BUS_SUCCESS_RATE_WARN, queueBacklogged } from '@/utils/healthVerdict'
+import type { HealthReport, HealthBusRow } from '@/api/system/status'
+import type { ProtocolCapabilityEntry } from '@/api/acquisition/protocols'
+import type { NorthStatus } from '@/api/uplink/uplink'
+import type { NtpStatus } from '@/api/system/network'
+import type { Certificate } from '@/api/system/certificates'
+import type { ServiceInfo } from '@/api/system/watchdog'
+import { formatDateTime } from '@/utils/time/datetime'
+import { DELIVERY_BUS_SUCCESS_RATE_WARN, queueBacklogged } from '@/utils/health/healthVerdict'
 
 /** 单项结论：通过 / 提醒（不阻断交付）/ 未通过 */
 export type CheckLevel = 'pass' | 'warn' | 'fail'

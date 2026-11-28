@@ -11,9 +11,9 @@
  */
 import { computed } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
-import type { HealthProblem, HealthReport } from '@/api/status'
+import type { HealthProblem, HealthReport } from '@/api/system/status'
 import type { ConfigHealthIssue } from '@/composables/config/configHealth'
-import { overallStatusMeta } from '@/utils/healthStatus'
+import { overallStatusMeta } from '@/utils/health/healthStatus'
 
 export type SignalSeverity = 'error' | 'warning'
 

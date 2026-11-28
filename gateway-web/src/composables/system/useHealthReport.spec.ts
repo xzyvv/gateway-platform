@@ -9,11 +9,11 @@
  *   - invalidate 后绕过 TTL 重新请求
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import type { HealthProblem, HealthReport } from '@/api/status'
+import type { HealthProblem, HealthReport } from '@/api/system/status'
 
 const m = vi.hoisted(() => ({ getHealthReport: vi.fn() }))
 
-vi.mock('@/api/status', () => ({
+vi.mock('@/api/system/status', () => ({
   getHealthReport: () => m.getHealthReport(),
 }))
 

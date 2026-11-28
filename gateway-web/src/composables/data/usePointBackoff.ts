@@ -12,8 +12,8 @@
  *   - `usePointBackoff`：组件内状态（loading / error / 列表）。
  */
 import { computed, ref } from 'vue'
-import { listPointBackoff, type PointBackoff } from '@/api/dataQuality'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { listPointBackoff, type PointBackoff } from '@/api/acquisition/dataQuality'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 export interface BackoffStats {
   total: number

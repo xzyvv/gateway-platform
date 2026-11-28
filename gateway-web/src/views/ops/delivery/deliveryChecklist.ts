@@ -6,7 +6,7 @@
  * 前者是给人签字的交付凭证，后者是机器判定的结论。
  */
 import type { VersionInfo } from '@/api/types'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import { LEVEL_LABEL, type CheckLevel, type SelfCheckResult } from './selfCheckEvals'
 
 export interface ManualItemDef {

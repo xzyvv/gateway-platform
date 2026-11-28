@@ -175,10 +175,10 @@ import {
   deviceScoreTextColor,
   deviceScoreLevel,
   DEVICE_SCORE_LEVEL_LABEL,
-} from '@/utils/healthVerdict'
+} from '@/utils/health/healthVerdict'
 import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { formatElapsed, formatRelative } from '@/utils/format'
+import { formatElapsed, formatRelative } from '@/utils/time/format'
 const { showToast } = useErrorDisplay()
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
 import {
@@ -190,7 +190,7 @@ import {
   type DeviceShadowView,
   type DeviceShadowPointView,
   type HealthSummaryView,
-} from '@/api/deviceOps'
+} from '@/api/acquisition/deviceOps'
 
 /** 最近一次拉取的完整列表（排序前的原始顺序） */
 const healthRows = ref<DeviceHealthView[]>([])

@@ -10,7 +10,7 @@
 import { reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import type { FormInstance } from 'element-plus'
-import type { DeviceTemplate } from '@/api/templates'
+import type { DeviceTemplate } from '@/api/acquisition/templates'
 import type { BusConfig, DeviceConfig } from '@/api/types'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import type { DeviceFormModel, DeviceState } from './types'

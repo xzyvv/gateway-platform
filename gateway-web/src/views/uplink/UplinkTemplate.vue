@@ -130,7 +130,7 @@ import { h, ref, watch, onUnmounted } from 'vue'
 import { ElButton, ElTag } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import type { TemplateVarInfo } from '@/api/uplink'
+import type { TemplateVarInfo } from '@/api/uplink/uplink'
 import { useUplinkConfig } from '@/composables/uplink/useUplinkConfig'
 
 const {

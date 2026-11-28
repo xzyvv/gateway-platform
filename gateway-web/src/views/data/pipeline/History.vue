@@ -160,8 +160,8 @@ import { useQueryState } from '@/composables/core/useQueryState'
 import { fetchPointBackoffOnce } from '@/composables/data/usePointBackoff'
 import { fetchPointQualities } from '@/composables/data/usePointQuality'
 import { usePointOptions } from '@/composables/data/usePointOptions'
-import { qualityText } from '@/utils/qualityLabels'
-import { scopedGet, scopedSet } from '@/utils/gatewayStorage'
+import { qualityText } from '@/utils/ui/qualityLabels'
+import { scopedGet, scopedSet } from '@/utils/storage/gatewayStorage'
 
 /** 历史行：原始查询与聚合结果共用同一形状 */
 type HistoryRow = { timestamp: number; value: number; quality: string; rowKey?: string }

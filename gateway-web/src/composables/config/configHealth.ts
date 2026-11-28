@@ -10,7 +10,7 @@
  * - 按 `field` 路径解析出可读的「对象」（设备名 / 总线端口 / 点位名）；
  * - 为超时越界提供一键修复（唯一可自动落盘的动作）。
  */
-import { postConfig } from '@/api/config'
+import { postConfig } from '@/api/uplink/config'
 import type { GatewayConfig } from '@/api/types'
 import { validateConfig } from '@/composables/config/configValidation'
 

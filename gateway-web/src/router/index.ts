@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { routes as pageRoutes } from './routes'
-import { isScopeDirty, confirmDiscardDirty } from '../utils/dirtyGuard'
+import { isScopeDirty, confirmDiscardDirty } from '../utils/storage/dirtyGuard'
 import { logError } from '../utils/logger'
 
 /**

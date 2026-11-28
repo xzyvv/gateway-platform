@@ -7,7 +7,7 @@ import DataBuffering from './DataBuffering.vue'
  * 不得写死 100000（那是背压阈值，真实淘汰线是 max_rows 的 90%）。
  */
 const mockGetStatus = vi.fn()
-vi.mock('@/api/status', () => ({ getStatus: () => mockGetStatus() }))
+vi.mock('@/api/system/status', () => ({ getStatus: () => mockGetStatus() }))
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function stateOf(wrapper: ReturnType<typeof mount>): any {

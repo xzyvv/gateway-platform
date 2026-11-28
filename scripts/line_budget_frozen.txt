@@ -15,7 +15,7 @@
 # **与前端 gateway-web/src 使用同一份账本、同一套规则**。
 #   - 后端条目：gateway-core/... 、gateway-api/... 、gatewayd/...
 #   - 前端条目：gateway-web/src/...（当前为空——前端存量巨型文件已按 §3.3 拆完）
-# 前端自动生成物（gateway-web/src/api/generated/、src/utils/ep-icons-compact.ts）
+# 前端自动生成物（gateway-web/src/api/generated/、src/utils/ui/ep-icons-compact.ts）
 # 不计入扫描，也不登记——生成物不靠人拆。
 #
 # 格式：<仓库相对路径><TAB><行数上限>，一行一个，# 开头为注释。

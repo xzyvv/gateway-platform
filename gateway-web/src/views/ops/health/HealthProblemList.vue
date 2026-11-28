@@ -30,8 +30,8 @@
 import { computed } from 'vue'
 import { CircleCheck } from '@element-plus/icons-vue'
 import { ElTag } from 'element-plus'
-import type { HealthProblem } from '@/api/status'
-import { problemLevelMeta } from '@/utils/healthStatus'
+import type { HealthProblem } from '@/api/system/status'
+import { problemLevelMeta } from '@/utils/health/healthStatus'
 
 const props = withDefaults(defineProps<{ problems: HealthProblem[]; title?: string }>(), {
   title: '待处置问题',

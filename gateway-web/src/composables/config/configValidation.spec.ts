@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const m = vi.hoisted(() => ({ validateConfigDraft: vi.fn() }))
 
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   validateConfigDraft: (...a: unknown[]) => m.validateConfigDraft(...a),
 }))
 

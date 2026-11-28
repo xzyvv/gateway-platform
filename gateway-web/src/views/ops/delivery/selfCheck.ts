@@ -8,14 +8,14 @@
  * 公共 API 面保持不变：既有页面（DeliveryCheck.vue）与测试仍从
  * `@/views/ops/delivery/selfCheck` 导入，无需改动调用点。
  */
-import { getConfig } from '@/api/config'
+import { getConfig } from '@/api/uplink/config'
 import type { GatewayConfig } from '@/api/types'
-import { getHealthReport } from '@/api/status'
-import { listProtocolCapabilities } from '@/api/protocols'
-import { getNorthStatus } from '@/api/uplink'
-import { getNtpStatus } from '@/api/network'
-import { listCertificates } from '@/api/certificates'
-import { listServices } from '@/api/watchdog'
+import { getHealthReport } from '@/api/system/status'
+import { listProtocolCapabilities } from '@/api/acquisition/protocols'
+import { getNorthStatus } from '@/api/uplink/uplink'
+import { getNtpStatus } from '@/api/system/network'
+import { listCertificates } from '@/api/system/certificates'
+import { listServices } from '@/api/system/watchdog'
 import {
   evalBuses,
   evalCertificates,
@@ -27,7 +27,7 @@ import {
   type CheckItem,
   type SelfCheckResult,
 } from './selfCheckEvals'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 export {
   LEVEL_LABEL,

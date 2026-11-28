@@ -1,6 +1,6 @@
-import { getGatewayBaseUrlSafe } from '../gatewayContext'
+import { getGatewayBaseUrlSafe } from '../storage/gatewayContext'
 import { isTauri } from '../platform'
-import { getToken } from '../secureStorage'
+import { getToken } from '../storage/secureStorage'
 
 /**
  * 构造 WebSocket 连接 URL。

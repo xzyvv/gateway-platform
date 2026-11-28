@@ -135,13 +135,13 @@
 import { computed, h, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { getVersion } from '@/api/status'
-import { importProject, type ProjectFile } from '@/api/project'
+import { getVersion } from '@/api/system/status'
+import { importProject, type ProjectFile } from '@/api/system/project'
 import type { VersionInfo } from '@/api/types'
-import { copyText } from '@/utils/clipboard'
-import { triggerDownload } from '@/utils/exportCsv'
-import { pad2 } from '@/utils/datetime'
-import { confirmAction } from '@/utils/confirm'
+import { copyText } from '@/utils/ui/clipboard'
+import { triggerDownload } from '@/utils/csv/exportCsv'
+import { pad2 } from '@/utils/time/datetime'
+import { confirmAction } from '@/utils/ui/confirm'
 import { useHealthReport } from '@/composables/system/useHealthReport'
 import {
   LEVEL_LABEL,
@@ -154,7 +154,7 @@ import {
   type CheckItem,
   type SelfCheckResult,
 } from './selfCheck'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 interface TemplateDef {
   name: string

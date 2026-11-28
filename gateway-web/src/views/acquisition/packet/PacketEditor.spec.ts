@@ -18,7 +18,7 @@ vi.mock('@/api/protocolTools', () => ({
   listPresets: vi.fn(),
   sendFrame: vi.fn(),
 }))
-vi.mock('@/utils/confirm', () => ({ confirmAction: vi.fn() }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmAction: vi.fn() }))
 vi.mock('@/composables/acquisition/useDebugTargets', async () => {
   const { ref } = await vi.importActual<typeof import('vue')>('vue')
   return {
@@ -31,7 +31,7 @@ vi.mock('@/composables/acquisition/useDebugTargets', async () => {
   }
 })
 // BusPauseBanner 在总线忙时会查暂停状态，不能让它真的发 HTTP
-vi.mock('@/api/buses', () => ({
+vi.mock('@/api/acquisition/buses', () => ({
   listPausedBuses: vi.fn().mockResolvedValue({ paused_buses: [] }),
   pauseBusCollect: vi.fn(),
   resumeBusCollect: vi.fn(),
@@ -40,7 +40,7 @@ vi.mock('@/api/buses', () => ({
 import PacketEditor from './PacketEditor.vue'
 import HexInput from '@/components/industrial/HexInput.vue'
 import { listPresets, sendFrame, type SendResult } from '@/api/protocolTools'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 
 /**
  * 报文编辑：这是唯一把「用户手写的帧」直接打到真实总线的入口。

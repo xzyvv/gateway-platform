@@ -22,14 +22,14 @@ vi.mock('element-plus', async () => {
     ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
   }
 })
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   listConfigVersions: (...a: unknown[]) => listVersionsMock(...a),
   getConfigVersion: (...a: unknown[]) => getVersionMock(...a),
   rollbackConfigVersion: (...a: unknown[]) => rollbackMock(...a),
   backupConfig: (...a: unknown[]) => backupMock(...a),
   compareConfigVersions: (...a: unknown[]) => compareMock(...a),
 }))
-vi.mock('@/utils/confirm', () => ({ confirmAction: (...a: unknown[]) => confirmActionMock(...a) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmAction: (...a: unknown[]) => confirmActionMock(...a) }))
 vi.mock('@/utils/logger', () => ({ logError: (...a: unknown[]) => logErrorMock(...a) }))
 
 const listVersionsMock = vi.hoisted(() => vi.fn())
@@ -41,7 +41,7 @@ const confirmActionMock = vi.hoisted(() => vi.fn())
 const logErrorMock = vi.hoisted(() => vi.fn())
 
 import ConfigVersions from './ConfigVersions.vue'
-import type { ConfigVersionSummary } from '@/api/config'
+import type { ConfigVersionSummary } from '@/api/uplink/config'
 
 const DialogStub = {
   name: 'ElDialog',

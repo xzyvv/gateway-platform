@@ -39,9 +39,9 @@ import { ref, computed, onMounted, h } from 'vue'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import { ElCheckbox, ElMessage, ElTag } from 'element-plus'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import {Promotion, Refresh} from '@element-plus/icons-vue'
-import { listOffsetPointsView, applyOffsetView, type OffsetPointViewV } from '@/api/pointsOps'
+import { listOffsetPointsView, applyOffsetView, type OffsetPointViewV } from '@/api/acquisition/pointsOps'
 import type { ColumnDef } from '@/components/DataTable.vue'
 
 const points = ref<OffsetPointViewV[]>([])

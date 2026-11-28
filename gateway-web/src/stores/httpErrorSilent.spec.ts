@@ -20,7 +20,7 @@ vi.mock('element-plus', () => {
 
 import { instance, request } from '@/api/http'
 import { useNotificationsStore } from './notifications'
-import { isUserNotified } from '@/utils/errorHandler'
+import { isUserNotified } from '@/utils/error/errorHandler'
 
 const realAdapter = instance.defaults.adapter
 

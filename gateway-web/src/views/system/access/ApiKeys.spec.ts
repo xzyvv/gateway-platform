@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import type { ApiKey, CreatedApiKey } from '@/api/apiKeys'
+import type { ApiKey, CreatedApiKey } from '@/api/system/apiKeys'
 
 const {
   listApiKeysMock,
@@ -19,7 +19,7 @@ const {
   confirmDeleteMock: vi.fn(),
 }))
 
-vi.mock('@/api/apiKeys', () => ({
+vi.mock('@/api/system/apiKeys', () => ({
   listApiKeys: listApiKeysMock,
   createApiKey: createApiKeyMock,
   setApiKeyEnabled: setApiKeyEnabledMock,
@@ -36,7 +36,7 @@ vi.mock('@/api/apiKeys', () => ({
   ],
 }))
 
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmDelete: confirmDeleteMock,
   confirmAction: vi.fn(),
 }))

@@ -8,11 +8,11 @@
  */
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createDevice } from '@/api/devices'
-import { listTemplates, saveTemplate, type DeviceTemplate } from '@/api/templates'
+import { createDevice } from '@/api/acquisition/devices'
+import { listTemplates, saveTemplate, type DeviceTemplate } from '@/api/acquisition/templates'
 import type { DeviceConfig } from '@/api/types'
 import type { DeviceFormModel, NewTemplateForm } from './types'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 export function useDeviceStep() {
   /** 网关模板库 */

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({ readPointNow: vi.fn() }))
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   readPointNow: (id: string) => m.readPointNow(id),
 }))
 

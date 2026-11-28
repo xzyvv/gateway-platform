@@ -15,7 +15,7 @@
  *   logError('storage:decrypt', e, '密文解密失败，返回空')
  */
 
-import { formatClock } from '@/utils/datetime'
+import { formatClock } from '@/utils/time/datetime'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 

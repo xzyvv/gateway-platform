@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 /**
  * #1 修复 stores/theme.ts hook 测试。
  *
- * 通过 vi.mock 让 '@/utils/echarts' 的导出变成 spy，验证：
+ * 通过 vi.mock 让 '@/utils/chart/echarts' 的导出变成 spy，验证：
  *   - setDark 在状态实际变化时调用 applyEchartsTheme
  *   - setDark 在 no-op 时不调用
  *   - initTheme 启动时会派一次 applyEchartsTheme（首屏已渲染图表也能跟上）
@@ -12,7 +12,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 /**
  * 等所有 microtask + 若干轮宏任务全部 flush（处理 store 内部 fire-and-forget
- * `import('@/utils/echarts')` 的模块解析）。
+ * `import('@/utils/chart/echarts')` 的模块解析）。
  *
  * N-12：旧实现只等 1 次 `setTimeout(0)`。全量并行跑时 worker 争抢会让动态 import
  * 的模块解析跨过单个宏任务，用例偶发 5s 超时（单独跑稳定）。改为多轮
@@ -32,7 +32,7 @@ async function flushAsync(): Promise<void> {
 
 const applyEchartsThemeMock = vi.fn()
 
-vi.mock('@/utils/echarts', () => ({
+vi.mock('@/utils/chart/echarts', () => ({
   applyEchartsTheme: (...args: unknown[]) => applyEchartsThemeMock(...args),
 }))
 
@@ -57,7 +57,7 @@ describe('theme store — #1 修复：暗色切换驱动 echarts 主题', () => 
     expect(document.documentElement.classList.contains('dark')).toBe(true)
     expect(localStorage.getItem('gw_theme')).toBe('dark')
 
-    // store 内部 `import('@/utils/echarts')` 是动态 import，回到 vitest mock 需要走宏任务
+    // store 内部 `import('@/utils/chart/echarts')` 是动态 import，回到 vitest mock 需要走宏任务
     await flushAsync()
     const calls = applyEchartsThemeMock.mock.calls.filter((args) => args[0] === true)
     expect(calls.length).toBeGreaterThanOrEqual(1)

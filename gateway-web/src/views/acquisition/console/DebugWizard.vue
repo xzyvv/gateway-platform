@@ -148,7 +148,7 @@ import { useRouter } from 'vue-router'
 import EmptyState from '@/components/EmptyState.vue'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useHealthReport } from '@/composables/system/useHealthReport'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 import {
   PROTOCOL_LABELS,
   WIZARD_PROTOCOLS,

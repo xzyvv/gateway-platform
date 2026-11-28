@@ -12,9 +12,9 @@
 import { h, type VNodeChild } from 'vue'
 import { ElTag } from 'element-plus'
 import type { ColumnDef } from '@/types/dataTable'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import { protocolLabel, protocolType } from '@/composables/devices/protocolMeta'
-import type { TagType } from '@/utils/statusType'
+import type { TagType } from '@/utils/ui/statusType'
 
 /** 行类型只要求是对象；取值统一走 key 下标，避免各页接口无索引签名导致泛型约束报错 */
 type AnyRow = Record<string, unknown>

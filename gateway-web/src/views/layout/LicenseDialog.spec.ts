@@ -12,7 +12,7 @@ const { fetchLicenseMock, importLicenseMock } = vi.hoisted(() => ({
 }))
 
 // vi.mock 工厂替换 api/license 模块（fetchLicense / importLicense 均走 mock）
-vi.mock('@/api/license', () => ({
+vi.mock('@/api/system/license', () => ({
   fetchLicense: fetchLicenseMock,
   importLicense: importLicenseMock,
 }))

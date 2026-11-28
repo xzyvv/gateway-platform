@@ -21,7 +21,7 @@ vi.mock('element-plus', async () => {
     ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
   }
 })
-vi.mock('@/api/network', () => ({ getCellularStatus: getCellularStatusMock }))
+vi.mock('@/api/system/network', () => ({ getCellularStatus: getCellularStatusMock }))
 vi.mock('@/composables/core/usePolling', () => ({
   usePolling: (..._a: unknown[]) => ({ start: startPoll, stop: stopPoll }),
 }))

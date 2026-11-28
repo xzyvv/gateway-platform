@@ -7,7 +7,7 @@ import Topbar from './Topbar.vue'
 import { useTableDensity, __resetTablePrefsForTests } from '@/composables/core/useTablePrefs'
 import type { useLayoutClock } from '@/composables/layout/useLayoutClock'
 import type { useGatewaySwitcher } from '@/composables/layout/useGatewaySwitcher'
-import type { GatewayEntry, DiscoveredGateway } from '@/api/gatewayConfig'
+import type { GatewayEntry, DiscoveredGateway } from '@/api/runtime/gatewayConfig'
 
 type LayoutClockApi = ReturnType<typeof useLayoutClock>
 type GatewaySwitcherApi = ReturnType<typeof useGatewaySwitcher>

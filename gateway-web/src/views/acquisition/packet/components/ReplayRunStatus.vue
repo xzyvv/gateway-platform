@@ -45,7 +45,7 @@
  */
 import { computed } from 'vue'
 import type { ReplayExecuteResult } from '@/api/protocolTools'
-import { formatElapsed } from '@/utils/format'
+import { formatElapsed } from '@/utils/time/format'
 
 const props = defineProps<{
   /** 回放进行中 */

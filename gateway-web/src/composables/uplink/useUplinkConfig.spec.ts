@@ -17,7 +17,7 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: m.push }),
   useRoute: () => ({ path: '/test-uplink' }),
 }))
-vi.mock('@/utils/dirtyGuard', () => ({
+vi.mock('@/utils/storage/dirtyGuard', () => ({
   registerDirtyGuard: () => ({ reset: vi.fn(), mark: vi.fn(), unregister: vi.fn() }),
 }))
 vi.mock('element-plus', async () => {
@@ -33,7 +33,7 @@ vi.mock('element-plus', async () => {
     }),
   }
 })
-vi.mock('@/api/uplink', () => {
+vi.mock('@/api/uplink/uplink', () => {
   const BUILTIN_TEMPLATES = [
     { id: 'default', name: '默认', description: '', template: '{"a":${value}}' },
     { id: 'tb', name: 'ThingsBoard', description: '', template: '{"ts":${timestamp_ms}}' },

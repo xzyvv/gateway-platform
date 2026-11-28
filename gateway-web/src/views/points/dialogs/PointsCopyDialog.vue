@@ -33,10 +33,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listPoints, createPoint } from '@/api/points'
+import { listPoints, createPoint } from '@/api/acquisition/points'
 import type { DeviceConfig, PointConfig } from '@/api/types'
-import { filterPointsForCopy, mapPointToTarget } from '@/utils/deviceCopy'
-import { runConcurrent } from '@/utils/concurrency'
+import { filterPointsForCopy, mapPointToTarget } from '@/utils/device/deviceCopy'
+import { runConcurrent } from '@/utils/config/concurrency'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'

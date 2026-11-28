@@ -35,4 +35,4 @@ export interface RunLog extends StepOutcome {
  * 用户会以为是两种故障。现统一复用共享映射，本模块只保留类型定义并转出，
  * 避免调用方为了一个文案函数多 import 一个路径。
  */
-export { protocolFailureLabel as errorLabel } from '@/utils/protocolFailures'
+export { protocolFailureLabel as errorLabel } from '@/utils/health/protocolFailures'

@@ -9,7 +9,7 @@ import { useRequestLogStore } from '@/stores/requestLog'
 
 /** 捕获「复制为 cURL」写入剪贴板的内容 */
 const copiedText = vi.hoisted(() => ({ value: '' }))
-vi.mock('@/utils/clipboard', () => ({
+vi.mock('@/utils/ui/clipboard', () => ({
   copyText: async (text: string) => {
     copiedText.value = text
   },

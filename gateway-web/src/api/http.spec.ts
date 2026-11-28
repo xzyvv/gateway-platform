@@ -5,7 +5,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import axios from 'axios'
 import { sanitizeForLog, sanitizeUrl, readTraceId, instance, loggableHeaders } from './http'
-import { abortAllInflight, getInflightCount } from './inflight'
+import { abortAllInflight, getInflightCount } from './runtime/inflight'
 
 describe('sanitizeForLog（W-4 脱敏）', () => {
   it('顶层 password / token / secret 字段被替换', () => {

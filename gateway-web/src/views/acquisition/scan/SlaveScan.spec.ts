@@ -8,7 +8,7 @@ vi.mock('@/api/protocolTools', () => ({
   scanBusStream: vi.fn(),
   canStreamScan: vi.fn(),
 }))
-vi.mock('@/api/protocols', () => ({
+vi.mock('@/api/acquisition/protocols', () => ({
   listProtocolCapabilities: vi.fn(),
 }))
 vi.mock('@/composables/acquisition/useDebugTargets', () => ({
@@ -27,7 +27,7 @@ import {
   canStreamScan,
   type SlaveScanResult,
 } from '@/api/protocolTools'
-import { listProtocolCapabilities } from '@/api/protocols'
+import { listProtocolCapabilities } from '@/api/acquisition/protocols'
 
 /**
  * P0-2 契约 §7：扫描模式选择的回归钉子——

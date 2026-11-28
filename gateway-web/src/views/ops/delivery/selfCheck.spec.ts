@@ -13,11 +13,11 @@ import {
   type CheckItem,
 } from './selfCheck'
 import type { GatewayConfig } from '@/api/types'
-import type { HealthReport } from '@/api/status'
-import type { ProtocolCapabilityEntry } from '@/api/protocols'
-import type { NorthStatus } from '@/api/uplink'
-import type { Certificate } from '@/api/certificates'
-import type { ServiceInfo } from '@/api/watchdog'
+import type { HealthReport } from '@/api/system/status'
+import type { ProtocolCapabilityEntry } from '@/api/acquisition/protocols'
+import type { NorthStatus } from '@/api/uplink/uplink'
+import type { Certificate } from '@/api/system/certificates'
+import type { ServiceInfo } from '@/api/system/watchdog'
 
 function config(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   return {

@@ -45,12 +45,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { copyText } from '@/utils/clipboard'
+import { copyText } from '@/utils/ui/clipboard'
 import {
   Lock, QuestionFilled, HomeFilled, CopyDocument, SwitchButton,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 
 const route = useRoute()
 const router = useRouter()

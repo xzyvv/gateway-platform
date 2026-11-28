@@ -90,12 +90,12 @@ import { usePolling } from '@/composables/core/usePolling'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import {Refresh} from '@element-plus/icons-vue'
-import echarts, { disposeChart, ensureChart } from '@/utils/echarts-extra'
-import { defaultGrid, valueAxisStyle, categoryAxisStyle, axisNameStyle } from '@/utils/chartStyle'
-import { CHART_PRIMARY, CHART_DANGER, CHART_WARNING } from '@/utils/chartTheme'
-import { getDiskHistory, type DiskHistory } from '@/api/status'
-import { pad2 } from '@/utils/datetime'
-import { diskLevelMeta } from '@/utils/healthStatus'
+import echarts, { disposeChart, ensureChart } from '@/utils/chart/echarts-extra'
+import { defaultGrid, valueAxisStyle, categoryAxisStyle, axisNameStyle } from '@/utils/chart/chartStyle'
+import { CHART_PRIMARY, CHART_DANGER, CHART_WARNING } from '@/utils/chart/chartTheme'
+import { getDiskHistory, type DiskHistory } from '@/api/system/status'
+import { pad2 } from '@/utils/time/datetime'
+import { diskLevelMeta } from '@/utils/health/healthStatus'
 import { logError } from '@/utils/logger'
 
 // 磁盘水位分级阈值，与后端 `gateway_core::engine::monitor::health::disk_alarm` 保持一致。

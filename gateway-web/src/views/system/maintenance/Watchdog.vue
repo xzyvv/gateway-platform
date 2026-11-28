@@ -96,10 +96,10 @@ import {
   STATUS_TYPE,
   type ServiceInfo,
   type HealEvent,
-} from '@/api/watchdog'
-import { getConfig, postConfig } from '@/api/config'
+} from '@/api/system/watchdog'
+import { getConfig, postConfig } from '@/api/uplink/config'
 import type { SelfHealConfig } from '@/api/types'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import { actionColumn, tagColumn } from '@/composables/core/commonColumns'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 

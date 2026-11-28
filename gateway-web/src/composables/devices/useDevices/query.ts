@@ -5,11 +5,11 @@
  * 以及从「设备模板 / 点位」页跳转过来时的高亮定位。
  */
 import { computed } from 'vue'
-import { listDevices } from '@/api/devices'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { listDevices } from '@/api/acquisition/devices'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 import type { DeviceConfig } from '@/api/types'
 import type { DeviceState } from './types'
-import { flashHighlightRow } from '@/utils/tableHighlight'
+import { flashHighlightRow } from '@/utils/ui/tableHighlight'
 
 /**
  * 设备列表查询

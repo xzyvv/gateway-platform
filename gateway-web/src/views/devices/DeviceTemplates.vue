@@ -72,19 +72,19 @@
 import { ref, reactive, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElButton, ElMessage } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 import {Plus, Refresh} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
 import {
   listTemplates, saveTemplate, deleteTemplate,
   type DeviceTemplate, type TemplatePoint,
-} from '@/api/templates'
+} from '@/api/acquisition/templates'
 import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
 import DurationSelect from '@/components/industrial/DurationSelect.vue'
 import { DATA_TYPES } from '@/composables/devices/decodeParams'
 import { unitChoices } from '@/composables/devices/useUnits'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 

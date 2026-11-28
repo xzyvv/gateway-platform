@@ -25,7 +25,7 @@
  * - steps：探测项列表（含 pending/testing/success/fail 状态）
  */
 import type { DetectStep } from '@/api/protocolTools'
-import { withDiagHint } from '@/utils/diagHints'
+import { withDiagHint } from '@/utils/error/diagHints'
 
 defineProps<{
   /** 探测项列表 */

@@ -24,10 +24,10 @@
 
 import { ElButton, ElMessage, ElMessageBox } from 'element-plus'
 import { h } from 'vue'
-import { composeFailure, extractErrorMessage, isUserNotified } from '@/utils/errorHandler'
-import { withDiagHint } from '@/utils/diagHints'
+import { composeFailure, extractErrorMessage, isUserNotified } from '@/utils/error/errorHandler'
+import { withDiagHint } from '@/utils/error/diagHints'
 import { logError } from '@/utils/logger'
-import { copyText } from '@/utils/clipboard'
+import { copyText } from '@/utils/ui/clipboard'
 
 export type ErrorStyle = 'toast' | 'inline' | 'modal' | 'silent'
 

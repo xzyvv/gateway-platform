@@ -26,7 +26,7 @@ vi.mock('@/api', () => ({
   setToken: setTokenMock,
   clearToken: clearTokenMock,
 }))
-vi.mock('@/api/auth', () => ({
+vi.mock('@/api/system/auth', () => ({
   login: loginMock,
   whoami: whoamiMock,
 }))

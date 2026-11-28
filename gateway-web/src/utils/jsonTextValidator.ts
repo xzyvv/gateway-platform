@@ -6,7 +6,7 @@
  * 这里把「解析 + 中文原因」收成一处：页面只负责把结果渲染到输入框下方。
  */
 import type { FormItemRule } from 'element-plus'
-import { extractErrorMessage } from './errorHandler'
+import { extractErrorMessage } from './error/errorHandler'
 
 /** 解析结果：失败时 error 为可直接展示给现场人员的中文原因 */
 export interface JsonTextParseResult<T = unknown> {

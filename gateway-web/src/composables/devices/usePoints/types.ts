@@ -1,6 +1,6 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { AggFn, DeviceConfig, PointConfig } from '@/api/types'
-import type { PointQuality } from '@/api/dataQuality'
+import type { PointQuality } from '@/api/acquisition/dataQuality'
 
 /**
  * 点位清单行：配置点位（可编辑）+ 模板展开的运行时点位（只读，_source='template'）。

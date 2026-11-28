@@ -13,7 +13,7 @@ import type { GatewayConfig } from '@/api/types'
 const { configDiffMock } = vi.hoisted(() => ({ configDiffMock: vi.fn() }))
 
 // 仅替换 configDiff，组件其余依赖保持真实实现
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   configDiff: (...args: unknown[]) => configDiffMock(...args),
 }))
 

@@ -39,7 +39,7 @@ vi.mock('vue-router', async () => {
     useRouter: () => ({ replace: m.replace }),
   }
 })
-vi.mock('@/utils/dirtyGuard', () => ({
+vi.mock('@/utils/storage/dirtyGuard', () => ({
   confirmDiscardDirty: (...a: unknown[]) => m.confirm(...(a as [string])),
 }))
 

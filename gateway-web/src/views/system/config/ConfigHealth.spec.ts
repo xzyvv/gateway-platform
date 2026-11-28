@@ -23,8 +23,8 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
-vi.mock('@/api/config', () => ({ getConfig: (...a: unknown[]) => getConfigMock(...a) }))
-vi.mock('@/api/templates', () => ({ listTemplates: (...a: unknown[]) => listTemplatesMock(...a) }))
+vi.mock('@/api/uplink/config', () => ({ getConfig: (...a: unknown[]) => getConfigMock(...a) }))
+vi.mock('@/api/acquisition/templates', () => ({ listTemplates: (...a: unknown[]) => listTemplatesMock(...a) }))
 vi.mock('@/composables/config/configHealth', () => ({ loadConfigHealthIssues: (...a: unknown[]) => loadIssuesMock(...a) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 

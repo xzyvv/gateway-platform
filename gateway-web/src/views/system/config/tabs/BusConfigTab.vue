@@ -259,13 +259,13 @@ import {
   protocolVariantsOf,
 } from '@/composables/devices/protocolMeta'
 import type { BusConfig, OpcUaClientConfig } from '@/api/types'
-import { defaultBusReconnectBackoff } from '@/utils/configDefaults'
+import { defaultBusReconnectBackoff } from '@/utils/config/configDefaults'
 import {
   BACKOFF_OPTIONS,
   applyPreset,
   presetOf,
   type BackoffPreset,
-} from '@/utils/backoffPresets'
+} from '@/utils/config/backoffPresets'
 
 // 总线列表为受控模型；增删/协议切换等业务逻辑仍由 useConfigActions 提供，经事件上抛。
 const buses = defineModel<BusConfig[]>({ required: true })

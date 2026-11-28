@@ -64,8 +64,8 @@
 import { computed, ref, watch } from 'vue'
 import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
 import type { GatewayConfig } from '@/api/types'
-import { estimateCapacity, aggregateCoverageDays } from '@/utils/capacityPlan'
-import { formatBytes } from '@/utils/format'
+import { estimateCapacity, aggregateCoverageDays } from '@/utils/config/capacityPlan'
+import { formatBytes } from '@/utils/time/format'
 
 const queue = defineModel<GatewayConfig['queue']>({ required: true })
 

@@ -12,8 +12,8 @@
  * useFavorites 的 @singleton 约定），且避免多实例各自挂 watch 重复写盘。
  */
 import { computed, ref, watch } from 'vue'
-import { scopedGet, scopedRemove, scopedSet } from '@/utils/gatewayStorage'
-import { isValidHex, normalizeHex } from '@/utils/hexFrame'
+import { scopedGet, scopedRemove, scopedSet } from '@/utils/storage/gatewayStorage'
+import { isValidHex, normalizeHex } from '@/utils/hex/hexFrame'
 
 // 帧文本规范/合法性判断已移到 utils/hexFrame（报文编辑也要用），这里保留再导出兼容既有引用
 export { isValidHex, normalizeHex }

@@ -69,8 +69,8 @@ import { ref, computed, onMounted } from 'vue'
 import {Refresh} from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
 import BusSelect, { type BusOption } from '@/components/industrial/BusSelect.vue'
-import { getConfig } from '@/api/config'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { getConfig } from '@/api/uplink/config'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 import type { PointConfig } from '@/api/types'
 
 const buses = ref<string[]>([])

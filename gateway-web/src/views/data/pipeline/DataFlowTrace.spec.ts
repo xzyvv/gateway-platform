@@ -11,17 +11,17 @@ const mockReadPointNow = vi.fn()
 const mockGetUplinkConfig = vi.fn()
 const mockTestUplink = vi.fn()
 
-vi.mock('@/api/devices', () => ({
+vi.mock('@/api/acquisition/devices', () => ({
   listDevices: () => mockListDevices(),
 }))
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   listPoints: (id: string) => mockListPoints(id),
   readPointNow: (id: string) => mockReadPointNow(id),
 }))
-vi.mock('@/api/dataQuality', () => ({
+vi.mock('@/api/acquisition/dataQuality', () => ({
   listPointQuality: () => mockListPointQuality(),
 }))
-vi.mock('@/api/uplink', () => ({
+vi.mock('@/api/uplink/uplink', () => ({
   getUplinkConfig: () => mockGetUplinkConfig(),
   testUplink: (payload: unknown) => mockTestUplink(payload),
 }))

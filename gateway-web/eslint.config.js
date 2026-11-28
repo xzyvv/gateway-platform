@@ -21,7 +21,7 @@ const LINE_BUDGET = 800
 // 自动生成物：不纳入行数预算（生成物不靠人拆）。
 const LINE_BUDGET_GENERATED = [
   // 自动生成，勿手改（vite alias 重定向 @element-plus/icons-vue 的产物）
-  'src/utils/ep-icons-compact.ts',
+  'src/utils/ui/ep-icons-compact.ts',
 ]
 
 // 冻结账本与后端共用一份（DD-58）：scripts/line_budget_frozen.txt

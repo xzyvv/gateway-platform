@@ -1,6 +1,6 @@
 /**
  * 从 @element-plus/icons-vue/dist/index.js 提取所有图标的 SVG path 数据，
- * 生成紧凑的图标模块 src/utils/ep-icons-compact.ts。
+ * 生成紧凑的图标模块 src/utils/ui/ep-icons-compact.ts。
  *
  * 紧凑版去掉了每个图标独立的 defineComponent / name / __name / setup 包装，
  * 改用一个共享的 ic() 工厂函数，每个图标仅保留路径数据 + 一次工厂调用。
@@ -130,5 +130,5 @@ for (const { name, paths } of icons) {
 }
 
 lines.push('')
-writeFileSync('src/utils/ep-icons-compact.ts', lines.join('\n'))
-console.log(`Wrote src/utils/ep-icons-compact.ts (${lines.length} lines)`)
+writeFileSync('src/utils/ui/ep-icons-compact.ts', lines.join('\n'))
+console.log(`Wrote src/utils/ui/ep-icons-compact.ts (${lines.length} lines)`)

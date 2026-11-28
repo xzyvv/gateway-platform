@@ -20,13 +20,13 @@ vi.mock('@/composables/acquisition/useDebugTargets', async () => {
     }),
   }
 })
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmAction: vi.fn(),
   confirmDelete: vi.fn(),
 }))
 // 执行日志导出：文件名时间戳用固定值，断言不受运行机器时区影响
 const exportState = vi.hoisted(() => ({ csv: vi.fn() }))
-vi.mock('@/utils/exportCsv', () => ({
+vi.mock('@/utils/csv/exportCsv', () => ({
   downloadTableCsv: exportState.csv,
   csvFilename: (prefix: string) => `${prefix}-stamp.csv`,
 }))
@@ -42,10 +42,10 @@ vi.mock('element-plus', async () => {
 import StepDebug from './StepDebug.vue'
 import { abortAllInflight } from '@/api/http'
 import { listPresets, sendFrame, type SendResult } from '@/api/protocolTools'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import { ElMessage } from 'element-plus'
 import { makeDefaultSequence, useStepSequences } from '@/composables/acquisition/useStepSequences'
-import { scopedKey } from '@/utils/gatewayStorage'
+import { scopedKey } from '@/utils/storage/gatewayStorage'
 
 /**
  * 单步调试：这是「把多条帧按顺序打到现场总线」的执行器。

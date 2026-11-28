@@ -30,9 +30,9 @@
  * 选择误判为「失效」而清空。
  */
 import { ref, computed, watch, onMounted } from 'vue'
-import { listDevices } from '@/api/devices'
-import { getConfig } from '@/api/config'
-import { scopedGet, scopedRemove, scopedSet } from '@/utils/gatewayStorage'
+import { listDevices } from '@/api/acquisition/devices'
+import { getConfig } from '@/api/uplink/config'
+import { scopedGet, scopedRemove, scopedSet } from '@/utils/storage/gatewayStorage'
 import type { DeviceConfig, BusConfig } from '@/api/types'
 
 const LS_DEVICE_KEY = 'gateway.debug-target.device-id'

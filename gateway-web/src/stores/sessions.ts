@@ -21,7 +21,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getToken, clearToken } from '@/api/index'
 import { useAuthStore } from './auth'
-import { scopedGet, scopedRemove, scopedSet } from '@/utils/gatewayStorage'
+import { scopedGet, scopedRemove, scopedSet } from '@/utils/storage/gatewayStorage'
 
 export interface LoginSession {
   id: string

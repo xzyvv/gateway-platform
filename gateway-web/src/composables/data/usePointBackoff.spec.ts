@@ -5,11 +5,11 @@
  * 设备列表复用同一函数，避免出现「监控说 3 个退避、列表说 2 个」。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { PointBackoff } from '@/api/dataQuality'
+import type { PointBackoff } from '@/api/acquisition/dataQuality'
 
 const m = vi.hoisted(() => ({ listPointBackoff: vi.fn() }))
 
-vi.mock('@/api/dataQuality', () => ({
+vi.mock('@/api/acquisition/dataQuality', () => ({
   listPointBackoff: () => m.listPointBackoff(),
 }))
 

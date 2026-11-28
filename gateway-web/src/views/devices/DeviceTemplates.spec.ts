@@ -24,12 +24,12 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
-vi.mock('@/api/templates', () => ({
+vi.mock('@/api/acquisition/templates', () => ({
   listTemplates: (...a: unknown[]) => listMock(...a),
   saveTemplate: (...a: unknown[]) => saveMock(...a),
   deleteTemplate: (...a: unknown[]) => deleteMock(...a),
 }))
-vi.mock('@/utils/confirm', () => ({ confirmDelete: (...a: unknown[]) => confirmDeleteMock(...a) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: (...a: unknown[]) => confirmDeleteMock(...a) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 vi.mock('@/composables/core/useDialogDirtyGuard', () => ({
   useDialogDirtyGuard: () => ({ beforeClose: () => {}, close: closeGuard }),
@@ -46,7 +46,7 @@ const closeGuard = vi.hoisted(() => vi.fn())
 import DeviceTemplates from './DeviceTemplates.vue'
 import DataTable from '@/components/DataTable.vue'
 import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
-import type { DeviceTemplate } from '@/api/templates'
+import type { DeviceTemplate } from '@/api/acquisition/templates'
 import { ElInputNumber } from 'element-plus'
 
 const DialogStub = {

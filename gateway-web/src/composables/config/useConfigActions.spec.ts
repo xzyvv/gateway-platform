@@ -21,12 +21,12 @@ vi.mock('vue-router', () => ({
   // 测试环境 mock 一个稳定的 path。真实组件挂载时由 Vue Router 注入实际 path。
   useRoute: () => ({ path: '/test-config', query: {} }),
 }))
-vi.mock('@/utils/confirm', () => ({ confirmAction: (...a: unknown[]) => m.confirmAction(...a) }))
-vi.mock('@/utils/dirtyGuard', () => ({
+vi.mock('@/utils/ui/confirm', () => ({ confirmAction: (...a: unknown[]) => m.confirmAction(...a) }))
+vi.mock('@/utils/storage/dirtyGuard', () => ({
   registerDirtyGuard: () => ({ reset: vi.fn(), mark: vi.fn(), unregister: vi.fn() }),
 }))
 vi.mock('@/composables/config/configValidation', () => ({ validateConfig: async () => [] }))
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   postConfig: (...a: unknown[]) => m.postConfig(...a),
   exportConfig: async () => ({}),
   reloadConfig: async () => ({ status: 'ok', notes: [] }),

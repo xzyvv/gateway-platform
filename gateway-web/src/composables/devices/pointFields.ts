@@ -1,4 +1,4 @@
-import { getPointFields } from '@/api/pointFields'
+import { getPointFields } from '@/api/acquisition/pointFields'
 import { applyByteOrders, applyDataTypes } from './decodeParams'
 import { applyUnits } from './useUnits'
 

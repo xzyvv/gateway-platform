@@ -175,7 +175,7 @@ import {
   lastGoodByDevice,
   resolveBackoffDeviceId,
 } from '@/composables/data/usePointBackoff'
-import type { PointBackoff } from '@/api/dataQuality'
+import type { PointBackoff } from '@/api/acquisition/dataQuality'
 import { getPackets } from '@/api/protocolTools/packetCapture'
 import type { Packet } from '@/api/protocolTools/types'
 import {
@@ -183,7 +183,7 @@ import {
   aggregateLastFrameByDevice,
   mergeDeviceEvidence,
   type DeviceEvidence,
-} from '@/utils/deviceEvidence'
+} from '@/utils/device/deviceEvidence'
 import {
   createDeviceColumns,
   type BackoffQuality,

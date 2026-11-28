@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getToken, setToken, clearToken } from '@/api'
-import * as authApi from '@/api/auth'
+import * as authApi from '@/api/system/auth'
 import { markLoggingOut, resetLoggingOut } from '@/api/http'
 import { type Role } from '../types/roles'
-import { scopedGet, scopedRemove, scopedSet } from '../utils/gatewayStorage'
+import { scopedGet, scopedRemove, scopedSet } from '../utils/storage/gatewayStorage'
 
 /// Bug 2.8: 三态身份验证状态机
 ///

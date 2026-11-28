@@ -54,14 +54,14 @@ import { ElTag } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 const { showToast } = useErrorDisplay()
-import { listAuditLogs, type AuditLogEntry, type AuditFilter } from '@/api/auditLog'
+import { listAuditLogs, type AuditLogEntry, type AuditFilter } from '@/api/system/auditLog'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import FilterToolbar, { type FilterField } from '@/components/FilterToolbar.vue'
 import { useQueryState } from '@/composables/core/useQueryState'
 import { useTablePager } from '@/composables/core/useTablePager'
 import { logError } from '@/utils/logger'
 import { timeColumn } from '@/composables/core/commonColumns'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 
 const logs = ref<AuditLogEntry[]>([])
 const loading = ref(false)

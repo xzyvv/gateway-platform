@@ -47,13 +47,13 @@ import { reactive, computed, ref, getCurrentInstance } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { InfoFilled } from '@element-plus/icons-vue'
-import { createPoint } from '@/api/points'
+import { createPoint } from '@/api/acquisition/points'
 import type { DeviceConfig } from '@/api/types'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
-import { runConcurrent } from '@/utils/concurrency'
-import { defaultPointConfig } from '@/utils/pointDefaults'
+import { runConcurrent } from '@/utils/config/concurrency'
+import { defaultPointConfig } from '@/utils/config/pointDefaults'
 
 const props = defineProps<{
   modelValue: boolean

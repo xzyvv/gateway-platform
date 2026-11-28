@@ -14,7 +14,7 @@ import { usePolledTask } from '@/composables/core/useTaskProgress'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useProtocolCaps } from '@/composables/acquisition/useProtocolCaps'
-import { copyText } from '@/utils/clipboard'
+import { copyText } from '@/utils/ui/clipboard'
 
 const POLL_INTERVAL_MS = 500
 

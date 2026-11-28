@@ -34,8 +34,8 @@
  * 「导入对象」切换与两条分支共用的网关模板库。
  */
 import { ref, onMounted } from 'vue'
-import { listTemplates } from '@/api/templates'
-import type { TemplateInfo } from '@/utils/batchImportCsv'
+import { listTemplates } from '@/api/acquisition/templates'
+import type { TemplateInfo } from '@/utils/csv/batchImportCsv'
 import SectionHeader from '@/components/SectionHeader.vue'
 import DeviceImportBranch from './batchImport/DeviceImportBranch.vue'
 import PointImportBranch from './batchImport/PointImportBranch.vue'

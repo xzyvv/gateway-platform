@@ -9,7 +9,7 @@
  * - 调用校验接口；
  * - 把字段路径前缀映射为配置页签，供「定位」跳转（UI 概念不进入后端）。
  */
-import { validateConfigDraft } from '@/api/config'
+import { validateConfigDraft } from '@/api/uplink/config'
 import type { GatewayConfig } from '@/api/types'
 
 export interface ConfigValidationIssue {

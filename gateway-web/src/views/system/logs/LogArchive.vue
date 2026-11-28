@@ -68,15 +68,15 @@ import DataTable, { type ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
 import EmptyState from '@/components/EmptyState.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
-import { formatBytes } from '@/utils/format'
+import { formatBytes } from '@/utils/time/format'
 import {
   downloadArchive,
   listArchives,
   viewArchive,
   type ArchiveLogLine,
   type LogArchiveItem,
-} from '@/api/logArchive'
-import { extractErrorReason } from '@/utils/errorHandler'
+} from '@/api/system/logArchive'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 
 // downloadArchive 是 GET：拦截器已弹全局通知并打标记，showToast 据此跳过重复提示

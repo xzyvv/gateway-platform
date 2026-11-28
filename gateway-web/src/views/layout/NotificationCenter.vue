@@ -106,10 +106,10 @@ import { ElBadge } from 'element-plus'
 import 'element-plus/es/components/badge/style/css'
 import { Bell, CopyDocument, Close, Position } from '@element-plus/icons-vue'
 import { useNotificationsStore, type AppNotification, type NotificationType } from '@/stores/notifications'
-import { formatTimeOfDay, pad2 } from '@/utils/datetime'
-import { describeErrorDetail, isHttpStatusCode } from '@/utils/errorCodes'
-import { buildDiagnosticText } from '@/utils/diagnosticReport'
-import { copyText } from '@/utils/clipboard'
+import { formatTimeOfDay, pad2 } from '@/utils/time/datetime'
+import { describeErrorDetail, isHttpStatusCode } from '@/utils/error/errorCodes'
+import { buildDiagnosticText } from '@/utils/health/diagnosticReport'
+import { copyText } from '@/utils/ui/clipboard'
 
 const store = useNotificationsStore()
 const router = useRouter()

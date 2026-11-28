@@ -13,8 +13,8 @@
  * 合并后下拉不再为空；点位的当前值/质量在无采集器时为 null，各页面按「无值」展示。
  */
 import { ref } from 'vue'
-import { getConfig } from '@/api/config'
-import { type PointQuality } from '@/api/dataQuality'
+import { getConfig } from '@/api/uplink/config'
+import { type PointQuality } from '@/api/acquisition/dataQuality'
 import { fetchPointQualities } from '@/composables/data/usePointQuality'
 
 export interface PointOption {

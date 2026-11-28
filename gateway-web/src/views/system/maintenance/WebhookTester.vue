@@ -77,10 +77,10 @@ import { ref, reactive, onMounted, h } from 'vue'
 import { ElMessage, ElTag } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { Promotion } from '@element-plus/icons-vue'
-import { testWebhook, type WebhookTestResponse } from '@/api/webhook'
+import { testWebhook, type WebhookTestResponse } from '@/api/uplink/webhook'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { timeColumn } from '@/composables/core/commonColumns'
-import { scopedGet, scopedSet } from '@/utils/gatewayStorage'
+import { scopedGet, scopedSet } from '@/utils/storage/gatewayStorage'
 
 interface HistoryItem {
   id: string

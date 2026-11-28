@@ -16,7 +16,7 @@ vi.mock('element-plus', async () => {
 })
 
 const confirmDeleteMock = vi.hoisted(() => vi.fn())
-vi.mock('@/utils/confirm', () => ({ confirmDelete: confirmDeleteMock }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: confirmDeleteMock }))
 
 const apiMock = vi.hoisted(() => ({
   listSessions: vi.fn(),

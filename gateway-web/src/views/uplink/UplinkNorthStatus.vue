@@ -247,10 +247,10 @@ import {
   type NorthAggregated,
   type NorthServer,
   type PassthroughSession,
-} from '@/api/uplink'
-import { computeNorthHealth, verdictAlertType } from '@/utils/northHealth'
+} from '@/api/uplink/uplink'
+import { computeNorthHealth, verdictAlertType } from '@/utils/health/northHealth'
 import { logError } from '@/utils/logger'
-import { formatClock, formatDateTime } from '@/utils/datetime'
+import { formatClock, formatDateTime } from '@/utils/time/datetime'
 
 const status = reactive<{ channels: NorthChannel[]; aggregated?: NorthAggregated }>({
   channels: [],

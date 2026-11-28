@@ -114,11 +114,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import {Refresh} from '@element-plus/icons-vue'
-import { getCellularStatus, type CellularStatus } from '@/api/network'
+import { getCellularStatus, type CellularStatus } from '@/api/system/network'
 import { logError } from '@/utils/logger'
 import { usePolling } from '@/composables/core/usePolling'
-import { formatClock, formatTimestamp } from '@/utils/datetime'
-import { statusTagType, type TagType } from '@/utils/statusType'
+import { formatClock, formatTimestamp } from '@/utils/time/datetime'
+import { statusTagType, type TagType } from '@/utils/ui/statusType'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 
 // getCellularStatus 是 GET：拦截器已弹全局通知并打标记，showToast 据此跳过重复提示

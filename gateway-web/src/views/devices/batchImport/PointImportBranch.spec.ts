@@ -22,8 +22,8 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
-vi.mock('@/utils/exportCsv', () => ({ downloadCsvText: downloadCsvTextMock }))
-vi.mock('@/api/points', () => ({
+vi.mock('@/utils/csv/exportCsv', () => ({ downloadCsvText: downloadCsvTextMock }))
+vi.mock('@/api/acquisition/points', () => ({
   batchImportPoints: batchImportPointsMock,
   exportPoints: exportPointsMock,
 }))

@@ -5,8 +5,8 @@
  * 审计字段接收后端 /api/audit/logs 的日志（B3：前端本地审计已下线，不再有第二份来源）。
  */
 import type { GatewayConfig } from '@/api/types'
-import type { AuditLogEntry } from '@/api/auditLog'
-import { triggerDownload } from './exportCsv'
+import type { AuditLogEntry } from '@/api/system/auditLog'
+import { triggerDownload } from './csv/exportCsv'
 
 export interface SystemBackup {
   version: string

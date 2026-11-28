@@ -11,8 +11,8 @@
  */
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getAssetView, upsertAssetView, ALL_TAGS, type DeviceAssetView } from '@/api/deviceOps'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { getAssetView, upsertAssetView, ALL_TAGS, type DeviceAssetView } from '@/api/acquisition/deviceOps'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 const props = defineProps<{
   /** 弹窗可见性 */

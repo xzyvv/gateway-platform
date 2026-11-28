@@ -45,12 +45,12 @@ import { ref, reactive, onMounted, h, nextTick, watch } from 'vue'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import { ElButton, ElIcon, ElMessage, ElTag, ElInputNumber, ElSwitch, type FormInstance } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 import {Plus, Refresh} from '@element-plus/icons-vue'
-import { listRules, createRule, updateRule, deleteRule, getRecentLogs, getStats, type ApiLimitRule, type ApiLog } from '@/api/apiRateLimit'
+import { listRules, createRule, updateRule, deleteRule, getRecentLogs, getStats, type ApiLimitRule, type ApiLog } from '@/api/system/apiRateLimit'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn, timeColumn } from '@/composables/core/commonColumns'
-import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/formFieldError'
+import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/error/formFieldError'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 const rules = ref<ApiLimitRule[]>([]); const logs = ref<ApiLog[]>([])
 const showCreate = ref(false); const creating = ref(false)

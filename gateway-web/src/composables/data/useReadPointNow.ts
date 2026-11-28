@@ -12,8 +12,8 @@
  *
  * 各页面只负责「把 outcome 映射成自己的 UI」，不再各自解释后端语义。
  */
-import { readPointNow } from '@/api/points'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { readPointNow } from '@/api/acquisition/points'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 /** 单次读点的统一结果，不区分协议错误 / 传输错误 */
 export interface PointReadOutcome {

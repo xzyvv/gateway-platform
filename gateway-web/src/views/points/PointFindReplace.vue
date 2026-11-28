@@ -47,13 +47,13 @@
 import { ref, computed, watch, h } from 'vue'
 import { ElCheckbox, ElMessage } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import { Search } from '@element-plus/icons-vue'
 import {
   findReplaceSearchView,
   findReplaceApplyView,
   type SearchResultView,
-} from '@/api/pointsOps'
+} from '@/api/acquisition/pointsOps'
 import type { ColumnDef } from '@/components/DataTable.vue'
 
 const { showToast } = useErrorDisplay()

@@ -24,7 +24,7 @@ import { Cpu } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import type { HealthComponent } from '@/api/types'
 import type { OverallHealthStatus } from '@/composables/system/useHealthReport'
-import { healthComponentLabel, healthStatusInfo } from '@/utils/healthStatus'
+import { healthComponentLabel, healthStatusInfo } from '@/utils/health/healthStatus'
 
 // status 可选：给出综合状态（正常/降级/严重），与 useHealthReport 的 overallStatus 同一文案
 defineProps<{ healthRows: HealthComponent[]; loading?: boolean; status?: OverallHealthStatus }>()

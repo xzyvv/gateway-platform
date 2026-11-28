@@ -8,8 +8,8 @@
  *   解析其 message 抛出，与 axios 路径的现场指引一致；
  * - 用户 abort（signal.aborted）属正常收尾（契约 §4），resolve 而非 reject。
  */
-import { getToken } from '../token'
-import { isTauri } from '../env'
+import { getToken } from '../runtime/token'
+import { isTauri } from '../runtime/env'
 import { logWarn } from '@/utils/logger'
 
 /** 流式端点事件回调：event 为 SSE `event:` 字段，data 为单行 JSON 解析结果 */

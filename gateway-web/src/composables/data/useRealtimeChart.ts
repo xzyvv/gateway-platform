@@ -1,11 +1,11 @@
 import { computed, ref } from 'vue'
-import echarts, { initChart, disposeChart, APPEND_THROTTLE_MS } from '@/utils/echarts'
-import { tooltipStyle, defaultGrid, valueAxisStyle, categoryAxisStyle, legendStyle } from '@/utils/chartStyle'
-import { formatTimeOfDay } from '@/utils/datetime'
+import echarts, { initChart, disposeChart, APPEND_THROTTLE_MS } from '@/utils/chart/echarts'
+import { tooltipStyle, defaultGrid, valueAxisStyle, categoryAxisStyle, legendStyle } from '@/utils/chart/chartStyle'
+import { formatTimeOfDay } from '@/utils/time/datetime'
 import { logError } from '@/utils/logger'
-import { compactAxis } from '@/utils/realtimeFormat'
+import { compactAxis } from '@/utils/time/realtimeFormat'
 import type { DataPoint } from '@/api/types'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 /** 每个点位保留的历史点位数（图表窗口 60 点） */
 const HISTORY_CAP = 60

@@ -111,8 +111,8 @@ import {
   useStepSequences,
   type SequenceStep,
 } from '@/composables/acquisition/useStepSequences'
-import { confirmDelete } from '@/utils/confirm'
-import { triggerDownload } from '@/utils/exportCsv'
+import { confirmDelete } from '@/utils/ui/confirm'
+import { triggerDownload } from '@/utils/csv/exportCsv'
 import type { PacketPreset } from '@/api/protocolTools'
 import StepSequenceToolbar from './StepSequenceToolbar.vue'
 import StepListEditor from './StepListEditor.vue'

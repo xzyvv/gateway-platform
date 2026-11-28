@@ -28,18 +28,18 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push }) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({
   useErrorDisplay: () => ({ showToast }),
 }))
-vi.mock('@/api/config', () => ({ getConfig: vi.fn(), postConfig: vi.fn() }))
-vi.mock('@/api/uplink', () => ({
+vi.mock('@/api/uplink/config', () => ({ getConfig: vi.fn(), postConfig: vi.fn() }))
+vi.mock('@/api/uplink/uplink', () => ({
   getUplinkConfig: vi.fn(),
   getNorthStatus: vi.fn(),
   testUplink: vi.fn(),
 }))
-vi.mock('@/api/webhook', () => ({ testWebhook: vi.fn() }))
+vi.mock('@/api/uplink/webhook', () => ({ testWebhook: vi.fn() }))
 
 import UplinkForwardConfig from './UplinkForwardConfig.vue'
-import { getConfig, postConfig } from '@/api/config'
-import { getUplinkConfig, getNorthStatus, testUplink } from '@/api/uplink'
-import { testWebhook } from '@/api/webhook'
+import { getConfig, postConfig } from '@/api/uplink/config'
+import { getUplinkConfig, getNorthStatus, testUplink } from '@/api/uplink/uplink'
+import { testWebhook } from '@/api/uplink/webhook'
 import DataTable from '@/components/DataTable.vue'
 
 interface CfgLike {

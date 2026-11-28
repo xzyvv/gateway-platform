@@ -68,10 +68,10 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       // el-icons 瘦身：把 @element-plus/icons-vue 重定向到紧凑版
-      // （src/utils/ep-icons-compact.ts，自动生成）。原版每个图标独立
+      // （src/utils/ui/ep-icons-compact.ts，自动生成）。原版每个图标独立
       // defineComponent 包装，100 个图标约 52KB raw / 13KB gzip；
       // 紧凑版用共享工厂 ic()，体积降约 40%。
-      '@element-plus/icons-vue': fileURLToPath(new URL('./src/utils/ep-icons-compact.ts', import.meta.url)),
+      '@element-plus/icons-vue': fileURLToPath(new URL('./src/utils/ui/ep-icons-compact.ts', import.meta.url)),
     },
   },
   optimizeDeps: {
@@ -147,7 +147,7 @@ export default defineConfig({
           // 共享的异步 chunk，首屏只下载实际渲染需要的组件与样式。
           //
           // el-icons 同样不固定 chunk：登录页只注册 5 个图标（main.ts 同步导入），
-          // 其余 77 个在 utils/icons-extra.ts 中动态导入注册。去掉 manualChunks 后，
+          // 其余 77 个在 utils/ui/icons-extra.ts 中动态导入注册。去掉 manualChunks 后，
           // Rollup 会把 5 个登录图标放进主 chunk，77 个放进懒加载 chunk，首屏减负。
           if (id.includes('/src/mock/') || id.includes('\\src\\mock\\')) return 'mock-data'
         },

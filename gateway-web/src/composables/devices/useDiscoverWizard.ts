@@ -2,14 +2,14 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { getConfig, postConfig } from '@/api/config'
+import { getConfig, postConfig } from '@/api/uplink/config'
 import { protocolType, protocolDefaultTimeoutMs } from './protocolMeta'
-import { createDevice } from '@/api/devices'
+import { createDevice } from '@/api/acquisition/devices'
 import { scanBus, respondedSlaves } from '@/api/protocolTools/slaveScan'
 import type { SlaveScanResult } from '@/api/protocolTools/types'
 import type { BusConfig, DeviceConfig } from '@/api/types'
-import { runConcurrent } from '@/utils/concurrency'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { runConcurrent } from '@/utils/config/concurrency'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 interface FoundDevice {
   uid: string

@@ -6,10 +6,10 @@
  *   统一取消，避免请求打到错误的网关或被静默丢弃（注册中心实现见 ../inflight）
  */
 import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
-import { isTauri } from '../env'
-import { tauriAdapter } from '../gatewayConfig'
-import { getToken } from '../token'
-import { addInflight, removeInflight } from '../inflight'
+import { isTauri } from '../runtime/env'
+import { tauriAdapter } from '../runtime/gatewayConfig'
+import { getToken } from '../runtime/token'
+import { addInflight, removeInflight } from '../runtime/inflight'
 
 export const instance: AxiosInstance = axios.create({
   baseURL: '/',

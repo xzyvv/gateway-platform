@@ -110,7 +110,7 @@ import { storeToRefs } from 'pinia'
 import { useWebsocketStore } from '@/stores/websocket'
 import { forceReconnectAll } from '@/utils/websocket'
 import { ElMessage } from 'element-plus'
-import { formatRelative } from '@/utils/format'
+import { formatRelative } from '@/utils/time/format'
 
 const wsStore = useWebsocketStore()
 const { status, reconnectCount, lastError, reconnectHistory, isReconnecting, activeStreams } = storeToRefs(wsStore)

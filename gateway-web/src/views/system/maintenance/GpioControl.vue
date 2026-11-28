@@ -94,11 +94,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { getIoStatus, controlIo, type IoStatus } from '@/api/devices'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { getIoStatus, controlIo, type IoStatus } from '@/api/acquisition/devices'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 import { logError } from '@/utils/logger'
 import { usePolling } from '@/composables/core/usePolling'
-import { formatClock } from '@/utils/datetime'
+import { formatClock } from '@/utils/time/datetime'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 
 // getIoStatus 是 GET：拦截器已弹全局通知并打标记，showToast 据此跳过重复提示

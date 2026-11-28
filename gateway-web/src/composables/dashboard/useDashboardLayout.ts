@@ -3,7 +3,7 @@
  * 允许用户控制各模块的显示顺序与可见性，持久化到 localStorage
  */
 import { ref, watch } from 'vue'
-import { globalGet, globalSet } from '@/utils/gatewayStorage'
+import { globalGet, globalSet } from '@/utils/storage/gatewayStorage'
 
 /** 仪表盘布局是「人」的偏好，切网关不重置，故走全局入口；由本模块独占访问 */
 const STORAGE_KEY = 'gw_dashboard_layout'

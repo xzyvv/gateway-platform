@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, nextTick, type Ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { useDialogDirtyGuard } from './useDialogDirtyGuard'
-import { isScopeDirty } from '../../utils/dirtyGuard'
+import { isScopeDirty } from '../../utils/storage/dirtyGuard'
 
 vi.mock('element-plus', () => ({
   ElMessageBox: { confirm: vi.fn() },

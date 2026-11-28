@@ -1,12 +1,12 @@
 import { h, reactive, ref } from 'vue'
 import { ElMessage, ElNotification } from 'element-plus'
-import { createPoint } from '@/api/points'
-import { parseImportPoints } from '@/utils/importPoints'
-import { mapPointToTarget } from '@/utils/deviceCopy'
+import { createPoint } from '@/api/acquisition/points'
+import { parseImportPoints } from '@/utils/csv/importPoints'
+import { mapPointToTarget } from '@/utils/device/deviceCopy'
 import { clampInterval } from './validation'
-import { runConcurrent } from '@/utils/concurrency'
+import { runConcurrent } from '@/utils/config/concurrency'
 import type { BatchImportResult, PointFailure, PointsState } from './types'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 /**
  * 批量导入点位

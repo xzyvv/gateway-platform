@@ -3,7 +3,7 @@
  * 网关后端只提供 /api/metrics 实时值，前端轮询后把 CPU/内存/队列长度等
  * 指标写入环形缓冲，供 Dashboard 绘制趋势折线。
  */
-import { scopedGet, scopedSet } from '@/utils/gatewayStorage'
+import { scopedGet, scopedSet } from '@/utils/storage/gatewayStorage'
 
 const STORAGE_KEY = 'gw_metrics_history'
 const MAX_POINTS = 120 // 2 小时 × 1 分钟采样

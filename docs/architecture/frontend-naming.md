@@ -158,8 +158,8 @@ Hub tab 的 `subtitle` 必须描述该页**真实存在**的区块，不得承�
 
 ### 状态词与徽章色
 
-- **徽章色**：`src/utils/statusType.ts` 的 `statusTagType()` 是全站唯一取色入口；页面不再各写 `xxxType()`。确需例外时用「本地覆盖表 + 委托通用表」，并在注释里写明为何不能直接委托。
-- **组件健康状态**（`/health/ready` 的 `components`）：`src/utils/healthStatus.ts` 登记后端真实取值（组件 `process/mqtt/queue/ota/storage`，状态 `ok/down/backpressure/degraded`），中文名、严重度、徽章色同源；后端新增取值时只改这一个文件。
+- **徽章色**：`src/utils/ui/statusType.ts` 的 `statusTagType()` 是全站唯一取色入口；页面不再各写 `xxxType()`。确需例外时用「本地覆盖表 + 委托通用表」，并在注释里写明为何不能直接委托。
+- **组件健康状态**（`/health/ready` 的 `components`）：`src/utils/health/healthStatus.ts` 登记后端真实取值（组件 `process/mqtt/queue/ota/storage`，状态 `ok/down/backpressure/degraded`），中文名、严重度、徽章色同源；后端新增取值时只改这一个文件。
 - **严重度与徽章色必须同档**：`ok→success`、`warning→warning`、`error→danger`，不允许出现「表格红徽章、汇总黄底色」的同页矛盾。
 - **聚合口径同源**：仪表盘总览、异常信号、连通性横幅、诊断报告「健康检查」分节按同一份严重度判定；不直接使用后端聚合的 `status` —— 它对任何非 `ok` 组件都判 `degraded`，直接沿用会与组件明细口径不一致。
 - **一词一义，不重复报**：组件故障只由「N 个组件异常 / 未就绪」表达；「网关状态」卡片与「健康检查未通过」信号只负责探针可达性，两者不叠加同一件事。
@@ -167,7 +167,7 @@ Hub tab 的 `subtitle` 必须描述该页**真实存在**的区块，不得承�
 
 ### 跨域术语（DD-75）
 
-- **`critical` 一律译「严重」**：设备健康评分（`utils/healthVerdict.ts`）与网关健康报告（`utils/healthStatus.ts`）同档同词；「异常」只用于组件级 `error`，不再表示 `critical`。
+- **`critical` 一律译「严重」**：设备健康评分（`utils/health/healthVerdict.ts`）与网关健康报告（`utils/health/healthStatus.ts`）同档同词；「异常」只用于组件级 `error`，不再表示 `critical`。
 - **「会话」必须带限定词**：`登录会话`（`LoginSession`）、`回放会话`（`ReplaySession`）、`透传会话`（`PassthroughSession`）；禁止用裸「会话」或「连接会话」指代其中任一。
 
 ## 9. 校验

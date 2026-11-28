@@ -32,27 +32,27 @@ vi.mock('@/composables/acquisition/useDebugTargets', async () => {
 vi.mock('@/composables/data/useReadPointNow', () => ({
   useReadPointNow: () => ({ readOnce: h.readOnce }),
 }))
-vi.mock('@/api/devices', () => ({ listDevices: vi.fn() }))
-vi.mock('@/api/points', () => ({ listPoints: vi.fn() }))
-vi.mock('@/api/protocols', async () => {
-  const actual = await vi.importActual<typeof import('@/api/protocols')>('@/api/protocols')
+vi.mock('@/api/acquisition/devices', () => ({ listDevices: vi.fn() }))
+vi.mock('@/api/acquisition/points', () => ({ listPoints: vi.fn() }))
+vi.mock('@/api/acquisition/protocols', async () => {
+  const actual = await vi.importActual<typeof import('@/api/acquisition/protocols')>('@/api/acquisition/protocols')
   return { ...actual, listProtocolCapabilities: vi.fn() }
 })
 const clipboardState = vi.hoisted(() => ({ copyText: vi.fn(async () => true) }))
-vi.mock('@/utils/clipboard', () => ({ copyText: clipboardState.copyText }))
+vi.mock('@/utils/ui/clipboard', () => ({ copyText: clipboardState.copyText }))
 const exportState = vi.hoisted(() => ({ csv: vi.fn() }))
-vi.mock('@/utils/exportCsv', () => ({
+vi.mock('@/utils/csv/exportCsv', () => ({
   downloadTableCsv: exportState.csv,
   csvFilename: (prefix: string) => `${prefix}-stamp.csv`,
 }))
-vi.mock('@/utils/deviceComms', () => ({ recordRead: vi.fn() }))
+vi.mock('@/utils/device/deviceComms', () => ({ recordRead: vi.fn() }))
 
 import BatchReadTest from './BatchReadTest.vue'
-import { listDevices } from '@/api/devices'
-import { listPoints } from '@/api/points'
-import { listProtocolCapabilities } from '@/api/protocols'
+import { listDevices } from '@/api/acquisition/devices'
+import { listPoints } from '@/api/acquisition/points'
+import { listProtocolCapabilities } from '@/api/acquisition/protocols'
 import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
-import { recordRead } from '@/utils/deviceComms'
+import { recordRead } from '@/utils/device/deviceComms'
 
 const DEVICES = [
   { id: 'dev-1', name: '温控器', protocol: 'modbus-tcp' },

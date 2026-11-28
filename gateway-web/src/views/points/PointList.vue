@@ -159,7 +159,7 @@ import PointsGenerateDialog from './dialogs/PointsGenerateDialog.vue'
 import { pointFormContextKey } from './pointFormContext'
 import { createPointColumns } from './components/pointColumns'
 import type { PointRow } from '@/composables/devices/usePoints'
-import { flashHighlightRow } from '@/utils/tableHighlight'
+import { flashHighlightRow } from '@/utils/ui/tableHighlight'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const router = useRouter()

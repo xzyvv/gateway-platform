@@ -1,6 +1,6 @@
 import { computed, getCurrentInstance, onUnmounted, ref, watch, type Ref } from 'vue'
-import { confirmAction } from '../../utils/confirm'
-import { registerDirtyGuard } from '../../utils/dirtyGuard'
+import { confirmAction } from '../../utils/ui/confirm'
+import { registerDirtyGuard } from '../../utils/storage/dirtyGuard'
 
 /**
  * 弹窗级未保存更改守卫

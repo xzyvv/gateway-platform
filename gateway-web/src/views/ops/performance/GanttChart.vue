@@ -38,7 +38,7 @@
  * 采集循环尾部记录的真实执行窗口（起止 epoch 毫秒），重叠也由后端按真实样本计算。
  * 无样本时明确提示「不做推算」，不再给出虚构结论。 */
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import echarts, { initChart, disposeChart } from '@/utils/echarts-extra'
+import echarts, { initChart, disposeChart } from '@/utils/chart/echarts-extra'
 import { getScheduleTimeline } from '@/api/diagnostics/raw'
 
 interface TaskBar {

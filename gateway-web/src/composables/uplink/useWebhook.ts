@@ -1,7 +1,7 @@
 import { ref, watch } from 'vue'
 import { isTauri, forwardWebhook } from '@/api'
-import { extractErrorMessage } from '@/utils/errorHandler'
-import { scopedGet, scopedSet } from '@/utils/gatewayStorage'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
+import { scopedGet, scopedSet } from '@/utils/storage/gatewayStorage'
 import {
   formatUrlSafetyError,
   validateOutboundUrl,

@@ -15,7 +15,7 @@ const { fetchLicenseMock } = vi.hoisted(() => ({
   fetchLicenseMock: vi.fn(),
 }))
 // mock 工厂会被提升到文件顶部，引用顶层变量必须走 vi.hoisted（项目既有教训）
-vi.mock('@/api/license', () => ({
+vi.mock('@/api/system/license', () => ({
   fetchLicense: fetchLicenseMock,
 }))
 

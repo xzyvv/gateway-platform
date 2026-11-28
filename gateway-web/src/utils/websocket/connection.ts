@@ -8,7 +8,7 @@ import { closeSocketQuietly, detachSocketHandlers } from './socket'
 import { publishErrorToStore, publishStatusToStore } from './publisher'
 import { SubscriberRegistry } from './subscribers'
 import type { BrowserNetSnapshot, ConnectionState } from './types'
-import { extractErrorReason } from '../errorHandler'
+import { extractErrorReason } from '../error/errorHandler'
 
 /**
  * 网关 WebSocket 客户端

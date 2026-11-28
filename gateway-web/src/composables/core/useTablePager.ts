@@ -11,7 +11,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
-import { scopedGet, scopedSet } from '@/utils/gatewayStorage'
+import { scopedGet, scopedSet } from '@/utils/storage/gatewayStorage'
 import { useQueryState } from './useQueryState'
 
 /**

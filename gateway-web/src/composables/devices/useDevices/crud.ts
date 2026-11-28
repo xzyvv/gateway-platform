@@ -7,9 +7,9 @@
  */
 import { h, ref } from 'vue'
 import { ElMessage, ElNotification, ElButton } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
-import { createDevice, updateDevice, deleteDevice } from '@/api/devices'
-import { failureMessage } from '@/utils/errorHandler'
+import { confirmDelete } from '@/utils/ui/confirm'
+import { createDevice, updateDevice, deleteDevice } from '@/api/acquisition/devices'
+import { failureMessage } from '@/utils/error/errorHandler'
 import type { DeviceConfig } from '@/api/types'
 import type { DeviceCrudDeps, DeviceInlinePatch, DeviceSnapshot, DeviceState } from './types'
 

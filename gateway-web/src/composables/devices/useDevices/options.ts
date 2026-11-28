@@ -5,9 +5,9 @@
  * 模板来自 /api/templates，总线来自 /api/config 的 buses。
  * 写错名字后端也能建出记录，但永远采不到数据，所以这里强制走下拉。
  */
-import { listTemplates } from '@/api/templates'
-import { getConfig } from '@/api/config'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { listTemplates } from '@/api/acquisition/templates'
+import { getConfig } from '@/api/uplink/config'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 import type { DeviceConfig } from '@/api/types'
 import type { DeviceState } from './types'
 

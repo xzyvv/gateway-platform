@@ -26,7 +26,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { formatRelative } from '@/utils/format'
+import { formatRelative } from '@/utils/time/format'
 
 const props = withDefaults(
   defineProps<{

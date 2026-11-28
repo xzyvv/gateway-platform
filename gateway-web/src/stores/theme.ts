@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { logWarn } from '@/utils/logger'
-import { globalGet, globalSet } from '@/utils/gatewayStorage'
+import { globalGet, globalSet } from '@/utils/storage/gatewayStorage'
 
 /**
  * 主题是「这台浏览器上的人」的偏好，不是网关配置：切网关不重置主题，
@@ -31,13 +31,13 @@ function applyDarkClass(dark: boolean): void {
  * 全量 echarts core / 5 个 chart 模块，store 是几乎所有页面的共有依赖），
  * 这里走动态 import + 错误隔离：
  *
- *   - `import('@/utils/echarts')` 走 Vite 已拆包，运行时才取图表工具。
+ *   - `import('@/utils/chart/echarts')` 走 Vite 已拆包，运行时才取图表工具。
  *   - 失败时 console.warn：缺 echarts 不会让主题切换崩溃（其他依赖项
  *     如 element-plus dark vars 仍正常工作）。
  */
 function applyEchartsThemeSafe(dark: boolean): void {
   if (typeof window === 'undefined') return
-  void import('@/utils/echarts')
+  void import('@/utils/chart/echarts')
     .then((m) => {
       if (typeof m.applyEchartsTheme === 'function') m.applyEchartsTheme(dark)
     })

@@ -1,5 +1,5 @@
 import { onMounted, ref } from 'vue'
-import { formatClock } from '@/utils/datetime'
+import { formatClock } from '@/utils/time/datetime'
 import { useSharedTick } from '@/composables/core/useSharedTick'
 
 /**

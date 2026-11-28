@@ -11,7 +11,7 @@ const m = vi.hoisted(() => ({ push: vi.fn() }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: m.push }) }))
 
 import HealthConclusionBar from './HealthConclusionBar.vue'
-import type { HealthProblem } from '@/api/status'
+import type { HealthProblem } from '@/api/system/status'
 
 const statusOk = { value: 'ok' as const, label: '正常', type: 'success' as const }
 

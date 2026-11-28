@@ -23,19 +23,19 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('vue-router', () => ({ useRoute: () => ({ path: '/points/formula' }) }))
-vi.mock('@/utils/confirm', () => ({ confirmDelete: (...args: unknown[]) => confirmDelete(...args) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: (...args: unknown[]) => confirmDelete(...args) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 vi.mock('@/composables/core/useDialogDirtyGuard', () => ({
   useDialogDirtyGuard: () => ({ beforeClose: () => {}, close: closeDialog }),
 }))
-vi.mock('@/api/pointsOps', () => ({
+vi.mock('@/api/acquisition/pointsOps', () => ({
   listVirtualPointsView: (...a: unknown[]) => listVirtualPointsView(...a),
   createVirtualPointView: (...a: unknown[]) => createVirtualPointView(...a),
   updateVirtualPointView: (...a: unknown[]) => updateVirtualPointView(...a),
   deleteVirtualPoint: (...a: unknown[]) => deleteVirtualPoint(...a),
   recalcVirtualPointView: (...a: unknown[]) => recalcVirtualPointView(...a),
 }))
-vi.mock('@/api/devices', () => ({ listDevices: vi.fn() }))
+vi.mock('@/api/acquisition/devices', () => ({ listDevices: vi.fn() }))
 
 const confirmDelete = vi.hoisted(() => vi.fn())
 const showToast = vi.hoisted(() => vi.fn())
@@ -48,7 +48,7 @@ const recalcVirtualPointView = vi.hoisted(() => vi.fn())
 
 import PointFormula from './PointFormula.vue'
 import DataTable from '@/components/DataTable.vue'
-import { listDevices } from '@/api/devices'
+import { listDevices } from '@/api/acquisition/devices'
 
 const DialogStub = {
   name: 'ElDialog',

@@ -21,7 +21,7 @@ vi.mock('@/api', () => ({
   saveGatewayConfig: vi.fn(async () => {}),
 }))
 
-vi.mock('@/api/status', () => ({ getStatus: (...args: unknown[]) => mockGetStatus(...args) }))
+vi.mock('@/api/system/status', () => ({ getStatus: (...args: unknown[]) => mockGetStatus(...args) }))
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({ login: mockLogin, logout: vi.fn() }),
@@ -36,7 +36,7 @@ vi.mock('@/composables/system/useGatewayDiscovery', () => ({
   }),
 }))
 
-vi.mock('@/utils/gatewayStorage', () => ({
+vi.mock('@/utils/storage/gatewayStorage', () => ({
   scopedSet: (...args: unknown[]) => mockScopedSet(...args),
 }))
 

@@ -83,7 +83,7 @@
 import { computed, ref } from 'vue'
 import { Share } from '@element-plus/icons-vue'
 import type { OpcuaConfig } from '@/api/types'
-import { createRowKey } from '@/utils/rowKey'
+import { createRowKey } from '@/utils/ui/rowKey'
 
 const opcua = defineModel<OpcuaConfig | null>({ required: true })
 /** 表单渲染只在 opcua 非空时发生；此视图仅用于让模板拿到非空类型 */

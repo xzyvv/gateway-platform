@@ -10,7 +10,7 @@
  * 任何缓存都会让「刷新」拿到旧值。
  */
 import { ref, computed } from 'vue'
-import { listPointQuality, type PointQuality } from '@/api/dataQuality'
+import { listPointQuality, type PointQuality } from '@/api/acquisition/dataQuality'
 
 /**
  * 拉一份全量点位质量快照（全站唯一调用 listPointQuality 的地方）。

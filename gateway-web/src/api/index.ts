@@ -10,7 +10,7 @@
  * 本文件作为 barrel 重新导出，向后兼容所有 `from '@/api'` / `from './index'` 调用方。
  * 各业务 API（devices.ts / points.ts / ...）继续从 './index' 导入 request。
  */
-export * from './env'
-export * from './token'
-export * from './gatewayConfig'
+export * from './runtime/env'
+export * from './runtime/token'
+export * from './runtime/gatewayConfig'
 export * from './http'

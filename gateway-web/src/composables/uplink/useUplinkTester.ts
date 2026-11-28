@@ -1,9 +1,9 @@
 import { ref, computed, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
-import { copyText } from '@/utils/clipboard'
-import { formatTimestamp } from '@/utils/datetime'
+import { confirmDelete } from '@/utils/ui/confirm'
+import { copyText } from '@/utils/ui/clipboard'
+import { formatTimestamp } from '@/utils/time/datetime'
 import {
   testUplink,
   getUplinkConfig,
@@ -12,7 +12,7 @@ import {
   BUILTIN_TEMPLATES,
   type UplinkTestResponse,
   type UplinkTestHistoryItem,
-} from '@/api/uplink'
+} from '@/api/uplink/uplink'
 
 interface TesterState {
   template: string

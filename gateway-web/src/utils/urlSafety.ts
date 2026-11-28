@@ -30,7 +30,7 @@
  * `invoke('forward_webhook', ...)` 同样会被拦截——不再需要"后续安全审计"跟进。
  */
 
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 export type UrlSafetyError =
   | { kind: 'invalid-url'; reason: string }
   | { kind: 'scheme-not-allowed'; scheme: string }

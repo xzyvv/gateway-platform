@@ -24,7 +24,7 @@ const { sourceState } = vi.hoisted(() => ({
   sourceState: { value: 'local' as 'remote' | 'local' },
 }))
 
-vi.mock('@/api/dataQuality', () => ({
+vi.mock('@/api/acquisition/dataQuality', () => ({
   listQualityRules: async () => [],
   createQualityRule: async () => ({}),
   updateQualityRule: async () => undefined,
@@ -36,8 +36,8 @@ vi.mock('@/api/dataQuality', () => ({
   QUALITY_COLOR: { good: 'success', bad: 'danger', uncertain: 'warning', old: 'info' },
 }))
 
-vi.mock('@/api/devices', () => ({ listDevices: async () => [] }))
-vi.mock('@/api/points', () => ({ listPoints: async () => [] }))
+vi.mock('@/api/acquisition/devices', () => ({ listDevices: async () => [] }))
+vi.mock('@/api/acquisition/points', () => ({ listPoints: async () => [] }))
 
 import DataQuality from './DataQuality.vue'
 

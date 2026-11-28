@@ -38,7 +38,7 @@ vi.mock('./routes', () => ({
   ],
 }))
 
-vi.mock('../utils/dirtyGuard', () => ({
+vi.mock('../utils/storage/dirtyGuard', () => ({
   isAnyDirty: vi.fn(() => false),
   isScopeDirty: vi.fn(() => false),
   confirmDiscardDirty: vi.fn(async () => true),
@@ -48,7 +48,7 @@ vi.mock('../composables/core/useErrorReporter', () => ({ reportPageError: vi.fn(
 
 import router from './index'
 import { useAuthStore } from '../stores/auth'
-import { isScopeDirty, confirmDiscardDirty } from '../utils/dirtyGuard'
+import { isScopeDirty, confirmDiscardDirty } from '../utils/storage/dirtyGuard'
 
 describe('router 守卫', () => {
   beforeEach(async () => {

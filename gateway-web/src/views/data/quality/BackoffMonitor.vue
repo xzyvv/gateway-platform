@@ -52,12 +52,12 @@ import { ref, computed, onMounted, watch, h } from 'vue'
 import { usePolling } from '@/composables/core/usePolling'
 import { ElTag } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { QUALITY_LABEL, QUALITY_COLOR, type PointBackoff, type Quality } from '@/api/dataQuality'
+import { QUALITY_LABEL, QUALITY_COLOR, type PointBackoff, type Quality } from '@/api/acquisition/dataQuality'
 import { usePointBackoff } from '@/composables/data/usePointBackoff'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 
 // 三类计数统一由 usePointBackoff 的 stats 提供，页面不再各自 filter
 const { points, loading, stats, load } = usePointBackoff()

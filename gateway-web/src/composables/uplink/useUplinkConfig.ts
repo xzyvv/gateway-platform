@@ -10,10 +10,10 @@ import {
   BUILTIN_TEMPLATES,
   type UplinkConfig,
   type TemplateVarInfo,
-} from '@/api/uplink'
+} from '@/api/uplink/uplink'
 import { logWarn } from '@/utils/logger'
-import { registerDirtyGuard } from '@/utils/dirtyGuard'
-import { triggerDownload } from '@/utils/exportCsv'
+import { registerDirtyGuard } from '@/utils/storage/dirtyGuard'
+import { triggerDownload } from '@/utils/csv/exportCsv'
 
 /**
  * UplinkConfig 页面数据层封装

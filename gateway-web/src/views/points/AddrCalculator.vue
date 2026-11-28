@@ -26,7 +26,7 @@
 import { ref } from 'vue'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
-import { calculate, listFuncCodes, type CalcResult } from '@/utils/addrCalculator'
+import { calculate, listFuncCodes, type CalcResult } from '@/utils/device/addrCalculator'
 import ModbusAddressInput from '@/components/industrial/ModbusAddressInput.vue'
 const fcs = listFuncCodes()
 const manualAddr = ref('40001'); const funcCode = ref('03'); const slaveId = ref(1); const count = ref(2)

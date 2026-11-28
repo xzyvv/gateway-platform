@@ -12,7 +12,7 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ path: '/change-password', query: {} }),
 }))
 
-vi.mock('@/api/auth', () => ({ changePassword: (...args: unknown[]) => mockChangePassword(...args) }))
+vi.mock('@/api/system/auth', () => ({ changePassword: (...args: unknown[]) => mockChangePassword(...args) }))
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({ logout: mockLogout, login: vi.fn() }),

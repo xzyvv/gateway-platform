@@ -13,14 +13,14 @@
  *
  * 典型应用场景：批量导入页点位分支选择 CSV 方式后的「校验」动作。
  */
-import { parseCsvRows } from '@/utils/csvParse'
+import { parseCsvRows } from '@/utils/csv/csvParse'
 import {
   POINT_FIELDS_FULL,
   POINT_FIELD_BY_COLUMN,
   parsePointCell,
-} from '@/utils/pointFields'
+} from '@/utils/device/pointFields'
 import type { PointConfig } from '@/api/types'
-import { defaultPointConfig as defaultPointValues } from '@/utils/pointDefaults'
+import { defaultPointConfig as defaultPointValues } from '@/utils/config/pointDefaults'
 import type { PointParseResult, PointRow } from './types'
 
 /** CSV 解析结果：成功时带回校验结果与待提交数据，失败时带回提示文案 */

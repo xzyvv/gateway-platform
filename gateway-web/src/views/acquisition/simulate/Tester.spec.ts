@@ -37,11 +37,11 @@ vi.mock('element-plus', async () => {
 
 // 操作记录「复制全部」：统一走 utils/clipboard，这里打桩以便断言复制内容
 const clipboardState = vi.hoisted(() => ({ copyText: vi.fn(async () => true) }))
-vi.mock('@/utils/clipboard', () => ({ copyText: clipboardState.copyText }))
+vi.mock('@/utils/ui/clipboard', () => ({ copyText: clipboardState.copyText }))
 
-vi.mock('@/api/devices', () => ({ listDevices }))
-vi.mock('@/api/points', () => ({ listPoints }))
-vi.mock('@/api/protocols', () => ({ listProtocolCapabilities, getProtocolDiag }))
+vi.mock('@/api/acquisition/devices', () => ({ listDevices }))
+vi.mock('@/api/acquisition/points', () => ({ listPoints }))
+vi.mock('@/api/acquisition/protocols', () => ({ listProtocolCapabilities, getProtocolDiag }))
 vi.mock('@/api/protocolTools/packetCapture', () => ({ getPackets }))
 vi.mock('@/composables/data/useReadPointNow', () => ({ useReadPointNow: () => ({ readOnce }) }))
 vi.mock('@/composables/data/usePointWrite', () => ({

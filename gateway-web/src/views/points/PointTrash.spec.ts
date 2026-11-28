@@ -1,9 +1,9 @@
 ﻿import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import type { PointTrashEntry } from '@/api/points'
+import type { PointTrashEntry } from '@/api/acquisition/points'
 import PointsTrash from './PointTrash.vue'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 
 const mockListPointTrash = vi.fn()
 const mockRestorePoint = vi.fn()
@@ -11,14 +11,14 @@ const mockPurgeTrashPoint = vi.fn()
 const mockPurgeAllTrash = vi.fn()
 const mockConfirmAction = vi.fn()
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   listPointTrash: () => mockListPointTrash(),
   restorePoint: (id: string) => mockRestorePoint(id),
   purgeTrashPoint: (id: string) => mockPurgeTrashPoint(id),
   purgeAllTrash: () => mockPurgeAllTrash(),
 }))
 
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmAction: (opts: { message: string }) => mockConfirmAction(opts),
 }))
 

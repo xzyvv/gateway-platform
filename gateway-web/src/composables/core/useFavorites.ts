@@ -1,5 +1,5 @@
 import { ref, watch } from 'vue'
-import { scopedGet, scopedSet } from '../../utils/gatewayStorage'
+import { scopedGet, scopedSet } from '../../utils/storage/gatewayStorage'
 
 /**
  * 点位收藏 / 关注列表 — 基于 localStorage 持久化

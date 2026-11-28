@@ -41,11 +41,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import type echarts from '@/utils/echarts-extra'
-import { initChart, disposeChart, cssVar } from '@/utils/echarts-extra'
-import { CHART_PRIMARY, CHART_SUCCESS, CHART_WARNING, CHART_DANGER, CHART_MUTED_TEXT, CHART_LINE } from '@/utils/chartTheme'
-import { getTopology } from '@/api/topology'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import type echarts from '@/utils/chart/echarts-extra'
+import { initChart, disposeChart, cssVar } from '@/utils/chart/echarts-extra'
+import { CHART_PRIMARY, CHART_SUCCESS, CHART_WARNING, CHART_DANGER, CHART_MUTED_TEXT, CHART_LINE } from '@/utils/chart/chartTheme'
+import { getTopology } from '@/api/acquisition/topology'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null

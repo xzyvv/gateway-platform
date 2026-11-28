@@ -23,7 +23,7 @@
  *   下一次挂载会**自动重试**——否则用户修好网络后换个调试页仍旧全是灰按钮。
  */
 import { onMounted, ref } from 'vue'
-import { listProtocolCapabilities } from '@/api/protocols'
+import { listProtocolCapabilities } from '@/api/acquisition/protocols'
 import type { ProtocolCapabilities } from '@/api/generated/ProtocolCapabilities'
 
 // 模块级单例：一份网关协议能力快照（理由见文件头）。

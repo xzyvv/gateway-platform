@@ -24,10 +24,10 @@
  */
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import type { HealthProblem } from '@/api/status'
+import type { HealthProblem } from '@/api/system/status'
 import type { OverallHealthStatus, ProblemCounts } from '@/stores/healthReport'
-import { countProblemLevels } from '@/utils/healthStatus'
-import { formatTimeOfDay } from '@/utils/datetime'
+import { countProblemLevels } from '@/utils/health/healthStatus'
+import { formatTimeOfDay } from '@/utils/time/datetime'
 
 const props = withDefaults(
   defineProps<{

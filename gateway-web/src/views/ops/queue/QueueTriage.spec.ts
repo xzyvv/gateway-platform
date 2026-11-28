@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import type { SimConsumerStatus } from '@/api/types'
 
 const {
@@ -16,7 +16,7 @@ const {
   stopSimConsumerMock: vi.fn(),
 }))
 
-vi.mock('@/api/simConsumer', () => ({
+vi.mock('@/api/acquisition/simConsumer', () => ({
   getSimConsumerStatus: getSimConsumerStatusMock,
   startSimConsumer: startSimConsumerMock,
   stopSimConsumer: stopSimConsumerMock,

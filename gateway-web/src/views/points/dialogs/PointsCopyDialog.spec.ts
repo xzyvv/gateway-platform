@@ -4,7 +4,7 @@ import { createPinia } from 'pinia'
 import { ElMessage, ElSelect } from 'element-plus'
 import type { DeviceConfig, PointConfig } from '@/api/types'
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   listPoints: vi.fn(),
   createPoint: vi.fn(),
 }))
@@ -17,7 +17,7 @@ vi.mock('element-plus', async () => {
 })
 
 import PointsCopyDialog from './PointsCopyDialog.vue'
-import { listPoints, createPoint } from '@/api/points'
+import { listPoints, createPoint } from '@/api/acquisition/points'
 
 /**
  * 复制点位对话框的错误口径。

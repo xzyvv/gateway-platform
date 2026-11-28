@@ -42,7 +42,7 @@ npm run dev                     # http://localhost:5173
 
 `src/` 下按职责分 12 个一级目录（`api` / `app` / `assets` / `components` / `composables` / `mock` / `router` / `stores` / `test` / `types` / `utils` / `views` 等）。各目录的职责边界、命名约定与分层规则见 **[`docs/architecture/frontend.md`](../docs/architecture/frontend.md) 3.3 / 3.4 节**（权威来源，此处不重复以免漂移）；组合式函数的分类与边界另见 [`src/composables/README.md`](src/composables/README.md)。
 
-一个值得注意的约定：`src/utils` 顶层平铺了大量工具文件，改动前先全局搜索同名/近义实现（历史上出现过字节工具三套并存，DD-47）。
+一个值得注意的约定：`src/utils` 顶层只保留无明确主题的通用模块（logger / frameParser / prometheus 等），其余按主题分在 `chart` / `health` / `csv` / `hex` / `error` / `time` / `storage` / `ui` / `config` / `device` 十个子目录；改动前先全局搜索同名/近义实现（历史上出现过字节工具三套并存，DD-47）。`src/api` 同理按业务域分组（`runtime` / `system` / `acquisition` / `uplink` + 既有 `http` / `diagnostics` / `protocolTools` / `generated`）。
 
 ## 环境变量
 

@@ -1,14 +1,14 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import { logError } from '@/utils/logger'
 import {
   listConfigVersions, getConfigVersion, rollbackConfigVersion, backupConfig,
   compareConfigVersions, type ConfigVersionMeta, type ConfigVersionSummary,
-} from '@/api/config'
-import { failureMessage } from '@/utils/errorHandler'
-import { formatTimestamp } from '@/utils/datetime'
-import { formatBytes } from '@/utils/format'
+} from '@/api/uplink/config'
+import { failureMessage } from '@/utils/error/errorHandler'
+import { formatTimestamp } from '@/utils/time/datetime'
+import { formatBytes } from '@/utils/time/format'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 

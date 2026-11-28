@@ -16,8 +16,8 @@ const m = vi.hoisted(() => ({
   listPointQuality: vi.fn(),
 }))
 
-vi.mock('@/api/config', () => ({ getConfig: () => m.getConfig() }))
-vi.mock('@/api/dataQuality', () => ({ listPointQuality: () => m.listPointQuality() }))
+vi.mock('@/api/uplink/config', () => ({ getConfig: () => m.getConfig() }))
+vi.mock('@/api/acquisition/dataQuality', () => ({ listPointQuality: () => m.listPointQuality() }))
 
 describe('usePointOptions', () => {
   beforeEach(() => {

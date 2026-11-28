@@ -114,7 +114,7 @@
 | `gateway-api/tests/protocol_tools_write_api.rs` | DD-57：补 `POST /api/protocol-tools/iec104/ioa-read` 用例——覆盖缺 bus / ioas 为空 / 总线不存在 / 协议不匹配四个分支，全部在触碰网络前返回，断言 HTTP 状态码与机器可读 `error` 分类 |
 | `gateway-api/tests/read_api_coverage.rs` | 补第 4 批新增端点 `GET /api/diagnostics/schedule-optimize` 的用例（合并计划由后端算，断言 `original_reads` / `merged_reads` / 分组数与总览自洽）；接口覆盖由 175/175 变为 **176/176** |
 | `scripts/line_budget_frozen.txt` | DD-58：账本头写明**前端与后端共用同一份账本、同一套规则**（前端条目写 `gateway-web/src/...`）；补登记两个基线建立后涨过 800 行却漏登记的存量巨型文件（`gateway-core/src/runtime/gateway.rs` 上限 1112、`gateway-core/src/south/bus/serial_task.rs` 上限 905）——补登记后它们同样受硬上限约束，不得再悄悄长 |
-| `scripts/deploy_lint.ps1` | DD-58：C24 段由「只扫三个后端 crate」扩到**同时扫描 `gateway-web/src`**（排除 `src/api/generated/`、`src/utils/ep-icons-compact.ts`、`*.spec.ts` / `*.test.ts`），与后端同一账本、同一上限规则 |
+| `scripts/deploy_lint.ps1` | DD-58：C24 段由「只扫三个后端 crate」扩到**同时扫描 `gateway-web/src`**（排除 `src/api/generated/`、`src/utils/ui/ep-icons-compact.ts`、`*.spec.ts` / `*.test.ts`），与后端同一账本、同一上限规则 |
 | `gateway-web/eslint.config.js` | DD-58：删掉写死的 `LINE_BUDGET_EXEMPT` 清单，改为**读取同一份 `scripts/line_budget_frozen.txt`**：未登记文件 > 800 行 → warning（CI `--max-warnings 0` 即阻断）；已登记文件按账本里的**单文件硬上限**判定，超出 → error |
 | `gateway-core/src/engine/metrics/scoped.rs`、`scoped/error_codes.rs`（新建） | 拆出错误码与失败原因分桶（`CollectErrorCode` / `REASON_LABELS` / `ReasonCounters`），主文件 532 → 383 行（< 500，恢复 C23 的拆分守护）；对外路径用 `pub use` 原样再导出，引用方无需改动 |
 | `docs/architecture/frontend.md` | 同步前端行数预算的实际口径（共用账本 + 仓库级 C24 也扫前端），与代码一致 |

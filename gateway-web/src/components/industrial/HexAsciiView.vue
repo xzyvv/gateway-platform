@@ -17,7 +17,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { hexDumpRows } from '@/utils/hexDump'
+import { hexDumpRows } from '@/utils/hex/hexDump'
 
 const props = withDefaults(defineProps<{ hex: string; bytesPerRow?: number; ariaLabel?: string }>(), {
   bytesPerRow: 16,

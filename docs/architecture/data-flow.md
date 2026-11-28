@@ -144,7 +144,7 @@ Prometheus 暴露（`gateway_core::engine::metrics::sim_consumer`）：
 客户合同若含数据留存 SLA / 审计要求，**正确的做法是定期导出**，而不是指望本地冗余：
 
 - 导出入口：`GET /api/history/export`（见 `gateway-api/src/web/api/history/routes.rs`，
-  handler 为 `history_export_csv`），前端对应 `gateway-web/src/utils/exportCsv.ts` 与 `utils/zip.ts`。
+  handler 为 `history_export_csv`），前端对应 `gateway-web/src/utils/csv/exportCsv.ts` 与 `utils/csv/zip.ts`。
 - 导出结果应落到**网关之外**的介质（客户侧 NAS / 人工归档），
   落回本机不构成任何冗余。
 - 长周期查询走降采样表 `data_queue_aggregated`（分钟桶 avg/min/max），

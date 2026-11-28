@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useSharedTick } from '@/composables/core/useSharedTick'
-import { formatRelative } from '@/utils/format'
+import { formatRelative } from '@/utils/time/format'
 
 const props = defineProps<{ timestamp: number }>()
 

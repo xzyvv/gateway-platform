@@ -35,7 +35,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import StatCard from '@/components/StatCard.vue'
-import { getStatus } from '@/api/status'
+import { getStatus } from '@/api/system/status'
 
 const queueLength = ref(0)
 const onlineDevices = ref(0)

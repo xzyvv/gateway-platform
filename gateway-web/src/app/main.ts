@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 // EP 官方暗色变量（挂在 html.dark 下，与 theme store 切换的 class 配套）
 import 'element-plus/theme-chalk/dark/css-vars.css'
 import '../assets/styles/global.css'
-// 首屏只注册登录页需要的 5 个图标，其余 77 个在挂载后懒加载注册（utils/icons-extra.ts），
+// 首屏只注册登录页需要的 5 个图标，其余 77 个在挂载后懒加载注册（utils/ui/icons-extra.ts），
 // 避免登录页白屏时加载 120KB 图标。
 import { Cellphone, Search, User, Lock, InfoFilled } from '@element-plus/icons-vue'
 
@@ -22,7 +22,7 @@ import { useAuthStore } from '../stores/auth'
 // ③ api → stores 事件化：把 HTTP 层发出的通知/日志事件接到 store
 import '../stores/httpEvents'
 import { logWarn, logError } from '../utils/logger'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 const app = createApp(App)
 
@@ -103,7 +103,7 @@ async function bootstrap() {
     if (isTauri()) {
       // token 迁移与配置加载并行：迁移失败只降级明文，不影响挂载；
       // 未迁移完成的首个请求会临时读到明文 token（同一 localStorage，无损坏风险）
-      const migratePromise = import('@/api/token')
+      const migratePromise = import('@/api/runtime/token')
         .then(({ migrateLegacyToken }) => migrateLegacyToken())
         .then(async (migrated) => {
           if (migrated) {
@@ -113,7 +113,7 @@ async function bootstrap() {
           // 若 IndexedDB / Web Crypto 在隐私模式或受限环境下不可用，token 已静默
           // 落明文 localStorage，必须显式告知用户「凭证未加密保存」。
           // 这里在挂载前读，确保 ElMessage 在 pinia + ElementPlus 就绪后能正常渲染。
-          const { __getLastDegradeReason } = await import('../utils/secureStorage')
+          const { __getLastDegradeReason } = await import('../utils/storage/secureStorage')
           const reason = __getLastDegradeReason()
           if (reason) {
             // 延迟到挂载后再弹（app.mount 之后 ElMessage 才能拿到完整主题/全局样式）
@@ -147,7 +147,7 @@ async function bootstrap() {
 
   // 懒加载并注册其余 77 个图标：登录页只需要 5 个，其余在用户登录后才用到。
   // 放在 mount 之后、用户交互之前完成（登录流程的网络请求足以覆盖导入耗时）。
-  void import('../utils/icons-extra')
+  void import('../utils/ui/icons-extra')
     .then(({ registerExtraIcons }) => registerExtraIcons(app))
     .catch((e) => logError('main', e, '[bootstrap] 图标懒加载注册失败'))
 

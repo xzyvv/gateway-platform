@@ -16,7 +16,7 @@
 import { computed } from 'vue'
 import { ROLES, roleHasPermission, type Permission, type Role } from '@/types/roles'
 import { useAuthStore } from '@/stores/auth'
-import { scopedGet } from '@/utils/gatewayStorage'
+import { scopedGet } from '@/utils/storage/gatewayStorage'
 
 // 必须在本模块内直接读取编译期 env 字面量：跨模块 import 的 const（即便初值是字面量）
 // 不会被 Rollup 传播到条件动态 import() 的死分支，曾导致 userPermissions 泄漏进 mock-data chunk。

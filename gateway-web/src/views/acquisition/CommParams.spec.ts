@@ -23,12 +23,12 @@ vi.mock('element-plus', async () => {
   }
 })
 
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: vi.fn(),
   postConfig: vi.fn(),
 }))
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   batchEditPoints: vi.fn(),
 }))
 
@@ -37,8 +37,8 @@ vi.mock('@/composables/core/useErrorDisplay', () => ({
 }))
 
 import CommParams from './CommParams.vue'
-import { getConfig, postConfig } from '@/api/config'
-import { batchEditPoints } from '@/api/points'
+import { getConfig, postConfig } from '@/api/uplink/config'
+import { batchEditPoints } from '@/api/acquisition/points'
 
 interface Cfg {
   buses: Array<Record<string, unknown>>

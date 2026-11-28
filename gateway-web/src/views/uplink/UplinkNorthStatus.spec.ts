@@ -4,7 +4,7 @@ import UplinkNorthStatus from './UplinkNorthStatus.vue'
 
 const mockGetNorthStatus = vi.fn()
 const mockGetPassthroughSessions = vi.fn()
-vi.mock('@/api/uplink', () => ({
+vi.mock('@/api/uplink/uplink', () => ({
   getNorthStatus: () => mockGetNorthStatus(),
   getPassthroughSessions: () => mockGetPassthroughSessions(),
 }))

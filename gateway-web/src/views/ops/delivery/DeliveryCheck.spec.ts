@@ -23,16 +23,16 @@ vi.mock('element-plus', async () => {
   }
 })
 
-vi.mock('@/api/status', () => ({ getVersion: vi.fn(), getHealthReport: vi.fn() }))
-vi.mock('@/api/config', () => ({ getConfig: vi.fn() }))
-vi.mock('@/api/protocols', () => ({ listProtocolCapabilities: vi.fn() }))
-vi.mock('@/api/uplink', () => ({ getNorthStatus: vi.fn() }))
-vi.mock('@/api/network', () => ({ getNtpStatus: vi.fn() }))
-vi.mock('@/api/certificates', () => ({ listCertificates: vi.fn() }))
-vi.mock('@/api/watchdog', () => ({ listServices: vi.fn() }))
-vi.mock('@/api/project', () => ({ importProject: vi.fn() }))
-vi.mock('@/utils/clipboard', () => ({ copyText: vi.fn() }))
-vi.mock('@/utils/exportCsv', () => ({ triggerDownload: vi.fn() }))
+vi.mock('@/api/system/status', () => ({ getVersion: vi.fn(), getHealthReport: vi.fn() }))
+vi.mock('@/api/uplink/config', () => ({ getConfig: vi.fn() }))
+vi.mock('@/api/acquisition/protocols', () => ({ listProtocolCapabilities: vi.fn() }))
+vi.mock('@/api/uplink/uplink', () => ({ getNorthStatus: vi.fn() }))
+vi.mock('@/api/system/network', () => ({ getNtpStatus: vi.fn() }))
+vi.mock('@/api/system/certificates', () => ({ listCertificates: vi.fn() }))
+vi.mock('@/api/system/watchdog', () => ({ listServices: vi.fn() }))
+vi.mock('@/api/system/project', () => ({ importProject: vi.fn() }))
+vi.mock('@/utils/ui/clipboard', () => ({ copyText: vi.fn() }))
+vi.mock('@/utils/csv/exportCsv', () => ({ triggerDownload: vi.fn() }))
 
 const { refreshGates } = vi.hoisted(() => ({ refreshGates: vi.fn() }))
 vi.mock('@/composables/system/useHealthReport', () => ({
@@ -40,16 +40,16 @@ vi.mock('@/composables/system/useHealthReport', () => ({
 }))
 
 import DeliveryCheck from './DeliveryCheck.vue'
-import { getVersion, getHealthReport } from '@/api/status'
-import { getConfig } from '@/api/config'
-import { listProtocolCapabilities } from '@/api/protocols'
-import { getNorthStatus } from '@/api/uplink'
-import { getNtpStatus } from '@/api/network'
-import { listCertificates } from '@/api/certificates'
-import { listServices } from '@/api/watchdog'
-import { importProject } from '@/api/project'
-import { copyText } from '@/utils/clipboard'
-import { triggerDownload } from '@/utils/exportCsv'
+import { getVersion, getHealthReport } from '@/api/system/status'
+import { getConfig } from '@/api/uplink/config'
+import { listProtocolCapabilities } from '@/api/acquisition/protocols'
+import { getNorthStatus } from '@/api/uplink/uplink'
+import { getNtpStatus } from '@/api/system/network'
+import { listCertificates } from '@/api/system/certificates'
+import { listServices } from '@/api/system/watchdog'
+import { importProject } from '@/api/system/project'
+import { copyText } from '@/utils/ui/clipboard'
+import { triggerDownload } from '@/utils/csv/exportCsv'
 
 const VERSION = { version: '1.2.3', build_time: '2026-01-01T00:00:00Z', git_hash: 'abc1234' }
 

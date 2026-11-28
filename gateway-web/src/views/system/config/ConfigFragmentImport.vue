@@ -109,16 +109,16 @@ import DataTable from '@/components/DataTable.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ImportOutcome from '@/components/ImportOutcome.vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { getConfig, postConfig, validateConfigDraft, type ConfigValidationIssue } from '@/api/config'
+import { getConfig, postConfig, validateConfigDraft, type ConfigValidationIssue } from '@/api/uplink/config'
 import type { GatewayConfig } from '@/api/types'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 import {
   SECTION_LABELS,
   mergeFragment,
   parseFragment,
   pointsIgnoredByTemplateMode,
   type SectionStat,
-} from '@/utils/configFragment'
+} from '@/utils/config/configFragment'
 
 const SAMPLE = JSON.stringify(
   {

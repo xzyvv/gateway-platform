@@ -137,7 +137,7 @@ import {
   presetOf,
   type Backoff,
   type BackoffPreset,
-} from '@/utils/backoffPresets'
+} from '@/utils/config/backoffPresets'
 
 const mqtt = defineModel<MqttConfig>({ required: true })
 

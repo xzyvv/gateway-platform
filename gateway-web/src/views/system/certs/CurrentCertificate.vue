@@ -87,8 +87,8 @@ import { ref, onMounted } from 'vue'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import {Refresh, Folder} from '@element-plus/icons-vue'
-import { listCertificates, type Certificate } from '@/api/certificates'
-import { formatDateTime } from '@/utils/datetime'
+import { listCertificates, type Certificate } from '@/api/system/certificates'
+import { formatDateTime } from '@/utils/time/datetime'
 import { logError } from '@/utils/logger'
 
 /**

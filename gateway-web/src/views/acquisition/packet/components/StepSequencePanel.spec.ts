@@ -21,8 +21,8 @@ vi.mock('element-plus', async () => {
     ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
   }
 })
-vi.mock('@/utils/confirm', () => ({ confirmDelete: (...args: unknown[]) => confirmDelete(...args) }))
-vi.mock('@/utils/exportCsv', () => ({ triggerDownload: (...args: unknown[]) => triggerDownload(...args) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: (...args: unknown[]) => confirmDelete(...args) }))
+vi.mock('@/utils/csv/exportCsv', () => ({ triggerDownload: (...args: unknown[]) => triggerDownload(...args) }))
 vi.mock('@/composables/acquisition/useDebugTargets', async () => {
   const { ref } = await vi.importActual<typeof import('vue')>('vue')
   if (!h.selectedBus.current) h.selectedBus.current = ref('')

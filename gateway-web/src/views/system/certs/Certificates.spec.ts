@@ -8,13 +8,13 @@ const { listCertificatesMock, uploadCertificateMock, renewCertificateMock, confi
   confirmMock: vi.fn(),
 }))
 
-vi.mock('@/api/certificates', () => ({
+vi.mock('@/api/system/certificates', () => ({
   listCertificates: listCertificatesMock,
   uploadCertificate: uploadCertificateMock,
   renewCertificate: renewCertificateMock,
 }))
 
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmAction: confirmMock,
 }))
 

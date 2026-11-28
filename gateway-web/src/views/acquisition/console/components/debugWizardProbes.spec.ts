@@ -7,7 +7,7 @@ import {
   runHealthProbe,
 } from './debugWizardProbes'
 import type { BusConfig, DeviceConfig } from '@/api/types'
-import type { HealthProblem } from '@/api/status'
+import type { HealthProblem } from '@/api/system/status'
 
 /**
  * 自动检查（探针）逻辑的判定契约。

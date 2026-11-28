@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ElMessage } from 'element-plus'
-import { createPoint, listPoints } from '@/api/points'
+import { createPoint, listPoints } from '@/api/acquisition/points'
 import { usePointStep } from './usePointStep'
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   createPoint: vi.fn(() => Promise.resolve({})),
   listPoints: vi.fn(() => Promise.resolve([])),
 }))

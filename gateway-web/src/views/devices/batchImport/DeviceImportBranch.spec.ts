@@ -21,11 +21,11 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
-vi.mock('@/utils/batchImportCsv', async () => {
-  const actual = await vi.importActual<typeof import('@/utils/batchImportCsv')>('@/utils/batchImportCsv')
+vi.mock('@/utils/csv/batchImportCsv', async () => {
+  const actual = await vi.importActual<typeof import('@/utils/csv/batchImportCsv')>('@/utils/csv/batchImportCsv')
   return { ...actual, downloadTemplate: vi.fn() }
 })
-vi.mock('@/api/devices', () => ({ createDevice: vi.fn() }))
+vi.mock('@/api/acquisition/devices', () => ({ createDevice: vi.fn() }))
 
 const showToast = vi.hoisted(() => vi.fn())
 
@@ -34,8 +34,8 @@ import DataTable from '@/components/DataTable.vue'
 import ImportFileUpload from './ImportFileUpload.vue'
 import ImportValidatePreview from './ImportValidatePreview.vue'
 import ImportResultPanel from './ImportResultPanel.vue'
-import { createDevice } from '@/api/devices'
-import { downloadTemplate } from '@/utils/batchImportCsv'
+import { createDevice } from '@/api/acquisition/devices'
+import { downloadTemplate } from '@/utils/csv/batchImportCsv'
 
 const HEADER = '设备名称,设备ID,所属总线,协议,从站ID,模板,地址'
 const TEMPLATES = [{ name: '温控模板', protocol: 'modbus-tcp' }]

@@ -4,8 +4,8 @@ import type { LicenseState } from '@/api/generated/LicenseState'
 import type { LicenseSnapshot } from '@/api/generated/LicenseSnapshot'
 import type { QuotaUsage } from '@/api/generated/QuotaUsage'
 import type { QuotaAvailable } from '@/api/generated/QuotaAvailable'
-import { fetchLicense } from '@/api/license'
-import { scopedGet, scopedSet } from '../utils/gatewayStorage'
+import { fetchLicense } from '@/api/system/license'
+import { scopedGet, scopedSet } from '../utils/storage/gatewayStorage'
 
 /** license 档位。v2.0 起仅约束产能配额，不再控制页面可见性。 */
 export type Tier = 'core' | 'standard' | 'pro' | 'ultra'

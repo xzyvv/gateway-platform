@@ -22,7 +22,7 @@ vi.mock('../composables/core/useErrorReporter', () => ({
 // 用模块级 mock 断言。forks 池时期的 defineProperty(window,'location') 写法已不可用。
 const mockNavigateTo = vi.fn()
 const mockReloadPage = vi.fn()
-vi.mock('@/utils/navigation', () => ({
+vi.mock('@/utils/ui/navigation', () => ({
   navigateTo: (...args: unknown[]) => mockNavigateTo(...args),
   reloadPage: () => mockReloadPage(),
 }))

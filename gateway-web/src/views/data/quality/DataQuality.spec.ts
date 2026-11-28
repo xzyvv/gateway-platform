@@ -23,8 +23,8 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
-vi.mock('@/api/dataQuality', async () => {
-  const actual = await vi.importActual<typeof import('@/api/dataQuality')>('@/api/dataQuality')
+vi.mock('@/api/acquisition/dataQuality', async () => {
+  const actual = await vi.importActual<typeof import('@/api/acquisition/dataQuality')>('@/api/acquisition/dataQuality')
   return {
     ...actual,
     listQualityRules: (...a: unknown[]) => listRulesMock(...a),
@@ -36,7 +36,7 @@ vi.mock('@/api/dataQuality', async () => {
     listPointQuality: (...a: unknown[]) => listPointsMock(...a),
   }
 })
-vi.mock('@/utils/confirm', () => ({ confirmDelete: (...a: unknown[]) => confirmDeleteMock(...a) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: (...a: unknown[]) => confirmDeleteMock(...a) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 vi.mock('@/composables/core/useDialogDirtyGuard', () => ({
   useDialogDirtyGuard: () => ({ beforeClose: () => {}, close: closeGuard }),
@@ -56,7 +56,7 @@ const closeGuard = vi.hoisted(() => vi.fn())
 
 import DataQuality from './DataQuality.vue'
 import DataTable from '@/components/DataTable.vue'
-import { QUALITY_LABEL, type PointQuality, type QualityRule } from '@/api/dataQuality'
+import { QUALITY_LABEL, type PointQuality, type QualityRule } from '@/api/acquisition/dataQuality'
 
 const DialogStub = {
   name: 'ElDialog',

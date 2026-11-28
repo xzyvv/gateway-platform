@@ -68,7 +68,7 @@
  */
 import { ref, computed, onErrorCaptured, nextTick } from 'vue'
 import { CopyDocument, Refresh, RefreshRight } from '@element-plus/icons-vue'
-import { copyText } from '@/utils/clipboard'
+import { copyText } from '@/utils/ui/clipboard'
 import SectionHeader from './SectionHeader.vue'
 import { reportPageError, bumpErrorCount, clearErrorCount } from '../composables/core/useErrorReporter'
 

@@ -30,7 +30,7 @@ function newMockChart(dom: HTMLElement): MockChart {
   return c
 }
 
-vi.mock('@/utils/echarts', () => ({
+vi.mock('@/utils/chart/echarts', () => ({
   default: { init: () => mockCharts[mockCharts.length - 1], graphic: { LinearGradient: class {} } },
   // 页面统一从 initChart 初始化（暗色主题注入包装）
   initChart: (dom: HTMLElement) => newMockChart(dom),
@@ -52,7 +52,7 @@ vi.mock('@/utils/echarts', () => ({
 
 // Mock API
 const mockGetDiskHistory = vi.fn()
-vi.mock('@/api/status', () => ({
+vi.mock('@/api/system/status', () => ({
   getDiskHistory: () => mockGetDiskHistory(),
 }))
 

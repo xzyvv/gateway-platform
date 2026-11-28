@@ -157,12 +157,12 @@ import {
 import BrandMark from '@/components/BrandMark.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionsStore } from '@/stores/sessions'
-import { getStatus } from '@/api/status'
+import { getStatus } from '@/api/system/status'
 import { isTauri, getGatewayBaseUrl, loadGatewayConfig, saveGatewayConfig } from '@/api'
 import { useGatewayDiscovery } from '@/composables/system/useGatewayDiscovery'
-import { scopedSet } from '@/utils/gatewayStorage'
-import { statusTagType, type TagType } from '@/utils/statusType'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { scopedSet } from '@/utils/storage/gatewayStorage'
+import { statusTagType, type TagType } from '@/utils/ui/statusType'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 const router = useRouter()
 const auth = useAuthStore()

@@ -18,7 +18,7 @@
  * 读失败 / 内容损坏 / 隐私模式写入失败一律静默回退默认值，不阻塞页面可用。
  */
 import { ref, readonly, type Ref } from 'vue'
-import { scopedGet, scopedSet } from '@/utils/gatewayStorage'
+import { scopedGet, scopedSet } from '@/utils/storage/gatewayStorage'
 
 export type TableDensity = 'default' | 'compact'
 

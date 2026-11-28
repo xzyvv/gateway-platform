@@ -95,7 +95,7 @@
 import { ref, reactive, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElButton, ElMessage, ElSwitch, ElTag } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 import { Plus } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
@@ -104,9 +104,9 @@ import {
   getQualityStats, qualityRulesSource,
   QUALITY_LABEL, QUALITY_COLOR,
   type QualityRule, type PointQuality, type Quality, type QualityStats, type QualityRulesSource,
-} from '@/api/dataQuality'
+} from '@/api/acquisition/dataQuality'
 import { usePointQuality } from '@/composables/data/usePointQuality'
-import { formatTimeOfDay } from '@/utils/datetime'
+import { formatTimeOfDay } from '@/utils/time/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 

@@ -16,8 +16,8 @@ import { nextTick } from 'vue'
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
-vi.mock('@/api/deviceOps', async () => {
-  const actual = await vi.importActual<typeof import('@/api/deviceOps')>('@/api/deviceOps')
+vi.mock('@/api/acquisition/deviceOps', async () => {
+  const actual = await vi.importActual<typeof import('@/api/acquisition/deviceOps')>('@/api/acquisition/deviceOps')
   return {
     ...actual,
     listHealthView: (...a: unknown[]) => listHealthMock(...a),
@@ -32,7 +32,7 @@ const listShadowsMock = vi.hoisted(() => vi.fn())
 
 import HealthScore from './HealthScore.vue'
 import DataTable from '@/components/DataTable.vue'
-import type { DeviceHealthView, DeviceShadowView } from '@/api/deviceOps'
+import type { DeviceHealthView, DeviceShadowView } from '@/api/acquisition/deviceOps'
 
 const DrawerStub = {
   name: 'ElDrawer',

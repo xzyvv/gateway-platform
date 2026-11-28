@@ -8,15 +8,15 @@ const { updatePointMock, notifyMock, confirmMock } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
 }))
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   updatePoint: updatePointMock,
 }))
 
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: vi.fn(),
 }))
 
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmAction: confirmMock,
 }))
 
@@ -31,7 +31,7 @@ vi.mock('element-plus', async () => {
 
 import PointsBatchEditDialog from './PointsBatchEditDialog.vue'
 import { ElMessage, ElSelect, ElInputNumber } from 'element-plus'
-import { getConfig } from '@/api/config'
+import { getConfig } from '@/api/uplink/config'
 import type { PointConfig } from '@/api/types'
 
 /**

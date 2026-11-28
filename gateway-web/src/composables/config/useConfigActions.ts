@@ -1,13 +1,13 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { confirmAction } from '@/utils/confirm'
-import { failureMessage } from '@/utils/errorHandler'
-import { registerDirtyGuard } from '@/utils/dirtyGuard'
+import { confirmAction } from '@/utils/ui/confirm'
+import { failureMessage } from '@/utils/error/errorHandler'
+import { registerDirtyGuard } from '@/utils/storage/dirtyGuard'
 import {
   postConfig,
   exportConfig as apiExport,
   reloadConfig,
-} from '@/api/config'
+} from '@/api/uplink/config'
 import { setToken } from '@/api'
 import type { GatewayConfig } from '@/api/types'
 import { validateConfig, type ConfigValidationIssue } from '@/composables/config/configValidation'
@@ -18,13 +18,13 @@ import {
   defaultMqtt,
   unknownTopKeys,
   type ConfigForm,
-} from '@/utils/configDefaults'
+} from '@/utils/config/configDefaults'
 import { useConfigJson } from './useConfigJson'
-import { scopedGet, scopedSet, scopedRemove } from '@/utils/gatewayStorage'
+import { scopedGet, scopedSet, scopedRemove } from '@/utils/storage/gatewayStorage'
 import { useWebhook } from '@/composables/uplink/useWebhook'
 import { protocolDefaultTimeoutMs } from '@/composables/devices/protocolMeta'
 import { useRoute } from 'vue-router'
-import { triggerDownload } from '@/utils/exportCsv'
+import { triggerDownload } from '@/utils/csv/exportCsv'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**

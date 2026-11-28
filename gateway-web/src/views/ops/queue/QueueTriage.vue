@@ -144,13 +144,13 @@ import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import StatCard from '@/components/StatCard.vue'
-import { getSimConsumerStatus, startSimConsumer, stopSimConsumer } from '@/api/simConsumer'
+import { getSimConsumerStatus, startSimConsumer, stopSimConsumer } from '@/api/acquisition/simConsumer'
 import type { SimConsumerStatus } from '@/api/types'
 import { usePolling } from '@/composables/core/usePolling'
 import { usePermission } from '@/composables/auth/usePermission'
-import { extractErrorMessage, failureMessage } from '@/utils/errorHandler'
-import { formatDateTime } from '@/utils/datetime'
-import { formatDuration } from '@/utils/format'
+import { extractErrorMessage, failureMessage } from '@/utils/error/errorHandler'
+import { formatDateTime } from '@/utils/time/datetime'
+import { formatDuration } from '@/utils/time/format'
 
 const status = ref<SimConsumerStatus | null>(null)
 const starting = ref(false)

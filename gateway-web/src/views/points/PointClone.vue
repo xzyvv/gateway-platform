@@ -63,7 +63,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import {Promotion} from '@element-plus/icons-vue'
 import {
   listCloneSourcesView,
@@ -71,8 +71,8 @@ import {
   cloneApplyView,
   type CloneSourceView,
   type CloneTargetView,
-} from '@/api/pointsOps'
-import { listPoints } from '@/api/points'
+} from '@/api/acquisition/pointsOps'
+import { listPoints } from '@/api/acquisition/points'
 import type { ColumnDef } from '@/components/DataTable.vue'
 
 /** 源设备点位预览行（点位级） */

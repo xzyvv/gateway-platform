@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import MetricsDashboard from './MetricsDashboard.vue'
 
 const mockGetMetrics = vi.fn()
-vi.mock('@/api/status', () => ({
+vi.mock('@/api/system/status', () => ({
   getMetrics: () => mockGetMetrics(),
 }))
 

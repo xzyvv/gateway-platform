@@ -18,14 +18,14 @@ const { readPointNow, writePoints } = vi.hoisted(() => ({
   })),
 }))
 
-vi.mock('@/api/devices', () => ({
+vi.mock('@/api/acquisition/devices', () => ({
   listDevices: vi.fn(async () => [
     { id: 'dev_1', name: '电表1' },
     { id: 'dev_2', name: '温控器2' },
   ]),
 }))
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   listPoints: vi.fn(async (deviceId: string) => [{ id: `${deviceId}_p1`, name: '温度' }]),
   readPointNow,
   writePoints,
@@ -66,7 +66,7 @@ describe('BatchCommand.vue 冒烟', () => {
   })
 
   it('listPoints 按设备逐个调用', async () => {
-    const { listPoints } = await import('@/api/points')
+    const { listPoints } = await import('@/api/acquisition/points')
     mount(BatchCommand)
     await settle()
 

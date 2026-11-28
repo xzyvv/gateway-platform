@@ -68,7 +68,7 @@
 import { ref, reactive, onMounted, h } from 'vue'
 import { ElButton, ElMessage, ElTag } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import { Upload, Refresh } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
@@ -79,8 +79,8 @@ import {
   uploadCertificate,
   renewCertificate,
   type Certificate,
-} from '@/api/certificates'
-import { formatDate, formatDateTime } from '@/utils/datetime'
+} from '@/api/system/certificates'
+import { formatDate, formatDateTime } from '@/utils/time/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import CurrentCertificate from './CurrentCertificate.vue'
 

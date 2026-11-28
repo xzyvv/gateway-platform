@@ -3,8 +3,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import type { ScheduleTask } from '@/api/scheduledTasks'
-import { formatDateTime } from '@/utils/datetime'
+import type { ScheduleTask } from '@/api/system/scheduledTasks'
+import { formatDateTime } from '@/utils/time/datetime'
 
 const {
   listTasksMock,
@@ -22,7 +22,7 @@ const {
   confirmDeleteMock: vi.fn(),
 }))
 
-vi.mock('@/api/scheduledTasks', () => ({
+vi.mock('@/api/system/scheduledTasks', () => ({
   listTasks: listTasksMock,
   createTask: createTaskMock,
   updateTask: updateTaskMock,
@@ -39,7 +39,7 @@ vi.mock('@/api/scheduledTasks', () => ({
   ],
 }))
 
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmDelete: confirmDeleteMock,
   confirmAction: vi.fn(),
 }))

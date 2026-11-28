@@ -3,9 +3,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 /** 确认框与常驻通知：批量删除的交互结果需要可观测 */
 const m = vi.hoisted(() => ({ confirmDelete: vi.fn(), notify: vi.fn() }))
 
-vi.mock('@/utils/confirm', () => ({ confirmDelete: (...a: unknown[]) => m.confirmDelete(...a) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: (...a: unknown[]) => m.confirmDelete(...a) }))
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   listPoints: vi.fn().mockResolvedValue([]),
   deletePoint: vi.fn(),
   restorePoint: vi.fn(),
@@ -14,14 +14,14 @@ vi.mock('@/api/points', () => ({
   createPoint: vi.fn(),
   updatePoint: vi.fn(),
 }))
-vi.mock('@/api/devices', () => ({
+vi.mock('@/api/acquisition/devices', () => ({
   listDevices: vi.fn().mockResolvedValue([]),
 }))
-vi.mock('@/api/dataQuality', () => ({
+vi.mock('@/api/acquisition/dataQuality', () => ({
   listPointQuality: vi.fn().mockResolvedValue([]),
 }))
 // 北向上报周期由配置接口提供：点位采集周期必须小于它
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: vi.fn().mockResolvedValue({ mqtt: { enabled: true, publish_interval: 60 } }),
 }))
 vi.mock('element-plus', async () => {
@@ -34,8 +34,8 @@ vi.mock('element-plus', async () => {
 })
 
 import { usePoints } from './usePoints'
-import { updatePoint, listPoints, deletePoint, restorePoint, createPoint } from '@/api/points'
-import { getConfig } from '@/api/config'
+import { updatePoint, listPoints, deletePoint, restorePoint, createPoint } from '@/api/acquisition/points'
+import { getConfig } from '@/api/uplink/config'
 import { ElMessage, ElButton, type FormInstance } from 'element-plus'
 import { nextTick } from 'vue'
 import type { VNode } from 'vue'

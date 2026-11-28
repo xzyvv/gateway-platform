@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { scanBusStream, canStreamScan } from './slaveScan'
 
-vi.mock('../token', () => ({ getToken: vi.fn(async () => 'test-token') }))
+vi.mock('../runtime/token', () => ({ getToken: vi.fn(async () => 'test-token') }))
 
 /**
  * P0-2 契约 §4：流式扫描的 SSE 事件分发与中断语义。

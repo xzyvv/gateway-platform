@@ -19,14 +19,14 @@ vi.mock('element-plus', async () => {
     ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
   }
 })
-vi.mock('@/api/config', () => ({ exportConfig: vi.fn(), importConfig: vi.fn() }))
-vi.mock('@/api/project', () => ({ exportProject: vi.fn(), importProject: vi.fn() }))
-vi.mock('@/utils/exportCsv', () => ({ triggerDownload: vi.fn() }))
+vi.mock('@/api/uplink/config', () => ({ exportConfig: vi.fn(), importConfig: vi.fn() }))
+vi.mock('@/api/system/project', () => ({ exportProject: vi.fn(), importProject: vi.fn() }))
+vi.mock('@/utils/csv/exportCsv', () => ({ triggerDownload: vi.fn() }))
 
 import ConfigIo from './ConfigIo.vue'
-import { exportConfig, importConfig } from '@/api/config'
-import { exportProject, importProject } from '@/api/project'
-import { triggerDownload } from '@/utils/exportCsv'
+import { exportConfig, importConfig } from '@/api/uplink/config'
+import { exportProject, importProject } from '@/api/system/project'
+import { triggerDownload } from '@/utils/csv/exportCsv'
 
 /** 预览对话框替换为纯道具桩：内部要跑 configDiff，只关心「传了哪份配置进去」 */
 const PreviewStub = {

@@ -11,14 +11,14 @@ vi.mock('@/api/protocolTools', () => ({
   toggleConvertRule: vi.fn(),
   PROTO_LABEL: { 'modbus-tcp': 'Modbus TCP', 'modbus-rtu': 'Modbus RTU', mqtt: 'MQTT', 'opc-ua': 'OPC UA' },
 }))
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: vi.fn(),
 }))
-vi.mock('@/utils/confirm', () => ({ confirmDelete: vi.fn() }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: vi.fn() }))
 
 import ProtocolConvert from './ProtocolConvert.vue'
 import { listConvertRules } from '@/api/protocolTools'
-import { getConfig } from '@/api/config'
+import { getConfig } from '@/api/uplink/config'
 
 /**
  * 协议转换「本地试跑」：现场靠它确认规则填得对不对，再下发到网关。

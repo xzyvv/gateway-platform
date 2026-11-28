@@ -6,8 +6,8 @@ import { diagnosticsExec } from '@/api/diagnostics/raw'
 import { useWebhook } from '@/composables/uplink/useWebhook'
 import { precheckCommand, QUICK_DIAGNOSTIC_COMMANDS } from '@/utils/diagnosticsCommands'
 import { useVirtualLogs } from './useVirtualLogs'
-import { triggerDownload } from '@/utils/exportCsv'
-import { copyText } from '@/utils/clipboard'
+import { triggerDownload } from '@/utils/csv/exportCsv'
+import { copyText } from '@/utils/ui/clipboard'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 interface LogItem { id: number; text: string }

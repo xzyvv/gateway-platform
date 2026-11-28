@@ -5,7 +5,7 @@ import {
   defaultSimConsumer,
   KNOWN_NULLABLE_KEYS,
   type ConfigForm,
-} from '@/utils/configDefaults'
+} from '@/utils/config/configDefaults'
 
 export interface UseConfigJsonOptions {
   /** 表单主数据（reactive，与 useConfigActions 共享同一实例） */

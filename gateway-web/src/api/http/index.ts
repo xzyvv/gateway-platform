@@ -48,6 +48,6 @@ export {
   getInflightCount,
   abortAllInflight,
   triggerGatewaySwitchRefresh,
-} from '../inflight'
+} from '../runtime/inflight'
 
 export { instance as default } from './instance'

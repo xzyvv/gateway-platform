@@ -34,7 +34,7 @@
  * - packets：录制会话里的报文序列
  * - frames：packetId → 逐帧结果（执行中为流式中间态，结束后为全量汇总）
  */
-import { withDiagHint } from '@/utils/diagHints'
+import { withDiagHint } from '@/utils/error/diagHints'
 import type { ReplayPacket, ReplayFrameResult } from '@/api/protocolTools'
 import { statusLabel, replayStatusTagType } from '@/composables/acquisition/usePacketReplay'
 

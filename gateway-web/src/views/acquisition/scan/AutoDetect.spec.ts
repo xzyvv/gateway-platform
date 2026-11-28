@@ -7,7 +7,7 @@ vi.mock('@/api/protocolTools', () => ({
   getAutoDetectResult: vi.fn(),
   stopAutoDetect: vi.fn(),
 }))
-vi.mock('@/api/protocols', () => ({
+vi.mock('@/api/acquisition/protocols', () => ({
   listProtocolCapabilities: vi.fn(),
 }))
 vi.mock('@/composables/acquisition/useDebugTargets', () => ({
@@ -21,7 +21,7 @@ vi.mock('@/composables/acquisition/useDebugTargets', () => ({
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
 import AutoDetect from './AutoDetect.vue'
-import { listProtocolCapabilities } from '@/api/protocols'
+import { listProtocolCapabilities } from '@/api/acquisition/protocols'
 import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
 
 // 协议能力是模块级单例：逐条用例清空，保证各自的 mock 能力位真正被请求到

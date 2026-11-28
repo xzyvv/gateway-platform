@@ -22,12 +22,12 @@ vi.mock('@/api/diagnostics/view', () => ({
   getStatsReportView: (...args: unknown[]) => mockGetStatsReport(...args),
 }))
 
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: (...args: unknown[]) => mockGetConfig(...args),
 }))
 
 // 原「时延分析」页合并后，本页还依赖点位质量以累计连续失败点位数
-vi.mock('@/api/dataQuality', () => ({
+vi.mock('@/api/acquisition/dataQuality', () => ({
   listPointQuality: (...args: unknown[]) => mockListPointQuality(...args),
 }))
 

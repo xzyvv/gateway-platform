@@ -162,9 +162,9 @@ import { h } from 'vue'
 import { ElButton, ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
-import type { UplinkTestHistoryItem } from '@/api/uplink'
+import type { UplinkTestHistoryItem } from '@/api/uplink/uplink'
 import { useUplinkTester } from '@/composables/uplink/useUplinkTester'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 
 const {
   testing, sending, lastResult, history, historyLoading,

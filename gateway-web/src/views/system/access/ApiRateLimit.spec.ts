@@ -4,8 +4,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import type { ApiLimitRule, ApiLog } from '@/api/apiRateLimit'
-import { formatDateTime } from '@/utils/datetime'
+import type { ApiLimitRule, ApiLog } from '@/api/system/apiRateLimit'
+import { formatDateTime } from '@/utils/time/datetime'
 
 const {
   listRulesMock,
@@ -25,7 +25,7 @@ const {
   confirmDeleteMock: vi.fn(),
 }))
 
-vi.mock('@/api/apiRateLimit', () => ({
+vi.mock('@/api/system/apiRateLimit', () => ({
   listRules: listRulesMock,
   createRule: createRuleMock,
   updateRule: updateRuleMock,
@@ -34,7 +34,7 @@ vi.mock('@/api/apiRateLimit', () => ({
   getStats: getStatsMock,
 }))
 
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmDelete: confirmDeleteMock,
   confirmAction: vi.fn(),
 }))

@@ -58,7 +58,7 @@
  * 典型应用场景：报文分步调试页（StepDebug.vue）右栏的执行日志卡片。
  */
 import LogPanel from '@/components/LogPanel.vue'
-import { formatTimeOfDay } from '@/utils/datetime'
+import { formatTimeOfDay } from '@/utils/time/datetime'
 import { errorLabel, type RunLog } from './stepDebugTypes'
 
 defineProps<{

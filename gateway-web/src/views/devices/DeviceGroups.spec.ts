@@ -28,8 +28,8 @@ vi.mock('@/composables/core/useErrorDisplay', () => ({
 vi.mock('@/composables/core/useDialogDirtyGuard', () => ({
   useDialogDirtyGuard: () => ({ beforeClose: (done: () => void) => done(), close: () => {} }),
 }))
-vi.mock('@/utils/confirm', () => ({ confirmDelete: vi.fn() }))
-vi.mock('@/api/deviceOps', () => ({
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: vi.fn() }))
+vi.mock('@/api/acquisition/deviceOps', () => ({
   listGroupsView: vi.fn(),
   createGroupView: vi.fn(),
   updateGroupView: vi.fn(),
@@ -38,10 +38,10 @@ vi.mock('@/api/deviceOps', () => ({
   removeDeviceFromGroup: vi.fn(),
   presetColors: ['#1677ff', '#52c41a', '#faad14'],
 }))
-vi.mock('@/api/devices', () => ({ listDevices: vi.fn() }))
+vi.mock('@/api/acquisition/devices', () => ({ listDevices: vi.fn() }))
 
 import DeviceGroups from './DeviceGroups.vue'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 import {
   listGroupsView,
   createGroupView,
@@ -49,8 +49,8 @@ import {
   deleteGroup,
   addDeviceToGroup,
   removeDeviceFromGroup,
-} from '@/api/deviceOps'
-import { listDevices } from '@/api/devices'
+} from '@/api/acquisition/deviceOps'
+import { listDevices } from '@/api/acquisition/devices'
 
 function groups() {
   return [

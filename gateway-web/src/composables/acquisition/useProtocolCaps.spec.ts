@@ -19,7 +19,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 
-vi.mock('@/api/protocols', () => ({
+vi.mock('@/api/acquisition/protocols', () => ({
   listProtocolCapabilities: vi.fn(),
 }))
 
@@ -53,7 +53,7 @@ type Api = ReturnType<CapsModule['useProtocolCaps']>
  */
 async function setup() {
   vi.resetModules()
-  const protocolsApi = await import('@/api/protocols')
+  const protocolsApi = await import('@/api/acquisition/protocols')
   const mod = await import('./useProtocolCaps')
   return { mod, protocolsApi }
 }

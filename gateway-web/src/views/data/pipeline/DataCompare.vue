@@ -74,15 +74,15 @@
 <script setup lang="ts">
 import {ref, computed, onMounted, onUnmounted, nextTick, h, watch} from 'vue'
 import {Search} from '@element-plus/icons-vue'
-import echarts, { disposeChart, ensureChart } from '@/utils/echarts'
-import { tooltipStyle, defaultGrid, valueAxisStyle, categoryAxisStyle, legendStyle } from '@/utils/chartStyle'
+import echarts, { disposeChart, ensureChart } from '@/utils/chart/echarts'
+import { tooltipStyle, defaultGrid, valueAxisStyle, categoryAxisStyle, legendStyle } from '@/utils/chart/chartStyle'
 import { fetchHistorySamples } from '@/composables/data/useHistoryQuery'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
-import { listDevices } from '@/api/devices'
-import { listPoints } from '@/api/points'
+import { listDevices } from '@/api/acquisition/devices'
+import { listPoints } from '@/api/acquisition/points'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { formatTimeOfDay } from '@/utils/datetime'
-import { CHART_PRIMARY, CHART_SUCCESS, CHART_WARNING, CHART_DANGER } from '@/utils/chartTheme'
+import { formatTimeOfDay } from '@/utils/time/datetime'
+import { CHART_PRIMARY, CHART_SUCCESS, CHART_WARNING, CHART_DANGER } from '@/utils/chart/chartTheme'
 
 interface PointOption { id: string; pointName: string; deviceName: string; color: string }
 

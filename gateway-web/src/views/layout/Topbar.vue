@@ -213,7 +213,7 @@ import WsStatusBadge from '@/views/layout/WsStatusBadge.vue'
 import type { useLayoutClock } from '@/composables/layout/useLayoutClock'
 import type { useGatewaySwitcher } from '@/composables/layout/useGatewaySwitcher'
 import { getInflightCount, abortAllInflight } from '@/api'
-import { formatDate } from '@/utils/datetime'
+import { formatDate } from '@/utils/time/datetime'
 import { findGroupFirstPath } from './menu'
 
 type LayoutClockApi = ReturnType<typeof useLayoutClock>

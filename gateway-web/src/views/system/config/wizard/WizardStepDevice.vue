@@ -50,7 +50,7 @@
  * 典型应用场景：部署向导的第 2 步，只负责渲染与局部交互，不直接发请求。
  */
 import type { BusConfig } from '@/api/types'
-import type { DeviceTemplate } from '@/api/templates'
+import type { DeviceTemplate } from '@/api/acquisition/templates'
 import type { DeviceFormModel } from './types'
 
 defineProps<{

@@ -8,10 +8,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
-import { scopedKey, scopedSet } from '@/utils/gatewayStorage'
+import { scopedKey, scopedSet } from '@/utils/storage/gatewayStorage'
 
-vi.mock('@/api/devices', () => ({ listDevices: vi.fn() }))
-vi.mock('@/api/config', () => ({ getConfig: vi.fn() }))
+vi.mock('@/api/acquisition/devices', () => ({ listDevices: vi.fn() }))
+vi.mock('@/api/uplink/config', () => ({ getConfig: vi.fn() }))
 
 const DEVICES = [
   { id: 'dev_1', name: '一号机' },
@@ -25,8 +25,8 @@ const BUSES = [
 /** 重置模块缓存、配置好 mock 返回值后重新加载 composable 模块 */
 async function setup() {
   vi.resetModules()
-  const devicesApi = await import('@/api/devices')
-  const configApi = await import('@/api/config')
+  const devicesApi = await import('@/api/acquisition/devices')
+  const configApi = await import('@/api/uplink/config')
   vi.mocked(devicesApi.listDevices).mockResolvedValue(DEVICES as never)
   vi.mocked(configApi.getConfig).mockResolvedValue({ buses: BUSES } as never)
   const mod = await import('./useDebugTargets')

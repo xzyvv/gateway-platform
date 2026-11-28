@@ -8,15 +8,15 @@
  */
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createPoint, listPoints } from '@/api/points'
+import { createPoint, listPoints } from '@/api/acquisition/points'
 import {
   modbusAddressOf,
   parseModbusAddress,
 } from '@/composables/devices/usePoints/modbusAddress'
 import type { PointConfig } from '@/api/types'
-import { defaultPointConfig } from '@/utils/pointDefaults'
+import { defaultPointConfig } from '@/utils/config/pointDefaults'
 import type { ManualPointForm } from './types'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 export function usePointStep() {
   /** 已创建设备的点位列表 */

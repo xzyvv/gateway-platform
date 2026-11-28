@@ -29,7 +29,7 @@ vi.mock('@/composables/acquisition/useDebugTargets', () => ({
   useDebugTargets: () => ({ busOptions: ref([]) }),
 }))
 
-vi.mock('@/utils/clipboard', () => ({ copyText: vi.fn() }))
+vi.mock('@/utils/ui/clipboard', () => ({ copyText: vi.fn() }))
 
 // useQueryState 依赖 route.query 与 router.replace：筛选条件记忆走 URL
 vi.mock('vue-router', () => ({

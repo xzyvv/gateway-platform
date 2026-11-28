@@ -55,7 +55,7 @@ import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import { ElMessage } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
-import { getConfig, postConfig } from '@/api/config'
+import { getConfig, postConfig } from '@/api/uplink/config'
 import type { BusConfig } from '@/api/types'
 
 /** embedded：作为「运行参数」页内区块使用时为 true，隐藏自身区块标题 */

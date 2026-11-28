@@ -158,8 +158,8 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PresetNumberSelect from '@/components/industrial/PresetNumberSelect.vue'
 import type { WebConfig } from '@/api/types'
-import { changePassword } from '@/api/auth'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { changePassword } from '@/api/system/auth'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 const web = defineModel<WebConfig | null>({ required: true })
 const props = defineProps<{ originalToken: string; tokenStatusText: string }>()

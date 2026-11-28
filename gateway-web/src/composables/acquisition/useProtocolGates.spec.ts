@@ -9,9 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { defineComponent, h, ref, nextTick } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 
-vi.mock('@/api/protocols', () => ({ listProtocolCapabilities: vi.fn() }))
+vi.mock('@/api/acquisition/protocols', () => ({ listProtocolCapabilities: vi.fn() }))
 
-import { listProtocolCapabilities } from '@/api/protocols'
+import { listProtocolCapabilities } from '@/api/acquisition/protocols'
 import { useProtocolGates } from './useProtocolGates'
 import { resetProtocolCapsCache } from './useProtocolCaps'
 import type { DeviceConfig } from '@/api/types'

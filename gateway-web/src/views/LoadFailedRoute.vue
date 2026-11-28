@@ -45,15 +45,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { copyText } from '@/utils/clipboard'
+import { copyText } from '@/utils/ui/clipboard'
 import {
   WarningFilled, Refresh, RefreshRight, HomeFilled, CopyDocument,
 } from '@element-plus/icons-vue'
 import { reportPageError } from '../composables/core/useErrorReporter'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 // 整页跳转/刷新经 utils/navigation 间接一层：vmThreads 下 location 不可重定义，
 // 测试需 vi.mock 本模块断言（见 LoadFailedRoute.spec.ts）
-import { navigateTo, reloadPage as hardReload } from '@/utils/navigation'
+import { navigateTo, reloadPage as hardReload } from '@/utils/ui/navigation'
 
 /**
  * 路由 meta 扩展：error 字段携带原始错误对象 / message / 触发路径。

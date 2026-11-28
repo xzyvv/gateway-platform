@@ -7,7 +7,7 @@
  * 2. 时间戳归零：首帧记 0ms，回放按帧间隔下发而非绝对时间。
  */
 import type { ReplayPacket, ReplaySession } from '@/api/protocolTools/types'
-import { pad2 } from './datetime'
+import { pad2 } from './time/datetime'
 
 export interface ReplayFrameInput {
   /** 帧捕获时刻（epoch ms） */

@@ -67,18 +67,18 @@ import { ref, reactive, computed, watch, onMounted, h } from 'vue'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import { ElButton, ElMessage, ElSwitch, ElTag, type FormInstance, type FormRules } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 import {Plus, Refresh} from '@element-plus/icons-vue'
 import InlineEditCell from '@/components/InlineEditCell.vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
 import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import {
   listTasks, createTask, updateTask, deleteTask, runTaskNow, getCronPresets,
   type ScheduleTask, type TaskType,
-} from '@/api/scheduledTasks'
+} from '@/api/system/scheduledTasks'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 
 const tasks = ref<ScheduleTask[]>([])

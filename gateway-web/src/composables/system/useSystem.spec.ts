@@ -35,8 +35,8 @@ vi.mock('element-plus', async () => {
   const actual = await vi.importActual<typeof import('element-plus')>('element-plus')
   return { ...actual, ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() } }
 })
-vi.mock('@/utils/confirm', () => ({ confirmAction: (o: unknown) => m.confirmAction(o) }))
-vi.mock('@/api/status', () => ({
+vi.mock('@/utils/ui/confirm', () => ({ confirmAction: (o: unknown) => m.confirmAction(o) }))
+vi.mock('@/api/system/status', () => ({
   getStatus: () => m.getStatus(),
   getVersion: () => m.getVersion(),
   getMetrics: () => m.getMetrics(),
@@ -44,22 +44,22 @@ vi.mock('@/api/status', () => ({
   getHealthReport: () => m.getHealthReport(),
   parsePrometheusText: (t: string) => m.parsePrometheusText(t),
 }))
-vi.mock('@/api/network', () => ({
+vi.mock('@/api/system/network', () => ({
   getNtpStatus: () => m.getNtpStatus(),
   ntpSync: () => m.ntpSync(),
 }))
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: () => m.getConfig(),
   postConfig: (c: unknown) => m.postConfig(c),
 }))
-vi.mock('@/api/devices', () => ({ listDevices: () => m.listDevices() }))
+vi.mock('@/api/acquisition/devices', () => ({ listDevices: () => m.listDevices() }))
 // B3：审计只有后端一条链路，useSystem 通过 listAuditLogs 读取
-vi.mock('@/api/auditLog', () => ({ listAuditLogs: (f: unknown) => m.listAuditLogs(f) }))
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/system/auditLog', () => ({ listAuditLogs: (f: unknown) => m.listAuditLogs(f) }))
+vi.mock('@/api/acquisition/points', () => ({
   listPoints: (id: string) => m.listPoints(id),
   readPointNow: (id: string) => m.readPointNow(id),
 }))
-vi.mock('@/utils/diagnosticReport', () => ({
+vi.mock('@/utils/health/diagnosticReport', () => ({
   buildDiagnosticReport: (i: unknown) => m.buildDiagnosticReport(i),
   downloadDiagnosticReport: (html: string) => m.downloadDiagnosticReport(html),
 }))
@@ -68,7 +68,7 @@ vi.mock('@/utils/systemBackup', () => ({
   downloadBackup: (b: unknown) => m.downloadBackup(b),
   parseBackupFile: (f: unknown) => m.parseBackupFile(f),
 }))
-vi.mock('@/utils/deviceComms', () => ({
+vi.mock('@/utils/device/deviceComms', () => ({
   recordRead: (id: string, ok: boolean, lat: number) => m.recordRead(id, ok, lat),
 }))
 vi.mock('@/composables/uplink/useWebhook', async () => {

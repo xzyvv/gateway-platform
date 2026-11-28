@@ -2386,7 +2386,7 @@ if (Test-Path $webSrcRoot) {
     foreach ($f in Get-ChildItem -Recurse -Path $webSrcRoot -Include *.ts,*.vue) {
         $rel = "gateway-web/src/" + ($f.FullName.Substring($webSrcRoot.Length + 1) -replace '\\', '/')
         if ($rel -match '/api/generated/') { continue }
-        if ($rel -match '/utils/ep-icons-compact\.ts$') { continue }
+        if ($rel -match '/utils/ui/ep-icons-compact\.ts$') { continue }
         if ($f.Name -match '\.(spec|test)\.ts$') { continue }
         $n = [System.IO.File]::ReadAllLines($f.FullName).Count
         if ($n -gt $lineBudget) {

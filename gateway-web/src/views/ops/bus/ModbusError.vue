@@ -85,7 +85,7 @@ import {
   METER_ERROR_PROTOCOL_LABEL,
   type MeterErrorEntry,
   type MeterErrorProtocol,
-} from '@/utils/meterErrorCodes'
+} from '@/utils/health/meterErrorCodes'
 
 type ProtocolTab = 'modbus' | MeterErrorProtocol
 

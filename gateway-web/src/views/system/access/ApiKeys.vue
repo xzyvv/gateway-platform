@@ -85,8 +85,8 @@ import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import { ElButton, ElIcon, ElMessage, ElSwitch, ElTag, ElTooltip, type FormInstance, type FormRules } from 'element-plus'
 import { useRoute } from 'vue-router'
-import { confirmDelete } from '@/utils/confirm'
-import { copyText } from '@/utils/clipboard'
+import { confirmDelete } from '@/utils/ui/confirm'
+import { copyText } from '@/utils/ui/clipboard'
 import { Plus, Refresh, CopyDocument } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
@@ -97,8 +97,8 @@ import {
   deleteApiKey,
   getAllScopes,
   type ApiKey,
-} from '@/api/apiKeys'
-import { formatDate, formatDateTime } from '@/utils/datetime'
+} from '@/api/system/apiKeys'
+import { formatDate, formatDateTime } from '@/utils/time/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 
 const keys = ref<ApiKey[]>([])

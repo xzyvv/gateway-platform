@@ -7,7 +7,7 @@ const apiState = vi.hoisted(() => ({
   fail: null as Error | null,
 }))
 
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   exportPoints: vi.fn(async () => {
     if (apiState.fail) throw apiState.fail
     return { total: apiState.points.length, points: apiState.points }
@@ -19,7 +19,7 @@ const downloadState = vi.hoisted(() => ({
   blob: vi.fn(),
 }))
 
-vi.mock('@/utils/exportCsv', () => ({
+vi.mock('@/utils/csv/exportCsv', () => ({
   downloadTableCsv: downloadState.csv,
   triggerDownload: downloadState.blob,
   // 导出文件名的时间戳由 utils/exportCsv 统一生成（本地时间，非 UTC）；

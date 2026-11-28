@@ -1,9 +1,9 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { getHealthReport, type HealthReport } from '@/api/status'
-import { extractErrorMessage } from '@/utils/errorHandler'
-import { countProblemLevels, overallStatusMeta, type ProblemCounts } from '@/utils/healthStatus'
-import type { TagType } from '@/utils/statusType'
+import { getHealthReport, type HealthReport } from '@/api/system/status'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
+import { countProblemLevels, overallStatusMeta, type ProblemCounts } from '@/utils/health/healthStatus'
+import type { TagType } from '@/utils/ui/statusType'
 
 /** 快照有效期：10s 内重复调用不会产生新请求 */
 export const HEALTH_REPORT_TTL_MS = 10_000

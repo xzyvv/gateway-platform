@@ -1,4 +1,4 @@
-// 临时核验脚本：对 17 号报告的每条具体断言逐条复核
+﻿// 临时核验脚本：对 17 号报告的每条具体断言逐条复核
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -140,7 +140,7 @@ check('A-4.3', '【DD-86 已修】pool 经 publisher 端口上报，不再直接
   lineOf(pool, 'stores/websocket') === -1)
 check('A-4.4', '【DD-86 已修】state.ts 已删除，发布逻辑回到 stores 层',
   read('src/utils/websocket/state.ts') === null)
-const gwStorage = read('src/utils/gatewayStorage.ts')
+const gwStorage = read('src/utils/storage/gatewayStorage.ts')
 check('A-4.5', '【DD-86 已修】gatewayStorage 经 gatewayContext 读网关名，不再反向依赖 api',
   lineOf(gwStorage, '@/api') === -1)
 
@@ -152,7 +152,7 @@ for (const f of ['c', 'r', 'v']) {
 }
 
 console.log('\n=== S-4 utils/deviceComms.ts 模块级 reactive ===')
-const dc = read('src/utils/deviceComms.ts')
+const dc = read('src/utils/device/deviceComms.ts')
 check('S-4.1', '【DD-84 已修】deviceComms.ts 的模块级 reactive 已显式豁免（不再是无标注盲区）',
   /eslint-disable-next-line no-restricted-syntax[\s\S]{0,300}const STATS = reactive\(new Map/.test(dc || ''),
   `line ${lineOf(dc, 'reactive(new Map')}`)
@@ -164,7 +164,7 @@ console.log('\n=== E-1 组件状态取色绕开唯一真源 ===')
 const hr = read('src/views/ops/health/HealthReport.vue')
 check('E-1.1', '【DD-68 已修】HealthReport.vue 不再自建 componentType 映射',
   !/const componentType = \(v: string\)/.test(hr || ''))
-const hs = read('src/utils/healthStatus.ts')
+const hs = read('src/utils/health/healthStatus.ts')
 check('E-1.2', "healthStatus.ts 登记 error → severity error",
   /error: \{ label: '异常', severity: 'error' \}/.test(hs || ''), `line ${lineOf(hs, "error: { label: '异常'")}`)
 check('E-1.3', "【DD-77 已修】healthStatus.ts 已删除死导出 healthStatusTag，组件标签语义由 healthComponentLabel 承接",
@@ -233,7 +233,7 @@ check('E-7.2', '【DD-74 已修】configHealth.ts 的展示问题改名为 Confi
 
 console.log('\n=== E-8/E-9 术语漂移 ===')
 const ptools = read('src/api/protocolTools/types.ts')
-const upl = read('src/api/uplink.ts')
+const upl = read('src/api/uplink/uplink.ts')
 check('E-8.1', 'useSessions.ts 定义 LoginSession', /export interface LoginSession/.test(sess || ''), `line ${lineOf(sess, 'export interface LoginSession')}`)
 check('E-8.2', 'protocolTools/types.ts 定义 ReplaySession', /export interface ReplaySession/.test(ptools || ''), `line ${lineOf(ptools, 'export interface ReplaySession')}`)
 check('E-8.3', 'api/uplink.ts 定义 PassthroughSession', /export interface PassthroughSession/.test(upl || ''), `line ${lineOf(upl, 'export interface PassthroughSession')}`)
@@ -241,11 +241,11 @@ check('E-8.4', '【DD-75 已修】命名文档登记会话三词口径，README 
   /登录会话.*回放会话.*透传会话/.test(read('docs/architecture/frontend-naming.md') || '') &&
   !/连接会话/.test(read('src/composables/README.md') || ''))
 check('E-9.1', '【DD-75 已修】设备评分与网关健康的 critical 统一为「严重」',
-  /critical: '严重'/.test(read('src/utils/healthVerdict.ts') || '') &&
-  /critical: \{ label: '严重'/.test(read('src/utils/healthStatus.ts') || ''))
+  /critical: '严重'/.test(read('src/utils/health/healthVerdict.ts') || '') &&
+  /critical: \{ label: '严重'/.test(read('src/utils/health/healthStatus.ts') || ''))
 
 console.log('\n=== E-14 源码 UTF-8 残字节（DD-80 已修）===')
-const conc = read('src/utils/concurrency.ts')
+const conc = read('src/utils/config/concurrency.ts')
 check('E-14.1', "【DD-80 已修】concurrency.ts 不再含 U+FFFD 残字节", !(conc || '').includes('\uFFFD'), `残留行 ${lineOf(conc, '\uFFFD')}`)
 check('E-14.2', 'concurrency.ts:61 附近有完整句子「已在飞的任务照常跑完」（修复时的对照句仍在）', /已在飞的任务照常跑完/.test(conc || ''))
 
@@ -295,11 +295,11 @@ check('D-24', '【DOC-F10 已修】README.md 优化方向改为「已完成 + �
   /已完成（截至 2026-11-28）/.test(greadme || '') && /10 个 Hub \/ 72 个页签/.test(greadme || ''))
 
 console.log('\n=== DD-77 死导出已清理 ===')
-check('DD-77.1', 'hasBlockingIssues 已删除', !/hasBlockingIssues/.test(read('src/utils/configValidation.ts') || ''))
-check('DD-77.2', 'healthStatusTag 已删除', !/healthStatusTag/.test(read('src/utils/healthStatus.ts') || ''))
-check('DD-77.3', 'healthRowsFrom 已删除', !/\bhealthRowsFrom\b/.test(read('src/utils/healthStatus.ts') || ''))
+check('DD-77.1', 'hasBlockingIssues 已删除', !/hasBlockingIssues/.test(read('src/composables/config/configValidation.ts') || ''))
+check('DD-77.2', 'healthStatusTag 已删除', !/healthStatusTag/.test(read('src/utils/health/healthStatus.ts') || ''))
+check('DD-77.3', 'healthRowsFrom 已删除', !/\bhealthRowsFrom\b/.test(read('src/utils/health/healthStatus.ts') || ''))
 check('DD-77.4', 'invalidateHealthReport 已删除', !/invalidateHealthReport/.test(read('src/composables/system/useHealthReport.ts') || ''))
-check('DD-77.5', 'getDeviceStat 已删除', !/getDeviceStat\b/.test(read('src/utils/deviceComms.ts') || ''))
+check('DD-77.5', 'getDeviceStat 已删除', !/getDeviceStat\b/.test(read('src/utils/device/deviceComms.ts') || ''))
 check('DD-77.6', '全仓再无这些符号的引用',
   ![...['hasBlockingIssues', 'healthStatusTag', 'healthRowsFrom', 'invalidateHealthReport', 'getDeviceStat']
     ].some((s) => {
@@ -311,9 +311,9 @@ check('DD-77.6', '全仓再无这些符号的引用',
       return hit
     }))
 check('DD-77.7', 'clearDeviceStats 保留（测试夹具，有独立行为用例）',
-  /clearDeviceStats/.test(read('src/utils/deviceComms.ts') || ''))
+  /clearDeviceStats/.test(read('src/utils/device/deviceComms.ts') || ''))
 check('DD-77.8', 'diagHint 保留（生产被 withDiagHint 调用，非死导出）',
-  /diagHint\(message\)/.test(read('src/utils/diagHints.ts') || ''))
+  /diagHint\(message\)/.test(read('src/utils/error/diagHints.ts') || ''))
 
 console.log('\n=== DD-80 / DD-82 结构与字符债已清 ===')
 check('DD-80.1', 'concurrency.ts 不含 U+FFFD 残字节', !/\uFFFD/.test(conc || ''))

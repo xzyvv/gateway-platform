@@ -34,7 +34,7 @@ function newMockChart(dom: HTMLElement): MockChart {
   return c
 }
 
-vi.mock('@/utils/echarts', () => ({
+vi.mock('@/utils/chart/echarts', () => ({
   default: { init: () => mockCharts.at(-1), graphic: { LinearGradient: class {} } },
   initChart: (dom: HTMLElement) => newMockChart(dom),
   disposeChart: vi.fn((c: { dispose: () => void }) => c?.dispose?.()),
@@ -58,10 +58,10 @@ vi.mock('@/composables/data/useHistoryQuery', () => ({
 }))
 
 const mockListDevices = vi.fn()
-vi.mock('@/api/devices', () => ({ listDevices: () => mockListDevices() }))
+vi.mock('@/api/acquisition/devices', () => ({ listDevices: () => mockListDevices() }))
 
 const mockListPoints = vi.fn()
-vi.mock('@/api/points', () => ({ listPoints: (id: string) => mockListPoints(id) }))
+vi.mock('@/api/acquisition/points', () => ({ listPoints: (id: string) => mockListPoints(id) }))
 
 const DEVICES = [{ id: 'd1', name: '仪表1' }]
 const POINTS = [

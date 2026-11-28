@@ -6,7 +6,7 @@ import {
   getInflightCount, onInflightCountChange, abortAllInflight,
   type GatewayEntry, type DiscoveredGateway,
 } from '@/api'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 /**
  * 网关切换 + LAN 扫描 composable

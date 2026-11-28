@@ -28,12 +28,12 @@ vi.mock('element-plus', async () => {
   }
 })
 
-vi.mock('@/utils/clipboard', () => ({ copyText: vi.fn(() => Promise.resolve(true)) }))
+vi.mock('@/utils/ui/clipboard', () => ({ copyText: vi.fn(() => Promise.resolve(true)) }))
 
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 import { useErrorDisplay } from './useErrorDisplay'
-import { markUserNotified } from '@/utils/errorHandler'
+import { markUserNotified } from '@/utils/error/errorHandler'
 
 describe('useErrorDisplay', () => {
   beforeEach(() => {

@@ -21,7 +21,7 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('vue-router', () => ({ useRouter: () => ({ push }) }))
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: vi.fn(),
   postConfig: vi.fn(),
   validateConfigDraft: vi.fn(),
@@ -32,7 +32,7 @@ const push = vi.hoisted(() => vi.fn())
 import ConfigFragmentImport from './ConfigFragmentImport.vue'
 import DataTable from '@/components/DataTable.vue'
 import ImportOutcome from '@/components/ImportOutcome.vue'
-import { getConfig, postConfig, validateConfigDraft } from '@/api/config'
+import { getConfig, postConfig, validateConfigDraft } from '@/api/uplink/config'
 
 const CURRENT = {
   buses: [{ port_name: 'com1', protocol: 'modbus' }],

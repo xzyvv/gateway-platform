@@ -44,13 +44,13 @@
 import { h, onMounted, ref } from 'vue'
 import { ElButton, ElMessage } from 'element-plus'
 import { Delete, Refresh } from '@element-plus/icons-vue'
-import { confirmAction } from '@/utils/confirm'
-import { listPointTrash, purgeAllTrash, purgeTrashPoint, restorePoint } from '@/api/points'
-import type { PointTrashEntry } from '@/api/points'
+import { confirmAction } from '@/utils/ui/confirm'
+import { listPointTrash, purgeAllTrash, purgeTrashPoint, restorePoint } from '@/api/acquisition/points'
+import type { PointTrashEntry } from '@/api/acquisition/points'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
-import { formatDateTime } from '@/utils/datetime'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { formatDateTime } from '@/utils/time/datetime'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const items = ref<PointTrashEntry[]>([])

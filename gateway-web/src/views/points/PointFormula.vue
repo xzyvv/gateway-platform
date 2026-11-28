@@ -83,7 +83,7 @@
 import { ref, reactive, computed, onMounted, h } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElButton, ElMessage, ElTag } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import {Plus, Refresh} from '@element-plus/icons-vue'
@@ -94,11 +94,11 @@ import {
   deleteVirtualPoint,
   recalcVirtualPointView,
   type VirtualPointViewV,
-} from '@/api/pointsOps'
-import { validateFormula, extractPointRefs } from '@/utils/formulaEngine'
+} from '@/api/acquisition/pointsOps'
+import { validateFormula, extractPointRefs } from '@/utils/device/formulaEngine'
 import { unitChoices } from '@/composables/devices/useUnits'
-import { virtualPointEvalUi } from '@/utils/virtualPointStatus'
-import { listDevices } from '@/api/devices'
+import { virtualPointEvalUi } from '@/utils/health/virtualPointStatus'
+import { listDevices } from '@/api/acquisition/devices'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
 

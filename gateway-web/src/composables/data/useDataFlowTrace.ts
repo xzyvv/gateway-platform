@@ -1,14 +1,14 @@
 import { ref, computed, onMounted, type Ref as VueRef } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listDevices } from '@/api/devices'
+import { listDevices } from '@/api/acquisition/devices'
 import type { DeviceConfig, PointConfig } from '@/api/types'
-import { listPoints } from '@/api/points'
+import { listPoints } from '@/api/acquisition/points'
 import { useReadPointNow } from '@/composables/data/useReadPointNow'
-import { type PointQuality } from '@/api/dataQuality'
+import { type PointQuality } from '@/api/acquisition/dataQuality'
 import { fetchPointQualities } from '@/composables/data/usePointQuality'
-import { getUplinkConfig, testUplink } from '@/api/uplink'
-import { extractErrorMessage } from '@/utils/errorHandler'
-import { copyText } from '@/utils/clipboard'
+import { getUplinkConfig, testUplink } from '@/api/uplink/uplink'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
+import { copyText } from '@/utils/ui/clipboard'
 
 /**
  * 链路追踪可选点位：配置点位（元数据全）与运行时点位（模板展开，仅 id/name/device_id）

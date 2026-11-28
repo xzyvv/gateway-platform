@@ -26,7 +26,7 @@ vi.mock('@/utils/websocket', () => ({
 /** 图表实例桩：setOption 调用参数可断言（BUG-K 回归护栏） */
 const chartMock = vi.hoisted(() => ({ setOption: vi.fn() }))
 
-vi.mock('@/utils/echarts', () => ({
+vi.mock('@/utils/chart/echarts', () => ({
   // updateChartStructure 用 echarts.graphic.LinearGradient 构造面积填充，
   // 默认导出必须是带 graphic 的对象（`{}` 会在渲染路径上直接抛出 TypeError）
   default: { graphic: { LinearGradient: class { constructor(..._args: unknown[]) { /* 占位 */ } } } },
@@ -51,7 +51,7 @@ vi.mock('element-plus', async () => {
 
 import { useRealtime } from './useRealtime'
 // compactAxis 已随 W3b-13 拆到 utils/realtimeFormat（纯函数，与 WS/图表无关）
-import { compactAxis } from '@/utils/realtimeFormat'
+import { compactAxis } from '@/utils/time/realtimeFormat'
 import type { DataPoint } from '@/api/types'
 
 /**

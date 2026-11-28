@@ -45,8 +45,8 @@ import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 const { showToast } = useErrorDisplay()
 import { ElInputNumber, ElMessage, ElNotification, ElOption, ElSelect } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { getConfig, postConfig } from '@/api/config'
-import { batchEditPoints } from '@/api/points'
+import { getConfig, postConfig } from '@/api/uplink/config'
+import { batchEditPoints } from '@/api/acquisition/points'
 import type { DeviceConfig, BusConfig, PointConfig } from '@/api/types'
 import { BYTE_ORDERS } from '@/composables/devices/decodeParams'
 

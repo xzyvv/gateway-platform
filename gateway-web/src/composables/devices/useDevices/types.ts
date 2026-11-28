@@ -9,7 +9,7 @@
 import type { Ref } from 'vue'
 import type { FormInstance } from 'element-plus'
 import type { useRoute } from 'vue-router'
-import type { DeviceTemplate } from '@/api/templates'
+import type { DeviceTemplate } from '@/api/acquisition/templates'
 import type { BusConfig, DeviceConfig } from '@/api/types'
 import type { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 

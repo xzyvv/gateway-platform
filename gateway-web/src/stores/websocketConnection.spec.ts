@@ -21,8 +21,8 @@ import { useWebsocketStore } from './websocket'
 // DD-86：endpoint 已改为直接依赖 utils 层，不再经 `@/api` 间接取值
 vi.mock('@/utils/platform', () => ({ isTauri: () => true }))
 // 模拟桌面端未配置网关地址：buildUrl() 直接 throw
-vi.mock('@/utils/gatewayContext', () => ({ getGatewayBaseUrlSafe: () => '' }))
-vi.mock('@/utils/secureStorage', () => ({ getToken: async () => '' }))
+vi.mock('@/utils/storage/gatewayContext', () => ({ getGatewayBaseUrlSafe: () => '' }))
+vi.mock('@/utils/storage/secureStorage', () => ({ getToken: async () => '' }))
 
 describe('S12: computeReconnectDelay', () => {
   it('attempt=1 with rng=0.7 returns baseDelay * 1 * 0.7 = 2100 (base=3000)', () => {

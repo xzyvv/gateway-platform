@@ -110,7 +110,7 @@ ProcessingPipeline (mpsc 通道，背压)
 **虚拟点位公式**（`vformula.rs`）是另一套自研递归下降引擎（多变量、可调函数、可引用其它点位），
 与 `engine/formula.rs` 的 evalexpr（点位级工程量换算）刻意不合并，避免把点位换算的白名单边界撑破。
 它在浏览器端有一份**等价实现**
-（`gateway-web/src/utils/formulaEngine.ts`）用于表单预演与语法校验，
+（`gateway-web/src/utils/device/formulaEngine.ts`）用于表单预演与语法校验，
 两侧语义由**同一份用例契约**钉住：[shared/formula_cases.json](../../shared/formula_cases.json)。
 Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同一个文件——
 改语义只需改契约，只改单侧会在另一侧立刻转红。

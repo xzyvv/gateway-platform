@@ -23,8 +23,8 @@ import {
   diskLevelMeta,
   overallStatusMeta,
   problemLevelMeta,
-} from '@/utils/healthStatus'
-import { healthStatusInfo } from '@/utils/healthStatus'
+} from '@/utils/health/healthStatus'
+import { healthStatusInfo } from '@/utils/health/healthStatus'
 import HealthConclusionBar from '@/views/ops/health/HealthConclusionBar.vue'
 
 /* -------------------------------------------------------------------------- */

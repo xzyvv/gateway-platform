@@ -26,8 +26,8 @@ import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { toTaskTerminal, type TaskTerminal } from '@/composables/core/useTaskProgress'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
-import { confirmDelete } from '@/utils/confirm'
-import { statusTagType as baseStatusTagType, type TagType } from '@/utils/statusType'
+import { confirmDelete } from '@/utils/ui/confirm'
+import { statusTagType as baseStatusTagType, type TagType } from '@/utils/ui/statusType'
 
 /** 预置会话不可删（后端也拒绝，前端灰色 + tooltip）。
  *  DD-27：后端 gateway-api/.../packet_replay/sessions.rs 只内置 s1/s2；

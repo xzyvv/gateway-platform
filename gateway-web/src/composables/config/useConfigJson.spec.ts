@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { nextTick, reactive, ref } from 'vue'
 import { useConfigJson } from './useConfigJson'
-import { createSeedConfig, unknownTopKeys, KNOWN_GATEWAY_TOP_KEYS, type ConfigForm } from '@/utils/configDefaults'
+import { createSeedConfig, unknownTopKeys, KNOWN_GATEWAY_TOP_KEYS, type ConfigForm } from '@/utils/config/configDefaults'
 
 /**
  * 「原始 JSON」标签页的契约。

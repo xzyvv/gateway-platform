@@ -20,8 +20,8 @@
 
 import { ref, type Ref } from 'vue'
 import { isTauri, scanGatewayLan } from '@/api'
-import { extractErrorMessage } from '@/utils/errorHandler'
-import { runConcurrent } from '@/utils/concurrency'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
+import { runConcurrent } from '@/utils/config/concurrency'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 
 export interface DiscoveredGateway {

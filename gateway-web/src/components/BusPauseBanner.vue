@@ -43,8 +43,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listPausedBuses, pauseBusCollect, resumeBusCollect } from '@/api/buses'
-import { extractErrorMessage } from '@/utils/errorHandler'
+import { listPausedBuses, pauseBusCollect, resumeBusCollect } from '@/api/acquisition/buses'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
 
 const props = defineProps<{
   /** 目标总线名（即 port_name） */

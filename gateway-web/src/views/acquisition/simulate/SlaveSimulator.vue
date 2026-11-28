@@ -33,7 +33,7 @@ import { usePolling } from '@/composables/core/usePolling'
 import { ElButton, ElMessage, ElMessageBox } from 'element-plus'
 import {VideoPlay} from '@element-plus/icons-vue'
 import { getRegisters, updateRegister, startSimulate, stopSimulate, getSimulatorStatus, type SimRegister, type SimulatorStatus } from '@/api/protocolTools'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn } from '@/composables/core/commonColumns'
 

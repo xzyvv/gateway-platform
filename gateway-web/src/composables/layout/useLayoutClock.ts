@@ -3,8 +3,8 @@ import { useThemeStore } from '@/stores/theme'
 import { useGatewayStore } from '@/stores/gateway'
 import { useClock } from '@/composables/system/useClock'
 import { usePolling } from '@/composables/core/usePolling'
-import { healthComponentLabel, healthSeverity, healthStatusLabel, healthSnapshotDegraded } from '@/utils/healthStatus'
-import { globalGet, scopedGet, scopedKey } from '@/utils/gatewayStorage'
+import { healthComponentLabel, healthSeverity, healthStatusLabel, healthSnapshotDegraded } from '@/utils/health/healthStatus'
+import { globalGet, scopedGet, scopedKey } from '@/utils/storage/gatewayStorage'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**

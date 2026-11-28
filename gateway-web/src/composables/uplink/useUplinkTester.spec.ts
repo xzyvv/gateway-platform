@@ -17,8 +17,8 @@ vi.mock('element-plus', async () => {
   const actual = await vi.importActual<typeof import('element-plus')>('element-plus')
   return { ...actual, ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() } }
 })
-vi.mock('@/utils/confirm', () => ({ confirmDelete: (...a: unknown[]) => m.confirmDelete(...a) }))
-vi.mock('@/api/uplink', () => {
+vi.mock('@/utils/ui/confirm', () => ({ confirmDelete: (...a: unknown[]) => m.confirmDelete(...a) }))
+vi.mock('@/api/uplink/uplink', () => {
   const BUILTIN_TEMPLATES = [
     { id: 'default', name: '默认', description: '', template: '{"a":${value}}' },
     { id: 'tb', name: 'ThingsBoard', description: '', template: '{"ts":${timestamp_ms}}' },

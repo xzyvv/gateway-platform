@@ -50,12 +50,12 @@
 import { ref, computed, onMounted, h } from 'vue'
 import { ElMessage, ElTag, type FormInstance } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
-import { listWritablePoints, listCommands, type ControlCommand, type WritablePoint } from '@/api/remoteControl'
+import { listWritablePoints, listCommands, type ControlCommand, type WritablePoint } from '@/api/acquisition/remoteControl'
 import { confirmPointWrite, usePointWrite } from '@/composables/data/usePointWrite'
-import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/formFieldError'
+import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/error/formFieldError'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { formatTimeOfDay } from '@/utils/datetime'
-import { composeFailure } from '@/utils/errorHandler'
+import { formatTimeOfDay } from '@/utils/time/datetime'
+import { composeFailure } from '@/utils/error/errorHandler'
 
 const STATUS_LABEL: Record<string, string> = {
   success: '成功',

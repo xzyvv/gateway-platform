@@ -7,21 +7,21 @@
  */
 import { computed, h, onMounted, ref, type Ref } from 'vue'
 import { ElButton, ElMessage, ElTag, type FormInstance } from 'element-plus'
-import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/formFieldError'
+import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/error/formFieldError'
 import {
   startScan, getScanResult, listScanResults, deleteScanResult, generatePointSuggestions,
   type ScanResult, type RegType,
 } from '@/api/protocolTools'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import { useProtocolCaps } from '@/composables/acquisition/useProtocolCaps'
-import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
-import { copyText } from '@/utils/clipboard'
-import { withDiagHint } from '@/utils/diagHints'
+import { csvFilename, downloadTableCsv } from '@/utils/csv/exportCsv'
+import { copyText } from '@/utils/ui/clipboard'
+import { withDiagHint } from '@/utils/error/diagHints'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { usePolledTask } from '@/composables/core/useTaskProgress'
 import type { ColumnDef } from '@/types/dataTable'
 import { actionColumn, timeColumn } from '@/composables/core/commonColumns'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 
 /** 点位建议行 */
 export type SuggestionRow = { id: string; name: string; address: string; address_num: number }

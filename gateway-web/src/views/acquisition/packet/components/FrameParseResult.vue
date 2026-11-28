@@ -36,7 +36,7 @@
  * 与离线逐字段表格对不上，现场核对同一帧要在两处来回看。
  */
 import SectionHeader from '@/components/SectionHeader.vue'
-import { copyText } from '@/utils/clipboard'
+import { copyText } from '@/utils/ui/clipboard'
 import { parseResultToText, type ParseResult } from '@/utils/frameParser'
 
 const props = withDefaults(defineProps<{

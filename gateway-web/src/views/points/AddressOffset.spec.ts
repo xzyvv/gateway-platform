@@ -21,11 +21,11 @@ vi.mock('element-plus', async () => {
     ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
   }
 })
-vi.mock('@/api/pointsOps', () => ({
+vi.mock('@/api/acquisition/pointsOps', () => ({
   listOffsetPointsView: (...a: unknown[]) => listMock(...a),
   applyOffsetView: (...a: unknown[]) => applyMock(...a),
 }))
-vi.mock('@/utils/confirm', () => ({ confirmAction: (...a: unknown[]) => confirmMock(...a) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmAction: (...a: unknown[]) => confirmMock(...a) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 
 const listMock = vi.hoisted(() => vi.fn())
@@ -34,7 +34,7 @@ const confirmMock = vi.hoisted(() => vi.fn())
 const showToast = vi.hoisted(() => vi.fn())
 
 import AddressOffset from './AddressOffset.vue'
-import type { OffsetPointViewV } from '@/api/pointsOps'
+import type { OffsetPointViewV } from '@/api/acquisition/pointsOps'
 
 const POINTS: OffsetPointViewV[] = [
   { id: 'p1', name: '温度', oldAddr: 40001, newAddr: 40001, type: 'int16', selected: false },

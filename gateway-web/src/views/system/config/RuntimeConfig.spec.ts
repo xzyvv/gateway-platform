@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { ref, reactive, computed } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import Config from './RuntimeConfig.vue'
-import { createSeedConfig } from '@/utils/configDefaults'
+import { createSeedConfig } from '@/utils/config/configDefaults'
 import type { BusConfig } from '@/api/types'
 
 /** 最小合法总线配置：满足 BusConfig 全部必填字段（测试仅关心 port_name） */

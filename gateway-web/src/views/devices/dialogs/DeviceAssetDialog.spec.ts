@@ -17,7 +17,7 @@ const {
   mockSuccess: vi.fn(),
 }))
 
-vi.mock('@/api/deviceOps', () => ({
+vi.mock('@/api/acquisition/deviceOps', () => ({
   getAssetView: (...args: unknown[]) => mockGetAssetView(...args),
   upsertAssetView: (...args: unknown[]) => mockUpsertAssetView(...args),
   ALL_TAGS: ['重要', '外协'],

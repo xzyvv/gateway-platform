@@ -63,16 +63,16 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { ElButton, ElMessage } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import { actionColumn, timeColumn } from '@/composables/core/commonColumns'
-import { confirmAction } from '@/utils/confirm'
-import { extractErrorMessage, failureMessage } from '@/utils/errorHandler'
+import { confirmAction } from '@/utils/ui/confirm'
+import { extractErrorMessage, failureMessage } from '@/utils/error/errorHandler'
 import {
   listDeadLetters,
   purgeDeadLetters,
   replayDeadLetter,
   type DeadLetterItem,
-} from '@/api/deadLetter'
+} from '@/api/acquisition/deadLetter'
 
 const PAGE_SIZE = 50
 

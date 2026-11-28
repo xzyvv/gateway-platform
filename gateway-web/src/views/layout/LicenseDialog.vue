@@ -116,11 +116,11 @@
  */
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchLicense, importLicense, type LicenseSnapshot } from '@/api/license'
+import { fetchLicense, importLicense, type LicenseSnapshot } from '@/api/system/license'
 import { useTierStore, TIER_LABEL } from '../../stores/tier'
-import { formatDate } from '@/utils/datetime'
+import { formatDate } from '@/utils/time/datetime'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { copyText } from '@/utils/clipboard'
+import { copyText } from '@/utils/ui/clipboard'
 
 defineProps<{ modelValue: boolean }>()
 defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()

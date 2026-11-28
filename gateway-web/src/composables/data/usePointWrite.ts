@@ -11,15 +11,15 @@
  *
  * 权限与审计不在前端：所有写入都经后端统一入口，单写走 writable 白名单 + 审计。
  */
-import { confirmAction } from '@/utils/confirm'
-import { extractErrorMessage } from '@/utils/errorHandler'
-import { ERR } from '@/utils/errorCodes'
+import { confirmAction } from '@/utils/ui/confirm'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
+import { ERR } from '@/utils/error/errorCodes'
 import {
   writePoints,
   type BatchWriteResultItem,
   type PointWriteEntry,
   type WriteOptions,
-} from '@/api/points'
+} from '@/api/acquisition/points'
 
 /** 批量写结果；始终与入参等长（传输失败时逐条补 null） */
 export interface PointWriteOutcome {

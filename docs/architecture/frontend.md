@@ -18,7 +18,7 @@
 | **Pinia** | ^4.0.3 | 状态管理，如 `stores/auth.ts` 管理登录 token 与登录态、`stores/sessions.ts` 管理登录会话列表 |
 | **Vue Router** | ^5.3.1 | 路由，`router/index.ts` 定义页面路由与登录鉴权守卫 |
 | **Axios** | ^1.20.0 | HTTP 客户端，传输层在 `api/http/`（`instance.ts` / `request` / `responseInterceptor.ts`：自动 Bearer token、统一解包 `{code,message,data}`、401 跳登录、请求日志）；`api/index.ts` 只做业务模块聚合 |
-| **ECharts** | ^6.1.0 | 图表渲染，`utils/echarts.ts` 按需引入（LineChart/CanvasRenderer），用于磁盘健康、指标大盘等 |
+| **ECharts** | ^6.1.0 | 图表渲染，`utils/chart/echarts.ts` 按需引入（LineChart/CanvasRenderer），用于磁盘健康、指标大盘等 |
 
 ### 3.2 工程化
 
@@ -35,7 +35,11 @@
 
 ```
 gateway-web/src/
-├── api/                # REST 接口封装（40+ 模块：auth/devices/points/uplink/diagnostics...）
+├── api/                # REST 接口封装（40+ 模块，按业务域分组）
+│   ├── acquisition/    # 采集域：devices/points/protocols/buses/topology...
+│   ├── runtime/        # 运行环境：env/gatewayConfig/inflight/token
+│   ├── system/         # 系统域：auth/apiKeys/auditLog/certificates/license/network/ota...
+│   ├── uplink/         # 上联域：uplink/webhook/config
 │   ├── generated/      # ts-rs 从 Rust struct 自动生成的 TS 类型（勿手改，cargo test export_ts_types 重新生成）
 │   ├── http/           # 传输层：instance/request/响应拦截器/日志脱敏/登出门（barrel 出口 index.ts）
 │   └── protocolTools/  # 协议工具按业务域分组的接口模块
@@ -55,8 +59,17 @@ gateway-web/src/
 │                       #   页面内数据由 composables 持有，见 composables/README.md 边界约定）
 ├── test/               # 测试 setup（vitest，测试文件 .spec.ts 与源码 co-locate）
 ├── types/              # 全局类型（角色、RouteMeta 增强）
-├── utils/              # 工具函数（echarts/formulaEngine/frameParser/exportCsv/secureStorage/
-│                       #   addrCalculator/configFragment/batchImportCsv...）
+├── utils/              # 工具函数（顶层留 12 个通用模块，其余按主题分 10 个子目录）
+│   ├── chart/          # echarts 封装/主题/图表样式/降采样
+│   ├── health/         # 健康状态/判级/北向健康/诊断报告
+│   ├── csv/            # 导入导出 CSV/ZIP
+│   ├── hex/            # 字节编解码/十六进制帧与转储
+│   ├── error/          # 错误码/全局错误处理/表单字段错误/诊断提示
+│   ├── time/           # 时间格式化（通用/实时/日期）
+│   ├── storage/        # 网关上下文/本地存储/安全存储/脏标记
+│   ├── ui/             # 确认框/剪贴板/状态取色/质量标签/表格高亮/行键/导航/图标
+│   ├── config/         # 配置默认值/片段/退避预设/点位默认值/容量规划/并发
+│   ├── device/         # 设备地址换算/复制/通信状态/证据/点位字段/公式引擎
 │   └── websocket/      # WebSocket 客户端（连接/心跳/重连/分发/订阅/连接池），index.ts 为出口
 ├── views/              # 业务页面（140+ .vue：页面 + 同域子组件，一级目录 = 业务域：
 │                       #   overview/devices/points/acquisition/data/uplink/ops/system/auth 等）
@@ -79,7 +92,7 @@ gateway-web/src/
 前端条目写 `gateway-web/src/...`，格式同为 `路径<TAB>行数上限`），
 账本里的条目带**单文件硬上限**，超出即 lint error——存量不能悄悄长回去；
 拆到 800 行以内后请把对应行从账本删掉。测试文件（`*.spec.ts` / `*.test.ts`）与
-自动生成物（`src/api/generated/`、`src/utils/ep-icons-compact.ts`）不纳入。
+自动生成物（`src/api/generated/`、`src/utils/ui/ep-icons-compact.ts`）不纳入。
 仓库级门禁 `scripts/deploy_lint.ps1` 的 C24 段现在**同时扫描前端**
 （`gateway-web/src`）与三个后端 crate（`gateway-core` / `gateway-api` / `gatewayd`），
 同一份账本、同一套规则：未登记的新文件 > 800 行、或已登记文件超过其上限，都直接判 FAIL。
@@ -106,7 +119,7 @@ gateway-web/src/
 
 ### 3.6 运行形态：桌面端 vs 浏览器直连
 
-`api/env.ts::isTauri()` 区分两种运行形态，决定登录页字段与网络地址来源：
+`api/runtime/env.ts::isTauri()` 区分两种运行形态，决定登录页字段与网络地址来源：
 
 | 形态 | 登录页 | API / WS 地址来源 |
 |---|---|---|

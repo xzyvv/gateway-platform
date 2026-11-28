@@ -3,12 +3,12 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { ElDrawer, ElSelect } from 'element-plus'
 
-vi.mock('@/api/config', () => ({
+vi.mock('@/api/uplink/config', () => ({
   getConfig: vi.fn(),
 }))
 
 import ModbusAddressMap from './ModbusAddressMap.vue'
-import { getConfig } from '@/api/config'
+import { getConfig } from '@/api/uplink/config'
 import type { PointConfig } from '@/api/types'
 
 /**

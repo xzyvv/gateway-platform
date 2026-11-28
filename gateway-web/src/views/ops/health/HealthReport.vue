@@ -95,11 +95,11 @@
 import { computed, h, onMounted } from 'vue'
 import { ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import type { HealthBusRow } from '@/api/status'
+import type { HealthBusRow } from '@/api/system/status'
 import { useHealthReport } from '@/composables/system/useHealthReport'
-import { busSuccessTag, QUEUE_BACKLOG_WARN } from '@/utils/healthVerdict'
-import { diskLevelMeta, healthComponentLabel, healthStatusInfo } from '@/utils/healthStatus'
-import { formatTimeOfDay } from '@/utils/datetime'
+import { busSuccessTag, QUEUE_BACKLOG_WARN } from '@/utils/health/healthVerdict'
+import { diskLevelMeta, healthComponentLabel, healthStatusInfo } from '@/utils/health/healthStatus'
+import { formatTimeOfDay } from '@/utils/time/datetime'
 import HealthProblemList from './HealthProblemList.vue'
 
 // 与运行总览 / 自诊断 / 网关信息共享同一份模块级快照；手动刷新强制绕过 10s TTL

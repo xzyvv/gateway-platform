@@ -10,7 +10,7 @@
 
 import { reactive } from 'vue'
 
-import { listProtocolCapabilities, type ProtocolCapabilityEntry } from '@/api/protocols'
+import { listProtocolCapabilities, type ProtocolCapabilityEntry } from '@/api/acquisition/protocols'
 import { applyNumericDecodeProtocols } from './decodeParams'
 import { loadPointFields } from './pointFields'
 

@@ -8,13 +8,13 @@ const { getOtaStatusMock, otaUploadMock, otaRollbackMock, confirmMock } = vi.hoi
   confirmMock: vi.fn(),
 }))
 
-vi.mock('@/api/ota', () => ({
+vi.mock('@/api/system/ota', () => ({
   getOtaStatus: getOtaStatusMock,
   otaUpload: otaUploadMock,
   otaRollback: otaRollbackMock,
 }))
 
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmAction: confirmMock,
 }))
 

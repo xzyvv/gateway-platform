@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import { ref, computed } from 'vue'
 import { buildHealthSignals, useHealthSignals } from './useHealthSignals'
-import type { HealthProblem, HealthReport } from '@/api/status'
+import type { HealthProblem, HealthReport } from '@/api/system/status'
 
 function report(patch: Partial<HealthReport> = {}): HealthReport {
   return {

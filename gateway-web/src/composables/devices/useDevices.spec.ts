@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/api/devices', () => ({
+vi.mock('@/api/acquisition/devices', () => ({
   listDevices: vi.fn().mockResolvedValue([]),
   createDevice: vi.fn(),
   updateDevice: vi.fn(),
@@ -10,7 +10,7 @@ vi.mock('@/api/protocolTools/slaveScan', () => ({
   scanBus: vi.fn().mockResolvedValue([]),
   respondedSlaves: (rows: Array<{ responded: boolean }>) => (rows ?? []).filter((r) => r.responded),
 }))
-vi.mock('@/api/points', () => ({
+vi.mock('@/api/acquisition/points', () => ({
   listPoints: vi.fn().mockResolvedValue([]),
   readPointNow: vi.fn(),
 }))
@@ -22,7 +22,7 @@ vi.mock('element-plus', async () => {
     ElNotification: vi.fn(),
   }
 })
-vi.mock('@/utils/confirm', () => ({
+vi.mock('@/utils/ui/confirm', () => ({
   confirmDelete: vi.fn(async () => true),
 }))
 vi.mock('vue-router', () => ({
@@ -31,9 +31,9 @@ vi.mock('vue-router', () => ({
 
 import { useDevices } from './useDevices'
 import type { DeviceConfig } from '@/api/types'
-import { listDevices, createDevice, deleteDevice, updateDevice } from '@/api/devices'
+import { listDevices, createDevice, deleteDevice, updateDevice } from '@/api/acquisition/devices'
 import { ElMessage, ElNotification } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 
 describe('useDevices', () => {
   it('初始状态：devices=[], loading=false, 各 flag=false', () => {

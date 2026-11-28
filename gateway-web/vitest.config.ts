@@ -23,7 +23,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
-      '@element-plus/icons-vue': fileURLToPath(new URL('./src/utils/ep-icons-compact.ts', import.meta.url)),
+      '@element-plus/icons-vue': fileURLToPath(new URL('./src/utils/ui/ep-icons-compact.ts', import.meta.url)),
     },
   },
   plugins: [

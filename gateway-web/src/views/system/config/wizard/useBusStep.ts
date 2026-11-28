@@ -11,11 +11,11 @@
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { getConfig, postConfig } from '@/api/config'
+import { getConfig, postConfig } from '@/api/uplink/config'
 import { protocolDefaultTimeoutMs } from '@/composables/devices/protocolMeta'
 import type { BusConfig } from '@/api/types'
 import type { NewBusForm } from './types'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 export function useBusStep() {
   const { showToast } = useErrorDisplay()

@@ -6,7 +6,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick, reactive } from 'vue'
 import { ElSwitch } from 'element-plus'
 import WebConfigTab from './WebConfigTab.vue'
-import { createSeedConfig } from '@/utils/configDefaults'
+import { createSeedConfig } from '@/utils/config/configDefaults'
 import type { WebConfig } from '@/api/types'
 
 function mountTab() {

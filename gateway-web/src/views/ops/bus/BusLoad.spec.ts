@@ -21,7 +21,7 @@ vi.mock('@/api/diagnostics/view', () => ({
 }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 vi.mock('@/composables/core/usePolling', () => ({ usePolling: () => ({ start: startPoll }) }))
-vi.mock('@/utils/echarts', () => ({
+vi.mock('@/utils/chart/echarts', () => ({
   default: {},
   initChart: (...a: unknown[]) => initChart(...a),
   disposeChart: (...a: unknown[]) => disposeChart(...a),

@@ -36,8 +36,8 @@ import { defineAsyncComponent, computed, onMounted, ref } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
 import HubShell from '@/views/layout/HubShell.vue'
 import type { HubTab } from '@/views/layout/HubShell.vue'
-import { getIoStatus } from '@/api/devices'
-import { getCellularStatus } from '@/api/network'
+import { getIoStatus } from '@/api/acquisition/devices'
+import { getCellularStatus } from '@/api/system/network'
 
 const SystemOverview = defineAsyncComponent({ loader: () => import('./overview/SystemOverview.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const ApiKeys = defineAsyncComponent({ loader: () => import('./access/ApiKeys.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

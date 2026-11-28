@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent, h, type VNodeChild } from 'vue'
-import type { DeviceEvidence } from '@/utils/deviceEvidence'
+import type { DeviceEvidence } from '@/utils/device/deviceEvidence'
 import { createDeviceColumns, type DeviceColumnContext, type DeviceRow } from './deviceListColumns'
 
 /**

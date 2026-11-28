@@ -50,7 +50,7 @@
 import { ref, watch } from 'vue'
 import { Check } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { configDiff } from '@/api/config'
+import { configDiff } from '@/api/uplink/config'
 import type { GatewayConfig } from '@/api/types'
 import { fieldLabel } from '@/composables/config/useConfigVersions'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'

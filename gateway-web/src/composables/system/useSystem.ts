@@ -1,24 +1,24 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
-import { confirmAction } from '@/utils/confirm'
+import { confirmAction } from '@/utils/ui/confirm'
 import { useClock } from '@/composables/system/useClock'
 import { usePolling } from '@/composables/core/usePolling'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
-import { getStatus, getVersion, getMetrics, parsePrometheusText } from '@/api/status'
-import { getNtpStatus, ntpSync, type NtpStatus } from '@/api/network'
+import { getStatus, getVersion, getMetrics, parsePrometheusText } from '@/api/system/status'
+import { getNtpStatus, ntpSync, type NtpStatus } from '@/api/system/network'
 import type { VersionInfo, RunStatus } from '@/api/types'
-import { getConfig } from '@/api/config'
+import { getConfig } from '@/api/uplink/config'
 import { useWebhook } from '@/composables/uplink/useWebhook'
-import { listAuditLogs, type AuditLogEntry } from '@/api/auditLog'
+import { listAuditLogs, type AuditLogEntry } from '@/api/system/auditLog'
 import { useSessionsStore } from '@/stores/sessions'
 import { useDiagnosticExport } from './useDiagnosticExport'
 import { useHealthReport } from './useHealthReport'
-import { healthRowsFromComponents } from '@/utils/healthStatus'
+import { healthRowsFromComponents } from '@/utils/health/healthStatus'
 import { buildBackup, downloadBackup, parseBackupFile, type SystemBackup } from '@/utils/systemBackup'
-import { extractErrorMessage } from '@/utils/errorHandler'
-import { formatDateTime } from '@/utils/datetime'
-import { statusTagType, type TagType } from '@/utils/statusType'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
+import { formatDateTime } from '@/utils/time/datetime'
+import { statusTagType, type TagType } from '@/utils/ui/statusType'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 /**
@@ -236,7 +236,7 @@ export function useSystem() {
       title: '还原备份',
     }))) return
     try {
-      const { postConfig } = await import('@/api/config')
+      const { postConfig } = await import('@/api/uplink/config')
       await postConfig(backup.config)
       ElMessage.success('还原成功，配置已更新')
       lastBackup.value = backup

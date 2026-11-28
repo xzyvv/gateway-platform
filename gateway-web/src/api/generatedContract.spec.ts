@@ -18,11 +18,11 @@ import type { TopologyData as TopologyDataRaw } from './generated/TopologyData'
 import type { ControlCommand as ControlCommandRaw } from './generated/ControlCommand'
 import type { HealEvent as HealEventRaw } from './generated/HealEvent'
 import type { CertificateInfo } from './generated/CertificateInfo'
-import type { PointQuality, PointBackoff } from './dataQuality'
-import type { TopologyData } from './topology'
-import type { ControlCommand } from './remoteControl'
-import type { HealEvent } from './watchdog'
-import type { Certificate } from './certificates'
+import type { PointQuality, PointBackoff } from './acquisition/dataQuality'
+import type { TopologyData } from './acquisition/topology'
+import type { ControlCommand } from './acquisition/remoteControl'
+import type { HealEvent } from './system/watchdog'
+import type { Certificate } from './system/certificates'
 
 // 编译期断言：把「视图可赋给契约形状（剔除被覆盖字段后）」写进类型系统。
 // 若视图遗漏或改错字段名，这行会在 type-check 报错。

@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
-import { scopedSet } from '@/utils/gatewayStorage'
+import { scopedSet } from '@/utils/storage/gatewayStorage'
 
 /**
  * 模拟后端 `GET /api/protocol-tools/packet-editor/presets` 的返回。

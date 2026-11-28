@@ -37,13 +37,13 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ query: {}, params: {} }),
 }))
 
-vi.mock('@/api/deadLetter', () => ({
+vi.mock('@/api/acquisition/deadLetter', () => ({
   listDeadLetters: (o: unknown) => m.listDeadLetters(o),
   replayDeadLetter: (id: number) => m.replayDeadLetter(id),
   purgeDeadLetters: (olderThanMs?: number) => m.purgeDeadLetters(olderThanMs),
 }))
 
-vi.mock('@/utils/confirm', () => ({ confirmAction: (o: unknown) => m.confirmAction(o) }))
+vi.mock('@/utils/ui/confirm', () => ({ confirmAction: (o: unknown) => m.confirmAction(o) }))
 
 vi.mock('@/composables/system/useSystem', async () => {
   const { ref, reactive, computed } = await import('vue')

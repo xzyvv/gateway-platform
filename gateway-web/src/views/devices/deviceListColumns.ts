@@ -14,10 +14,10 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn, protocolColumn, addressColumn } from '@/composables/core/commonColumns'
 import InlineEditCell from '@/components/InlineEditCell.vue'
 import FreshnessBadge from '@/components/FreshnessBadge.vue'
-import { formatDateTime } from '@/utils/datetime'
+import { formatDateTime } from '@/utils/time/datetime'
 import type { DeviceConfig } from '@/api/types'
-import type { DeviceEvidence } from '@/utils/deviceEvidence'
-import type { TagType } from '@/utils/statusType'
+import type { DeviceEvidence } from '@/utils/device/deviceEvidence'
+import type { TagType } from '@/utils/ui/statusType'
 
 /** 设备行：DeviceConfig 之外，列表接口可能带分组/标签等扩展字段；
  *  last_good_ts 由前端从退避接口聚合后注入，供「最后成功采集」列展示与排序。 */

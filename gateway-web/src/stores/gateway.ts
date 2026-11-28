@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getConfig } from '@/api/config'
-import { getStatus, getVersion, healthReady } from '@/api/status'
+import { getConfig } from '@/api/uplink/config'
+import { getStatus, getVersion, healthReady } from '@/api/system/status'
 import type { GatewayConfig, RunStatus, VersionInfo, HealthReady } from '@/api/types'
 import { useNotificationsStore } from './notifications'
-import { extractErrorMessage } from '../utils/errorHandler'
+import { extractErrorMessage } from '../utils/error/errorHandler'
 
 /**
  * 网关共享状态 Store

@@ -9,7 +9,7 @@ import DataCompression from './DataCompression.vue'
  */
 const mockCharts: { setOption: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }[] = []
 
-vi.mock('@/utils/echarts-extra', () => ({
+vi.mock('@/utils/chart/echarts-extra', () => ({
   default: {},
   initChart: () => {
     const c = { setOption: vi.fn(), dispose: vi.fn() }
@@ -20,15 +20,15 @@ vi.mock('@/utils/echarts-extra', () => ({
 }))
 
 const mockGetConfig = vi.fn()
-vi.mock('@/api/config', () => ({ getConfig: () => mockGetConfig() }))
+vi.mock('@/api/uplink/config', () => ({ getConfig: () => mockGetConfig() }))
 
 const mockLoadStats = vi.fn()
 vi.mock('@/composables/data/useStatsReport', () => ({
   useStatsReport: () => ({ load: () => mockLoadStats() }),
 }))
 
-vi.mock('@/api/points', () => ({ batchEditPoints: vi.fn() }))
-vi.mock('@/utils/gatewayStorage', () => ({ scopedGet: () => '', scopedSet: vi.fn() }))
+vi.mock('@/api/acquisition/points', () => ({ batchEditPoints: vi.fn() }))
+vi.mock('@/utils/storage/gatewayStorage', () => ({ scopedGet: () => '', scopedSet: vi.fn() }))
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function stateOf(wrapper: ReturnType<typeof mount>): any {

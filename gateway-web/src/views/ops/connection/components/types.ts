@@ -1,5 +1,5 @@
 import type { DeviceConfig } from '@/api/types'
-import type { NorthChannel } from '@/api/uplink'
+import type { NorthChannel } from '@/api/uplink/uplink'
 
 /** 扩展设备行：附加测试状态字段（容器维护，子组件只读渲染） */
 export interface DeviceRow extends DeviceConfig {

@@ -9,10 +9,10 @@ const { mockHealth, mockShadows } = vi.hoisted(() => ({
   mockShadows: vi.fn(),
 }))
 
-vi.mock('@/api/deviceOps', async (importOriginal) => {
+vi.mock('@/api/acquisition/deviceOps', async (importOriginal) => {
   // only 替换请求函数，summarizeHealth / qualityLabel 等纯函数用真实实现，
   // 保证本测试验证的是页面展示口径，而不是 mock 出来的假口径
-  const actual = await importOriginal<typeof import('@/api/deviceOps')>()
+  const actual = await importOriginal<typeof import('@/api/acquisition/deviceOps')>()
   return { ...actual, listHealthView: mockHealth, listShadowsView: mockShadows }
 })
 

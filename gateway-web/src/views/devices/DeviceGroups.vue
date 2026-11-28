@@ -120,7 +120,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { confirmDelete } from '@/utils/confirm'
+import { confirmDelete } from '@/utils/ui/confirm'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { Plus, Refresh, Cpu } from '@element-plus/icons-vue'
@@ -133,9 +133,9 @@ import {
   removeDeviceFromGroup,
   presetColors,
   type DeviceGroupView,
-} from '@/api/deviceOps'
-import { listDevices } from '@/api/devices'
-import { CHART_PRIMARY } from '@/utils/chartTheme'
+} from '@/api/acquisition/deviceOps'
+import { listDevices } from '@/api/acquisition/devices'
+import { CHART_PRIMARY } from '@/utils/chart/chartTheme'
 import type { DeviceConfig } from '@/api/types'
 
 const route = useRoute()

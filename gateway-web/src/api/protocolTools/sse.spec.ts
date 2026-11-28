@@ -5,8 +5,8 @@ const { getTokenMock, isTauriMock } = vi.hoisted(() => ({
   getTokenMock: vi.fn<() => Promise<string | null>>(async () => 'test-token'),
   isTauriMock: vi.fn<() => boolean>(() => false),
 }))
-vi.mock('../token', () => ({ getToken: getTokenMock }))
-vi.mock('../env', () => ({ isTauri: isTauriMock }))
+vi.mock('../runtime/token', () => ({ getToken: getTokenMock }))
+vi.mock('../runtime/env', () => ({ isTauri: isTauriMock }))
 
 import { canUseSseStream, postSseStream } from './sse'
 

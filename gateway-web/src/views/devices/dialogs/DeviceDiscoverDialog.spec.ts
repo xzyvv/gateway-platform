@@ -11,7 +11,7 @@ vi.mock('@/api/protocolTools/slaveScan', () => ({
   respondedSlaves: (rows: Array<{ responded: boolean }>) => (rows ?? []).filter((r) => r.responded),
 }))
 
-vi.mock('@/api/devices', () => ({
+vi.mock('@/api/acquisition/devices', () => ({
   listDevices: vi.fn(async () => []),
 }))
 

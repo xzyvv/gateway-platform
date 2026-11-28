@@ -109,9 +109,9 @@ import type { Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import { confirmDiscardDirty } from '@/utils/dirtyGuard'
+import { confirmDiscardDirty } from '@/utils/storage/dirtyGuard'
 import { setHubTabLabel } from '@/composables/core/useHubContext'
-import { globalGet, globalSet } from '@/utils/gatewayStorage'
+import { globalGet, globalSet } from '@/utils/storage/gatewayStorage'
 
 export interface HubTab {
   name: string

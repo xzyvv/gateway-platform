@@ -8,9 +8,9 @@
  */
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getConfig, postConfig } from '@/api/config'
+import { getConfig, postConfig } from '@/api/uplink/config'
 import type { UplinkFormModel } from './types'
-import { extractErrorReason } from '@/utils/errorHandler'
+import { extractErrorReason } from '@/utils/error/errorHandler'
 
 export function useUplinkStep() {
   /** 上行转发表单值 */

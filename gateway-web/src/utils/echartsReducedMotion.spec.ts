@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { applyReducedMotion } from './echarts'
+import { applyReducedMotion } from './chart/echarts'
 
 /**
  * 回归测试：ECharts 尊重「减少动态效果」偏好（P2 #4a）。

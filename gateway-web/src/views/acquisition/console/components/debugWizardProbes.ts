@@ -7,9 +7,9 @@
  *
  * 拆出来后这些判定可以脱离页面单独单测，也避免页面文件被探针细节淹没。
  */
-import type { HealthProblem } from '@/api/status'
+import type { HealthProblem } from '@/api/system/status'
 import type { BusConfig, DeviceConfig } from '@/api/types'
-import { problemLevelMeta } from '@/utils/healthStatus'
+import { problemLevelMeta } from '@/utils/health/healthStatus'
 import {
   PROTOCOL_LABELS,
   busMatchesProtocol,

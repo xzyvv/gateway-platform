@@ -66,17 +66,17 @@
 import { ref, computed, onMounted } from 'vue'
 import { Connection, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { listDevices } from '@/api/devices'
-import { listPoints, readPointNow } from '@/api/points'
-import { getNorthStatus, type NorthStatus } from '@/api/uplink'
-import { getUplinkConfig, testUplink, type UplinkConfig } from '@/api/uplink'
+import { listDevices } from '@/api/acquisition/devices'
+import { listPoints, readPointNow } from '@/api/acquisition/points'
+import { getNorthStatus, type NorthStatus } from '@/api/uplink/uplink'
+import { getUplinkConfig, testUplink, type UplinkConfig } from '@/api/uplink/uplink'
 import DeviceTestForm from './components/DeviceTestForm.vue'
 import ChannelTestForm from './components/ChannelTestForm.vue'
 import TestSummaryPanel from './components/TestSummaryPanel.vue'
 import ModbusError from '../bus/ModbusError.vue'
 import type { DeviceRow, ChannelRow, TestSummary } from './components/types'
-import { extractErrorMessage } from '@/utils/errorHandler'
-import { formatClock } from '@/utils/datetime'
+import { extractErrorMessage } from '@/utils/error/errorHandler'
+import { formatClock } from '@/utils/time/datetime'
 
 const devices = ref<DeviceRow[]>([])
 const channels = ref<ChannelRow[]>([])
