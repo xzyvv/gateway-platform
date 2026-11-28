@@ -47,7 +47,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { tagColumn } from '@/utils/commonColumns'
+import { tagColumn } from '@/composables/core/commonColumns'
 import { getGatewayDiagView as getDiag, type GatewayDiagView as GatewayDiag, type NetInterfaceView, type SerialPortView } from '@/api/diagnostics/view'
 import { useHealthReport } from '@/composables/system/useHealthReport'
 import { healthRowsFromComponents } from '@/utils/healthStatus'

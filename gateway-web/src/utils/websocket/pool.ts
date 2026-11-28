@@ -1,5 +1,5 @@
-import { useWebsocketStore } from '../../stores/websocket'
 import { GatewayWebSocket } from './connection'
+import { addActiveStream, removeActiveStream } from './publisher'
 
 // ===== ROI #3: 共享连接池（按 path 复用同一 GatewayWebSocket，避免重复建连） =====
 //
@@ -38,7 +38,7 @@ export function acquireSharedWebSocket(path: string): SharedWebSocketHandle {
     sharedPool.set(path, entry)
     // 注册到 store：告知「有实时流实例在跑」，供顶栏 WS 徽章区分
     // 「断开需提示」与「页面无实时功能不该提示假断开」
-    store().addActiveStream(path)
+    addActiveStream(path)
     // 首个使用者触发建连；后续复用的使用者不再触发 connect，避免打断已建立的连接
     void entry.ws.connect()
   }
@@ -58,28 +58,17 @@ export function acquireSharedWebSocket(path: string): SharedWebSocketHandle {
       cur.refs--
       if (cur.refs <= 0) {
         sharedPool.delete(path)
-        store().removeActiveStream(path)
+        removeActiveStream(path)
         cur.ws.close()
       }
     },
   }
 }
 
-/** 延迟取 store：避免模块加载期 pinia 尚未安装 */
-function store() {
-  return useWebsocketStore()
-}
-
 /** 测试用：清空共享连接池并关闭所有连接 */
 export function __resetSharedWebSocketPoolForTests(): void {
   for (const e of sharedPool.values()) e.ws.close()
   sharedPool.clear()
-  try {
-    const s = store()
-    for (const p of Array.from(s.activeStreams)) s.removeActiveStream(p)
-  } catch {
-    /* 测试环境可能未安装 pinia，忽略 */
-  }
 }
 
 /**

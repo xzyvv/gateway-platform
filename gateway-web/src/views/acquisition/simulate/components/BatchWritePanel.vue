@@ -55,7 +55,7 @@ import { ElMessage, ElButton, ElIcon, ElInputNumber, ElOption, ElSelect, ElTag }
 import { Check, Delete, Plus } from '@element-plus/icons-vue'
 import DataTable from '@/components/DataTable.vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import type { BatchWriteResultItem } from '@/api/points'
 import type { PointConfig } from '@/api/types'
 import { confirmPointWrite, usePointWrite } from '@/composables/data/usePointWrite'

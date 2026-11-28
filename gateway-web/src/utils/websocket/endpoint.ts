@@ -1,4 +1,6 @@
-import { getGatewayBaseUrl, getToken, isTauri } from '@/api'
+import { getGatewayBaseUrlSafe } from '../gatewayContext'
+import { isTauri } from '../platform'
+import { getToken } from '../secureStorage'
 
 /**
  * 构造 WebSocket 连接 URL。
@@ -10,7 +12,7 @@ import { getGatewayBaseUrl, getToken, isTauri } from '@/api'
  */
 export async function buildWsUrl(path: string): Promise<string> {
   if (isTauri()) {
-    const baseUrl = getGatewayBaseUrl()
+    const baseUrl = getGatewayBaseUrlSafe()
     if (!baseUrl) {
       throw new Error('网关地址未设置，请在登录页填写后重试')
     }

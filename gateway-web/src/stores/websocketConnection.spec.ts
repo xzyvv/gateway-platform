@@ -12,18 +12,17 @@ import {
   __sharedWebSocketCountForTests,
   subscribeWsFrames,
   type WsFrameInfo,
-} from './websocket'
-import { useWebsocketStore } from '../stores/websocket'
+} from '../utils/websocket'
+import { useWebsocketStore } from './websocket'
 
 // Bug 226(web) 回归：connect() 自身失败（构建 URL / 取 token / 构造 WebSocket 抛错）
 // 不得向外抛出——调用方是重连定时器回调与 online 事件回调，都不带 catch，
 // 异常会成为未处理的 Promise rejection：状态卡在 connecting、重连链断裂、UI 无提示。
-vi.mock('@/api', () => ({
-  isTauri: () => true,
-  // 模拟桌面端未配置网关地址：buildUrl() 直接 throw
-  getGatewayBaseUrl: () => '',
-  getToken: async () => '',
-}))
+// DD-86：endpoint 已改为直接依赖 utils 层，不再经 `@/api` 间接取值
+vi.mock('@/utils/platform', () => ({ isTauri: () => true }))
+// 模拟桌面端未配置网关地址：buildUrl() 直接 throw
+vi.mock('@/utils/gatewayContext', () => ({ getGatewayBaseUrlSafe: () => '' }))
+vi.mock('@/utils/secureStorage', () => ({ getToken: async () => '' }))
 
 describe('S12: computeReconnectDelay', () => {
   it('attempt=1 with rng=0.7 returns baseDelay * 1 * 0.7 = 2100 (base=3000)', () => {
@@ -257,14 +256,8 @@ describe('B-2: GatewayWebSocket 离线感知', () => {
     await ws.connect()
     expect(ws.getStatus()).toBe('disconnected')
 
-    // 改 mock：buildUrl 成功（这里关键是 connect() 被调用一次）
-    vi.doMock('@/api', () => ({
-      isTauri: () => true,
-      getGatewayBaseUrl: () => '',
-      // 仍然让 buildUrl throw；目的是观察「online 唤醒后调用一次 connect → 走异常兜底」，
-      // 关键是证明 handleNetChange 触发了 connect（异常兜底后 -> reconnecting 状态）
-      getToken: async () => 'abc',
-    }))
+    // buildUrl 仍然 throw（baseUrl 空）；目的是观察「online 唤醒后调用一次 connect → 走异常兜底」，
+    // 关键是证明 handleNetChange 触发了 connect（异常兜底后 -> reconnecting 状态）
 
     __setNavigatorOnlineForTests(true)
     // 让 online listener 内的 connect() 完成

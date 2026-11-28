@@ -100,7 +100,7 @@ import {
 import { getConfig, postConfig } from '@/api/config'
 import type { SelfHealConfig } from '@/api/types'
 import { formatDateTime } from '@/utils/datetime'
-import { actionColumn, tagColumn } from '@/utils/commonColumns'
+import { actionColumn, tagColumn } from '@/composables/core/commonColumns'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 
 const { showToast } = useErrorDisplay()

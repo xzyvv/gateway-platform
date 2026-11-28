@@ -54,7 +54,7 @@ const { showToast } = useErrorDisplay()
 import { ElButton, ElTag, ElMessage, ElMessageBox } from 'element-plus'
 import {VideoPlay, VideoPause} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import {startCapture, stopCapture, getPackets, clearPackets, type Packet} from '@/api/protocolTools'
 import FilterToolbar, { type FilterField } from '@/components/FilterToolbar.vue'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'

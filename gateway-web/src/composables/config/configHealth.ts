@@ -12,7 +12,7 @@
  */
 import { postConfig } from '@/api/config'
 import type { GatewayConfig } from '@/api/types'
-import { validateConfig } from '@/utils/configValidation'
+import { validateConfig } from '@/composables/config/configValidation'
 
 export type IssueLevel = 'error' | 'warning' | 'info'
 

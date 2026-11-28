@@ -89,7 +89,7 @@ import { confirmDelete } from '@/utils/confirm'
 import { copyText } from '@/utils/clipboard'
 import { Plus, Refresh, CopyDocument } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import {
   listApiKeys,
   createApiKey,

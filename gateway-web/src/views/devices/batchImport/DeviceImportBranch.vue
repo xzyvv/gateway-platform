@@ -103,7 +103,7 @@ import { parseCSV, validateImport, downloadTemplate, type ImportResult, type Imp
 import { createDevice } from '@/api/devices'
 import type { DeviceConfig } from '@/api/types'
 import DataTable, { type ColumnDef } from '@/components/DataTable.vue'
-import { timeColumn, protocolColumn, addressColumn, tagColumn } from '@/utils/commonColumns'
+import { timeColumn, protocolColumn, addressColumn, tagColumn } from '@/composables/core/commonColumns'
 import SectionHeader from '@/components/SectionHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ImportFileUpload from './ImportFileUpload.vue'

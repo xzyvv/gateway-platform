@@ -130,15 +130,19 @@ check('A-3.1', '【DD-67 已修】useDevices/index.ts 不再 import view 组件�
   lineOf(read('src/views/devices/DeviceList.vue'), "from './dialogs/DeviceDiscoverDialog.vue'") > 0)
 
 console.log('\n=== A-4 utils 反向依赖 + api⟷utils 双向 ===')
-const cc = read('src/utils/commonColumns.ts')
-check('A-4.1', 'utils/commonColumns.ts 值导入 composables/protocolMeta', lineOf(cc, "@/composables/devices/protocolMeta") > 0, `line ${lineOf(cc, "@/composables/devices/protocolMeta")}`)
-check('A-4.2', 'utils/commonColumns.ts 类型导入 components/DataTable.vue', lineOf(cc, "@/components/DataTable.vue") > 0, `line ${lineOf(cc, "@/components/DataTable.vue")}`)
+const ccNew = read('src/composables/core/commonColumns.ts')
+check('A-4.1', '【DD-86 已修】commonColumns 迁入 composables，utils 不再 → composables',
+  read('src/utils/commonColumns.ts') === null && lineOf(ccNew, "@/composables/devices/protocolMeta") > 0)
+check('A-4.2', '【DD-86 已修】ColumnDef 依赖随 commonColumns 迁入 composables，utils 不再 → components',
+  lineOf(ccNew, "@/components/DataTable.vue") > 0)
 const pool = read('src/utils/websocket/pool.ts')
-const wstate = read('src/utils/websocket/state.ts')
-check('A-4.3', 'utils/websocket/pool.ts 引 stores/websocket', lineOf(pool, "from '../../stores/websocket'") > 0, `line ${lineOf(pool, "from '../../stores/websocket'")}`)
-check('A-4.4', 'utils/websocket/state.ts 引 stores/websocket', lineOf(wstate, "from '../../stores/websocket'") > 0, `line ${lineOf(wstate, "from '../../stores/websocket'")}`)
+check('A-4.3', '【DD-86 已修】pool 经 publisher 端口上报，不再直接引 stores/websocket',
+  lineOf(pool, 'stores/websocket') === -1)
+check('A-4.4', '【DD-86 已修】state.ts 已删除，发布逻辑回到 stores 层',
+  read('src/utils/websocket/state.ts') === null)
 const gwStorage = read('src/utils/gatewayStorage.ts')
-check('A-4.5', 'utils/gatewayStorage.ts 值导入 @/api/gatewayConfig（api⟷utils 双向）', lineOf(gwStorage, "@/api/gatewayConfig") > 0, `line ${lineOf(gwStorage, "@/api/gatewayConfig")}`)
+check('A-4.5', '【DD-86 已修】gatewayStorage 经 gatewayContext 读网关名，不再反向依赖 api',
+  lineOf(gwStorage, '@/api') === -1)
 
 console.log('\n=== S-2 三个 0 字节垃圾文件（DD-82 已修）===')
 for (const f of ['c', 'r', 'v']) {
@@ -218,8 +222,8 @@ check('E-6.2', 'BusLoad.vue 靠重命名消歧 listBusLoadsView as listBusLoads'
   /listBusLoadsView as listBusLoads/.test(busload || ''), `line ${lineOf(busload, 'listBusLoadsView as listBusLoads')}`)
 
 console.log('\n=== E-7 两个同名 ConfigIssue ===')
-const cv = read('src/utils/configValidation.ts')
-const ch = read('src/utils/configHealth.ts')
+const cv = read('src/composables/config/configValidation.ts')
+const ch = read('src/composables/config/configHealth.ts')
 check('E-7.1', '【DD-74 已修】configValidation.ts 的原始问题改名为 ConfigValidationIssue',
   /export interface ConfigValidationIssue/.test(cv || '') && !/export interface ConfigIssue\b/.test(cv || ''),
   `line ${lineOf(cv, 'export interface ConfigValidationIssue')}`)

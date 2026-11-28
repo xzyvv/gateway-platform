@@ -167,7 +167,7 @@ import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
 import { useReadPointNow } from '@/composables/data/useReadPointNow'
 import { usePointWrite } from '@/composables/data/usePointWrite'
-import { timeColumn } from '@/utils/commonColumns'
+import { timeColumn } from '@/composables/core/commonColumns'
 import { extractErrorMessage } from '@/utils/errorHandler'
 
 export type BatchCmdType = 'read' | 'write'

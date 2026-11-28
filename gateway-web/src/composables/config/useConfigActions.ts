@@ -10,7 +10,7 @@ import {
 } from '@/api/config'
 import { setToken } from '@/api'
 import type { GatewayConfig } from '@/api/types'
-import { validateConfig, type ConfigValidationIssue } from '@/utils/configValidation'
+import { validateConfig, type ConfigValidationIssue } from '@/composables/config/configValidation'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import {
   createSeedConfig,

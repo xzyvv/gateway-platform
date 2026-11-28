@@ -11,7 +11,7 @@
  * Network 面板后没有 Content-Type / Accept 等头，回放直接失败。现在从请求日志条目
  * 里取实际记录到的头（见 stores/requestLog.ts 的 requestHeaders/responseHeaders）。
  */
-import type { RequestLogEntry } from '@/stores/requestLog'
+import type { RequestLogEntry } from '@/types/requestLog'
 
 function bodyText(v: unknown): string | undefined {
   if (v === undefined) return undefined

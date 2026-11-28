@@ -15,8 +15,9 @@ beforeEach(async () => {
   localStorage.clear()
   active.name = null
   vi.resetModules()
-  vi.doMock('@/api/gatewayConfig', () => ({
-    getActiveGatewayName: () => active.name,
+  vi.doMock('@/utils/gatewayContext', () => ({
+    getActiveGatewayNameSafe: () => active.name,
+    getGatewayBaseUrlSafe: () => '',
   }))
   store = await import('./gatewayStorage')
 })

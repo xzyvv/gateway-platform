@@ -32,10 +32,10 @@ function resolveImport(spec, fromFile) {
 const layerOf = (r) => r.split('/')[0]
 // 允许方向：低层 -> 高层（同层互允许）
 const ALLOWED = {
-  api: ['types', 'api', 'mock'],
+  api: ['types', 'utils', 'api', 'mock'],
   mock: ['types', 'mock'],
   types: ['types'],
-  utils: ['types', 'utils', 'api'],
+  utils: ['types', 'utils'],
   stores: ['types', 'utils', 'api', 'stores'],
   composables: ['types', 'utils', 'api', 'stores', 'composables'],
   components: ['types', 'utils', 'api', 'stores', 'composables', 'components'],
@@ -67,6 +67,9 @@ for (const f of files) {
     const before = withoutDyn.slice(0, m.index)
     const lineNo = before.split('\n').length
     const lineText = lines[lineNo - 1]?.trim() ?? ''
+    // DD-86：utils 只允许「纯类型」借用 api 的 DTO——`import type` 编译期擦除，
+    // 不产生运行时依赖，也就不会形成 utils ⟷ api 的双向环。
+    if (fromLayer === 'utils' && toLayer === 'api' && /^(import|export)\s+type\b/.test(lineText)) continue
     violations.push({ from, lineNo, to: target, toLayer, spec, lineText })
   }
 }

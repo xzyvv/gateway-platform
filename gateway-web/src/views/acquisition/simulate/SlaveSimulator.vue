@@ -35,7 +35,7 @@ import {VideoPlay} from '@element-plus/icons-vue'
 import { getRegisters, updateRegister, startSimulate, stopSimulate, getSimulatorStatus, type SimRegister, type SimulatorStatus } from '@/api/protocolTools'
 import { confirmAction } from '@/utils/confirm'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 
 const { showToast } = useErrorDisplay()
 const slaveId = ref(1); const port = ref(1502); const running = ref(false); const regs = ref<SimRegister[]>([]); const status = ref<SimulatorStatus | null>(null)

@@ -169,7 +169,7 @@ import { useRouter } from 'vue-router'
 import { ElButton, ElIcon, ElProgress, ElTag } from 'element-plus'
 import {Refresh, Cpu} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import {
   deviceScoreColor,
   deviceScoreTextColor,

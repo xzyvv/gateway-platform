@@ -64,7 +64,7 @@ const { showToast } = useErrorDisplay()
 import {Refresh} from '@element-plus/icons-vue'
 import { getPassthroughSessions, type PassthroughSession } from '@/api/uplink'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import { logError } from '@/utils/logger'
 import TableSkeleton from '@/components/TableSkeleton.vue'
 import { formatTimestamp } from '@/utils/datetime'

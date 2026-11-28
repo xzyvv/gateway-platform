@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildHar, buildHarObject } from './har'
-import type { RequestLogEntry } from '@/stores/requestLog'
+import type { RequestLogEntry } from '@/types/requestLog'
 
 /** 构造一条请求日志条目 */
 function entry(over: Partial<RequestLogEntry> = {}): RequestLogEntry {

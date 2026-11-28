@@ -20,7 +20,7 @@ import { withDiagHint } from '@/utils/diagHints'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { usePolledTask } from '@/composables/core/useTaskProgress'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn, timeColumn } from '@/utils/commonColumns'
+import { actionColumn, timeColumn } from '@/composables/core/commonColumns'
 import { confirmAction } from '@/utils/confirm'
 
 /** 点位建议行 */

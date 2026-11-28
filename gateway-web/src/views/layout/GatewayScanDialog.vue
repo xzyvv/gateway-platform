@@ -47,7 +47,7 @@ import { h } from 'vue'
 import { Loading, WarningFilled } from '@element-plus/icons-vue'
 import { ElButton } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import type { DiscoveredGateway } from '@/api'
 
 const props = defineProps<{

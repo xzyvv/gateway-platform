@@ -12,6 +12,7 @@ import { isTauri } from './env'
 // 静态引用在飞注册中心：inflight.ts 不反向依赖本模块，无循环依赖；
 // 此前为绕开 gatewayConfig ↔ http 循环而用动态 import('./http')，
 // 但 http.ts 已被多处静态引入，动态导入零拆包收益并触发构建警告。
+import { registerGatewayContext } from '@/utils/gatewayContext'
 import { triggerGatewaySwitchRefresh } from './inflight'
 
 export interface GatewayEntry {
@@ -43,6 +44,13 @@ export function getGatewayBaseUrl(): string {
 export function getActiveGatewayName(): string | null {
   return cachedConfig?.active ?? null
 }
+
+// 向 utils 层注册只读上下文（DD-86）：gatewayStorage / websocket endpoint 由
+// utils 直接读取，避免 utils → api 的反向依赖。函数声明已提升，此处可安全引用。
+registerGatewayContext({
+  baseUrl: () => getGatewayBaseUrl(),
+  activeName: () => getActiveGatewayName(),
+})
 
 /** 从 Tauri 后端加载网关配置并缓存 */
 export async function loadGatewayConfig(): Promise<GatewayConfig> {

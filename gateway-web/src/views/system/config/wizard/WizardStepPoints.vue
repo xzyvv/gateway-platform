@@ -71,7 +71,7 @@
  */
 import { computed } from 'vue'
 import DataTable, { type ColumnDef } from '@/components/DataTable.vue'
-import { addressColumn } from '@/utils/commonColumns'
+import { addressColumn } from '@/composables/core/commonColumns'
 import { DATA_TYPES } from '@/composables/devices/decodeParams'
 import type { BusConfig, PointConfig } from '@/api/types'
 import type { ManualPointForm } from './types'

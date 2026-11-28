@@ -75,7 +75,7 @@ const { showToast } = useErrorDisplay()
 import { ElButton, ElMessage, ElSwitch, ElTag } from 'element-plus'
 import { Refresh, Setting } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import { getConfig, postConfig } from '@/api/config'
 import { getUplinkConfig, getNorthStatus, testUplink } from '@/api/uplink'
 import { testWebhook } from '@/api/webhook'

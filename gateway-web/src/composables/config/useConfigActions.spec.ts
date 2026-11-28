@@ -25,7 +25,7 @@ vi.mock('@/utils/confirm', () => ({ confirmAction: (...a: unknown[]) => m.confir
 vi.mock('@/utils/dirtyGuard', () => ({
   registerDirtyGuard: () => ({ reset: vi.fn(), mark: vi.fn(), unregister: vi.fn() }),
 }))
-vi.mock('@/utils/configValidation', () => ({ validateConfig: async () => [] }))
+vi.mock('@/composables/config/configValidation', () => ({ validateConfig: async () => [] }))
 vi.mock('@/api/config', () => ({
   postConfig: (...a: unknown[]) => m.postConfig(...a),
   exportConfig: async () => ({}),

@@ -13,7 +13,7 @@ import { ElButton, ElDropdown, ElDropdownItem, ElDropdownMenu, ElIcon, ElSwitch,
 import { ArrowDown, Edit, Reading } from '@element-plus/icons-vue'
 import InlineEditCell from '@/components/InlineEditCell.vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn, protocolColumn } from '@/utils/commonColumns'
+import { actionColumn, protocolColumn } from '@/composables/core/commonColumns'
 import type { InlinePatch, PointRow } from '@/composables/devices/usePoints'
 
 export interface PointColumnActions {

@@ -9,14 +9,14 @@
  * 这里按激活网关名给 key 加前缀，实现天然隔离。Web 模式（非 Tauri / 未配置网关）
  * 前缀为空，等价于原始 key，行为与改造前完全一致。
  */
-import { getActiveGatewayName } from '@/api/gatewayConfig'
+import { getActiveGatewayNameSafe } from './gatewayContext'
 
 const SEP = '::'
 
 /** 当前命名空间前缀；无激活网关时为空串（等价于不隔离） */
 export function gatewayNamespace(): string {
   try {
-    const name = getActiveGatewayName()
+    const name = getActiveGatewayNameSafe()
     return name ? `gw:${name}${SEP}` : ''
   } catch {
     return ''

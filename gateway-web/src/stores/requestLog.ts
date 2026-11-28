@@ -1,49 +1,9 @@
 import { defineStore } from 'pinia'
 import { shallowRef, triggerRef, computed } from 'vue'
 
-/**
- * 单条请求记录
- *
- * method/url/status/duration/timestamp 为规范要求字段；
- * startTime/endTime/requestData/responseData/id 保留供请求监视器面板展示。
- */
-export interface RequestLogEntry {
-  id: number
-  method: string
-  url: string
-  status: number | string
-  /** 耗时（毫秒） */
-  duration: number
-  /** 请求发起时间戳（ms），与 startTime 一致 */
-  timestamp: number
-  startTime: number
-  endTime: number
-  requestData?: unknown
-  responseData?: unknown
-  error?: string
-  /** 后端 trace ID（响应头 x-request-id），报障时贴给研发即可定位到日志 */
-  traceId?: string
-  /**
-   * 实际发出的请求头（敏感值已脱敏）。
-   *
-   * 修复（P1-12）：原先不记录任何请求头，导致
-   *   - 导出的 HAR 里 `headers: []` 恒空，拖进 DevTools 无法回放；
-   *   - 「复制为 cURL」只能给方法+URL+Body，带鉴权的接口在终端无法重放。
-   * 记录头之后二者都能真正复现请求。
-   */
-  requestHeaders?: Array<{ name: string; value: string }>
-  /** 实际收到的响应头（敏感值已脱敏） */
-  responseHeaders?: Array<{ name: string; value: string }>
-  /** 记录来源：http（默认）或 ws 帧 */
-  kind?: 'http' | 'ws'
-  /** WS 帧明细（kind === 'ws' 时存在） */
-  ws?: {
-    direction: 'in' | 'out'
-    type: string
-    size: number
-    data: string
-  }
-}
+// 类型下沉到 types 层，避免 utils/har 反向依赖 stores（DD-86）；此处保留再导出不改调用方。
+import type { RequestLogEntry } from '@/types/requestLog'
+export type { RequestLogEntry }
 
 /** 向后兼容别名 */
 export type RequestRecord = RequestLogEntry

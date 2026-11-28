@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { setWsStorePublisher } from '@/utils/websocket/publisher'
 
 export type WebsocketStatus = 'connected' | 'connecting' | 'disconnected'
 
@@ -114,4 +115,47 @@ export const useWebsocketStore = defineStore('websocket', () => {
     subscribe,
     unsubscribe,
   }
+})
+
+// DD-86：utils 层（connection/pool）只通过 publisher 端口上报，映射逻辑留在 store 层；
+// 回调内延迟取 store，避免模块加载期 Pinia 尚未安装。
+setWsStorePublisher({
+  status(s, attempts) {
+    const store = useWebsocketStore()
+    switch (s) {
+      case 'connected':
+        store.setStatus('connected')
+        store.resetReconnect()
+        store.setLastError(null)
+        // 仅当之前有重连历史时才记录恢复事件，避免每次启动成功都刷噪音
+        if (attempts && attempts > 0) store.addReconnectEvent({ kind: 'recovered' })
+        break
+      case 'connecting':
+        store.setStatus('connecting')
+        break
+      case 'reconnecting':
+        store.setStatus('connecting')
+        if (typeof attempts === 'number' && attempts > 0) {
+          store.incrementReconnect()
+          store.addReconnectEvent({ kind: 'reconnecting', attempt: attempts })
+        }
+        break
+      case 'disconnected':
+        store.setStatus('disconnected')
+        store.resetReconnect()
+        break
+    }
+  },
+  error(detail) {
+    const msg = detail ?? 'WebSocket 连接发生错误'
+    const store = useWebsocketStore()
+    store.setLastError(msg)
+    store.addReconnectEvent({ kind: 'error', message: msg })
+  },
+  addStream(path) {
+    useWebsocketStore().addActiveStream(path)
+  },
+  removeStream(path) {
+    useWebsocketStore().removeActiveStream(path)
+  },
 })

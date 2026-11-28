@@ -49,7 +49,7 @@ import { confirmDelete } from '@/utils/confirm'
 import {Plus, Refresh} from '@element-plus/icons-vue'
 import { listRules, createRule, updateRule, deleteRule, getRecentLogs, getStats, type ApiLimitRule, type ApiLog } from '@/api/apiRateLimit'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn, timeColumn } from '@/utils/commonColumns'
+import { actionColumn, timeColumn } from '@/composables/core/commonColumns'
 import { setFormFieldErrors, clearFormFieldErrors } from '@/utils/formFieldError'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
 const rules = ref<ApiLimitRule[]>([]); const logs = ref<ApiLog[]>([])

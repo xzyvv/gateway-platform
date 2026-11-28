@@ -26,7 +26,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, h } from 'vue'
 import { ElButton, ElMessage, ElTag } from 'element-plus'
-import { validateConfig, type ConfigValidationIssue } from '@/utils/configValidation'
+import { validateConfig, type ConfigValidationIssue } from '@/composables/config/configValidation'
 import type { GatewayConfig } from '@/api/types'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import type { ColumnDef } from '@/components/DataTable.vue'

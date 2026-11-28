@@ -25,7 +25,7 @@ vi.mock('element-plus', async () => {
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
 vi.mock('@/api/config', () => ({ getConfig: (...a: unknown[]) => getConfigMock(...a) }))
 vi.mock('@/api/templates', () => ({ listTemplates: (...a: unknown[]) => listTemplatesMock(...a) }))
-vi.mock('@/utils/configHealth', () => ({ loadConfigHealthIssues: (...a: unknown[]) => loadIssuesMock(...a) }))
+vi.mock('@/composables/config/configHealth', () => ({ loadConfigHealthIssues: (...a: unknown[]) => loadIssuesMock(...a) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 
 const routerPush = vi.hoisted(() => vi.fn())
@@ -35,7 +35,7 @@ const loadIssuesMock = vi.hoisted(() => vi.fn())
 const showToast = vi.hoisted(() => vi.fn())
 
 import ConfigHealth from './ConfigHealth.vue'
-import type { ConfigHealthIssue } from '@/utils/configHealth'
+import type { ConfigHealthIssue } from '@/composables/config/configHealth'
 
 const CFG = { buses: [{ id: 'bus1' }], devices: [{ id: 'dev1' }], points: [{ id: 'p1' }] }
 

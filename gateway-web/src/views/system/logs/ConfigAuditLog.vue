@@ -60,7 +60,7 @@ import FilterToolbar, { type FilterField } from '@/components/FilterToolbar.vue'
 import { useQueryState } from '@/composables/core/useQueryState'
 import { useTablePager } from '@/composables/core/useTablePager'
 import { logError } from '@/utils/logger'
-import { timeColumn } from '@/utils/commonColumns'
+import { timeColumn } from '@/composables/core/commonColumns'
 import { formatDateTime } from '@/utils/datetime'
 
 const logs = ref<AuditLogEntry[]>([])

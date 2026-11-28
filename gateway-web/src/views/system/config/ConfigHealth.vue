@@ -53,12 +53,12 @@ const { showToast } = useErrorDisplay()
 import { ElButton, ElMessage, ElTag } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import { getConfig } from '@/api/config'
 import { listTemplates } from '@/api/templates'
 import type { GatewayConfig } from '@/api/types'
 // 体检规则单源在后端，这里只做「后端 issue → UI 行」适配；总览面板共用同一适配层
-import { loadConfigHealthIssues, type ConfigHealthIssue } from '@/utils/configHealth'
+import { loadConfigHealthIssues, type ConfigHealthIssue } from '@/composables/config/configHealth'
 
 // 问题清单列定义，顺序/宽度与原 el-table 保持一致
 const healthColumns: ColumnDef<ConfigHealthIssue>[] = [

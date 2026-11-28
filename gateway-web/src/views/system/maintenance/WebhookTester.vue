@@ -79,7 +79,7 @@ import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { Promotion } from '@element-plus/icons-vue'
 import { testWebhook, type WebhookTestResponse } from '@/api/webhook'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { timeColumn } from '@/utils/commonColumns'
+import { timeColumn } from '@/composables/core/commonColumns'
 import { scopedGet, scopedSet } from '@/utils/gatewayStorage'
 
 interface HistoryItem {

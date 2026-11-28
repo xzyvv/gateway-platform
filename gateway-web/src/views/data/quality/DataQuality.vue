@@ -98,7 +98,7 @@ import { ElButton, ElMessage, ElSwitch, ElTag } from 'element-plus'
 import { confirmDelete } from '@/utils/confirm'
 import { Plus } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import {
   listQualityRules, createQualityRule, deleteQualityRule, updateQualityRule,
   getQualityStats, qualityRulesSource,

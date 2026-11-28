@@ -11,7 +11,7 @@
 import { h, type VNodeChild } from 'vue'
 import { ElButton, ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn, protocolColumn, addressColumn } from '@/utils/commonColumns'
+import { actionColumn, protocolColumn, addressColumn } from '@/composables/core/commonColumns'
 import InlineEditCell from '@/components/InlineEditCell.vue'
 import FreshnessBadge from '@/components/FreshnessBadge.vue'
 import { formatDateTime } from '@/utils/datetime'

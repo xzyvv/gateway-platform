@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { VNode } from 'vue'
 import { timeColumn, protocolColumn, addressColumn, tagColumn, actionColumn } from './commonColumns'
-import { formatDateTime } from './datetime'
+import { formatDateTime } from '@/utils/datetime'
 
 /** 取出 `h(ElTag, props, () => text)` 渲染出的标签属性与文案（slot 可能被包装成函数或对象） */
 function slotText(slot: unknown): string {

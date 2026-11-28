@@ -42,7 +42,7 @@
 import { h } from 'vue'
 import { ElButton } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 
 interface NotifyQueueRow {
   id: string

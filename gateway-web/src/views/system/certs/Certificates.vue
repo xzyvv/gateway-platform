@@ -71,7 +71,7 @@ import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { confirmAction } from '@/utils/confirm'
 import { Upload, Refresh } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
 import {

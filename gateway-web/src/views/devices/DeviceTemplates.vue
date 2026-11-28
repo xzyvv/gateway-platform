@@ -75,7 +75,7 @@ import { ElButton, ElMessage } from 'element-plus'
 import { confirmDelete } from '@/utils/confirm'
 import {Plus, Refresh} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import {
   listTemplates, saveTemplate, deleteTemplate,
   type DeviceTemplate, type TemplatePoint,

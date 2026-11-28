@@ -95,7 +95,7 @@ import { ElMessage, ElButton, ElSwitch, ElTag, ElTooltip, type FormInstance, typ
 import { confirmDelete } from '@/utils/confirm'
 import {Plus, Refresh} from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import { listConvertRules, createConvertRule, updateConvertRule, deleteConvertRule, toggleConvertRule, PROTO_LABEL, type ConvertRule } from '@/api/protocolTools'
 import ProtocolSelector from '@/components/industrial/ProtocolSelector.vue'
 import { getConfig } from '@/api/config'

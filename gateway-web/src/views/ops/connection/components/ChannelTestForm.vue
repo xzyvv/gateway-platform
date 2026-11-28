@@ -31,7 +31,7 @@ import { h } from 'vue'
 import { ElButton, ElTag } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 import type { ChannelRow } from './types'
 
 defineProps<{

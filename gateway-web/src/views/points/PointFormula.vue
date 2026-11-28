@@ -100,7 +100,7 @@ import { unitChoices } from '@/composables/devices/useUnits'
 import { virtualPointEvalUi } from '@/utils/virtualPointStatus'
 import { listDevices } from '@/api/devices'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { actionColumn } from '@/utils/commonColumns'
+import { actionColumn } from '@/composables/core/commonColumns'
 
 const route = useRoute()
 const points = ref<VirtualPointViewV[]>([])
