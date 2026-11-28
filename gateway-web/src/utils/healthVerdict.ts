@@ -24,7 +24,8 @@ export const DEVICE_SCORE_LEVEL_LABEL: Record<DeviceScoreLevel, string> = {
   excellent: '优秀',
   good: '良好',
   warning: '告警',
-  critical: '异常',
+  // DD-75：「严重」与网关健康域 OVERALL_STATUS_META.critical 统一，避免同档两位中文
+  critical: '严重',
   unknown: '未采集',
 }
 

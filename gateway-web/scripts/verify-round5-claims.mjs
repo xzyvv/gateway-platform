@@ -237,6 +237,12 @@ const upl = read('src/api/uplink.ts')
 check('E-8.1', 'useSessions.ts 定义 LoginSession', /export interface LoginSession/.test(sess || ''), `line ${lineOf(sess, 'export interface LoginSession')}`)
 check('E-8.2', 'protocolTools/types.ts 定义 ReplaySession', /export interface ReplaySession/.test(ptools || ''), `line ${lineOf(ptools, 'export interface ReplaySession')}`)
 check('E-8.3', 'api/uplink.ts 定义 PassthroughSession', /export interface PassthroughSession/.test(upl || ''), `line ${lineOf(upl, 'export interface PassthroughSession')}`)
+check('E-8.4', '【DD-75 已修】命名文档登记会话三词口径，README 无「连接会话」',
+  /登录会话.*回放会话.*透传会话/.test(read('docs/architecture/frontend-naming.md') || '') &&
+  !/连接会话/.test(read('src/composables/README.md') || ''))
+check('E-9.1', '【DD-75 已修】设备评分与网关健康的 critical 统一为「严重」',
+  /critical: '严重'/.test(read('src/utils/healthVerdict.ts') || '') &&
+  /critical: \{ label: '严重'/.test(read('src/utils/healthStatus.ts') || ''))
 
 console.log('\n=== E-14 源码 UTF-8 残字节（DD-80 已修）===')
 const conc = read('src/utils/concurrency.ts')

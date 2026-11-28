@@ -76,7 +76,7 @@
 | useRealtimeChart | 实时趋势图：ECharts 实例 / 100ms 节流重绘 / 历史缓冲 / 跨度标签 | RealtimeMonitor.vue / useRealtime |
 | useRealtimeViewport | 实时页视口高度分配（表格 / 图表首屏内布局） | useRealtime |
 
-### system/ —— 系统 / 日志 / 审计 / 会话 / 网络
+### system/ —— 系统 / 日志 / 审计 / 登录会话 / 网络
 
 | 名称 | 职责 | 应用页面 |
 |------|------|---------|
