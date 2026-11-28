@@ -11,7 +11,6 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useNotificationsStore } from '../../stores/notifications'
 import { useRequestLogStore } from '../../stores/requestLog'
-import { useAuthStore } from '../../stores/auth'
 import { clearToken } from '../token'
 import { ERR, describeErrorCode } from '../../utils/errorCodes'
 import { markUserNotified } from '../../utils/errorHandler'
@@ -22,6 +21,9 @@ import { readTraceId } from './trace'
 import { isPlainObject, loggableBody, loggableHeaders, sanitizeUrl } from './sanitize'
 import { isBareResponse, type ApiEnvelope } from './envelope'
 import { releaseLoggingOut, tryAcquireLoggingOut } from './loggingOut'
+// 登出补丁走桥接而非直接引 stores/auth：直接引会与 '@/api' barrel 形成静态循环依赖，
+// 详见 ./authBridge.ts 头部注释（DD-65）。
+import { applyAuthLogoutPatch } from './authBridge'
 
 /**
  * 写操作方法判定（GET 之外都算写）。
@@ -171,9 +173,7 @@ instance.interceptors.response.use(
           const shouldFire = tryAcquireLoggingOut()
           if (shouldFire) {
             clearToken()
-            try {
-              useAuthStore().$patch({ loggedIn: false, token: '' })
-            } catch { /* pinia 未激活 */ }
+            applyAuthLogoutPatch()
             if (!isLoginPage) {
               const notify = useNotificationsStore()
               notify.error('鉴权失败，请重新登录', { code: ERR.UNAUTHORIZED, traceId })

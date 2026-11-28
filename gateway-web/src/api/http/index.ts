@@ -37,6 +37,10 @@ export {
   resetLoggingOut,
   getLoggingOutCount,
 } from './loggingOut'
+// 401 登出补丁桥：传输层不直接依赖 stores/auth（会形成静态循环依赖），
+// 由 app/main.ts 注册补丁函数。详见 ./authBridge.ts 头部注释。
+export { setAuthLogoutPatcher, applyAuthLogoutPatch } from './authBridge'
+export type { AuthLogoutPatch } from './authBridge'
 // 在飞请求注册中心独立成模块（inflight.ts），切断与 gatewayConfig.ts 的循环依赖。
 // 此处再导出，保持 '@/api/http' 与 api barrel 的既有 import 路径不变。
 export {

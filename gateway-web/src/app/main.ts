@@ -14,6 +14,7 @@ const coreIcons = { Cellphone, Search, User, Lock, InfoFilled }
 import App from './App.vue'
 import router from '../router'
 import { isTauri, loadGatewayConfig, checkGatewayHealth } from '@/api'
+import { setAuthLogoutPatcher } from '@/api/http'
 import SectionHeader from '../components/SectionHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { useThemeStore } from '../stores/theme'
@@ -84,6 +85,10 @@ router.afterEach((to) => {
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
+
+// 401 登出时需要同步清掉 auth store 的登录态。传输层不直接引 store（会与 '@/api'
+// barrel 形成静态循环依赖），改为由这里注册补丁函数——详见 api/http/authBridge.ts。
+setAuthLogoutPatcher((patch) => useAuthStore(pinia).$patch(patch))
 
 // 挂载前恢复上次主题偏好（localStorage），避免暗色用户首屏闪白
 useThemeStore(pinia).initTheme()
