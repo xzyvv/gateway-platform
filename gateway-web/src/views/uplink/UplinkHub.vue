@@ -16,8 +16,8 @@
  *  「北向」保留为搜索别名；对外提供数据的 Server（OPC UA / Modbus / 透传）统一称「对外服务 Server」。 */
 import { defineAsyncComponent } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
-import HubShell from '@/components/HubShell.vue'
-import type { HubTab } from '@/components/HubShell.vue'
+import HubShell from '@/views/layout/HubShell.vue'
+import type { HubTab } from '@/views/layout/HubShell.vue'
 
 const UplinkConfig = defineAsyncComponent({ loader: () => import('./UplinkConfig.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const UplinkNorthStatus = defineAsyncComponent({ loader: () => import('./UplinkNorthStatus.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

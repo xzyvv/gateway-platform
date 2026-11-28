@@ -12,8 +12,8 @@
  *  两者同看设备运行状态，分开会让用户在两页之间反复比对评分与快照。 */
 import { defineAsyncComponent } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
-import HubShell from '@/components/HubShell.vue'
-import type { HubTab } from '@/components/HubShell.vue'
+import HubShell from '@/views/layout/HubShell.vue'
+import type { HubTab } from '@/views/layout/HubShell.vue'
 
 const Devices = defineAsyncComponent({ loader: () => import('./DeviceList.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const DeviceGroups = defineAsyncComponent({ loader: () => import('./DeviceGroups.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

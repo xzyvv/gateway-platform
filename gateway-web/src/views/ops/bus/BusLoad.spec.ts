@@ -14,7 +14,7 @@ import { nextTick } from 'vue'
  * - 图表数据未变化时不重复 setOption，卸载时释放实例。
  */
 
-vi.mock('@/api/diagnostics', () => ({
+vi.mock('@/api/diagnostics/view', () => ({
   listBusLoadsView: (...a: unknown[]) => listBusLoads(...a),
   refreshBusLoadsView: (...a: unknown[]) => refreshBusLoads(...a),
   getBusLoadView: (...a: unknown[]) => getBusLoad(...a),

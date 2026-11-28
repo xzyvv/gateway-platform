@@ -63,7 +63,7 @@
 | 组合式函数 | `composables/<域>/` | `use<对象>.ts`，域目录与 `views/<域>` 对齐 |
 | 测试 | 与源码 co-locate | `<被测文件>.spec.ts` |
 
-只有 **≥2 个业务域复用** 的组件才进 `src/components/`（如 `HubShell`、`ErrorBoundary`）。
+只有 **≥2 个业务域复用** 的组件才进 `src/components/`（如 `DataTable`、`PageErrorBoundary`）；依赖 store 的容器组件放 `views/` 层（见 DD-87）。
 
 ### 3.3 禁止项
 
@@ -104,7 +104,7 @@
 
 规则：**对象 + 能力**，同一能力词全站只表达一种视图；页面名与其 Hub 内同名 tab 必须区分（如页面「设备管理」→ tab「设备清单」）。
 
-因为两者刻意不同名，Hub 落地页必须同时呈现父子两层（页头显示页面名 + 当前 tab 名），否则用户点完菜单只看到 tab 名，会误以为点错了入口。实现见 `src/components/HubShell.vue` 的 `hubTitle` 与 `.hub-body` / `.hub-body-header` / `.hub-body-title`。
+因为两者刻意不同名，Hub 落地页必须同时呈现父子两层（页头显示页面名 + 当前 tab 名），否则用户点完菜单只看到 tab 名，会误以为点错了入口。实现见 `src/views/layout/HubShell.vue` 的 `hubTitle` 与 `.hub-body` / `.hub-body-header` / `.hub-body-title`。
 
 Hub tab 的 `subtitle` 必须描述该页**真实存在**的区块，不得承诺页面上没有的内容（如页面没有组件健康表，就不能写「组件健康总览」）。页面结构增删区块时同步改副标题。
 

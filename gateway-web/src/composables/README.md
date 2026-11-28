@@ -49,7 +49,7 @@
 | useDevices | 设备列表 CRUD + 发现对话框（`devices/useDevices/` 目录，barrel 出口） | DeviceList.vue |
 | useDiscoverWizard | 设备发现向导状态机 | DeviceDiscovery.vue |
 | usePoints | 点位列表 CRUD + 批量操作（`devices/usePoints/` 目录，barrel 出口） | PointList.vue / points/components/pointColumns.ts |
-| useProtocol | 协议类型元数据 + protocolOptions（单一来源） | ProtocolSelector.vue / Config.vue / 点位相关页 |
+| protocolMeta（非 composable，纯模块） | 协议类型元数据 + protocolOptions（单一来源） | ProtocolSelector.vue / Config.vue / 点位相关页 |
 
 ### config/ —— 配置
 
@@ -103,7 +103,7 @@
 
 单元测试与实现同目录 co-locate（`useXxx.spec.ts`）。当前共 **42 个** spec 文件，
 覆盖约 35 个 composable（含 `useDevices` / `usePoints` / `useSystem` / `useLogs` /
-`useUplinkConfig` / `useUplinkTester` / `useGatewayDiscovery` / `useProtocol` /
+`useUplinkConfig` / `useUplinkTester` / `useGatewayDiscovery` / `protocolMeta` /
 `useLayoutClock` / `useGatewaySwitcher` / `useConfigActions` 等）。
 
 > 精确清单见 `src/composables/**` 下的 `*.spec.ts`；数量随补测变化，**以现场实测为准**，
@@ -112,7 +112,7 @@
 ## 引用约定
 
 - **跨域引用统一走别名**：`@/composables/<域>/useXxx`（如 `@/composables/system/useSystem`）；
-- **同域内引用**可用相对路径（`useProtocol` 在 `devices/` 上一级，故 `devices/usePoints/` 引它用 `'../useProtocol'`）；
+- **同域内引用**可用相对路径（`protocolMeta` 在 `devices/` 上一级，故 `devices/usePoints/` 引它用 `'../protocolMeta'`）；
 - 引用 composable 之外（api / utils / stores / views / types / mock）一律使用 `@/` 别名，
   避免因子目录层级变化导致相对路径失效；
 - 新增 composable 时**先定域、再建文件**：放入对应子目录后按上述约定引用。

@@ -257,7 +257,7 @@ import {
   protocolTransportOf,
   protocolType,
   protocolVariantsOf,
-} from '@/composables/devices/useProtocol'
+} from '@/composables/devices/protocolMeta'
 import type { BusConfig, OpcUaClientConfig } from '@/api/types'
 import { defaultBusReconnectBackoff } from '@/utils/configDefaults'
 import {

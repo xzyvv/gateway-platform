@@ -20,8 +20,8 @@
  */
 import { defineAsyncComponent } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
-import HubShell from '@/components/HubShell.vue'
-import type { HubTab } from '@/components/HubShell.vue'
+import HubShell from '@/views/layout/HubShell.vue'
+import type { HubTab } from '@/views/layout/HubShell.vue'
 
 const RuntimeConfig = defineAsyncComponent({ loader: () => import('./RuntimeConfig.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const Wizard = defineAsyncComponent({ loader: () => import('./Wizard.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

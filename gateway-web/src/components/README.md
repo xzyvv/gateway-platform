@@ -29,10 +29,12 @@ components/
 ├── SectionHeader.vue            # 区块标题（图标 + extra 操作）
 ├── EmptyState.vue              # 空状态（基于 el-empty）
 ├── FreshnessBadge.vue           # 数据新鲜度标签（5s/30s/超时）
-├── HubShell.vue                # 聚合页外壳（tabs + tier + URL 同步）
-├── PageErrorBoundary.vue        # 页面级错误边界（按路由粒度降级）
-└── RequestMonitor.vue           # 请求监控（HTTP 状态展示）
+└── PageErrorBoundary.vue        # 页面级错误边界（按路由粒度降级）
 ```
+
+> 依赖 auth / notifications / requestLog / websocket 等 store 的容器类组件不放在本目录（DD-87）：
+> `HubShell`、`NotificationCenter`、`WsStatusBadge`、`RequestMonitor` 归入 `views/layout/`，
+> 健康结论条归入 `views/ops/health/`；本目录只保留可在无 Pinia 上下文复用的展示/交互组件。
 
 ## 分类速查
 

@@ -78,7 +78,7 @@
 import { h, ref, computed, onMounted } from 'vue'
 import { ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { listModbusErrorsView as listErrors, listCommonIssuesView as getCommonIssues, type ModbusErrorView as ModbusError, type CommonIssueView } from '@/api/diagnostics'
+import { listModbusErrorsView as listErrors, listCommonIssuesView as getCommonIssues, type ModbusErrorView as ModbusError, type CommonIssueView } from '@/api/diagnostics/view'
 import {
   buildMeterErrorEntries,
   METER_ERROR_NOTES,

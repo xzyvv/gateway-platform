@@ -12,7 +12,7 @@ import StatsReport from './StatsReport.vue'
 const mockGetStatsReport = vi.fn()
 const mockExportCsv = vi.fn()
 
-vi.mock('@/api/diagnostics', () => ({
+vi.mock('@/api/diagnostics/view', () => ({
   getStatsReportView: (...args: unknown[]) => mockGetStatsReport(...args),
   exportStatsReportCsv: (...args: unknown[]) => mockExportCsv(...args),
 }))

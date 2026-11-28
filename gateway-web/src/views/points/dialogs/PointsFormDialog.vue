@@ -188,7 +188,7 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
 import { pointFormContextKey } from '../pointFormContext'
-import { protocolAddressPlaceholder } from '@/composables/devices/useProtocol'
+import { protocolAddressPlaceholder } from '@/composables/devices/protocolMeta'
 import { unitChoices } from '@/composables/devices/useUnits'
 import { ratioScopeOf } from '@/composables/devices/useRatio'
 import { modbusAddressOf, parseModbusAddress } from '@/composables/devices/usePoints/modbusAddress'

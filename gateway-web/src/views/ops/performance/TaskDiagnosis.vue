@@ -109,7 +109,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { VideoPlay, CircleCheck, CircleClose, Warning, Clock } from '@element-plus/icons-vue'
-import { diagnosePointView as diagnose, type DiagResultView as DiagResult, type DiagStepStatus } from '@/api/diagnostics'
+import { diagnosePointView as diagnose, type DiagResultView as DiagResult, type DiagStepStatus } from '@/api/diagnostics/view'
 import { listDevices } from '@/api/devices'
 import { listPoints } from '@/api/points'
 import { formatDateTime } from '@/utils/datetime'

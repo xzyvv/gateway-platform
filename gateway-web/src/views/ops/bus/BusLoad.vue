@@ -84,7 +84,7 @@ import echarts, { initChart, disposeChart } from '@/utils/echarts'
 import { tooltipStyle, defaultGrid, valueAxisStyle, categoryAxisStyle, legendStyle, axisNameStyle } from '@/utils/chartStyle'
 import { CHART_PRIMARY, CHART_SUCCESS } from '@/utils/chartTheme'
 import { formatTimeOfDay } from '@/utils/datetime'
-import { listBusLoadsView as listBusLoads, refreshBusLoadsView as refreshBusLoads, getBusLoadView as getBusLoad, type BusLoadView as BusLoad } from '@/api/diagnostics'
+import { listBusLoadsView as listBusLoads, refreshBusLoadsView as refreshBusLoads, getBusLoadView as getBusLoad, type BusLoadView as BusLoad } from '@/api/diagnostics/view'
 
 const loads = ref<BusLoad[]>([])
 const chartRefs = new Map<string, HTMLElement>()

@@ -5,11 +5,11 @@ import { nextTick } from 'vue'
 import ElementPlus from 'element-plus'
 
 import RequestMonitor from './RequestMonitor.vue'
-import { useRequestLogStore } from '../stores/requestLog'
+import { useRequestLogStore } from '@/stores/requestLog'
 
 /** 捕获「复制为 cURL」写入剪贴板的内容 */
 const copiedText = vi.hoisted(() => ({ value: '' }))
-vi.mock('../utils/clipboard', () => ({
+vi.mock('@/utils/clipboard', () => ({
   copyText: async (text: string) => {
     copiedText.value = text
   },

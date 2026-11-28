@@ -23,8 +23,8 @@
  */
 import { defineAsyncComponent } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
-import HubShell from '@/components/HubShell.vue'
-import type { HubTab } from '@/components/HubShell.vue'
+import HubShell from '@/views/layout/HubShell.vue'
+import type { HubTab } from '@/views/layout/HubShell.vue'
 import ConsoleTargetBar from './components/ConsoleTargetBar.vue'
 
 const ModbusAddressMap = defineAsyncComponent({ loader: () => import('./scan/ModbusAddressMap.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

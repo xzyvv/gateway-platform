@@ -88,7 +88,7 @@ import {
   exportStatsReportCsv as exportReportCsv,
   type DeviceStatView,
   type BusStatView,
-} from '@/api/diagnostics'
+} from '@/api/diagnostics/view'
 import { useStatsReport } from '@/composables/data/useStatsReport'
 
 // 表格统一走 DataTable；列顺序/宽度与迁移前保持一致

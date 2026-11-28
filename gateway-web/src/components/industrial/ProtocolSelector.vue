@@ -23,8 +23,8 @@
  *
  * 统一封装 el-select + protocolOptions，避免每个表单各自维护 el-option v-for。
  *
- * 数据源：composables/devices/useProtocol.ts 的 protocolOptions（单一来源）
- * 新增协议只需更新 useProtocol.ts，所有调用方自动同步。
+ * 数据源：composables/devices/protocolMeta.ts 的 protocolOptions（单一来源）
+ * 新增协议只需更新 protocolMeta.ts，所有调用方自动同步。
  *
  * Props:
  *   - modelValue: v-model 绑定的协议值（如 'modbus'）
@@ -40,7 +40,7 @@
  *   <ProtocolSelector v-model="discover.protocol" :filter="['modbus', 'cjt188']" width="140px" />
  */
 import { computed } from 'vue'
-import { protocolOptions } from '@/composables/devices/useProtocol'
+import { protocolOptions } from '@/composables/devices/protocolMeta'
 
 const props = withDefaults(defineProps<{
   modelValue: string

@@ -1,5 +1,5 @@
 import { onMounted } from 'vue'
-import { protocolLabel, protocolType, protocolOptions, protocolAddressPlaceholder } from '../useProtocol'
+import { protocolLabel, protocolType, protocolOptions, protocolAddressPlaceholder } from '../protocolMeta'
 import { createDeviceState } from './state'
 import { createDeviceQuery } from './query'
 import { createDeviceOptions } from './options'

@@ -131,7 +131,7 @@ check('A-3.1', '【DD-67 已修】useDevices/index.ts 不再 import view 组件�
 
 console.log('\n=== A-4 utils 反向依赖 + api⟷utils 双向 ===')
 const cc = read('src/utils/commonColumns.ts')
-check('A-4.1', 'utils/commonColumns.ts 值导入 composables/useProtocol', lineOf(cc, "@/composables/devices/useProtocol") > 0, `line ${lineOf(cc, "@/composables/devices/useProtocol")}`)
+check('A-4.1', 'utils/commonColumns.ts 值导入 composables/protocolMeta', lineOf(cc, "@/composables/devices/protocolMeta") > 0, `line ${lineOf(cc, "@/composables/devices/protocolMeta")}`)
 check('A-4.2', 'utils/commonColumns.ts 类型导入 components/DataTable.vue', lineOf(cc, "@/components/DataTable.vue") > 0, `line ${lineOf(cc, "@/components/DataTable.vue")}`)
 const pool = read('src/utils/websocket/pool.ts')
 const wstate = read('src/utils/websocket/state.ts')
@@ -171,7 +171,7 @@ check('E-1.4', '【DD-68 已修】HealthReport.vue 改用 healthStatusInfo + hea
 
 console.log('\n=== E-2 问题分级计数两份 ===')
 const hstore = read('src/stores/healthReport.ts')
-const hbar = read('src/components/HealthConclusionBar.vue')
+const hbar = read('src/views/ops/health/HealthConclusionBar.vue')
 check('E-2.1', 'stores/healthReport.ts 仍持有 problemCounts computed', /const problemCounts = computed/.test(hstore || ''), `line ${lineOf(hstore, 'const problemCounts = computed')}`)
 check('E-2.2', '【DD-69 已修】HealthConclusionBar 不再自带 reduce，改用 countProblemLevels',
   !/c\[p\.level\] \+= 1/.test(hbar || '') && /countProblemLevels/.test(hbar || ''))
@@ -211,8 +211,8 @@ check('E-5.3', '【DD-72 已修】问题分级同源到 utils/healthStatus 的 p
 
 console.log('\n=== E-6 diagnostics 双 export * ===')
 const dindex = read('src/api/diagnostics/index.ts')
-check('E-6.1', "diagnostics/index.ts 同时 export * from './raw' 与 './view'",
-  /export \* from '\.\/raw'/.test(dindex || '') && /export \* from '\.\/view'/.test(dindex || ''))
+check('E-6.1', '【DD-73 已修】diagnostics 双 export* barrel 已删除，调用方显式从 raw/view 导入',
+  dindex === null)
 const busload = read('src/views/ops/bus/BusLoad.vue')
 check('E-6.2', 'BusLoad.vue 靠重命名消歧 listBusLoadsView as listBusLoads',
   /listBusLoadsView as listBusLoads/.test(busload || ''), `line ${lineOf(busload, 'listBusLoadsView as listBusLoads')}`)

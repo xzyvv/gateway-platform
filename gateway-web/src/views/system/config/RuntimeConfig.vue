@@ -229,7 +229,7 @@ import ModbusServerConfigTab from './tabs/ModbusServerConfigTab.vue'
 import ModbusPassthroughConfigTab from './tabs/ModbusPassthroughConfigTab.vue'
 import RawJsonTab from './tabs/RawJsonTab.vue'
 import ParamSync from './ParamSync.vue'
-import { protocolDefaultTimeoutMs, isProtocolDefaultTimeout } from '@/composables/devices/useProtocol'
+import { protocolDefaultTimeoutMs, isProtocolDefaultTimeout } from '@/composables/devices/protocolMeta'
 import type { BusConfig } from '@/api/types'
 
 const {

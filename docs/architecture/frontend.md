@@ -40,7 +40,7 @@ gateway-web/src/
 │   ├── http/           # 传输层：instance/request/响应拦截器/日志脱敏/登出门（barrel 出口 index.ts）
 │   └── protocolTools/  # 协议工具按业务域分组的接口模块
 ├── assets/             # 静态资源（全局样式等）
-├── components/         # 通用组件（HubShell/StatCard/ErrorBoundary/RequestMonitor...）
+├── components/         # 通用展示组件（DataTable/StatCard/SectionHeader/ErrorBoundary...）
 │   ├── dataTable/      # 表格子组件（普通表 / 虚拟滚动 / 分页器 / 错误条），DataTable.vue 为组合入口
 │   └── industrial/     # 工业场景控件（波特率/校验位/Modbus 地址输入等）
 ├── composables/        # 组合式函数（80+ 个，按域分 10 个子目录：core/acquisition/auth/config/

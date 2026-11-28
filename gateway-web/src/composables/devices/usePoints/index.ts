@@ -1,5 +1,5 @@
 import { onMounted } from 'vue'
-import { protocolLabel, protocolType, protocolOptions } from '../useProtocol'
+import { protocolLabel, protocolType, protocolOptions } from '../protocolMeta'
 import { createPointsState } from './state'
 import { createPointQuery } from './query'
 import { createPointValues } from './values'

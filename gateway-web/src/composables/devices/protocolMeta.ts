@@ -12,7 +12,7 @@ import { reactive } from 'vue'
 
 import { listProtocolCapabilities, type ProtocolCapabilityEntry } from '@/api/protocols'
 import { applyNumericDecodeProtocols } from './decodeParams'
-import { loadPointFields } from './usePointFields'
+import { loadPointFields } from './pointFields'
 
 export type ProtocolTagType = 'primary' | 'success' | 'warning' | 'info' | 'danger'
 

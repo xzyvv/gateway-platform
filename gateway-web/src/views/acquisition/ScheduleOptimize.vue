@@ -36,7 +36,7 @@ import { h, ref, onMounted } from 'vue'
 import { ElProgress, ElTag } from 'element-plus'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import type { ColumnDef } from '@/components/DataTable.vue'
-import { getScheduleOptimizeReport } from '@/api/diagnostics'
+import { getScheduleOptimizeReport } from '@/api/diagnostics/raw'
 
 const { showToast } = useErrorDisplay()
 

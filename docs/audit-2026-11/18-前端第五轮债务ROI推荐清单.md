@@ -10,9 +10,9 @@
 
 ## 0. 一句话总览
 
-> **2026-11-28 更新（13:30）：A 档 14 项全部清空**（批次 0 + 批次 1 + 批次 2 + 批次 3(DOC) + 批次 4(DD-77 / DD-82 / DD-80) + DD-66，共 **16 项**），门禁全绿（lint `--max-warnings 0` EXIT=0 / type-check EXIT=0 / 单测 264 文件 2513 用例全过 / build EXIT=0），**静态环 5 → 0**、**构建警告清零**，健康语义 5 处重复收敛为 1 份共享源，死导出清零，0 字节垃圾文件清零，源码 UTF-8 残字节清零。剩余 **16 项**：**A 档 0** / B 档 3 / C 档 12 / D 档 1。**（16:40 补充：DOC-F8~F10 已完成，剩余 13 项）**　**（20:55 补充：DD-81 / DD-84 / DD-67 / DD-74 / DD-78 / DD-79 六项已完成，B 档清零，剩余 7 项：B 0 / C 6 / D 1，断言 99/99 全绿）**
+> **2026-11-28 更新（13:30）：A 档 14 项全部清空**（批次 0 + 批次 1 + 批次 2 + 批次 3(DOC) + 批次 4(DD-77 / DD-82 / DD-80) + DD-66，共 **16 项**），门禁全绿（lint `--max-warnings 0` EXIT=0 / type-check EXIT=0 / 单测 264 文件 2513 用例全过 / build EXIT=0），**静态环 5 → 0**、**构建警告清零**，健康语义 5 处重复收敛为 1 份共享源，死导出清零，0 字节垃圾文件清零，源码 UTF-8 残字节清零。剩余 **16 项**：**A 档 0** / B 档 3 / C 档 12 / D 档 1。**（16:40 补充：DOC-F8~F10 已完成，剩余 13 项）**　**（20:55 补充：DD-81 / DD-84 / DD-67 / DD-74 / DD-78 / DD-79 六项已完成，B 档清零，剩余 7 项）**　**（21:10 补充：DD-73 / DD-76 / DD-87 已完成，剩余 4 项：C 3 / D 1，断言 99/99 全绿）**
 
-- **32 项待办**（已完成 25 项，剩余 7 项）：**A 档 14 / B 档 5 / C 档 6 / D 档 1**，无一 P0。**A 档与 B 档已全部完成。**
+- **32 项待办**（已完成 28 项，剩余 4 项）：**A 档 14 / B 档 5 / C 档 3 / D 档 1**，无一 P0。**A 档与 B 档已全部完成。**
 - **最该先做（A 档头牌）**：
   - ~~**DD-64**（lint 红灯）~~ ✅ **已完成**——当前 CI lint 门禁已恢复绿；
   - ~~**DD-65**（5 组静态环）~~ ✅ **已完成**——静态环 **5 → 1**，只需动一条边；
@@ -22,7 +22,7 @@
   - ~~**DD-82**（3 个 0 字节垃圾文件）~~ ✅ **已完成**——删前逐项复核，删后 `src` 一级目录实测 **12 个**。
   - ~~**DD-80**（源码 UTF-8 残字节）~~ ✅ **已完成**——`concurrency.ts:30` 还原为完整句子，其余字节未动。
   - ~~**DOC-F3~F7**（5 项纯文档）~~ ✅ **已完成**——10 条 P1 文档债一次清空。
-- **下一个该做**：~~DOC-F8~F10~~、~~DD-81 / DD-84 / DD-67~~、~~DD-74 / DD-78 / DD-79~~ ✅ **均已完成（2026-11-28）**；剩余 C 档 6 项按「谁动那块代码谁捎带」，D 档 DD-83 不单独开工。
+- **下一个该做**：~~DOC-F8~F10~~、~~DD-81 / DD-84 / DD-67~~、~~DD-74 / DD-78 / DD-79~~、~~DD-73 / DD-76 / DD-87~~ ✅ **均已完成（2026-11-28）**；剩余 C 档 3 项（DD-75 等现场、DD-85 / DD-86 随重构）与 D 档 DD-83。
 - **最高单笔价值**：**DD-68**。`HealthReport.vue:145` 自建取色映射，把后端登记的 `error` 档显示成琥珀色"警告"而非红色"严重"，且绕开了全站唯一取色入口。
 - **投入最大**：**DD-83**（`utils/` 71 文件分层）——L 档，回报只是结构收敛、无现场表现，**建议随其他改动捎带，不单独开工**。
 - ~~**需要一个决策拍板**：**DD-66**（`useSessions` 归属）~~ ✅ **已拍板并完成**——用户定「上移为 store」，静态环 **1 → 0**，两份互相矛盾的文档已统一；顺带清掉基线最后一条 `INEFFECTIVE_DYNAMIC_IMPORT` 构建警告。
@@ -95,12 +95,12 @@
 | 20 | **DOC-F8** | `frontend.md` 的 axios / Element Plus 归属错 + E2E 覆盖项过期 | **S** | 中 | **C** | ✅ 已完成（2026-11-28） |
 | 21 | **DOC-F9** | `frontend-naming.md` §7 页面表过期（3 处） | **S** | 中 | **C** | ✅ 已完成（2026-11-28） |
 | 22 | **DOC-F10** | `README.md`「13 个一级目录」计数错 + 优化方向滞后现实 | **S** | 中 | **C** | ✅ 已完成（2026-11-28） |
-| 23 | **DD-73** | `api/diagnostics` barrel 双 `export *`，两套 API 只差 `View` 后缀 | **M** | 中 | **C** | 需定「删一层 or 统一改名」 |
+| 23 | **DD-73** | `api/diagnostics` barrel 双 `export *`，两套 API 只差 `View` 后缀 | **M** | 中 | **C** | ✅ 已完成（2026-11-28），删除 barrel，显式 raw/view |
 | 24 | **DD-74** | 两个同名不同义的 `ConfigIssue` | **M** | 中 | **C** | ✅ 已完成（2026-11-28），改为 ConfigValidationIssue / ConfigHealthIssue |
 | 25 | **DD-75** | 「会话」一词四义 + `critical` 两义 | **M** | 中 | **C** | 改文案要过现场确认 |
 | 26 | **DD-86** | `utils/` 反向依赖上层 + `api` ⟷ `utils` 双向 | **M** | 中 | **C** | 牵动较广 |
-| 27 | **DD-87** | `components/` 直接依赖 `stores/`（10 处） | **M** | 中 | **C** | 影响通用组件可复用性 |
-| 28 | **DD-76** | `use*` 命名但没有 `use*` 导出（2 个文件） | **S** | 低 | **C** | 需裁定"目录即 composable"范式 |
+| 27 | **DD-87** | `components/` 直接依赖 `stores/`（10 处） | **M** | 中 | **C** | ✅ 已完成（2026-11-28），容器组件迁入 views，components 零 store 导入 |
+| 28 | **DD-76** | `use*` 命名但没有 `use*` 导出（2 个文件） | **S** | 低 | **C** | ✅ 已完成（2026-11-28），改名 pointFields / protocolMeta |
 | 29 | **DD-78** | 导出的 `statusTagType` 与全站唯一取色入口同名 | **S** | 低 | **C** | ✅ 已完成（2026-11-28），改名 replayStatusTagType |
 | 30 | **DD-79** | 命名违反"能力词不表达技术栈"（`*Page` / `*View`） | **S** | 低 | **C** | ✅ 已完成（2026-11-28），UplinkConfig / CurrentCertificate |
 | 31 | **DD-85** | `api/` 分组维度不统一（37 平铺 + 4 子目录） | **M** | 低 | **C** | 动 `api/index.ts` 需回归 |
@@ -141,7 +141,7 @@
 >
 > 最终**没有**用动态 import，而是新增 `src/api/http/authBridge.ts` 桥接模块：`app/main.ts` 在 pinia 安装后注册一个"登出补丁函数"，传输层只管调用。
 >
-> **原因**：`stores/auth.ts` 已被 `router/index.ts`、`components/HubShell.vue` 等多处静态引入，与 `api/http/` 同在入口 chunk——动态导入会产生 `INEFFECTIVE_DYNAMIC_IMPORT` 构建警告（零拆包收益），正是项目当初为避免该警告而拆出 `api/inflight.ts` 的同一顾虑。桥接方案保持**同步**语义（登出时 `loggedIn` 立刻变 false），不引入微任务延迟。
+> **原因**：`stores/auth.ts` 已被 `router/index.ts`、`views/layout/HubShell.vue` 等多处静态引入，与 `api/http/` 同在入口 chunk——动态导入会产生 `INEFFECTIVE_DYNAMIC_IMPORT` 构建警告（零拆包收益），正是项目当初为避免该警告而拆出 `api/inflight.ts` 的同一顾虑。桥接方案保持**同步**语义（登出时 `loggedIn` 立刻变 false），不引入微任务延迟。
 >
 > **改动清单**（5 个文件）：
 > | 文件 | 改动 |
@@ -241,7 +241,7 @@
 > | `src/views/ops/health/DiskHealthChart.vue` | 删 `LEVEL_LABEL`，改 `diskLevelMeta` |
 > | `src/views/ops/health/HealthProblemList.vue` | `levelMeta` 委托 `problemLevelMeta` |
 > | `src/views/acquisition/console/parts/debugWizardProbes.ts` | `levelTagType` 委托 `problemLevelMeta` |
-> | `src/components/HealthConclusionBar.vue` | 新增可选 `counts` prop；本地 reduce 改用 `countProblemLevels` |
+> | `src/views/ops/health/HealthConclusionBar.vue` | 新增可选 `counts` prop；本地 reduce 改用 `countProblemLevels`（DD-87 后归入 health 目录） |
 > | `src/composables/system/useSystem.ts` | 透出 `healthProblemCounts` |
 > | `src/views/system/overview/SystemOverview.vue` · `src/views/ops/health/GatewayDiag.vue` | 给结论条传 `:counts` |
 >
@@ -300,15 +300,15 @@
 | 编号 | 做什么 | 需要谁拍板 |
 |---|---|---|
 | **DD-67** | 唯一的真层级倒挂：`composables/devices/useDevices/index.ts:3` 引用 `views/.../DeviceDiscoverDialog.vue`。改法：对话框由 `DeviceList.vue` 挂载，composable 只管开关状态与提交回调 | ✅ 已修（2026-11-28） |
-| **DD-73** | `api/diagnostics/index.ts` 同时 `export * from './raw'` 与 `'./view'`，两套 API 只差 `View` 后缀。改法：删一层强制显式选，或统一加 `Raw` 后缀 | 开发负责人 |
+| **DD-73** | `api/diagnostics/index.ts` 同时 `export * from './raw'` 与 `'./view'`，两套 API 只差 `View` 后缀。改法：删一层强制显式选，或统一加 `Raw` 后缀 | ✅ 已修（2026-11-28，删 barrel） |
 | **DD-74** | 两个同名 `ConfigIssue`（`configValidation.ts:15` vs `configHealth.ts:19`）→ 改名即可，风险低 | ✅ 已修（2026-11-28） |
 | **DD-75** | 「会话」四义（登录/回放/透传/"连接会话"）+ `critical` 两义（设备域"异常" vs 网关域"严重"）→ 改文案要过现场确认 | 产品 + 开发 |
-| **DD-76** | `usePointFields.ts` / `useProtocol.ts` 用 `use*` 命名但无 `use*` 导出 → 需裁定"目录即 composable"（`usePoints/`、`useDevices/` 已是此范式） | 开发负责人 |
+| **DD-76** | `usePointFields.ts` / `useProtocol.ts` 用 `use*` 命名但无 `use*` 导出 → 需裁定"目录即 composable"（`usePoints/`、`useDevices/` 已是此范式） | ✅ 已修（2026-11-28） |
 | **DD-78** | `usePacketReplay.ts:60` 导出的 `statusTagType` 与 `utils/statusType.ts:81` 同名不同义 → 改名即可 | ✅ 已修（2026-11-28） |
 | **DD-79** | `UplinkConfigPage.vue` / `CertView.vue` 违反"能力词不表达技术栈" → 改名即可 | ✅ 已修（2026-11-28） |
 | **DD-85** | `api/` 分组维度统一（37 平铺 + 4 子目录混放），动 `api/index.ts` 需全量回归 | 开发负责人 |
 | **DD-86** | `utils/` 反向依赖上层 + `api` ⟷ `utils` 双向 → 牵动较广 | 开发负责人 |
-| **DD-87** | `components/` 直接依赖 `stores/`（10 处）→ 影响通用组件可复用性 | 开发负责人 |
+| **DD-87** | `components/` 直接依赖 `stores/`（10 处）→ 影响通用组件可复用性 | ✅ 已修（2026-11-28） |
 | **DD-83** | `utils/` 顶层 71 文件按主题分域 → **L 档，建议随其他改动捎带，不单独开工** | 排期 |
 
 ---
@@ -391,7 +391,7 @@
 ## 7. 一页纸版
 
 ```
-✅ 已完成（2026-11-28，共 25 项，A 档 14 项全部清空）：
+✅ 已完成（2026-11-28，共 28 项，A 档 14 项全部清空）：
    DD-64 lint红灯      → 已修，lint 恢复 EXIT=0
    DD-65 静态环        → 已修，5 组 → 1 组
    DD-66 静态环        → 已修，1 组 → 0 组（会话上移为 store，用户已拍板）
@@ -410,13 +410,16 @@
    DD-74 ConfigIssue   → 已修，拆分 ConfigValidationIssue / ConfigHealthIssue
    DD-78 statusTagType → 已修，回放侧改名 replayStatusTagType
    DD-79 命名违例      → 已修，UplinkConfig / UplinkTemplate / CurrentCertificate
+   DD-73 双 barrel     → 已修，删除 diagnostics/index.ts，调用方显式选 raw / view
+   DD-76 use* 命名     → 已修，改名 pointFields.ts / protocolMeta.ts
+   DD-87 store 耦合    → 已修，容器组件迁 views/layout 与 views/ops/health
 
-本季做（1~3天）：     ~~DD-81 / DD-84 / DD-67~~ ✅ 已完成；C 档 6 项随改动捎带
+本季做（1~3天）：     C 档 3 项中 DD-86 单独立项，DD-85 随 api 重构捎带
 
-有空再做：            DD-73 / DD-75 / DD-76 / DD-85~DD-87
+有空再做：            DD-75（等现场文案） · DD-85 · DD-86
 
 别单独开工：          DD-83 utils分层(L档，随其他改动捎带)
 ```
 
-> **剩余 7 项分布**：**A 档 0** / B 档 0 / C 档 6 / D 档 1，无一 P0。
-> **当前门禁实测（2026-11-28 20:55）**：lint `--max-warnings 0` EXIT=0 · type-check EXIT=0 · 单测 264 文件 / 2513 用例全过 · build EXIT=0（**构建警告 0 条**） · **静态环 0 组** · 断言 **99/99 PASS**。
+> **剩余 4 项分布**：**A 档 0** / B 档 0 / C 档 3 / D 档 1，无一 P0。
+> **当前门禁实测（2026-11-28 21:10）**：lint `--max-warnings 0` EXIT=0 · type-check EXIT=0 · 单测 264 文件 / 2513 用例全过 · build EXIT=0（**构建警告 0 条**） · **静态环 0 组** · 断言 **99/99 PASS**。

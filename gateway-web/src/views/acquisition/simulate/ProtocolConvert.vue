@@ -21,7 +21,7 @@
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
         <el-form-item label="规则名称" prop="name"><el-input v-model="form.name" placeholder="请输入规则名称" /></el-form-item>
         <el-form-item label="源协议">
-          <!-- 源协议属于采集侧，与点位/设备共用同一份协议注册表（useProtocol） -->
+          <!-- 源协议属于采集侧，与点位/设备共用同一份协议注册表（protocolMeta） -->
           <ProtocolSelector v-model="form.sourceProto" aria-label="源协议" />
         </el-form-item>
         <el-form-item label="源点位 ID" prop="sourcePointId">

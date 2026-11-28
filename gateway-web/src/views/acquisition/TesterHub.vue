@@ -22,8 +22,8 @@
  */
 import { defineAsyncComponent } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
-import HubShell from '@/components/HubShell.vue'
-import type { HubTab } from '@/components/HubShell.vue'
+import HubShell from '@/views/layout/HubShell.vue'
+import type { HubTab } from '@/views/layout/HubShell.vue'
 
 const Tester = defineAsyncComponent({ loader: () => import('./simulate/Tester.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const BatchReadTest = defineAsyncComponent({ loader: () => import('./simulate/BatchReadTest.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

@@ -60,7 +60,7 @@
 <script setup lang="ts">
 import { Connection, Location, Collection } from '@element-plus/icons-vue'
 import type { DeviceConfig } from '@/api/types'
-import { protocolLabel, protocolType } from '@/composables/devices/useProtocol'
+import { protocolLabel, protocolType } from '@/composables/devices/protocolMeta'
 
 defineProps<{ deviceList: DeviceConfig[] }>()
 const emit = defineEmits<{ 'device-click': [d: DeviceConfig] }>()

@@ -3,7 +3,7 @@
  *
  * 从 ./view 抽出的纯类型/常量声明：后端 ts-rs 把 i64/u64 映射为 bigint，
  * 且字段名为 snake_case；View 层用 camelCase + number 时间戳，这里集中声明适配后的形态。
- * 由 ./view 重新导出，保持 `from '@/api/diagnostics'` 调用方兼容。
+ * 由 ./view 统一重新导出；调用方按需从 `@/api/diagnostics/view` 或 `.../raw` 显式导入。
  */
 
 export interface BusLoadHistoryView {

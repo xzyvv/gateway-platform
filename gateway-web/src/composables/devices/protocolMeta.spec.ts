@@ -12,10 +12,10 @@ import {
   protocolTransportOf,
   protocolEndpointPlaceholder,
   protocolVariantsOf,
-} from './useProtocol'
+} from './protocolMeta'
 
 /**
- * useProtocol 默认超时映射单元测试：
+ * protocolMeta 默认超时映射单元测试：
  * - 串行表计总线取 1s，TCP 类协议取 3s
  * - 未登记协议回落到兜底默认
  * - isProtocolDefaultTimeout 用于协议切换时判断「是否仍为默认值」

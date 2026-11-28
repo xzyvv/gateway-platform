@@ -2,7 +2,7 @@ import { ref, shallowRef, triggerRef, computed, watch, onMounted, onUnmounted, n
 import { ElMessage } from 'element-plus'
 import { GatewayWebSocket } from '@/utils/websocket'
 import { useWebsocketStore } from '@/stores/websocket'
-import { diagnosticsExec } from '@/api/diagnostics'
+import { diagnosticsExec } from '@/api/diagnostics/raw'
 import { useWebhook } from '@/composables/uplink/useWebhook'
 import { precheckCommand, QUICK_DIAGNOSTIC_COMMANDS } from '@/utils/diagnosticsCommands'
 import { useVirtualLogs } from './useVirtualLogs'

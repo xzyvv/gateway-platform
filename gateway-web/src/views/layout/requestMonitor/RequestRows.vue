@@ -23,7 +23,7 @@
 
 <script setup lang="ts">
 import type { PropType } from 'vue'
-import EmptyState from '../EmptyState.vue'
+import EmptyState from '@/components/EmptyState.vue'
 import type { RequestLogEntry as RequestRecord } from '@/stores/requestLog'
 
 /**

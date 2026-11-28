@@ -16,7 +16,7 @@ import EmptyState from '@/components/EmptyState.vue'
  *   4. 空列表要有创建入口，删除要按索引上抛。
  */
 
-vi.mock('@/composables/devices/useProtocol', () => ({
+vi.mock('@/composables/devices/protocolMeta', () => ({
   protocolLabel: {
     modbus: 'Modbus RTU/TCP',
     dlt645: 'DL/T 645',

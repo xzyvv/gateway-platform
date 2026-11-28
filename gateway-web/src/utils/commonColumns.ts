@@ -7,13 +7,13 @@
  * - 各页面差异（宽度 / 排序 / 自定义取色）通过参数覆盖，不复制整段 `h()`。
  *
  * 约束：这里只做「展示形态」的收敛，不掺业务判断——颜色映射仍走
- * `utils/statusType.ts`，协议元数据仍走 `composables/devices/useProtocol.ts`。
+ * `utils/statusType.ts`，协议元数据仍走 `composables/devices/protocolMeta.ts`。
  */
 import { h, type VNodeChild } from 'vue'
 import { ElTag } from 'element-plus'
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { formatDateTime } from '@/utils/datetime'
-import { protocolLabel, protocolType } from '@/composables/devices/useProtocol'
+import { protocolLabel, protocolType } from '@/composables/devices/protocolMeta'
 import type { TagType } from '@/utils/statusType'
 
 /** 行类型只要求是对象；取值统一走 key 下标，避免各页接口无索引签名导致泛型约束报错 */

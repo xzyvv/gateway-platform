@@ -22,7 +22,7 @@ import {
 import { useConfigJson } from './useConfigJson'
 import { scopedGet, scopedSet, scopedRemove } from '@/utils/gatewayStorage'
 import { useWebhook } from '@/composables/uplink/useWebhook'
-import { protocolDefaultTimeoutMs } from '@/composables/devices/useProtocol'
+import { protocolDefaultTimeoutMs } from '@/composables/devices/protocolMeta'
 import { useRoute } from 'vue-router'
 import { triggerDownload } from '@/utils/exportCsv'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'

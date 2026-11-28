@@ -90,7 +90,7 @@ const { showToast } = useErrorDisplay()
 import type { ColumnDef } from '@/components/DataTable.vue'
 import { useColumnPrefs } from '@/composables/core/useTablePrefs'
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
-import { type DeviceStatView } from '@/api/diagnostics'
+import { type DeviceStatView } from '@/api/diagnostics/view'
 import { useStatsReport } from '@/composables/data/useStatsReport'
 import { deviceFailureMap, fetchPointQualities } from '@/composables/data/usePointQuality'
 import { getConfig } from '@/api/config'

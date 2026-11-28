@@ -271,7 +271,7 @@ import { useSystem } from '@/composables/system/useSystem'
 import { formatDateTime } from '@/utils/datetime'
 import HealthStatus from '@/views/overview/HealthStatus.vue'
 import HealthProblemList from '@/views/ops/health/HealthProblemList.vue'
-import HealthConclusionBar from '@/components/HealthConclusionBar.vue'
+import HealthConclusionBar from '@/views/ops/health/HealthConclusionBar.vue'
 import DeviceDeadLetterPanel from '@/views/uplink/components/DeviceDeadLetterPanel.vue'
 import LocalNotifyQueuePanel from './components/LocalNotifyQueuePanel.vue'
 

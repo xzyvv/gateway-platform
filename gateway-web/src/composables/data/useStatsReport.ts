@@ -9,7 +9,8 @@
  * 随配置变更重载），缓存会让「刷新」按钮拿到旧数据。
  */
 import { ref, shallowRef } from 'vue'
-import { getStatsReportView, type StatsPeriod, type StatsReportView } from '@/api/diagnostics'
+import { getStatsReportView, type StatsReportView } from '@/api/diagnostics/view'
+import type { StatsPeriod } from '@/api/diagnostics/raw'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 
 export function useStatsReport(initialPeriod: StatsPeriod = 'day') {

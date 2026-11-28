@@ -37,7 +37,7 @@ function loadDensity(): TableDensity {
  *
  * 这里刻意不用 Pinia：密度是纯 UI 偏好，不参与任何业务判断，也不需要 devtools
  * 调试与持久化插件。用 store 会把一个布尔值塞进持久化体系，反而多一层失效路径。
- * 它与 useProtocol.ts 的模块级共享缓存同理。
+ * 它与 protocolMeta.ts 的模块级共享缓存同理。
  */
 // eslint-disable-next-line no-restricted-syntax
 const density = ref<TableDensity>(loadDensity())

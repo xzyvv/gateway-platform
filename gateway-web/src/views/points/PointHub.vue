@@ -12,8 +12,8 @@
  */
 import { defineAsyncComponent } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
-import HubShell from '@/components/HubShell.vue'
-import type { HubTab } from '@/components/HubShell.vue'
+import HubShell from '@/views/layout/HubShell.vue'
+import type { HubTab } from '@/views/layout/HubShell.vue'
 
 const Points = defineAsyncComponent({ loader: () => import('./PointList.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const PointsTrash = defineAsyncComponent({ loader: () => import('./PointTrash.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

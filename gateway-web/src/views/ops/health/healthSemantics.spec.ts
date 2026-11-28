@@ -25,7 +25,7 @@ import {
   problemLevelMeta,
 } from '@/utils/healthStatus'
 import { healthStatusInfo } from '@/utils/healthStatus'
-import HealthConclusionBar from '@/components/HealthConclusionBar.vue'
+import HealthConclusionBar from '@/views/ops/health/HealthConclusionBar.vue'
 
 /* -------------------------------------------------------------------------- */
 /* 1) 组件状态：健康报告页 vs 运行总览页                                        */

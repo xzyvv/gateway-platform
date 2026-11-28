@@ -24,8 +24,8 @@
  */
 import { defineAsyncComponent } from 'vue'
 import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
-import HubShell from '@/components/HubShell.vue'
-import type { HubTab } from '@/components/HubShell.vue'
+import HubShell from '@/views/layout/HubShell.vue'
+import type { HubTab } from '@/views/layout/HubShell.vue'
 
 const History = defineAsyncComponent({ loader: () => import('./pipeline/History.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const DataCompare = defineAsyncComponent({ loader: () => import('./pipeline/DataCompare.vue'), loadingComponent: AsyncTabLoading, delay: 200 })

@@ -39,7 +39,7 @@
  * 无样本时明确提示「不做推算」，不再给出虚构结论。 */
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import echarts, { initChart, disposeChart } from '@/utils/echarts-extra'
-import { getScheduleTimeline } from '@/api/diagnostics'
+import { getScheduleTimeline } from '@/api/diagnostics/raw'
 
 interface TaskBar {
   label: string

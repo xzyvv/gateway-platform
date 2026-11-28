@@ -18,7 +18,7 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: pushMock }),
 }))
 
-vi.mock('@/api/diagnostics', () => ({
+vi.mock('@/api/diagnostics/view', () => ({
   getStatsReportView: (...args: unknown[]) => mockGetStatsReport(...args),
 }))
 

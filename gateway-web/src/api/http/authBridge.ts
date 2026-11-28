@@ -9,7 +9,7 @@
  *
  * ## 为什么不用动态 import
  *
- * `stores/auth.ts` 已被 `router/index.ts`、`components/HubShell.vue` 等多处静态引入，
+ * `stores/auth.ts` 已被 `router/index.ts`、`views/layout/HubShell.vue` 等多处静态引入，
  * 与 `api/http/` 同在入口 chunk。动态导入会产生 `INEFFECTIVE_DYNAMIC_IMPORT`
  * 构建警告（零拆包收益）——同一顾虑见 `api/inflight.ts` 头部注释。
  *
