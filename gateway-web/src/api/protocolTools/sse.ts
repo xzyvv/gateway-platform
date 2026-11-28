@@ -10,6 +10,7 @@
  */
 import { getToken } from '../token'
 import { isTauri } from '../env'
+import { logWarn } from '@/utils/logger'
 
 /** 流式端点事件回调：event 为 SSE `event:` 字段，data 为单行 JSON 解析结果 */
 export interface SseStreamHandlers {
@@ -89,6 +90,6 @@ function dispatchSseBlock(raw: string, onEvent: SseStreamHandlers['onEvent']): v
     onEvent(event, JSON.parse(dataLines.join('\n')) as Record<string, unknown>)
   } catch {
     // 半截 JSON 容错：跳过该事件、不中断流；但不能静默，否则事件流损坏无从排查（DD-25）
-    console.warn('[protocolTools] 丢弃无法解析的 SSE 事件', event, dataLines.join('\n'))
+    logWarn('protocolTools', '丢弃无法解析的 SSE 事件', event, dataLines.join('\n'))
   }
 }
