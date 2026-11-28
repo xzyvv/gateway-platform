@@ -1,12 +1,26 @@
 /**
- * 登录会话管理（前端模拟）
+ * 登录会话 store（前端模拟）
+ *
  * 后端目前只支持单 token，这里在前端模拟"会话列表"概念：
  * - 记录本次登录时间、来源 IP（从 X-Forwarded-For 或未知）
  * - 支持查看活跃会话、强制下线（即清 token）
+ *
+ * 为什么是 store 而不是 composable（DD-66）：
+ * 会话列表要跨页面共享（路由守卫 + 系统总览页），且**登录会话属于应用级状态**——
+ * `src/composables/README.md` 自称唯一真源，判定「登录会话应进 store」。
+ * 原先它躺在 `composables/system/useSessions.ts`，导致
+ * `stores/auth.ts ⟷ composables/system/useSessions.ts` 互为静态依赖（最后一组静态环）。
+ *
+ * 环是怎么断的：
+ * - `stores/sessions.ts → stores/auth.ts` 保留（下线当前会话要真登出，见 revoke）。
+ * - `stores/auth.ts → stores/sessions.ts` **去掉**——登录成功后登记会话改由调用方
+ *   （`views/auth/Login.vue`）显式调 `useSessionsStore().markLogin()`。
+ *   单向依赖，不再成环。
  */
+import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getToken, clearToken } from '@/api/index'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthStore } from './auth'
 import { scopedGet, scopedRemove, scopedSet } from '@/utils/gatewayStorage'
 
 export interface LoginSession {
@@ -44,16 +58,14 @@ function save(sessions: LoginSession[]) {
   try { scopedSet(STORAGE_KEY, JSON.stringify(sessions)) } catch { /* ignore */ }
 }
 
-// @singleton: 登录会话列表需跨页面共享（路由守卫 + Sessions 管理页），有意使用模块级 ref
-// 持久化到 localStorage，后续如需 devtools 追踪可迁移到 Pinia store
-// eslint-disable-next-line no-restricted-syntax
-const sessions = ref<LoginSession[]>(load())
-
 function currentSessionId(): string {
   return scopedGet('gw_current_session') || ''
 }
 
-export function useSessions() {
+export const useSessionsStore = defineStore('sessions', () => {
+  // 会话列表持久化到 localStorage；store 实例全局唯一，天然跨页面共享
+  const sessions = ref<LoginSession[]>(load())
+
   /** 记录一次新登录 */
   function markLogin(ip?: string) {
     const id = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -95,7 +107,12 @@ export function useSessions() {
     return sess
   }
 
-  /** 刷新当前会话的活跃时间 */
+  /**
+   * 刷新当前会话的活跃时间。
+   *
+   * 目前**没有生产调用方**——它属于会话生命周期能力的公开接口，
+   * 保留在 store 上以免后续要接「闲置超时自动下线」时再造一遍。
+   */
   function touch() {
     const id = currentSessionId()
     const s = sessions.value.find((x) => x.id === id)
@@ -137,7 +154,11 @@ export function useSessions() {
     return sessions.value
   }
 
-  /** 检查当前 token 是否仍有效（是否需要跳登录） */
+  /**
+   * 检查当前 token 是否仍有效（是否需要跳登录）。
+   *
+   * 目前**没有生产调用方**，同 touch()——保留为公开能力。
+   */
   async function isLoggedIn(): Promise<boolean> {
     return !!(await getToken())
   }
@@ -152,7 +173,4 @@ export function useSessions() {
     list,
     isLoggedIn,
   }
-}
-
-
-
+})

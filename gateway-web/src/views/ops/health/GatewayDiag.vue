@@ -6,6 +6,7 @@
     <HealthConclusionBar
       :problems="report?.problems ?? []"
       :status="overallStatus"
+      :counts="problemCounts"
       :generated-at-ms="report?.generated_at_ms"
       :summary-text="summaryText"
     />
@@ -58,7 +59,7 @@ import HealthProblemList from './HealthProblemList.vue'
 const diag = ref<GatewayDiag>({} as GatewayDiag)
 
 // 健康结论 / 组件清单 / 问题清单来自聚合报告（与总览/健康报告同源）
-const { report, loading, refresh, overallStatus } = useHealthReport()
+const { report, loading, refresh, overallStatus, problemCounts } = useHealthReport()
 const healthRows = computed(() => healthRowsFromComponents(report.value?.components))
 // 一行摘要：总线数与在线设备数，完整结论（逐总线明细/分级处置）在健康报告页
 const summaryText = computed(() => {

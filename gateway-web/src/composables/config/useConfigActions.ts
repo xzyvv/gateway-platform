@@ -10,7 +10,7 @@ import {
 } from '@/api/config'
 import { setToken } from '@/api'
 import type { GatewayConfig } from '@/api/types'
-import { validateConfig, type ConfigIssue } from '@/utils/configValidation'
+import { validateConfig, type ConfigValidationIssue } from '@/utils/configValidation'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import {
   createSeedConfig,
@@ -278,7 +278,7 @@ export function useConfigActions() {
         return
       }
       // P4：校验规则在后端，需等待接口返回；请求失败时取消保存（避免无校验直发）。
-      let issues: ConfigIssue[]
+      let issues: ConfigValidationIssue[]
       try {
         issues = await validateConfig(config)
       } catch (e) {

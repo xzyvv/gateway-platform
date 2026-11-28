@@ -25,7 +25,7 @@ vi.mock('element-plus', async () => {
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
 vi.mock('@/api/config', () => ({ getConfig: (...a: unknown[]) => getConfigMock(...a) }))
 vi.mock('@/api/templates', () => ({ listTemplates: (...a: unknown[]) => listTemplatesMock(...a) }))
-vi.mock('@/utils/configHealth', () => ({ loadConfigIssues: (...a: unknown[]) => loadIssuesMock(...a) }))
+vi.mock('@/utils/configHealth', () => ({ loadConfigHealthIssues: (...a: unknown[]) => loadIssuesMock(...a) }))
 vi.mock('@/composables/core/useErrorDisplay', () => ({ useErrorDisplay: () => ({ showToast }) }))
 
 const routerPush = vi.hoisted(() => vi.fn())
@@ -35,11 +35,11 @@ const loadIssuesMock = vi.hoisted(() => vi.fn())
 const showToast = vi.hoisted(() => vi.fn())
 
 import ConfigHealth from './ConfigHealth.vue'
-import type { ConfigIssue } from '@/utils/configHealth'
+import type { ConfigHealthIssue } from '@/utils/configHealth'
 
 const CFG = { buses: [{ id: 'bus1' }], devices: [{ id: 'dev1' }], points: [{ id: 'p1' }] }
 
-const ISSUES: ConfigIssue[] = [
+const ISSUES: ConfigHealthIssue[] = [
   {
     id: 'i1', level: 'error', category: '总线', target: 'bus1',
     description: '总线不存在', suggestion: '创建总线', autoFixable: false,
@@ -127,7 +127,7 @@ describe('ConfigHealth 配置体检', () => {
     expect(wrapper.findComponent({ name: 'ElProgress' }).props('color')).toBe('var(--el-color-warning)')
 
     const table = wrapper.findComponent({ name: 'DataTable' })
-    expect((table.props() as unknown as { data: ConfigIssue[] }).data).toHaveLength(3)
+    expect((table.props() as unknown as { data: ConfigHealthIssue[] }).data).toHaveLength(3)
     expect(wrapper.text()).toContain('问题清单（共 3 项）')
     expect(wrapper.text()).toContain('总线不存在')
     expect(wrapper.text()).toContain('需手动处理')

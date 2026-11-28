@@ -2,29 +2,21 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { getHealthReport, type HealthReport } from '@/api/status'
 import { extractErrorMessage } from '@/utils/errorHandler'
+import { countProblemLevels, overallStatusMeta, type ProblemCounts } from '@/utils/healthStatus'
 import type { TagType } from '@/utils/statusType'
 
 /** 快照有效期：10s 内重复调用不会产生新请求 */
 export const HEALTH_REPORT_TTL_MS = 10_000
 
-/** 问题分级计数 */
-export interface ProblemCounts {
-  critical: number
-  warning: number
-  info: number
-}
+// 分级计数与综合状态的中文名/徽章色统一由 utils/healthStatus 出（DD-69 / DD-70），
+// 这里只负责把后端原词翻译过去，不再自建字面量副本。
+export type { ProblemCounts }
 
 /** 综合状态：value 为后端原词，label/type 供各页面统一展示 */
 export interface OverallHealthStatus {
   value: 'ok' | 'degraded' | 'critical' | 'unknown'
   label: string
   type: TagType
-}
-
-const STATUS_META: Record<Exclude<OverallHealthStatus['value'], 'unknown'>, { label: string; type: TagType }> = {
-  ok: { label: '正常', type: 'success' },
-  degraded: { label: '降级', type: 'warning' },
-  critical: { label: '严重', type: 'danger' },
 }
 
 /**
@@ -92,18 +84,12 @@ export const useHealthReportStore = defineStore('healthReport', () => {
     lastAttemptAt = Number.NEGATIVE_INFINITY
   }
 
-  const problemCounts = computed<ProblemCounts>(() => {
-    const counts: ProblemCounts = { critical: 0, warning: 0, info: 0 }
-    for (const p of report.value?.problems ?? []) {
-      if (p.level === 'critical' || p.level === 'warning' || p.level === 'info') counts[p.level] += 1
-    }
-    return counts
-  })
+  const problemCounts = computed<ProblemCounts>(() => countProblemLevels(report.value?.problems))
 
   const overallStatus = computed<OverallHealthStatus>(() => {
     const status = report.value?.status
     if (!status) return { value: 'unknown', label: '暂无数据', type: 'info' }
-    return { value: status, ...STATUS_META[status] }
+    return { value: status, ...overallStatusMeta(status) }
   })
 
   return {

@@ -13,11 +13,11 @@
 | **Vue 3** | (由 `@vitejs/plugin-vue` 引入) | UI 框架，所有页面为 `.vue` 单文件组件，Composition API + `<script setup>` |
 | **TypeScript** | ~6.0.2 | 全量类型约束，`tsc && vite build` 构建前类型检查 |
 | **Vite** | ^8.3.0 | 构建工具 + 开发服务器（5173 端口），`vite.config.ts` 配置 `/api`、`/health` 代理到后端 8080 |
-| **Element Plus** | ^2.14.6 | UI 组件库，`app/main.ts` 全局注册，配中文语言包 zh-cn |
+| **Element Plus** | ^2.14.6 | UI 组件库，`vite.config.ts` 经 unplugin 按需自动引入（见 3.2），中文语言包 zh-cn 由 `app/App.vue` 的 `el-config-provider` 提供 |
 | **@element-plus/icons-vue** | ^2.3.2 | Element Plus 图标集 |
-| **Pinia** | ^4.0.3 | 状态管理，如 `stores/auth.ts` 管理登录 token、登录态、会话 |
+| **Pinia** | ^4.0.3 | 状态管理，如 `stores/auth.ts` 管理登录 token 与登录态、`stores/sessions.ts` 管理登录会话列表 |
 | **Vue Router** | ^5.3.1 | 路由，`router/index.ts` 定义页面路由与登录鉴权守卫 |
-| **Axios** | ^1.20.0 | HTTP 客户端，`api/index.ts` 封装拦截器（自动 Bearer token、统一解包 `{code,message,data}`、401 跳登录、请求日志） |
+| **Axios** | ^1.20.0 | HTTP 客户端，传输层在 `api/http/`（`instance.ts` / `request` / `responseInterceptor.ts`：自动 Bearer token、统一解包 `{code,message,data}`、401 跳登录、请求日志）；`api/index.ts` 只做业务模块聚合 |
 | **ECharts** | ^6.1.0 | 图表渲染，`utils/echarts.ts` 按需引入（LineChart/CanvasRenderer），用于磁盘健康、指标大盘等 |
 
 ### 3.2 工程化
@@ -43,14 +43,15 @@ gateway-web/src/
 ├── components/         # 通用组件（HubShell/StatCard/ErrorBoundary/RequestMonitor...）
 │   ├── dataTable/      # 表格子组件（普通表 / 虚拟滚动 / 分页器 / 错误条），DataTable.vue 为组合入口
 │   └── industrial/     # 工业场景控件（波特率/校验位/Modbus 地址输入等）
-├── composables/        # 组合式函数（30+ 个，按域分子目录：core/auth/devices/config/dashboard/
-│                       #   data/system/layout/uplink；详见 composables/README.md 分类与边界约定）
+├── composables/        # 组合式函数（80+ 个，按域分 10 个子目录：core/acquisition/auth/config/
+│                       #   dashboard/data/devices/layout/system/uplink；
+│                       #   详见 composables/README.md 分类与边界约定）
 ├── mock/               # 仅放「模拟后端」模块（现仅 1 个：用户权限演示数据，dev 模式下按需
 │                       #   动态加载、生产构建被整链消除）；mocks.spec.ts 做孤儿检测，
 │                       #   页面接入真实 API 后强制删除对应 mock
 ├── router/             # 路由配置（index.ts 装配 + routes/index.ts 页面路由，按业务域登记）
-├── stores/             # Pinia 状态（auth/config/gateway/notifications/requestLog/theme/
-│                       #   tier/websocket 共 8 个 store；仅放跨页面共享状态，
+├── stores/             # Pinia 状态（auth/gateway/healthReport/notifications/requestLog/
+│                       #   sessions/theme/tier/websocket 共 9 个 store；仅放跨页面共享状态，
 │                       #   页面内数据由 composables 持有，见 composables/README.md 边界约定）
 ├── test/               # 测试 setup（vitest，测试文件 .spec.ts 与源码 co-locate）
 ├── types/              # 全局类型（角色、RouteMeta 增强）
@@ -91,7 +92,7 @@ gateway-web/src/
 ### 3.4 路由 meta 与命名约定
 
 - 命名分层：**目录 = 业务域（名词）**，**页面 = 对象 + 视图能力**（`DeviceTopology` / `PointHub` / `DataPipelineHub`），Hub 容器统一 `*Hub.vue`；
-- 路径语义 = `/<业务域>[/<视图能力>]`（如 `/devices/topology`、`/system/config`），Hub 内 tab 一律用 `?tab=<name>` 表达，不再为 tab 登记 redirect 别名；
+- 路径语义 = `/<业务域>[/<视图能力>]`（如 `/devices/topology`、`/system/config`），Hub 内 tab 一律用 `?tab=<name>` 表达；**已下线/已合并的页面，其旧 path 保留 redirect 别名**（兼容旧书签与外部链接），不为仍在线的 tab 另建别名；
 - 路由 `name` 与页面组件名一致，便于从路由反查文件；页面路由统一在 [routes/index.ts](../../gateway-web/src/router/routes/index.ts) 维护，`title` / `requireAdmin` 直接写在记录的 `meta` 中；
 - v2.0 起路由不再携带 `tier`：调试/分析/批量功能对所有档位（含失效态）免费，`tier` 不参与访问控制（历史 tier 守卫与 `promoteMeta` 提升逻辑已移除）；
 - 消费方（面包屑 `Layout.vue`、`document.title` 的 `main.ts` afterEach、admin 守卫）一律从 `meta` 读取。
@@ -99,13 +100,13 @@ gateway-web/src/
 ### 3.5 E2E 冒烟（Playwright）
 
 - 运行：`npm run e2e` 一条命令，webServer 自动编排**空配置 gatewayd**（`scripts/e2e/start-gateway.mjs`：临时目录写配置 + /health/live 轮询 + 退出清理）与 **vite dev server :5199**，测试结束自动回收；
-- 范围（DOC-F1 修订，2026-11-23）：仅 chromium、串行（workers=1）、retries=0；用例已扩展为 4 个 spec（`smoke` / `routes-deep` / `write-flows` / `debug-paths`），覆盖只读冒烟（栈健康 / 登录 / 路由巡游 / 暗色持久化 / 404 与降级页 / 登出）+ 写链路（配置保存 / 点位增删 / 点位读写 / 协议调试台能力门控）。写操作均针对 E2E 隔离网关，不碰真实串口 / MQTT / OTA。精确用例数见 `e2e/*.spec.ts` 现场统计；
+- 范围（DOC-F1 修订，2026-11-23）：仅 chromium、串行（workers=1）、retries=0；用例已扩展为 4 个 spec（`smoke` / `routes-deep` / `write-flows` / `debug-paths`），覆盖只读冒烟（栈健康 / 登录 / 路由巡游 / 登出）+ 写链路（配置保存 / 点位增删 / 点位读写 / 协议调试台能力门控）。暗色持久化与 404/降级路由已由 vitest 完全覆盖，e2e 只保留「真实浏览器 + 真实后端」才能验证的链路。写操作均针对 E2E 隔离网关，不碰真实串口 / MQTT / OTA。精确用例数见 `e2e/*.spec.ts` 现场统计；
 - 用例约定：禁止固定 sleep，只用 web-first 断言；定位优先 role / placeholder / 可见文本；浏览器形态下登录页不再触发局域网扫描（`isTauri()` 为 false 时直接跳过 discovery），`e2e/helpers.ts::stubLanDiscovery` 仍拦截 `/health/live` 作为兜底；
 - CI：`.github/workflows/ci.yml` 的 `e2e` job（ubuntu）为**强制门禁**——用例失败即阻塞合并；失败报告 / trace 见 Actions artifact `e2e-playwright-report`（`if: always()` 上传，失败时也能取到现场）。
 
 ### 3.6 运行形态：桌面端 vs 浏览器直连
 
-`utils/tauri.ts::isTauri()` 区分两种运行形态，决定登录页字段与网络地址来源：
+`api/env.ts::isTauri()` 区分两种运行形态，决定登录页字段与网络地址来源：
 
 | 形态 | 登录页 | API / WS 地址来源 |
 |---|---|---|

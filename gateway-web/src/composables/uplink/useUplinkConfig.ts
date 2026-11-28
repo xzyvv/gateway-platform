@@ -18,7 +18,7 @@ import { triggerDownload } from '@/utils/exportCsv'
 /**
  * UplinkConfig 页面数据层封装
  *
- * 把 UplinkConfig.vue 中的配置状态、变量清单、模板编译 computed、保存/加载/
+ * 把 UplinkTemplate.vue 中的配置状态、变量清单、模板编译 computed、保存/加载/
  * 导出/导入/应用模板/插入变量、跳转调试工具、生命周期全部封装，主组件
  * 只剩 template。
  *

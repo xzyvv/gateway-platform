@@ -134,7 +134,7 @@
  * 现场调试向导（C3）
  *
  * 把专家经验整理成「协议 + 症状」的可执行检查清单：流程数据集中在
- * parts/debugWizardFlows.ts，本组件只负责筛选、勾选进度与三类自动检查。
+ * components/debugWizardFlows.ts，本组件只负责筛选、勾选进度与三类自动检查。
  *
  * 自动检查复用现成资产，不另建数据通道：
  * - bus    → useDebugTargets() 的总线列表 + 共享调试目标，判断协议是否匹配
@@ -156,20 +156,20 @@ import {
   type WizardFlow,
   type WizardProtocol,
   type WizardStep,
-} from './parts/debugWizardFlows'
+} from './components/debugWizardFlows'
 import {
   levelTagType,
   runBusProbe,
   runDeviceProbe,
   runHealthProbe,
   type ProbeResult,
-} from './parts/debugWizardProbes'
+} from './components/debugWizardProbes'
 import {
   computeNextActions,
   computeProbeStats,
   computeVerdictText,
   computeVerdictTone,
-} from './parts/debugWizardVerdict'
+} from './components/debugWizardVerdict'
 
 const router = useRouter()
 

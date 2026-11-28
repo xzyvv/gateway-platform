@@ -66,8 +66,8 @@
     <el-card shadow="never" class="section-card">
       <template #header><strong>组件状态</strong></template>
       <div class="chips">
-        <el-tag v-for="(v, k) in components" :key="k" :type="componentType(v)" size="small">
-          {{ k }}：{{ v }}
+        <el-tag v-for="c in componentChips" :key="c.key" :type="c.tag" size="small">
+          {{ c.name }}：{{ c.label }}
         </el-tag>
         <span class="generated">{{ generatedAt }}</span>
       </div>
@@ -98,6 +98,7 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import type { HealthBusRow } from '@/api/status'
 import { useHealthReport } from '@/composables/system/useHealthReport'
 import { busSuccessTag, QUEUE_BACKLOG_WARN } from '@/utils/healthVerdict'
+import { diskLevelMeta, healthComponentLabel, healthStatusInfo } from '@/utils/healthStatus'
 import { formatTimeOfDay } from '@/utils/datetime'
 import HealthProblemList from './HealthProblemList.vue'
 
@@ -142,33 +143,25 @@ const queueBad = computed(() => summary.value.queue_len >= QUEUE_BACKLOG_WARN)
 const evictedRows = computed(() => summary.value.queue_evicted_rows ?? 0)
 const evictedUndeliveredRows = computed(() => summary.value.queue_evicted_undelivered_rows ?? 0)
 
-const componentType = (v: string) =>
-  v === 'ok' ? ('success' as const) : v === 'down' ? ('danger' as const) : ('warning' as const)
-
-/** 磁盘水位档位文案（与后端 DiskLevel 同名同义） */
-const DISK_LEVEL_LABEL: Record<string, string> = {
-  ok: '正常',
-  warn: '预警',
-  critical: '严重',
-  blocking: '阻断',
-}
-
-const diskLevelLabel = computed(
-  () => DISK_LEVEL_LABEL[summary.value.disk_level] ?? '正常',
+const componentChips = computed(() =>
+  Object.entries(components.value).map(([name, status]) => {
+    // 组件名 / 状态名 / 徽章色统一走 utils/healthStatus：那里登记的是后端
+    // /health/ready 的真实取值（process/mqtt/queue/ota、ok/down/backpressure/
+    // degraded），本页不再自建一套映射。
+    const info = healthStatusInfo(status)
+    return {
+      key: name,
+      name: healthComponentLabel(name),
+      label: info.label,
+      tag: info.tag,
+    }
+  }),
 )
 
-const diskTagType = computed(() => {
-  switch (summary.value.disk_level) {
-    case 'blocking':
-      return 'danger' as const
-    case 'critical':
-      return 'danger' as const
-    case 'warn':
-      return 'warning' as const
-    default:
-      return 'success' as const
-  }
-})
+const diskLevel = computed(() => diskLevelMeta(summary.value.disk_level))
+
+const diskLevelLabel = computed(() => diskLevel.value.label)
+const diskTagType = computed(() => diskLevel.value.type)
 
 const fmtPct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v}%`)
 

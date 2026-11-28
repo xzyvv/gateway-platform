@@ -14,12 +14,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   healthComponentLabel,
-  healthRowsFrom,
+  healthRowsFromComponents,
   healthSeverity,
   healthSnapshotDegraded,
   healthStatusInfo,
   healthStatusLabel,
-  healthStatusTag,
   healthWorstSeverity,
 } from './healthStatus'
 
@@ -83,13 +82,6 @@ describe('healthComponentLabel', () => {
   })
 })
 
-describe('healthStatusTag', () => {
-  it('与 healthStatusInfo 同源', () => {
-    expect(healthStatusTag('down')).toBe('danger')
-    expect(healthStatusTag('backpressure')).toBe('warning')
-  })
-})
-
 describe('healthSnapshotDegraded', () => {
   it('全 ok 时不算降级（不按后端聚合 status）', () => {
     expect(
@@ -113,18 +105,18 @@ describe('healthSnapshotDegraded', () => {
   })
 })
 
-describe('healthRowsFrom', () => {
+describe('healthRowsFromComponents', () => {
   it('把 components 展开成表格行', () => {
-    expect(healthRowsFrom({ status: 'ok', components: { mqtt: 'down', process: 'ok' } })).toEqual([
+    expect(healthRowsFromComponents({ mqtt: 'down', process: 'ok' })).toEqual([
       { name: 'mqtt', status: 'down' },
       { name: 'process', status: 'ok' },
     ])
   })
 
-  it('没有快照或没有组件明细时返回空数组（表格显示空态，不报错）', () => {
-    expect(healthRowsFrom(null)).toEqual([])
-    expect(healthRowsFrom(undefined)).toEqual([])
-    expect(healthRowsFrom({ status: 'ok', components: {} })).toEqual([])
+  it('没有组件明细时返回空数组（表格显示空态，不报错）', () => {
+    expect(healthRowsFromComponents(null)).toEqual([])
+    expect(healthRowsFromComponents(undefined)).toEqual([])
+    expect(healthRowsFromComponents({})).toEqual([])
   })
 })
 

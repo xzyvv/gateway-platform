@@ -12,7 +12,8 @@
 import { computed } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type { HealthProblem, HealthReport } from '@/api/status'
-import type { ConfigIssue } from '@/utils/configHealth'
+import type { ConfigHealthIssue } from '@/utils/configHealth'
+import { overallStatusMeta } from '@/utils/healthStatus'
 
 export type SignalSeverity = 'error' | 'warning'
 
@@ -45,7 +46,7 @@ interface SignalInput {
   /** 健康探针是否可达；仅用于「网关不可达」条目，不参与组件判定 */
   gatewayOnline?: boolean
   /** 配置体检结果（可选）：配置类问题并非健康聚合，仍单独并入总览 */
-  configIssues?: ConfigIssue[]
+  configIssues?: ConfigHealthIssue[]
 }
 
 /** 问题码 → 处理入口；未登记的新问题码退化为「查看健康报告」，不吞掉 */
@@ -91,13 +92,6 @@ const PROBLEM_ACTION: Record<string, { action: string; to: HealthSignal['to'] }>
 const DEFAULT_PROBLEM_ACTION = {
   action: '查看健康报告',
   to: { path: '/ops', query: { tab: 'health-report' } },
-}
-
-/** 与 useHealthReport 的 overallStatus 同一套中文文案 */
-const STATUS_LABEL: Record<HealthReport['status'], string> = {
-  ok: '正常',
-  degraded: '降级',
-  critical: '严重',
 }
 
 /**
@@ -147,7 +141,7 @@ export function buildHealthSignals({
   // 典型场景：storage / ota 组件降级，后端没有对应的 problem，若只看 problems
   // 总览会显示一切正常，与健康报告页的「降级」自相矛盾。
   if (report && report.status !== 'ok' && !report.problems.length) {
-    const label = STATUS_LABEL[report.status]
+    const label = overallStatusMeta(report.status).label
     out.push({
       id: 'health-status',
       severity: report.status === 'critical' ? 'error' : 'warning',
@@ -193,7 +187,7 @@ export function buildHealthSignals({
 export function useHealthSignals(
   report: Readonly<Ref<HealthReport | null>> | (() => HealthReport | null),
   gatewayOnline: Readonly<Ref<boolean>> | (() => boolean) = () => true,
-  configIssues: Readonly<Ref<ConfigIssue[]>> | (() => ConfigIssue[]) = () => [],
+  configIssues: Readonly<Ref<ConfigHealthIssue[]>> | (() => ConfigHealthIssue[]) = () => [],
 ): ComputedRef<HealthSignal[]> {
   const read = <V,>(v: Readonly<Ref<V>> | (() => V)): V =>
     typeof v === 'function' ? (v as () => V)() : v.value

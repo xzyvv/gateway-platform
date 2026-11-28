@@ -4,7 +4,8 @@
  * 命名约定：
  * - 一级路径 = 业务域：overview / devices / points / acquisition / data / uplink / ops / system。
  * - 二级路径 = 视图能力：`/<域>/<能力>`，如 `/devices/topology`、`/system/config`。
- * - Hub 页的 tab 用 `?tab=<name>` 表达，不再为每个 tab 单独登记 redirect 别名。
+ * - Hub 页的 tab 用 `?tab=<name>` 表达；已下线/已合并页面的旧 path 保留 redirect
+ *   别名（兼容旧书签与外部链接），不为仍在线的 tab 另建别名。
  * - `name` 与页面组件名保持一致，便于从路由反查文件。
  * - `title` 放在 `meta` 中（Vue Router 只把 meta 合并进 to.meta），
  *   面包屑（Layout.vue）、document.title（main.ts afterEach）与 admin 守卫均从 meta 读取。

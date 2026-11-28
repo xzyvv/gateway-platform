@@ -11,7 +11,7 @@ import type { VersionInfo, RunStatus } from '@/api/types'
 import { getConfig } from '@/api/config'
 import { useWebhook } from '@/composables/uplink/useWebhook'
 import { listAuditLogs, type AuditLogEntry } from '@/api/auditLog'
-import { useSessions } from './useSessions'
+import { useSessionsStore } from '@/stores/sessions'
 import { useDiagnosticExport } from './useDiagnosticExport'
 import { useHealthReport } from './useHealthReport'
 import { healthRowsFromComponents } from '@/utils/healthStatus'
@@ -67,7 +67,8 @@ export function useSystem() {
   }
 
   // ===== 会话管理 =====
-  const sessions = useSessions()
+  // DD-66：会话能力已从 composable 上移为 Pinia store（stores/sessions.ts）
+  const sessions = useSessionsStore()
   const sessionList = computed(() => sessions.list())
   async function revokeSession(id: string) {
     if (await confirmAction({ message: '确认强制下线该会话？', title: '强制下线' })) {
@@ -268,6 +269,8 @@ export function useSystem() {
     // 健康聚合（组件行 / 问题清单 / 状态）
     healthReport: health.report, healthRows, healthProblems, healthLoading: health.loading,
     healthOverallStatus: health.overallStatus,
+    // 分级计数直接取 store 里算好的那份（与结论条共用同一个纯函数，DD-69）
+    healthProblemCounts: health.problemCounts,
     ntpStatusMap, ntpTagType, nowTime, metricsText, metricsHtml, fmtPct,
     refresh, syncNtp,
     // diagnostic

@@ -19,7 +19,7 @@ import AsyncTabLoading from '@/components/AsyncTabLoading.vue'
 import HubShell from '@/components/HubShell.vue'
 import type { HubTab } from '@/components/HubShell.vue'
 
-const UplinkConfigPage = defineAsyncComponent({ loader: () => import('./UplinkConfigPage.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
+const UplinkConfig = defineAsyncComponent({ loader: () => import('./UplinkConfig.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const UplinkNorthStatus = defineAsyncComponent({ loader: () => import('./UplinkNorthStatus.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const UplinkPassthrough = defineAsyncComponent({ loader: () => import('./UplinkPassthrough.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
 const UplinkTester = defineAsyncComponent({ loader: () => import('./UplinkTester.vue'), loadingComponent: AsyncTabLoading, delay: 200 })
@@ -27,7 +27,7 @@ const UplinkTester = defineAsyncComponent({ loader: () => import('./UplinkTester
 const groupLabels = { config: '通道配置', observe: '运行观测', debug: '调试工具' }
 
 const tabs: HubTab[] = [
-  { name: 'forward-config', label: '上行配置', group: 'config', component: UplinkConfigPage, subtitle: '「通道转发」配置数据发往哪里（目标/周期/启停/连接测试），「上送模板」配置数据长什么样（内容/编码/字节上限），配好后再到「上行状态」看连接结果' },
+  { name: 'forward-config', label: '上行配置', group: 'config', component: UplinkConfig, subtitle: '「通道转发」配置数据发往哪里（目标/周期/启停/连接测试），「上送模板」配置数据长什么样（内容/编码/字节上限），配好后再到「上行状态」看连接结果' },
   { name: 'north-status', label: '上行状态', group: 'observe', component: UplinkNorthStatus, subtitle: '北向健康统一视图：一句话结论 + 上行通道连接数/消息积压/成功失败统计 + 对外服务 Server（OPC UA / Modbus / 透传）存活与透传会话' },
   { name: 'passthrough-sessions', label: '透传会话', group: 'debug', component: UplinkPassthrough, subtitle: '列出透传会话的总线、开始时间与超时时长' },
   { name: 'uplink-tester', label: '上行测试', group: 'debug', component: UplinkTester, subtitle: '编辑模板与测试数据预览渲染结果，可仅渲染或真实上行测试并保留调试历史' },

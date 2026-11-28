@@ -21,6 +21,10 @@ export interface DeviceCommsStat {
 // 用 reactive(Map) 而非裸 Map：调用方（如 useDevices 的 commsStats computed）需要
 // 依赖它做响应式追踪。裸 Map 的读写不触发任何依赖收集，computed 首次求值后永久缓存，
 // 导致"批量连通性检测"后通信质量列不刷新，必须离开页面再回来才更新。
+//
+// 有意保留为模块级单例：4 个跨页面消费方共享同一份统计，迁 Pinia 需同步改 4 个调用点
+// 与 3 个 spec，收益仅为结构收敛；此处显式豁免，并已纳入 ESLint #17 的 utils 覆盖范围。
+// eslint-disable-next-line no-restricted-syntax
 const STATS = reactive(new Map<string, DeviceCommsStat>())
 const MAX_LATENCIES = 20
 
@@ -52,10 +56,12 @@ export function getDeviceStats(): DeviceCommsStat[] {
   return Array.from(STATS.values())
 }
 
-export function getDeviceStat(deviceId: string): DeviceCommsStat | undefined {
-  return STATS.get(deviceId)
-}
-
+/**
+ * 清空统计（测试夹具）。
+ *
+ * 本模块持有模块级状态，单测之间需要复位；生产代码没有「清空全部设备通信统计」
+ * 的场景（切网关时是整页重载），故仅供 spec 使用。
+ */
 export function clearDeviceStats() {
   STATS.clear()
 }

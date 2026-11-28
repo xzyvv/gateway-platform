@@ -48,7 +48,7 @@ describe('protocolFailureLabel', () => {
   })
 
   it('单步调试与报文编辑拿到的是同一份文案（防两份表再次分叉）', async () => {
-    const { errorLabel } = await import('@/views/acquisition/packet/parts/stepDebugTypes')
+    const { errorLabel } = await import('@/views/acquisition/packet/components/stepDebugTypes')
     const { protocolFailureLabel: shared } = await import('./protocolFailures')
     for (const code of CONTRACT_CODES) {
       expect(errorLabel(code)).toBe(shared(code))

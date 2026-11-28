@@ -65,19 +65,19 @@
  *
  * 状态与回放链路（列表/选中会话、流式逐帧进度、停止/重置/另存）全部在
  * composables/acquisition/usePacketReplay.ts；
- * 展示按区块拆到同目录 parts/ 下：
- * - parts/ReplaySessionPanel.vue 左侧「回放文件列表」
- * - parts/ReplayControls.vue     右上执行参数表单（总线/超时/间隔/按钮）
- * - parts/ReplayRunStatus.vue    流式进度条与回放结果汇总
- * - parts/ReplayFrameList.vue    逐帧列表与判定详情
+ * 展示按区块拆到同目录 components/ 下：
+ * - components/ReplaySessionPanel.vue 左侧「回放文件列表」
+ * - components/ReplayControls.vue     右上执行参数表单（总线/超时/间隔/按钮）
+ * - components/ReplayRunStatus.vue    流式进度条与回放结果汇总
+ * - components/ReplayFrameList.vue    逐帧列表与判定详情
  *
  * 本文件只保留布局、事件接线与子组件组合。
  */
 import { usePacketReplay } from '@/composables/acquisition/usePacketReplay'
-import ReplaySessionPanel from './parts/ReplaySessionPanel.vue'
-import ReplayControls from './parts/ReplayControls.vue'
-import ReplayRunStatus from './parts/ReplayRunStatus.vue'
-import ReplayFrameList from './parts/ReplayFrameList.vue'
+import ReplaySessionPanel from './components/ReplaySessionPanel.vue'
+import ReplayControls from './components/ReplayControls.vue'
+import ReplayRunStatus from './components/ReplayRunStatus.vue'
+import ReplayFrameList from './components/ReplayFrameList.vue'
 
 const {
   busOptions,

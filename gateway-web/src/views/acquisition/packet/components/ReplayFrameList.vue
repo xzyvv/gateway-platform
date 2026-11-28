@@ -6,7 +6,7 @@
         <el-tag size="small" :type="p.direction === 'request' ? 'primary' : 'success'">{{ p.direction === 'request' ? '请求' : '响应' }}</el-tag>
         <code class="hex">{{ p.hex || '(空)' }}</code>
         <span class="parsed">{{ p.parsed }}</span>
-        <el-tag v-if="frameOf(p.id)" size="small" :type="statusTagType(frameOf(p.id)!.status)">
+        <el-tag v-if="frameOf(p.id)" size="small" :type="replayStatusTagType(frameOf(p.id)!.status)">
           {{ statusLabel(frameOf(p.id)!.status) }}
         </el-tag>
       </div>
@@ -36,7 +36,7 @@
  */
 import { withDiagHint } from '@/utils/diagHints'
 import type { ReplayPacket, ReplayFrameResult } from '@/api/protocolTools'
-import { statusLabel, statusTagType } from '@/composables/acquisition/usePacketReplay'
+import { statusLabel, replayStatusTagType } from '@/composables/acquisition/usePacketReplay'
 
 const props = defineProps<{
   /** 录制会话里的报文序列 */

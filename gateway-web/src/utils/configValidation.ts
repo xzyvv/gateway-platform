@@ -12,7 +12,7 @@
 import { validateConfigDraft } from '@/api/config'
 import type { GatewayConfig } from '@/api/types'
 
-export interface ConfigIssue {
+export interface ConfigValidationIssue {
   level: 'error' | 'warning' | 'info'
   /** 规则标识（后端下发，用于展示层映射） */
   code?: string
@@ -47,7 +47,7 @@ function tabOf(field: string): string | undefined {
 export async function validateConfig(
   config: GatewayConfig,
   templateNames?: ReadonlySet<string> | readonly string[],
-): Promise<ConfigIssue[]> {
+): Promise<ConfigValidationIssue[]> {
   const templates = templateNames
     ? 'size' in templateNames
       ? [...(templateNames as ReadonlySet<string>)]
@@ -58,9 +58,4 @@ export async function validateConfig(
     ...issue,
     tab: tabOf(issue.field),
   }))
-}
-
-/** 是否有阻断性错误（error 级别） */
-export function hasBlockingIssues(issues: ConfigIssue[]): boolean {
-  return issues.some((i) => i.level === 'error')
 }

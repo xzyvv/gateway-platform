@@ -16,9 +16,9 @@
 | composables | useDevices / useGatewayDiscovery / usePoints / useLayoutClock / useGatewaySwitcher | 单元测试 |
 | stores | websocket 等 | store 逻辑 |
 | utils | deviceCopy / exportCsv / importPoints / prometheus / secureStorage | 工具函数 |
-| router | routes/redirects / routerError | 重定向目标存在性与路由级错误兜底 |
+| router | routes / routerError | 重定向目标存在性与路由级错误兜底 |
 | components | PageErrorBoundary | 通用组件 |
-| views | Dashboard / Devices / Points / Config / DataFlowTrace / Simulator / Sidebar / Topbar / LoadFailedRoute / connection 表单组等 | 页面级与子组件 |
+| views | Overview / DeviceList / PointList / RuntimeConfig / DataFlowTrace / SlaveSimulator / Sidebar / Topbar / LoadFailedRoute / connection 表单组等 | 页面级与子组件 |
 | mock | mocks | mock 数据形状冒烟 |
 
 ## 测试约定
@@ -29,8 +29,8 @@
 
 ```ts
 src/views/devices/
-├── Devices.vue
-└── Devices.spec.ts    ← 同目录
+├── DeviceList.vue
+└── DeviceList.spec.ts    ← 同目录
 ```
 
 ### 2. 显式导入 vitest API
@@ -95,15 +95,15 @@ describe('TargetComp.vue', () => {
 
 `vitest.config.ts` 按一级目录设**防回落地板**（补测试只许上调、不许下调）：
 
-- 顶层兜底：lines 30% / functions 25% / branches 20% / statements 30%
-- 业务重点目录更高，如 views（lines 59%）、utils（50%）、composables（40%）
+- 顶层兜底：lines 63% / functions 56% / branches 53% / statements 60%
+- 业务重点目录更高，如 views（lines 58% / functions 53%）、utils（lines 76%）、composables（lines 61%）
 - 具体数值以 `vitest.config.ts` 的 `coverage.thresholds` 为准
 
 新增模块若涉及业务逻辑必须配套 spec，否则低于所在目录阈值会被 CI 拦截。
 
 ## E2E（Playwright）
 
-浏览器级用例独立放在 `e2e/`，不参与 vitest 与覆盖率统计：`npm run e2e` 一条命令自动编排空配置 gatewayd 与 vite dev server。当前分 4 个 spec 文件（`smoke` / `routes-deep` / `write-flows` / `debug-paths`，共 20+ 条用例），已不止早期的 6 条只读冒烟。用例约定与 CI 门禁状态见 [`docs/architecture/frontend.md`](../../../docs/architecture/frontend.md) 3.5 节（注：该文档 3.5 节仍写「6 条只读链路」，为 DOC-F1 待同步项）。
+浏览器级用例独立放在 `e2e/`，不参与 vitest 与覆盖率统计：`npm run e2e` 一条命令自动编排空配置 gatewayd 与 vite dev server。当前分 4 个 spec 文件（`smoke` / `routes-deep` / `write-flows` / `debug-paths`，共 20+ 条用例），已不止早期的 6 条只读冒烟。用例约定与 CI 门禁状态见 [`docs/architecture/frontend.md`](../../../docs/architecture/frontend.md) 3.5 节。
 
 ## 已知排除
 

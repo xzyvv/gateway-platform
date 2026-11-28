@@ -58,10 +58,10 @@ import { getConfig } from '@/api/config'
 import { listTemplates } from '@/api/templates'
 import type { GatewayConfig } from '@/api/types'
 // 体检规则单源在后端，这里只做「后端 issue → UI 行」适配；总览面板共用同一适配层
-import { loadConfigIssues, type ConfigIssue } from '@/utils/configHealth'
+import { loadConfigHealthIssues, type ConfigHealthIssue } from '@/utils/configHealth'
 
 // 问题清单列定义，顺序/宽度与原 el-table 保持一致
-const healthColumns: ColumnDef<ConfigIssue>[] = [
+const healthColumns: ColumnDef<ConfigHealthIssue>[] = [
   {
     key: 'level',
     title: '级别',
@@ -82,7 +82,7 @@ const healthColumns: ColumnDef<ConfigIssue>[] = [
   { key: 'target', title: '对象', width: 160 },
   { key: 'description', title: '问题描述', minWidth: 240, ellipsis: true },
   { key: 'suggestion', title: '修复建议', minWidth: 200, ellipsis: true },
-  actionColumn<ConfigIssue>({
+  actionColumn<ConfigHealthIssue>({
     key: 'action',
     width: 100,
     cell: (row) =>
@@ -92,7 +92,7 @@ const healthColumns: ColumnDef<ConfigIssue>[] = [
   }),
 ]
 
-const issues = ref<ConfigIssue[]>([])
+const issues = ref<ConfigHealthIssue[]>([])
 const summary = ref({ total: 0, errors: 0, warnings: 0, infos: 0, score: 0 })
 const loading = ref(false)
 const hasRun = ref(false)
@@ -128,7 +128,7 @@ async function run() {
     currentTemplateNames = templateNames
     isEmpty.value = (cfg.buses?.length ?? 0) === 0 && (cfg.devices?.length ?? 0) === 0 && (cfg.points?.length ?? 0) === 0
     // A3：规则在后端，模板清单随请求一起下发（后端据此判定模板存在性）
-    const list = await loadConfigIssues(cfg, templateNames)
+    const list = await loadConfigHealthIssues(cfg, templateNames)
     issues.value = list
     const errors = list.filter((i) => i.level === 'error').length
     const warnings = list.filter((i) => i.level === 'warning').length
@@ -142,13 +142,13 @@ async function run() {
   finally { loading.value = false }
 }
 
-async function fix(row: ConfigIssue) {
+async function fix(row: ConfigHealthIssue) {
   if (!row.fix) return
   try {
     await row.fix()
     row.autoFixable = false
     ElMessage.success(`已自动修复：${row.description}`)
-    if (currentConfig) issues.value = await loadConfigIssues(currentConfig, currentTemplateNames)
+    if (currentConfig) issues.value = await loadConfigHealthIssues(currentConfig, currentTemplateNames)
   } catch (e) { showToast(e, '修复失败') }
 }
 </script>

@@ -1,5 +1,5 @@
 /* 点位读写测试页（Tester.vue）主组件样式。
-   拆分子组件后，区块内的规则已随各自组件迁入 parts/*.vue 的 scoped 样式，
+   拆分子组件后，区块内的规则已随各自组件迁入 components/*.vue 的 scoped 样式，
    这里只保留主组件骨架（页面容器 + 左右两栏栅格）。 */
 
 .tester-page {

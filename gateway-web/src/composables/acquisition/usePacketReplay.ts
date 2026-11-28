@@ -3,7 +3,7 @@
  *
  * 负责：回放文件列表/会话加载、预置会话保护、真实回放（默认 P0-1b 流式，
  * 旧浏览器 / Tauri 回落 P0-1 阻塞）、逐帧中间态与汇总、停止/重置/另存。
- * 页面组件只保留布局与事件接线，逐帧列表与运行状态条在 packet/parts/ 下渲染。
+ * 页面组件只保留布局与事件接线，逐帧列表与运行状态条在 packet/components/ 下渲染。
  *
  * 为什么状态集中在这里：回放是「一条写链路 + 一份执行结果」——列表选中、
  * 进度条、逐帧状态、停止按钮都读同一份状态，父子各维护一份必然串台。
@@ -57,7 +57,7 @@ const REPLAY_TAG_OVERRIDE: Record<string, TagType> = {
   timeout: 'info',
 }
 
-export function statusTagType(s: string): TagType {
+export function replayStatusTagType(s: string): TagType {
   const key = String(s ?? '').trim().toLowerCase()
   const hit = REPLAY_TAG_OVERRIDE[key]
   if (hit) return hit

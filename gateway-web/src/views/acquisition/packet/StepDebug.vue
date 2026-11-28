@@ -47,10 +47,10 @@
  * 已知边界：每步独立抢总线租约，步与步之间采集可插入，因此时序敏感序列
  * （如「唤醒后 100ms 内读」）不属于本档能力。
  *
- * 本文件只保留「执行引擎 + 页面编排」，展示部分按区块拆到同目录 parts/ 下：
- * - parts/StepSequencePanel.vue 序列编辑区（序列/步骤编辑、导入导出、撤销重做）
- * - parts/StepRunLogPanel.vue   执行日志区
- * - parts/stepDebugTypes.ts     共享类型与错误码文案
+ * 本文件只保留「执行引擎 + 页面编排」，展示部分按区块拆到同目录 components/ 下：
+ * - components/StepSequencePanel.vue 序列编辑区（序列/步骤编辑、导入导出、撤销重做）
+ * - components/StepRunLogPanel.vue   执行日志区
+ * - components/stepDebugTypes.ts     共享类型与错误码文案
  */
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -70,9 +70,9 @@ import { isWriteFrame } from '@/utils/hexFrame'
 import { copyText } from '@/utils/clipboard'
 import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 import { confirmAction } from '@/utils/confirm'
-import StepSequencePanel from './parts/StepSequencePanel.vue'
-import StepRunLogPanel from './parts/StepRunLogPanel.vue'
-import { errorLabel, type RunLog, type StepOutcome } from './parts/stepDebugTypes'
+import StepSequencePanel from './components/StepSequencePanel.vue'
+import StepRunLogPanel from './components/StepRunLogPanel.vue'
+import { errorLabel, type RunLog, type StepOutcome } from './components/stepDebugTypes'
 
 const { selectedBus, busOptions, loading } = useDebugTargets()
 const { showToast, message } = useErrorDisplay()

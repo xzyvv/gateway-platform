@@ -101,11 +101,11 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
-  // #17: 禁止 composable 文件中使用模块级 ref/reactive 创建全局单例
+  // #17: 禁止 composable / utils 文件中使用模块级 ref/reactive 创建全局单例
   // 新增模块级 ref 会触发 warning，开发者应使用 Pinia store（跨页面）或将 ref 移入函数内（页面级）
   // 有意的单例用 // eslint-disable-next-line no-restricted-syntax 标注
   {
-    files: ['src/composables/**/*.ts'],
+    files: ['src/composables/**/*.ts', 'src/utils/**/*.ts'],
     rules: {
       'no-restricted-syntax': ['warn',
         {

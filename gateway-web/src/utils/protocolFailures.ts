@@ -10,7 +10,7 @@
  * （timeout / crc / exception / bus_offline / bus_busy / invalid_frame / bus_not_found）。
  * 此前这张表在**两处**各写了一份，且同一机器码给出了不同说法：
  *
- *   | 机器码        | packet/parts/stepDebugTypes.ts | packet/PacketEditor.vue |
+ *   | 机器码        | packet/components/stepDebugTypes.ts | packet/PacketEditor.vue |
  *   |---------------|--------------------------------|--------------------------|
  *   | exception     | 设备返回异常码                  | 设备返回异常帧            |
  *   | bus_offline   | 总线离线                        | 总线不可用                |

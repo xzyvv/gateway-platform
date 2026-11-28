@@ -68,13 +68,13 @@
  * 页面职责：选设备与点位 → 读取当前值 / 写入测试值 / 协议诊断 → 批量写入多点位，
  * 全过程写入右侧「操作记录」并附原始报文 HEX。
  *
- * 本文件只保留「状态 + 请求编排」，展示部分按区块拆到同目录 parts/ 下：
- * - parts/TesterIntro.vue        顶部说明条
- * - parts/DevicePointSelector.vue 设备/点位选择 + 协议能力徽标
- * - parts/CurrentValuePanel.vue  当前值展示 + 读取/协议诊断按钮
- * - parts/WriteSection.vue       写入区（按 supports_write 显隐）
- * - parts/OperationLogPanel.vue  右侧操作记录（含原始报文 HEX）
- * - parts/BatchWritePanel.vue    批量写入（多点位）
+ * 本文件只保留「状态 + 请求编排」，展示部分按区块拆到同目录 components/ 下：
+ * - components/TesterIntro.vue        顶部说明条
+ * - components/DevicePointSelector.vue 设备/点位选择 + 协议能力徽标
+ * - components/CurrentValuePanel.vue  当前值展示 + 读取/协议诊断按钮
+ * - components/WriteSection.vue       写入区（按 supports_write 显隐）
+ * - components/OperationLogPanel.vue  右侧操作记录（含原始报文 HEX）
+ * - components/BatchWritePanel.vue    批量写入（多点位）
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -93,13 +93,13 @@ import { formatClock } from '@/utils/datetime'
 import { csvFilename, downloadTableCsv } from '@/utils/exportCsv'
 import { copyText } from '@/utils/clipboard'
 import { getPackets } from '@/api/protocolTools/packetCapture'
-import TesterIntro from './parts/TesterIntro.vue'
-import DevicePointSelector from './parts/DevicePointSelector.vue'
-import CurrentValuePanel from './parts/CurrentValuePanel.vue'
-import WriteSection from './parts/WriteSection.vue'
-import OperationLogPanel from './parts/OperationLogPanel.vue'
-import BatchWritePanel from './parts/BatchWritePanel.vue'
-import type { LogEntry } from './parts/OperationLogPanel.vue'
+import TesterIntro from './components/TesterIntro.vue'
+import DevicePointSelector from './components/DevicePointSelector.vue'
+import CurrentValuePanel from './components/CurrentValuePanel.vue'
+import WriteSection from './components/WriteSection.vue'
+import OperationLogPanel from './components/OperationLogPanel.vue'
+import BatchWritePanel from './components/BatchWritePanel.vue'
+import type { LogEntry } from './components/OperationLogPanel.vue'
 import { useRequestGuard } from '@/composables/core/useRequestGuard'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
 

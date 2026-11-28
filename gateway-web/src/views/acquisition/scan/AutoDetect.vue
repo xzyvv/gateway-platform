@@ -55,17 +55,17 @@
  * 参数探测（薄编排层）
  *
  * 探测状态机（启动/中止/轮询/汇总/复制）在 composables/acquisition/useAutoDetect.ts；
- * 展示按区块拆到同目录 parts/ 下：
- * - parts/AutoDetectSteps.vue   逐项探测时间线（含失败原因与诊断建议）
- * - parts/AutoDetectSummary.vue 成功参数汇总、复制与跳转应用入口
+ * 展示按区块拆到同目录 components/ 下：
+ * - components/AutoDetectSteps.vue   逐项探测时间线（含失败原因与诊断建议）
+ * - components/AutoDetectSummary.vue 成功参数汇总、复制与跳转应用入口
  *
  * 本文件只保留布局、参数表单与事件接线。
  */
 import { useRouter } from 'vue-router'
 import { MagicStick } from '@element-plus/icons-vue'
 import { useAutoDetect } from '@/composables/acquisition/useAutoDetect'
-import AutoDetectSteps from './parts/AutoDetectSteps.vue'
-import AutoDetectSummary from './parts/AutoDetectSummary.vue'
+import AutoDetectSteps from './components/AutoDetectSteps.vue'
+import AutoDetectSummary from './components/AutoDetectSummary.vue'
 
 const router = useRouter()
 const {

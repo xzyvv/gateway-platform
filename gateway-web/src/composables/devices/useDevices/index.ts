@@ -1,6 +1,5 @@
 import { onMounted } from 'vue'
 import { protocolLabel, protocolType, protocolOptions, protocolAddressPlaceholder } from '../useProtocol'
-import DeviceDiscoverDialog from '@/views/devices/dialogs/DeviceDiscoverDialog.vue'
 import { createDeviceState } from './state'
 import { createDeviceQuery } from './query'
 import { createDeviceOptions } from './options'
@@ -59,8 +58,6 @@ export function useDevices() {
     resetForm: crud.resetForm, onDialogOpen: crud.onDialogOpen,
     testDeviceConn: connectivity.testDeviceConn, saveDevice: crud.saveDevice, removeDevice: crud.removeDevice,
     onDiscoverAdd: crud.onDiscoverAdd, saveDeviceField: crud.saveDeviceField,
-    // component
-    DeviceDiscoverDialog,
   }
 }
 

@@ -66,7 +66,7 @@ import { confirmAction } from '@/utils/confirm'
 import { inferParseProtocol, parseFrame, type ParseResult } from '@/utils/frameParser'
 import { useDebugTargets } from '@/composables/acquisition/useDebugTargets'
 import FrameParser from './FrameParser.vue'
-import FrameParseResult from './parts/FrameParseResult.vue'
+import FrameParseResult from './components/FrameParseResult.vue'
 
 // 共享调试目标（审查#5）：总线选择跨调试页保持一致
 const { busOptions, buses, loading: targetsLoading, selectedBus: bus } = useDebugTargets()

@@ -15,7 +15,7 @@
  * 徽章颜色、仪表盘总览、异常信号聚合共用同一份口径。
  */
 import { statusTagType, type TagType } from '@/utils/statusType'
-import type { HealthComponent, HealthReady } from '@/api/types'
+import type { HealthComponent } from '@/api/types'
 
 /** 组件健康严重度：ok 正常 / warning 可服务但不健康 / error 不可用 */
 export type HealthSeverity = 'ok' | 'warning' | 'error'
@@ -116,11 +116,6 @@ export function healthSeverity(status: string): HealthSeverity {
   return healthStatusInfo(status).severity
 }
 
-/** 组件状态 → 徽章颜色 */
-export function healthStatusTag(status: string): TagType {
-  return healthStatusInfo(status).tag
-}
-
 /**
  * 一份健康快照里是否有「不健康」的组件。
  *
@@ -151,16 +146,6 @@ export function healthRowsFromComponents(
 }
 
 /**
- * 健康快照 → 组件表格行。
- *
- * 运行总览页与「系统 → 网关信息」页共用这一份派生，
- * 避免两处各写一遍 Object.entries 映射后口径漂移。
- */
-export function healthRowsFrom(health: HealthReady | null | undefined): HealthComponent[] {
-  return healthRowsFromComponents(health?.components)
-}
-
-/**
  * 一组组件里最严重的级别（error > warning > ok）。
  *
  * 没有组件明细时（老版本后端不返回 components）按后端聚合 status 兜底：
@@ -179,4 +164,130 @@ export function healthWorstSeverity(
     if (sev === 'warning') worst = 'warning'
   }
   return worst
+}
+
+/* ============================== 网关综合健康状态 ============================== */
+
+/**
+ * 后端 `/api/health/report` 的聚合 status 取值。
+ *
+ * 注意：这是**聚合档位**，与上面的组件级 `HealthSeverity` 是两个层级——
+ * 聚合档位只有三档（正常 / 降级 / 严重），组件级才是三档严重度
+ * （ok / warning / error）。两者中文名与徽章色在此定义一次，
+ * 健康报告页、总览异常信号、结论条共用，避免各写一份字面量副本。
+ */
+export type OverallHealthValue = 'ok' | 'degraded' | 'critical'
+
+export interface OverallStatusMeta {
+  /** 中文展示名 */
+  label: string
+  /** 徽章色 */
+  type: TagType
+}
+
+const OVERALL_STATUS_META: Record<OverallHealthValue, OverallStatusMeta> = {
+  ok: { label: '正常', type: 'success' },
+  degraded: { label: '降级', type: 'warning' },
+  critical: { label: '严重', type: 'danger' },
+}
+
+/**
+ * 聚合状态 → 中文名 + 徽章色。
+ *
+ * 未知取值（含"还没有快照"）退化为「暂无数据」+ info——与
+ * `stores/healthReport.ts` 的 `overallStatus` 初值一致。
+ */
+export function overallStatusMeta(status: string | null | undefined): OverallStatusMeta {
+  const key = String(status ?? '').trim() as OverallHealthValue
+  return OVERALL_STATUS_META[key] ?? { label: '暂无数据', type: 'info' }
+}
+
+/* ============================== 健康问题分级 ============================== */
+
+/**
+ * 后端 `/api/health/report` 的 `problems[].level` 取值。
+ */
+export type ProblemLevel = 'critical' | 'warning' | 'info'
+
+export interface ProblemLevelMeta {
+  /** 中文展示名 */
+  label: string
+  /** 徽章色 */
+  type: TagType
+}
+
+const PROBLEM_LEVEL_META: Record<ProblemLevel, ProblemLevelMeta> = {
+  critical: { label: '严重', type: 'danger' },
+  warning: { label: '警告', type: 'warning' },
+  info: { label: '提示', type: 'info' },
+}
+
+/**
+ * 问题分级 → 中文名 + 徽章色。
+ *
+ * 徽章色与 `utils/statusType` 的通用表一致（critical→danger、
+ * warning→warning、info→info），但中文名是问题域独有的，故在此登记；
+ * 健康报告页的问题清单、结论条、协议调试台的探针结论共用这一份。
+ */
+export function problemLevelMeta(level: string | null | undefined): ProblemLevelMeta {
+  const key = String(level ?? '').trim() as ProblemLevel
+  return PROBLEM_LEVEL_META[key] ?? { label: '提示', type: 'info' }
+}
+
+/** 问题分级计数 */
+export interface ProblemCounts {
+  critical: number
+  warning: number
+  info: number
+}
+
+/**
+ * 问题清单 → 分级计数。
+ *
+ * 健康报告 store 的 `problemCounts` 与结论条（HealthConclusionBar）
+ * 此前各写一遍同样的 reduce，两处会随问题分级口径调整而漂移。
+ * 这里抽成纯函数，两边共用同一份实现。
+ *
+ * @param problems 后端 `problems` 列表；只统计已登记的三档，其余等级忽略
+ */
+export function countProblemLevels(
+  problems: readonly { level: string }[] | null | undefined,
+): ProblemCounts {
+  const counts: ProblemCounts = { critical: 0, warning: 0, info: 0 }
+  for (const p of problems ?? []) {
+    if (p.level === 'critical' || p.level === 'warning' || p.level === 'info') counts[p.level] += 1
+  }
+  return counts
+}
+
+/* ============================== 磁盘水位档位 ============================== */
+
+/**
+ * 后端 DiskLevel（`/api/health/report` 的 `summary.disk_level`）取值。
+ */
+export type DiskLevel = 'ok' | 'warn' | 'critical' | 'blocking'
+
+export interface DiskLevelMeta {
+  /** 中文展示名 */
+  label: string
+  /** 徽章色 */
+  type: TagType
+}
+
+const DISK_LEVEL_META: Record<DiskLevel, DiskLevelMeta> = {
+  ok: { label: '正常', type: 'success' },
+  warn: { label: '预警', type: 'warning' },
+  critical: { label: '严重', type: 'danger' },
+  blocking: { label: '阻断', type: 'danger' },
+}
+
+/**
+ * 磁盘水位档位 → 中文名 + 徽章色。
+ *
+ * 健康报告页与磁盘健康图表页此前各存一份逐字相同的字典、取色又各写一遍
+ * （一个 switch、一个 if 链），改档位文案必然漏改一处。这里定义一次。
+ */
+export function diskLevelMeta(level: string | null | undefined): DiskLevelMeta {
+  const key = String(level ?? '').trim() as DiskLevel
+  return DISK_LEVEL_META[key] ?? DISK_LEVEL_META.ok
 }

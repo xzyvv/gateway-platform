@@ -59,7 +59,6 @@ vi.mock('@/composables/devices/useDevices', () => ({
     saveDevice: vi.fn(),
     removeDevice: mockRemoveDevice,
     onDiscoverAdd: vi.fn(),
-    DeviceDiscoverDialog: { name: 'DeviceDiscoverDialog', render: () => null },
   }),
 }))
 

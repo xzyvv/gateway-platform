@@ -3,7 +3,7 @@
  *
  * 负责：扫描参数（总线/从站/寄存器类型/地址区间）、启动与进度轮询、
  * 地址分布图降采样与单元格文案、导出 CSV、点位建议、扫描历史增删。
- * 页面组件只保留参数表单与卡片布局，地址分布图交给 scan/parts/RegisterScanGrid.vue。
+ * 页面组件只保留参数表单与卡片布局，地址分布图交给 scan/components/RegisterScanGrid.vue。
  */
 import { computed, h, onMounted, ref, type Ref } from 'vue'
 import { ElButton, ElMessage, ElTag, type FormInstance } from 'element-plus'

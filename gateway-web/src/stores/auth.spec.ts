@@ -34,10 +34,8 @@ vi.mock('@/api/http', () => ({
   markLoggingOut: markLoggingOutMock,
   resetLoggingOut: resetLoggingOutMock,
 }))
-// useSessions \u8fd4\u56de\u5bf9\u8c61\u4e0d\u91cd\u8981\uff0c\u53ea\u9700\u5b58\u5728
-vi.mock('../composables/system/useSessions', () => ({
-  useSessions: () => ({ markLogin: vi.fn(), markLogout: vi.fn() }),
-}))
+// 注（DD-66）：登录会话的登记已移出 auth store（改由 Login.vue 调
+// useSessionsStore().markLogin()），故这里不再需要 mock 会话模块。
 
 describe('auth store\uff08Bug 2.8 \u4e09\u6001\u72b6\u6001\u673a\uff09', () => {
   beforeEach(() => {

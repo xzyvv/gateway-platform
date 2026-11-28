@@ -120,7 +120,7 @@
  *
  * 扫描状态机（参数校验/启动/进度轮询/历史增删/CSV 导出/点位建议）在
  * composables/acquisition/useRegisterScan.ts；
- * 地址分布图（本页最大的模板区块）在 scan/parts/RegisterScanGrid.vue。
+ * 地址分布图（本页最大的模板区块）在 scan/components/RegisterScanGrid.vue。
  *
  * 本文件只保留参数表单、结果概要卡片、建议弹窗与历史表的布局与事件接线。
  */
@@ -128,7 +128,7 @@ import { computed, ref } from 'vue'
 import type { FormInstance } from 'element-plus'
 import { VideoPlay } from '@element-plus/icons-vue'
 import { useRegisterScan } from '@/composables/acquisition/useRegisterScan'
-import RegisterScanGrid from './parts/RegisterScanGrid.vue'
+import RegisterScanGrid from './components/RegisterScanGrid.vue'
 import BusSelect from '@/components/industrial/BusSelect.vue'
 
 /** el-form 实例引用，供跨字段校验高亮（校验逻辑在 composable） */

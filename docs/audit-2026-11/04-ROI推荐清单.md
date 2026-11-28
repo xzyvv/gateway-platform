@@ -58,7 +58,7 @@
 | `gateway-api/.../packet_replay/replay_run.rs`、`engine.rs` | `ReplayExecuteResult` 新增 `terminal` / `planned`；阻塞模式中止/失败也如实返回终态与计划帧数 |
 | `gateway-web/src/api/protocolTools/types.ts` | View 类型与转换同步 `terminal` / `planned` |
 | `gateway-web/src/composables/acquisition/usePacketReplay.ts` | 删除本地 `summarizeFrames`；以服务端终态 / aborted / failed / 用户停止为准，非 completed 不再伪造「回放完成」 |
-| `gateway-web/src/views/acquisition/packet/parts/ReplayRunStatus.vue`、`PacketReplay.vue`、`PacketReplay.spec.ts` | 非 completed 显示「未跑完 / 已停止」告警与「已执行 N / M 帧」；新增流式/阻塞中止回归用例 |
+| `gateway-web/src/views/acquisition/packet/components/ReplayRunStatus.vue`、`PacketReplay.vue`、`PacketReplay.spec.ts` | 非 completed 显示「未跑完 / 已停止」告警与「已执行 N / M 帧」；新增流式/阻塞中止回归用例 |
 | `gateway-core/src/queue/storage/sqlite/wal.rs` | DD-19：WAL size gauge 在生产路径回写（低于阈值也写、文件不存在归零），不再只在单测赋值 |
 | `gateway-api/src/web/api/system/handlers/watchdog.rs` | DD-37：`ServiceInfo.restarts` 拆为 `panic_count` / `publish_fail_count` / `collect_fail_count` / `heartbeat_stall_count` 四个具名字段 |
 | `gateway-web/src/api/watchdog.ts` | DD-39：改用生成的 `ServiceInfo` 类型，API 边界把 bigint 字段转 number，删除手写接口与 `.restarts` |

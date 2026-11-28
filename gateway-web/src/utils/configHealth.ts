@@ -16,7 +16,7 @@ import { validateConfig } from '@/utils/configValidation'
 
 export type IssueLevel = 'error' | 'warning' | 'info'
 
-export interface ConfigIssue {
+export interface ConfigHealthIssue {
   id: string
   level: IssueLevel
   category: string
@@ -126,10 +126,10 @@ function fixFor(code: string | undefined, field: string, cfg: GatewayConfig): ((
  * @param cfg 当前网关配置（一键修复会在此对象上就地改字段并回写）
  * @param templateNames 模板库中的模板名集合；为空集合时后端跳过模板类检查
  */
-export async function loadConfigIssues(
+export async function loadConfigHealthIssues(
   cfg: GatewayConfig,
   templateNames: Set<string>,
-): Promise<ConfigIssue[]> {
+): Promise<ConfigHealthIssue[]> {
   const issues = await validateConfig(cfg, templateNames)
   return issues.map((i) => {
     const p = presentationOf(i.code)

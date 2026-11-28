@@ -8,7 +8,7 @@
       <template #header>
         <SectionHeader title="当前生效证书" icon="Lock" />
       </template>
-      <CertView />
+      <CurrentCertificate />
     </el-card>
 
     <div class="top-bar">
@@ -82,7 +82,7 @@ import {
 } from '@/api/certificates'
 import { formatDate, formatDateTime } from '@/utils/datetime'
 import { useDialogDirtyGuard } from '@/composables/core/useDialogDirtyGuard'
-import CertView from './CertView.vue'
+import CurrentCertificate from './CurrentCertificate.vue'
 
 const { showToast } = useErrorDisplay()
 

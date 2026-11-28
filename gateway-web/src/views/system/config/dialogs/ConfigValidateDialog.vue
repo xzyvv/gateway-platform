@@ -26,7 +26,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, h } from 'vue'
 import { ElButton, ElMessage, ElTag } from 'element-plus'
-import { validateConfig, type ConfigIssue } from '@/utils/configValidation'
+import { validateConfig, type ConfigValidationIssue } from '@/utils/configValidation'
 import type { GatewayConfig } from '@/api/types'
 import { useDialogVisible } from '@/composables/core/useDialogVisible'
 import type { ColumnDef } from '@/components/DataTable.vue'
@@ -44,19 +44,19 @@ const emit = defineEmits<{
 
 const visible = useDialogVisible(props, emit)
 
-const validateIssues = ref<ConfigIssue[]>([])
+const validateIssues = ref<ConfigValidationIssue[]>([])
 /** 后端校验请求进行中（规则在后端，需等待往返） */
 const validating = ref(false)
 const validateErrors = computed(() => validateIssues.value.filter((i) => i.level === 'error').length)
 const validateWarnings = computed(() => validateIssues.value.filter((i) => i.level === 'warning').length)
 
-/** 校验问题行唯一键（ConfigIssue 无 id 字段，用级别+字段+描述组合） */
-function validateRowKey(row: ConfigIssue): string {
+/** 校验问题行唯一键（ConfigValidationIssue 无 id 字段，用级别+字段+描述组合） */
+function validateRowKey(row: ConfigValidationIssue): string {
   return `${row.level}:${row.field}:${row.message}`
 }
 
 // 校验报告列定义，顺序/宽度与原 el-table 保持一致
-const validateColumns: ColumnDef<ConfigIssue>[] = [
+const validateColumns: ColumnDef<ConfigValidationIssue>[] = [
   {
     key: 'level',
     title: '级别',
@@ -102,7 +102,7 @@ async function runValidation() {
   }
 }
 
-function locateIssue(issue: ConfigIssue) {
+function locateIssue(issue: ConfigValidationIssue) {
   if (issue.tab) {
     emit('locate', issue.tab)
   }

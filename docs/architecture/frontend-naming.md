@@ -19,9 +19,9 @@
 | --- | --- | --- | --- |
 | `overview/` | 概览 | `/overview` | 运行总览、实时数据 |
 | `devices/` | 设备 | `/devices` | 设备管理、设备运维、设备拓扑、设备批量导入、批量命令 |
-| `points/` | 点位 | `/points` | 点位管理、地址换算、点位模板 |
-| `acquisition/` | 采集 | `/acquisition` | 读写测试、协议调试台（扫描/报文/模拟合并）、通信优化 |
-| `data/` | 数据 | `/data` | 数据流水、数据质量、数据加密 |
+| `points/` | 点位 | `/points` | 点位管理、地址换算（原「点位模板」已并入设备模板） |
+| `acquisition/` | 采集 | `/acquisition` | 读写测试、协议调试台（扫描/报文/模拟合并）、采集调优 |
+| `data/` | 数据 | `/data` | 数据流水、数据质量 |
 | `uplink/` | 上行 | `/uplink` | 上行转发与测试 |
 | `ops/` | 运维 | `/ops` | 性能监控、通信诊断、健康巡检、批量任务 |
 | `system/` | 系统 | `/system` | 系统设置、固件与证书、运行日志、配置管理、运行参数 |
@@ -45,7 +45,7 @@
 | `Topology` | 拓扑视图 | `DeviceTopology` |
 | `BatchImport` / `BatchCommand` | 批量写入类 | `DeviceBatchImport` |
 | `Monitor` | 只读监控 | `RealtimeMonitor` |
-| `Templates` | 模板管理 | `PointTemplates` |
+| `Templates` | 模板管理 | `DeviceTemplates` |
 | `Tools` / `Hub`（领域工具集） | 工具箱 | `OpsHub` |
 
 规则：
@@ -80,11 +80,11 @@
 ## 4. 路由命名
 
 1. **path**：`/<域>` 或 `/<域>/<能力>`；能力段用短横线小写（`batch-import`、`runtime-config`）。
-2. **Hub tab**：一律 `?tab=<name>`，**不再为每个 tab 登记 redirect 别名**；tab 名与 Hub 内 `tabs[].name` 一致。
-3. **name**：与页面组件名完全一致（PascalCase），便于从路由反查文件；不使用 `Index`、`*Redirect`。
+2. **Hub tab**：一律 `?tab=<name>`，tab 名与 Hub 内 `tabs[].name` 一致；**已下线/已合并页面的旧 path 保留 redirect 别名**（兼容旧书签与外部链接），不为仍在线的 tab 另建别名。
+3. **name**：与页面组件名完全一致（PascalCase），便于从路由反查文件；不使用 `Index`；**redirect 别名路由的 `name` 以 `*Redirect` 结尾**，与页面路由区分。
 4. **meta.title**：中文页面名，必须与侧边菜单 `label`、搜索索引文案一致。
 5. **meta.requireAdmin** 等权限只写在 `meta`，不在页面内二次判断。
-6. **旧地址不做兼容**：删除或改名即断链，未匹配路径落 `/not-found`（携带 `?from=`），不静默回首页。
+6. **旧地址保留兼容**：已删除或改名的页面，其旧 path 登记 redirect 指到新地址（兼容旧书签与外部链接）；未匹配路径落 `/not-found`（携带 `?from=`），不静默回首页。
 
 ## 5. 菜单与侧栏搜索索引
 
@@ -104,7 +104,7 @@
 
 规则：**对象 + 能力**，同一能力词全站只表达一种视图；页面名与其 Hub 内同名 tab 必须区分（如页面「设备管理」→ tab「设备清单」）。
 
-因为两者刻意不同名，Hub 落地页必须同时呈现父子两层（页头显示页面名 + 当前 tab 名），否则用户点完菜单只看到 tab 名，会误以为点错了入口。实现见 `src/components/HubShell.vue` 的 `hubTitle` / `.hub-body-parent`。
+因为两者刻意不同名，Hub 落地页必须同时呈现父子两层（页头显示页面名 + 当前 tab 名），否则用户点完菜单只看到 tab 名，会误以为点错了入口。实现见 `src/components/HubShell.vue` 的 `hubTitle` 与 `.hub-body` / `.hub-body-header` / `.hub-body-title`。
 
 Hub tab 的 `subtitle` 必须描述该页**真实存在**的区块，不得承诺页面上没有的内容（如页面没有组件健康表，就不能写「组件健康总览」）。页面结构增删区块时同步改副标题。
 
@@ -117,12 +117,10 @@ Hub tab 的 `subtitle` 必须描述该页**真实存在**的区块，不得承�
 | `DeviceBatchImport` | 设备批量导入 | — |
 | `DeviceBatchCommand` | 批量命令 | — |
 | `PointHub` | 点位管理 | 点位清单 / 回收站 / 虚拟点位 / 批量导入 / 点位克隆 / 进阶工具（查找替换 / 地址换算 / 地址偏移，原「地址换算」Hub 已并入） |
-| `PointTemplates` | 点位模板 | — |
 | `TesterHub` | 点位读写 | 点位读写 / 读取性能 |
 | `ProtocolConsoleHub` | 协议调试台 | 扫描与探测：地址映射 / 寄存器扫描 / 从站扫描 / 参数探测；报文查看与下发：报文捕获 / 报文编辑 / 报文回放 / 单步调试；模拟与扩展：从站模拟 / 协议转换。合并口径：原「协议扫描 / 协议仿真 / 报文调试」三个 Hub 合并为一台，页签 name 与旧 Hub 保持一致以兼容旧链接 |
-| `CommTuningHub` | 通信优化 | 通信参数 / 通信画像（表格·矩阵） / 调度优化 |
+| `CommTuningHub` | 采集调优（原「通信优化」仅为导航别名） | 通信参数 / 通信画像（表格·矩阵） / 调度优化 |
 | `DataPipelineHub` | 数据流水 | 历史数据 / 区间对比 / 数据压缩 / 断连续传 / 链路追踪 / 质量与治理（质量概览 / 采集退避，原「数据质量」Hub 已并入） |
-| `DataEncryption` | 数据加密 | — |
 | `UplinkHub` | 上行转发 | 转发规则 / 通道参数 / 上行服务状态 / 透传会话 / 上行测试 |
 | `OpsHub` | 运维监控 | 运行观察：总线负载 / 采集诊断 / 采集统计 / 运行指标；时序分析：采集甘特图；连通诊断：连接测试；资源：磁盘健康；自诊断与报告：自诊断 / 健康报告。合并口径：原「性能监控 / 通信诊断 / 健康巡检」三个 Hub 合并为一台 |
 | `SystemHub` | 系统设置 | 运维：网关信息 / 计划任务 / 看门狗 / Webhook 测试 / 固件升级 / 蜂窝网络（无蜂窝模块时隐藏）/ GPIO 控制（非 Linux 平台隐藏）/ 模拟消费者；日志：实时日志 / 日志归档（原「运行日志」Hub 已并入）；安全：API 密钥（内含 API 限流）/ 证书签发（内含当前生效证书与详情）/ 配置审计 |

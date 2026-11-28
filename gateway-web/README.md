@@ -40,7 +40,7 @@ npm run dev                     # http://localhost:5173
 
 ## 目录结构
 
-`src/` 下按职责分 13 个一级目录（`api` / `app` / `assets` / `components` / `composables` / `mock` / `router` / `stores` / `test` / `types` / `utils` / `views` 等）。各目录的职责边界、命名约定与分层规则见 **[`docs/architecture/frontend.md`](../docs/architecture/frontend.md) 3.3 / 3.4 节**（权威来源，此处不重复以免漂移）；组合式函数的分类与边界另见 [`src/composables/README.md`](src/composables/README.md)。
+`src/` 下按职责分 12 个一级目录（`api` / `app` / `assets` / `components` / `composables` / `mock` / `router` / `stores` / `test` / `types` / `utils` / `views` 等）。各目录的职责边界、命名约定与分层规则见 **[`docs/architecture/frontend.md`](../docs/architecture/frontend.md) 3.3 / 3.4 节**（权威来源，此处不重复以免漂移）；组合式函数的分类与边界另见 [`src/composables/README.md`](src/composables/README.md)。
 
 一个值得注意的约定：`src/utils` 顶层平铺了大量工具文件，改动前先全局搜索同名/近义实现（历史上出现过字节工具三套并存，DD-47）。
 
@@ -63,13 +63,12 @@ npm run dev                     # http://localhost:5173
 
 ## 优化方向
 
-目前继续评估 Web 端的优化方向，主要从以下四个方面展开：
+**已完成（截至 2026-11-28）**：
 
-1. **菜单与页面**：调整菜单栏结构、优化功能命名；改进页面布局，尽量减少滚动，并将相似功能整合归并。
-2. **组件**：梳理和优化组件设计，提升复用性与一致性。
-3. **架构**：评估整体架构是否合理、清晰、可维护。
-4. **目录**：优化目录结构，做到层级清晰、职责明确。
+- **菜单与页面**：8 次 Hub 合并，收敛为 10 个 Hub / 72 个页签（合并记录见 `src/router/routes/index.ts` 注释）；
+- **架构**：传输层收敛到 `api/http/` 12 个模块；路由拆为 `router/index.ts` + `router/routes/index.ts`；composables 按 10 个业务域分组；
+- **目录**：`src/` 收敛为 12 个一级目录、10 个业务域目录，并以 800 行门禁 + 冻结账本防止巨型文件回潮。
 
-整体原则：**易用、易理解、易上手**。
+**剩余（结构性收敛，不新增功能面）**：C 档 6 项（DD-73 diagnostics 双 barrel、DD-75「会话」四义、DD-76 `use*` 命名、DD-85 `api/` 分组、DD-86 `utils/` 反向依赖、DD-87 `components` 依赖 stores）与 D 档 DD-83（`utils/` 顶层 71 文件分层，随其他改动捎带），逐项与 ROI 见 [`18-前端第五轮债务ROI推荐清单.md`](../docs/audit-2026-11/18-前端第五轮债务ROI推荐清单.md)。目录同义词（DD-81）与 `deviceComms` 规则盲区（DD-84）已分别于 2026-11-28 收口。
 
-另外，优化过程中可**参考市面上优秀的 Web 产品**（如成熟的工业物联网平台、主流管理后台等），借鉴其交互设计与信息组织方式，作为对标和参考依据。
+整体原则：**易用、易理解、易上手**；可参考成熟工业物联网平台与主流管理后台的交互设计作为对标。

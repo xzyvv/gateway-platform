@@ -5,7 +5,7 @@ import { listDevices } from '@/api/devices'
 import { getConfig } from '@/api/config'
 import { listTemplates } from '@/api/templates'
 import type { DeviceConfig, HealthComponent, RunStatus, VersionInfo } from '@/api/types'
-import { loadConfigIssues, type ConfigIssue } from '@/utils/configHealth'
+import { loadConfigHealthIssues, type ConfigHealthIssue } from '@/utils/configHealth'
 import { pushMetrics, getMetricsHistory, clearMetricsHistory } from '@/utils/metricsHistory'
 import { usePolling } from '@/composables/core/usePolling'
 import { useSharedTick } from '@/composables/core/useSharedTick'
@@ -111,7 +111,7 @@ export function useDashboardData() {
   const deviceList = ref<DeviceConfig[]>([])
   // 配置体检结果：让「配置本身就错了」也能出现在总览异常面板里。
   // 低频拉取（5 分钟），配置只在人工改动时变化，无需跟随 3s 轮询。
-  const configIssues = ref<ConfigIssue[]>([])
+  const configIssues = ref<ConfigHealthIssue[]>([])
   const loading = ref(false)
   // 是否已完成过至少一次刷新（无论成败）。仅首次加载显示整页遮罩；
   // 3s 轮询属后台静默刷新，不应反复遮挡整页（见 refresh 首行的 P1 说明）。
@@ -353,7 +353,7 @@ export function useDashboardData() {
    * 界面显示一切正常、实则 0 点位。把体检结果并入总览异常面板，用户不必
    * 自己想到「去体检页看一眼」。模板库失败时退化为跳过模板类检查。
    */
-  async function refreshConfigIssues() {
+  async function refreshConfigHealthIssues() {
     const [cfgRes, tplRes] = await Promise.allSettled([getConfig(), listTemplates()])
     if (cfgRes.status !== 'fulfilled') return
     const templateNames = new Set(
@@ -362,7 +362,7 @@ export function useDashboardData() {
     // A3：体检规则在后端，模板清单随校验请求下发。
     // 校验请求失败时保留上一次结果：体检是总览的附加信号，不该拖垮主数据刷新。
     try {
-      configIssues.value = await loadConfigIssues(cfgRes.value, templateNames)
+      configIssues.value = await loadConfigHealthIssues(cfgRes.value, templateNames)
     } catch {
       /* 忽略：保留上一次体检结果 */
     }
@@ -372,7 +372,7 @@ export function useDashboardData() {
   async function refresh() {
     await Promise.allSettled([refreshStatus(), refreshAux()])
     // 手动刷新时顺带重算体检，避免用户改完配置回到总览仍看到旧问题
-    await Promise.allSettled([refreshConfigIssues()])
+    await Promise.allSettled([refreshConfigHealthIssues()])
   }
 
   /**
@@ -402,7 +402,7 @@ export function useDashboardData() {
   usePolling(refreshStatus, 3000)
   usePolling(refreshAux, 30000)
   // 配置只在人工改动时变化，5 分钟一次足够；挂载时会立即执行一次（runNow）
-  usePolling(refreshConfigIssues, 300000)
+  usePolling(refreshConfigHealthIssues, 300000)
 
   return {
     // layout

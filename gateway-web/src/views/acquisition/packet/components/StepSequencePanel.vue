@@ -81,9 +81,9 @@
  * （清空进度、标记中止、跳过一个步骤）都通过事件交给主组件执行，
  * 保证执行状态只有一处维护。
  *
- * 展示部分继续按区块下钻（parts/ 下）：
- * - parts/StepSequenceToolbar.vue 总线/序列选择、进度、失败即停开关
- * - parts/StepListEditor.vue      步骤列表与每步的内容编辑
+ * 展示部分继续按区块下钻（components/ 下）：
+ * - components/StepSequenceToolbar.vue 总线/序列选择、进度、失败即停开关
+ * - components/StepListEditor.vue      步骤列表与每步的内容编辑
  *
  * Props:
  * - busOptions：总线选项（来自 GET /api/config 的 buses）

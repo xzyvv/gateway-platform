@@ -169,6 +169,7 @@ import { usePermission } from '@/composables/auth/usePermission'
 import TablePrefsMenu from '@/components/TablePrefsMenu.vue'
 import BusSelect, { type BusOption } from '@/components/industrial/BusSelect.vue'
 import DeviceAssetDialog from './dialogs/DeviceAssetDialog.vue'
+import DeviceDiscoverDialog from './dialogs/DeviceDiscoverDialog.vue'
 import {
   usePointBackoff,
   lastGoodByDevice,
@@ -201,7 +202,6 @@ const {
   loadDevices, batchCheck, addDevice, addDeviceWithTemplate, editDevice, onDialogOpen,
   testDeviceConn, saveDevice, removeDevice, onDiscoverAdd,
   saveDeviceField,
-  DeviceDiscoverDialog,
 } = useDevices()
 
 // 模板里的 ref="formRef" 是按名字绑定 setup 变量的，vue-tsc 的 noUnusedLocals 看不到这层引用

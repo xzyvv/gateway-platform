@@ -156,6 +156,7 @@ import {
 } from '@element-plus/icons-vue'
 import BrandMark from '@/components/BrandMark.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useSessionsStore } from '@/stores/sessions'
 import { getStatus } from '@/api/status'
 import { isTauri, getGatewayBaseUrl, loadGatewayConfig, saveGatewayConfig } from '@/api'
 import { useGatewayDiscovery } from '@/composables/system/useGatewayDiscovery'
@@ -286,6 +287,9 @@ async function handleLogin() {
   loading.value = true
   try {
     await auth.login(form.username.trim(), form.password)
+    // 登记登录会话（DD-66：原先在 auth.login() 内部登记，会使 auth ↔ sessions
+    // 互为静态依赖构成最后一组静态环；改由调用方显式登记，依赖方向单向）
+    try { useSessionsStore().markLogin() } catch { /* 会话登记失败不阻断登录 */ }
     try { scopedSet('gw_username', form.username.trim()) } catch { /* 存储不可用不阻断登录 */ }
     // getStatus 仅用于预热连接，失败不应阻断登录流程
     try { await getStatus() } catch { /* ignore */ }

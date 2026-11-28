@@ -31,6 +31,7 @@ import { computed } from 'vue'
 import { CircleCheck } from '@element-plus/icons-vue'
 import { ElTag } from 'element-plus'
 import type { HealthProblem } from '@/api/status'
+import { problemLevelMeta } from '@/utils/healthStatus'
 
 const props = withDefaults(defineProps<{ problems: HealthProblem[]; title?: string }>(), {
   title: '待处置问题',
@@ -42,11 +43,8 @@ const sorted = computed(() =>
   [...props.problems].sort((a, b) => (LEVEL_ORDER[a.level] ?? 9) - (LEVEL_ORDER[b.level] ?? 9)),
 )
 
-const levelMeta = (level: string) => {
-  if (level === 'critical') return { label: '严重', type: 'danger' as const }
-  if (level === 'warning') return { label: '警告', type: 'warning' as const }
-  return { label: '提示', type: 'info' as const }
-}
+// 分级中文名 + 徽章色统一走 utils/healthStatus（与结论条、调试台探针同一份口径，DD-72）
+const levelMeta = (level: string) => problemLevelMeta(level)
 </script>
 
 <style scoped>

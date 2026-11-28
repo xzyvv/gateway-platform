@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getToken, setToken, clearToken } from '@/api'
 import * as authApi from '@/api/auth'
-import { useSessions } from '../composables/system/useSessions'
 import { markLoggingOut, resetLoggingOut } from '@/api/http'
 import { type Role } from '../types/roles'
 import { scopedGet, scopedRemove, scopedSet } from '../utils/gatewayStorage'
@@ -116,7 +115,11 @@ export const useAuthStore = defineStore('auth', () => {
       loggedIn.value = true
       // 新会话开始，清掉 401 单飞闸门
       resetLoggingOut()
-      useSessions().markLogin()
+      // 注意（DD-66）：**登录会话的登记已移出本 store**。
+      // 原先这里调 `useSessions().markLogin()`，使 `stores/auth.ts` 与会话模块
+      // 互为静态依赖（最后一组静态环）。现在由调用方在登录成功后显式登记：
+      // `views/auth/Login.vue` → `useSessionsStore().markLogin()`。
+      // 本 store 不再依赖会话模块，依赖方向单向（sessions → auth）。
       // 登录成功后立即 whoami 一次，拿到 username + 默认密码提醒
       await refreshIdentity().catch(() => {
         /* whoami 失败不影响主流程 */
@@ -135,7 +138,8 @@ export const useAuthStore = defineStore('auth', () => {
       //
       // 注意：**不**清掉 localStorage 已存的旧 token——可能是用户在同一
       // localStorage 下已登录过另一个账号，密码错不应清掉那个 token。
-      // 也不动 useSessions().markLogin()——只清 store 内部状态。
+      // 也**不**动会话列表——会话登记由调用方在登录成功后显式做（DD-66），
+      // 这里只清 auth store 内部状态。
       token.value = ''
       loggedIn.value = false
       username.value = ''

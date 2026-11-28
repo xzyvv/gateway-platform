@@ -26,6 +26,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import type { HealthProblem } from '@/api/status'
 import type { OverallHealthStatus, ProblemCounts } from '@/stores/healthReport'
+import { countProblemLevels } from '@/utils/healthStatus'
 import { formatTimeOfDay } from '@/utils/datetime'
 
 const props = withDefaults(
@@ -34,6 +35,14 @@ const props = withDefaults(
     problems: HealthProblem[]
     /** 综合状态（正常 / 降级 / 严重 / 暂无数据） */
     status: OverallHealthStatus
+    /**
+     * 分级计数（可选）。
+     *
+     * 调用方若已持有健康报告 store 的快照，可直接传入 store 里算好的
+     * `problemCounts`（同一份 reduce，见 utils/healthStatus.countProblemLevels）；
+     * 不传则本组件按同一份纯函数自行计算——两条路径结果必然一致。
+     */
+    counts?: ProblemCounts
     /** 一行摘要，如「3 条总线 · 12/14 台设备在线」 */
     summaryText?: string
     /** 报告生成时间戳（毫秒），无快照时不传 */
@@ -42,14 +51,10 @@ const props = withDefaults(
   { summaryText: '', generatedAtMs: 0 },
 )
 
-/** 计数在这里算一次，避免调用方各自 reduce 后与问题清单对不上 */
-const counts = computed<ProblemCounts>(() => {
-  const c: ProblemCounts = { critical: 0, warning: 0, info: 0 }
-  for (const p of props.problems) {
-    if (p.level === 'critical' || p.level === 'warning' || p.level === 'info') c[p.level] += 1
-  }
-  return c
-})
+/** 计数与 store 用同一个纯函数，避免两处 reduce 随口径调整而漂移（DD-69） */
+const counts = computed<ProblemCounts>(
+  () => props.counts ?? countProblemLevels(props.problems),
+)
 
 const generatedAt = computed(() => {
   const ms = props.generatedAtMs

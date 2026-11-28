@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 健康聚合报告共享快照的契约。
  *
  * 四个页面共用这一份快照，判定的是「会不会重复打接口」与「断网时是否清空数据」，
@@ -114,7 +114,7 @@ describe('useHealthReport', () => {
     expect(report.value).toEqual(ok)
 
     m.getHealthReport.mockRejectedValue(new Error('网络不可达'))
-    mod.invalidateHealthReport()
+    mod.useHealthReport().invalidate()
     await refresh()
 
     expect(report.value).toEqual(ok) // 旧快照仍在
@@ -132,7 +132,7 @@ describe('useHealthReport', () => {
     expect(error.value).toBe('boom')
 
     m.getHealthReport.mockResolvedValue(makeReport('ok'))
-    mod.invalidateHealthReport()
+    mod.useHealthReport().invalidate()
     await refresh()
     expect(error.value).toBeNull()
   })
@@ -145,7 +145,7 @@ describe('useHealthReport', () => {
     await refresh() // TTL 内复用
     expect(m.getHealthReport).toHaveBeenCalledTimes(1)
 
-    mod.invalidateHealthReport()
+    mod.useHealthReport().invalidate()
     await refresh()
     expect(m.getHealthReport).toHaveBeenCalledTimes(2)
   })

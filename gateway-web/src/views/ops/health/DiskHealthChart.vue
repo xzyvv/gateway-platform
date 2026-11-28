@@ -95,6 +95,7 @@ import { defaultGrid, valueAxisStyle, categoryAxisStyle, axisNameStyle } from '@
 import { CHART_PRIMARY, CHART_DANGER, CHART_WARNING } from '@/utils/chartTheme'
 import { getDiskHistory, type DiskHistory } from '@/api/status'
 import { pad2 } from '@/utils/datetime'
+import { diskLevelMeta } from '@/utils/healthStatus'
 import { logError } from '@/utils/logger'
 
 // 磁盘水位分级阈值，与后端 `gateway_core::engine::monitor::health::disk_alarm` 保持一致。
@@ -127,14 +128,8 @@ const level = computed(() => {
   return 'ok'
 })
 
-const LEVEL_LABEL: Record<string, string> = {
-  ok: '正常',
-  warn: '预警',
-  critical: '严重',
-  blocking: '阻断',
-}
-
-const levelLabel = computed(() => LEVEL_LABEL[level.value] ?? '正常')
+// 档位中文名与徽章色统一走 utils/healthStatus（与健康报告页同一份字典，DD-71）
+const levelLabel = computed(() => diskLevelMeta(level.value).label)
 
 // 摘要数值是文字色：用 --text-* 变体（原色在白底仅 2.04~2.90:1，不达 WCAG AA）
 const currentColor = computed(() => {

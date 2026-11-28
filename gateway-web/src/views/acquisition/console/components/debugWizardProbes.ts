@@ -9,6 +9,7 @@
  */
 import type { HealthProblem } from '@/api/status'
 import type { BusConfig, DeviceConfig } from '@/api/types'
+import { problemLevelMeta } from '@/utils/healthStatus'
 import {
   PROTOCOL_LABELS,
   busMatchesProtocol,
@@ -152,9 +153,8 @@ export function runHealthProbe(
   }
 }
 
-/** 健康问题等级 → 标签配色 */
+/** 健康问题等级 → 标签配色（统一走 utils/healthStatus，与健康报告页同一份口径，DD-72） */
 export function levelTagType(level: HealthProblem['level']): 'danger' | 'warning' | 'info' {
-  if (level === 'critical') return 'danger'
-  if (level === 'warning') return 'warning'
-  return 'info'
+  const type = problemLevelMeta(level).type
+  return type === 'danger' || type === 'warning' ? type : 'info'
 }

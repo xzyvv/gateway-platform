@@ -86,7 +86,7 @@
 import { computed, ref } from 'vue'
 import {Search, Delete} from '@element-plus/icons-vue'
 import { parseFrame, sampleFrames, sampleErrorFrames, type ParseResult } from '@/utils/frameParser'
-import FrameParseResult from './parts/FrameParseResult.vue'
+import FrameParseResult from './components/FrameParseResult.vue'
 
 const protocol = ref<'modbus-rtu' | 'dlt645' | 'cjt188'>('modbus-rtu')
 const hexInput = ref('')

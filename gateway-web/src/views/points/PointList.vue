@@ -157,7 +157,7 @@ import PointsFormDialog from './dialogs/PointsFormDialog.vue'
 import PointsBatchEditDialog from './dialogs/PointsBatchEditDialog.vue'
 import PointsGenerateDialog from './dialogs/PointsGenerateDialog.vue'
 import { pointFormContextKey } from './pointFormContext'
-import { createPointColumns } from './parts/pointColumns'
+import { createPointColumns } from './components/pointColumns'
 import type { PointRow } from '@/composables/devices/usePoints'
 import { flashHighlightRow } from '@/utils/tableHighlight'
 import { useUnmountedGuard } from '@/composables/core/useUnmountedGuard'
@@ -364,7 +364,7 @@ const { hidden: hiddenColumns } = useColumnPrefs('points', {
 })
 
 /**
- * 点位列定义：定义本身在 parts/pointColumns.ts（145 行），这里只注入页面动作。
+ * 点位列定义：定义本身在 components/pointColumns.ts（145 行），这里只注入页面动作。
  */
 const pointColumns = createPointColumns({
   canWrite: () => canWritePoint.value,

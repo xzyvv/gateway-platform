@@ -1,8 +1,8 @@
 /**
  * 单步调试（StepDebug）的共享类型与错误码文案
  *
- * 页面主组件与两个面板（parts/StepSequencePanel.vue 执行区、
- * parts/StepRunLogPanel.vue 日志区）都要用到「单步执行结果」结构与
+ * 页面主组件与两个面板（components/StepSequencePanel.vue 执行区、
+ * components/StepRunLogPanel.vue 日志区）都要用到「单步执行结果」结构与
  * 「后端错误码 → 中文标签」映射，抽到独立模块避免面板之间互相 import。
  */
 

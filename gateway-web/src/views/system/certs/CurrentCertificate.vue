@@ -117,4 +117,4 @@ async function load() {
 onMounted(load)
 </script>
 
-<style scoped src="./CertView.css"></style>
+<style scoped src="./CurrentCertificate.css"></style>

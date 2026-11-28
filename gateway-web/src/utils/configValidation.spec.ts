@@ -12,7 +12,7 @@ vi.mock('@/api/config', () => ({
   validateConfigDraft: (...a: unknown[]) => m.validateConfigDraft(...a),
 }))
 
-import { validateConfig, hasBlockingIssues } from './configValidation'
+import { validateConfig } from './configValidation'
 
 const emptyReport = { valid: true, errors: 0, warnings: 0, issues: [] }
 
@@ -50,11 +50,5 @@ describe('configValidation（后端驱动）', () => {
   it('后端无 issues 时返回空列表', async () => {
     m.validateConfigDraft.mockResolvedValue(emptyReport)
     expect(await validateConfig({} as never)).toEqual([])
-  })
-
-  it('hasBlockingIssues 区分 error / warning', () => {
-    expect(hasBlockingIssues([{ level: 'error', field: '', message: '' }])).toBe(true)
-    expect(hasBlockingIssues([{ level: 'warning', field: '', message: '' }])).toBe(false)
-    expect(hasBlockingIssues([])).toBe(false)
   })
 })

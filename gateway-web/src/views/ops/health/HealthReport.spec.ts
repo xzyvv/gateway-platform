@@ -130,13 +130,17 @@ describe('HealthReport 健康结论页', () => {
     expect(values[1]?.classes()).toContain('warn')
   })
 
-  it('组件状态按 ok / degraded / down 渲染', async () => {
+  it('组件状态走中文词表：中文组件名 + 中文状态名，英文原词不漏到界面', async () => {
     const wrapper = mount(HealthReport)
     await settle()
     const text = wrapper.text()
-    expect(text).toContain('mqtt：ok')
-    expect(text).toContain('modbus：degraded')
-    expect(text).toContain('iec104：down')
+    expect(text).toContain('MQTT 客户端：正常')
+    expect(text).toContain('降级运行')
+    expect(text).toContain('不可用')
+    // 英文原词不再透出（DD-68：改走 utils/healthStatus 的中文词表）
+    expect(text).not.toContain('mqtt：ok')
+    expect(text).not.toContain('modbus：degraded')
+    expect(text).not.toContain('iec104：down')
   })
 
   it('总线明细按行渲染，缺失值统一显示「—」', async () => {

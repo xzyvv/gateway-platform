@@ -25,11 +25,6 @@ export function refreshHealthReport(force = false) {
   return useHealthReportStore().refresh(force)
 }
 
-/** 标记快照过期：下次 refresh 会重新请求（写操作后由调用方使用） */
-export function invalidateHealthReport(): void {
-  useHealthReportStore().invalidate()
-}
-
 /**
  * 组件健康表 / 异常面板的统一入口。
  * 返回的 report 与 error 是所有页面共享的同一份快照，不会各自再发请求。

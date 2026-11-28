@@ -106,7 +106,7 @@
              报告不含 NTP 与磁盘余量，故 NTP 卡与上方系统信息仍走各自的既有接口。
              R2：网关级结论收敛到「运维 › 健康报告」唯一结论页 —— 这里只留一行摘要 + 深链，
              综合状态不再由本页重复渲染（原先 HealthStatus 头部的状态标签已移除）。 -->
-        <HealthConclusionBar :problems="healthProblems" :status="healthOverallStatus" />
+        <HealthConclusionBar :problems="healthProblems" :status="healthOverallStatus" :counts="healthProblemCounts" />
         <HealthStatus :health-rows="healthRows" :loading="healthLoading" />
         <HealthProblemList :problems="healthProblems" title="健康问题" />
 
@@ -266,7 +266,7 @@ import type { ColumnDef } from '@/components/DataTable.vue'
 import { actionColumn, timeColumn } from '@/utils/commonColumns'
 import { getConfig } from '@/api/config'
 import type { AuditLogEntry } from '@/api/auditLog'
-import type { LoginSession } from '@/composables/system/useSessions'
+import type { LoginSession } from '@/stores/sessions'
 import { useSystem } from '@/composables/system/useSystem'
 import { formatDateTime } from '@/utils/datetime'
 import HealthStatus from '@/views/overview/HealthStatus.vue'
@@ -292,7 +292,7 @@ const {
   webhook, webhookUrl, saveWebhook, testWebhook, retryAllNotify,
   sessionList, revokeSession,
   status, version, ntp, loading,
-  healthRows, healthProblems, healthLoading, healthOverallStatus,
+  healthRows, healthProblems, healthLoading, healthOverallStatus, healthProblemCounts,
   ntpStatusMap, ntpTagType, nowTime, metricsHtml, fmtPct,
   syncNtp,
   diagLoading, genDiagnostic, bundleLoading, genDiagnosticBundle,

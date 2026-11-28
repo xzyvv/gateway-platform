@@ -6,14 +6,14 @@
 |------|-------------|------------|
 | **生命周期** | 全局单例，应用存活期间持久 | 跟随调用组件的 setup，组件卸载即销毁 |
 | **共享范围** | 跨页面 / 跨组件共享 | 单页面内部 / 组件局部 |
-| **典型状态** | 用户认证、网关配置、设备列表、全局通知 | 表单草稿、筛选条件、分页、对话框开关 |
+| **典型状态** | 用户认证、网关连接状态、健康快照、全局通知 | 表单草稿、筛选条件、分页、对话框开关 |
 | **是否持久化** | 可持久化（localStorage） | 不持久化 |
 | **测试** | 独立测试 store 逻辑 | 随组件测试 |
 
 ## 判断规则（按顺序检查）
 
 1. **是否需要跨页面共享？** → 是 → Store
-   - 例：登录态（auth）、网关配置（config）、设备树（devices）
+   - 例：登录态（auth）、通知队列（notifications）、健康快照（healthReport）
 2. **是否需要在多个不相关组件间共享？** → 是 → Store
    - 例：全局通知队列（notifications）、网关连接状态（gateway）
 3. **是否仅在单个页面/视图内使用？** → 是 → Composable
@@ -23,13 +23,21 @@
 
 ## 现有 Store 清单
 
+`src/stores/` 下共 9 个 store（与 [frontend.md §3.3](frontend.md) 的目录树一致）：
+
 | Store | 职责 | 跨页面共享 |
 |-------|------|-----------|
-| `auth` | 登录态、token、权限 | ✅ |
-| `config` | 网关配置（buses/points/devices） | ✅ |
-| `devices` | 设备树/点位列表缓存 | ✅ |
-| `gateway` | 网关连接状态、版本信息 | ✅ |
+| `auth` | 登录态、token、界面角色 | ✅ |
+| `gateway` | 网关连接状态、版本信息、切换目标 | ✅ |
+| `healthReport` | `/api/health/report` 聚合快照（含分级计数、综合状态） | ✅ |
 | `notifications` | 全局通知队列 | ✅ |
+| `requestLog` | 全局请求日志（拦截器写入 + RequestMonitor 面板读取） | ✅ |
+| `sessions` | 登录会话列表（前端模拟，localStorage 持久化） | ✅ |
+| `theme` | 主题偏好（明暗），localStorage 持久化 | ✅ |
+| `tier` | license 档位与配额用量 | ✅ |
+| `websocket` | WebSocket 连接状态 | ✅ |
+
+> ⚠️ **设备列表与网关配置当前不在 store**：设备列表由 `useDevices` 持有（仅 `DeviceList.vue` 消费），网关配置由 `stores/gateway.ts` 持有地址与版本而非完整配置体。完整配置的读写走 `api/config.ts` + `composables/config/useConfigActions.ts`。归属判定见 [`composables/README.md`](../gateway-web/src/composables/README.md) 的「Store vs Composable 边界」一节（该节自称此表的**唯一真源**）。
 
 ## 典型 Composable 分类
 
@@ -59,9 +67,12 @@ ESLint 规则会 warn 新增的模块级 ref，防止无意中引入新的全局
 |------------|-----------|------|
 | `useFavorites` | `favorites` | 收藏列表跨页面共享（Realtime + 列表页），localStorage 持久化 |
 | `useDashboardLayout` | `sections` | 仪表盘布局用户偏好，跨组件共享，localStorage 持久化 |
-| `useSessions` | `sessions` | 登录会话列表跨页面共享（路由守卫 + 管理页），localStorage 持久化 |
-| `useRequestLog` | `logs`, `paused` | 全局请求日志，拦截器写入 + 面板读取，不绑定页面生命周期 |
+| `useStepSequences` | 序列与当前选择 | 跨 tab 切换保持，且避免多实例各自挂 watch 重复写盘（同 `useFavorites` 约定） |
 | `useWebhook` | `webhookUrl`, `notifyRetryQueue` | Webhook 配置跨页面共享（设置页 + 通知触发），localStorage 持久化；队列仅限本机浏览器通知，非设备端死信 |
+
+> **全局请求日志不在此表**：它已迁为 Pinia store `src/stores/requestLog.ts`（内部用 `shallowRef` + `triggerRef` 管理），没有对应的 `useRequestLog` composable。
+>
+> **登录会话也不在此表**：原为 `@singleton` 的 `composables/system/useSessions.ts` 已于 **DD-66** 上移为 Pinia store `src/stores/sessions.ts`（`useSessionsStore`）。理由：登录会话是**应用级状态**（跨路由 + 登录页 + 系统总览页），按 [`composables/README.md`](../gateway-web/src/composables/README.md)「Store vs Composable 边界」（唯一真源）应归 store；且原先它与 `stores/auth.ts` 互为静态 import，构成最后一组静态循环依赖。
 
 > 后续如需 DevTools 追踪或 SSR 兼容，可逐步迁移到 Pinia store。
 

@@ -56,10 +56,10 @@ vi.mock('@/composables/acquisition/useDebugTargets', async () => {
 })
 
 import Tester from './Tester.vue'
-import CurrentValuePanel from './parts/CurrentValuePanel.vue'
-import WriteSection from './parts/WriteSection.vue'
-import OperationLogPanel from './parts/OperationLogPanel.vue'
-import DevicePointSelector from './parts/DevicePointSelector.vue'
+import CurrentValuePanel from './components/CurrentValuePanel.vue'
+import WriteSection from './components/WriteSection.vue'
+import OperationLogPanel from './components/OperationLogPanel.vue'
+import DevicePointSelector from './components/DevicePointSelector.vue'
 import { resetProtocolCapsCache } from '@/composables/acquisition/useProtocolCaps'
 
 const DEVICE = { id: 'dev-1', name: '现场从站', bus: 'bus-1', protocol: 'modbus' }
