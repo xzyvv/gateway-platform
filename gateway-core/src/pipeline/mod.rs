@@ -562,18 +562,22 @@ mod tests {
         (pipeline, queue, north_rx)
     }
 
+    /// 「带真实 RealtimeBus」测试装配的返回值：
+    /// 管道、队列、广播订阅端、北向接收端。
+    type PipelineWithBus = (
+        Arc<ProcessingPipeline>,
+        Arc<DataQueue>,
+        tokio::sync::broadcast::Receiver<Arc<Vec<DataPoint>>>,
+        mpsc::Receiver<Arc<Vec<DataPoint>>>,
+    );
+
     /// 装配一条**带真实 RealtimeBus** 的管道：
     /// 返回管道、队列、广播订阅端与北向接收端（I-44 用）。
     fn spawn_pipeline_with_bus(
         edge: EdgeProcessor,
         convert: Vec<ConvertRuleConfig>,
         vps: Vec<VirtualPoint>,
-    ) -> (
-        Arc<ProcessingPipeline>,
-        Arc<DataQueue>,
-        tokio::sync::broadcast::Receiver<Arc<Vec<DataPoint>>>,
-        mpsc::Receiver<Arc<Vec<DataPoint>>>,
-    ) {
+    ) -> PipelineWithBus {
         let queue = Arc::new(DataQueue::new_memory().expect("memory queue"));
         let bus = RealtimeBus::new(64);
         let bus_rx = bus.subscribe();
