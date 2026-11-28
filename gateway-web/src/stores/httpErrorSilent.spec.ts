@@ -18,9 +18,9 @@ vi.mock('element-plus', () => {
   return { ElMessage: message, ElNotification: vi.fn() }
 })
 
-import { instance, request } from './http'
-import { useNotificationsStore } from '../stores/notifications'
-import { isUserNotified } from '../utils/errorHandler'
+import { instance, request } from '@/api/http'
+import { useNotificationsStore } from './notifications'
+import { isUserNotified } from '@/utils/errorHandler'
 
 const realAdapter = instance.defaults.adapter
 

@@ -413,7 +413,7 @@
    DD-73 双 barrel     → 已修，删除 diagnostics/index.ts，调用方显式选 raw / view
    DD-76 use* 命名     → 已修，改名 pointFields.ts / protocolMeta.ts
    DD-87 store 耦合    → 已修，容器组件迁 views/layout 与 views/ops/health
-   DD-86 utils 倒挂    → 已修，utils 向上依赖 0；api→utils 改单向，分层倒挂 36→14
+   DD-86 utils 倒挂    → 已修，utils 向上依赖 0；api→stores 事件化后分层倒挂 36→0
    DD-75 术语漂移      → 已修，critical 统一「严重」；会话三词限定写入命名文档
 
 本季做（1~3天）：     无强制项；DD-85 随下一次 api 重构捎带

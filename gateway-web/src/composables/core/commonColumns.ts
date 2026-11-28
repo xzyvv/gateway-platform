@@ -11,7 +11,7 @@
  */
 import { h, type VNodeChild } from 'vue'
 import { ElTag } from 'element-plus'
-import type { ColumnDef } from '@/components/DataTable.vue'
+import type { ColumnDef } from '@/types/dataTable'
 import { formatDateTime } from '@/utils/datetime'
 import { protocolLabel, protocolType } from '@/composables/devices/protocolMeta'
 import type { TagType } from '@/utils/statusType'

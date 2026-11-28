@@ -19,6 +19,8 @@ import SectionHeader from '../components/SectionHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
+// ③ api → stores 事件化：把 HTTP 层发出的通知/日志事件接到 store
+import '../stores/httpEvents'
 import { logWarn, logError } from '../utils/logger'
 import { extractErrorReason } from '@/utils/errorHandler'
 

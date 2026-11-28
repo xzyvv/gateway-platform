@@ -18,10 +18,13 @@ import { __resetSharedTickForTests } from '../composables/core/useSharedTick'
 // usePolling 已改为模块级共享调度器（同一策略）：每个用例前清空订阅/停表/归零虚拟时钟。
 import { __resetUsePollingForTests } from '../composables/core/usePolling'
 
-beforeEach(() => {
+beforeEach(async () => {
   setActivePinia(createPinia())
   __resetSharedTickForTests()
   __resetUsePollingForTests()
+  // ③ api → stores 事件化：生产由 app/main.ts 接线；测试在用例前动态接线，
+  // 保证测试文件里的 vi.mock('element-plus') 已生效（通知 store 会谈 mock）。
+  await import('../stores/httpEvents')
 })
 import { webcrypto } from 'node:crypto'
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.subtle) {

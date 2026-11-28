@@ -1,5 +1,5 @@
 import { computed } from 'vue'
-import type { ColumnDef } from '@/components/dataTable/types'
+import type { ColumnDef } from '@/types/dataTable'
 
 /**
  * 读取行对象里某个字段的值（列 key 即字段名）。

@@ -1,7 +1,7 @@
 import { computed, h, isVNode, type Component, type VNode } from 'vue'
 import { ElCheckbox, ElTooltip, type Column } from 'element-plus'
 import type { TableV2FixedDir } from 'element-plus/es/components/table-v2'
-import type { ColumnDef } from '@/components/dataTable/types'
+import type { ColumnDef } from '@/types/dataTable'
 import { valueOf } from './useDataTableColumns'
 
 /** data 行数超过该值自动切换虚拟滚动 */

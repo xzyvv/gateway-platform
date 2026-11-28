@@ -9,8 +9,7 @@
  */
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import { useNotificationsStore } from '../../stores/notifications'
-import { useRequestLogStore } from '../../stores/requestLog'
+import { emitHttpNotify, emitRequestLog } from './uiEvents'
 import { clearToken } from '../token'
 import { ERR, describeErrorCode } from '../../utils/errorCodes'
 import { markUserNotified } from '../../utils/errorHandler'
@@ -62,7 +61,7 @@ instance.interceptors.response.use(
         // 后端 message 有值时原样透出；为空则用错误码字典兜底，
         // 避免用户只看到 `biz:8000` 这类裸码。
         const message = describeErrorCode(wrapped.code, wrapped.message)
-        useRequestLogStore().pushLog({
+        emitRequestLog({
           method: cfg.method?.toUpperCase() || 'GET',
           url: sanitizeUrl(cfg.url),
           status: `biz:${wrapped.code}`,
@@ -73,7 +72,6 @@ instance.interceptors.response.use(
           requestHeaders: loggableHeaders(cfg.headers),
           responseHeaders: loggableHeaders(response.headers),
         })
-        const notify = useNotificationsStore()
         const isMutation = isMutationRequest(cfg)
         // 与下方 HTTP 状态码分支保持同一口径：写操作的提示归页面 catch（带动作语境），
         // 全局只留痕不弹窗。本分支此前无视 isMutation 无条件弹窗，于是「保存点位」
@@ -83,7 +81,11 @@ instance.interceptors.response.use(
           wrapped.code === ERR.QUOTA_EXCEEDED ||
           wrapped.code === ERR.LICENSE_REQUIRED ||
           wrapped.code === ERR.LICENSE_INVALID
-        notify.error(message, { code: wrapped.code, traceId, silent: isMutation && !isGlobalAlert })
+        emitHttpNotify({
+          level: 'error',
+          message,
+          opts: { code: wrapped.code, traceId, silent: isMutation && !isGlobalAlert },
+        })
         // traceId 挂到 Error 上：页面/组合式函数在上下文提示里也能带上它
         // bizCode 挂业务码（不用 code：axios 的 error.code 已被占用）：
         // 写结果未知（5102）与明确失败（5101）要能被调用方区分开——
@@ -100,7 +102,7 @@ instance.interceptors.response.use(
       }
     }
 
-    useRequestLogStore().pushLog({
+    emitRequestLog({
       method: cfg.method?.toUpperCase() || 'GET',
       url: sanitizeUrl(cfg.url),
       status: response.status,
@@ -175,8 +177,11 @@ instance.interceptors.response.use(
             clearToken()
             applyAuthLogoutPatch()
             if (!isLoginPage) {
-              const notify = useNotificationsStore()
-              notify.error('鉴权失败，请重新登录', { code: ERR.UNAUTHORIZED, traceId })
+              emitHttpNotify({
+                level: 'error',
+                message: '鉴权失败，请重新登录',
+                opts: { code: ERR.UNAUTHORIZED, traceId },
+              })
               // 已由全局层告知用户（并即将跳登录页），页面 catch 不必再弹一条
               markUserNotified(error)
               // Bug 179: 延迟到跳登录流程结束后再释放登出门。原实现紧接着同步 release，
@@ -219,13 +224,14 @@ instance.interceptors.response.use(
         void import('../../stores/tier')
           .then(({ useTierStore }) => {
             const licId = useTierStore().licenseState?.license_id
-            useNotificationsStore().error(
-              licId ? `${detail}（授权编号: ${licId}）` : detail,
-              { code: body.code, traceId },
-            )
+            emitHttpNotify({
+              level: 'error',
+              message: licId ? `${detail}（授权编号: ${licId}）` : detail,
+              opts: { code: body.code, traceId },
+            })
           })
           .catch(() => {
-            useNotificationsStore().error(detail, { code: body.code, traceId })
+            emitHttpNotify({ level: 'error', message: detail, opts: { code: body.code, traceId } })
           })
       } else if (status === 429) {
         ElMessage.warning('请求过于频繁，请稍后重试')
@@ -233,11 +239,15 @@ instance.interceptors.response.use(
       } else {
         // code 传 HTTP 状态码：通知中心按 100–599 区间识别并给出人话解释 + 排查建议
         // （业务码 4021/8000 都在区间外，不会与 ApiResponse.code 混淆）
-        useNotificationsStore().error(`请求失败(${status}): ${msg}`, { code: status, silent: isMutation, traceId })
+        emitHttpNotify({
+          level: 'error',
+          message: `请求失败(${status}): ${msg}`,
+          opts: { code: status, silent: isMutation, traceId },
+        })
         // 仅当真的弹了（GET；写操作是静音的，提示归页面 catch 负责）才标记
         if (!isMutation) markUserNotified(error)
       }
-      useRequestLogStore().pushLog({
+      emitRequestLog({
         method: cfg.method?.toUpperCase() || 'GET',
         url: sanitizeUrl(cfg.url),
         status,
@@ -254,10 +264,14 @@ instance.interceptors.response.use(
       // 网络层失败拿不到后端响应，自然没有 traceId——给出现场可执行的自检项，
       // 避免用户只看到一句"网络错误"无从下手
       const selfCheck = '自检：确认网关服务已启动、访问地址与端口正确、本机与网关网络连通'
-      useNotificationsStore().error(`网络错误: ${errMsg}；${selfCheck}`, { silent: isMutation })
+      emitHttpNotify({
+        level: 'error',
+        message: `网络错误: ${errMsg}；${selfCheck}`,
+        opts: { silent: isMutation },
+      })
       // 同上：只有 GET 会真弹，写操作的提示归页面 catch
       if (!isMutation) markUserNotified(error)
-      useRequestLogStore().pushLog({
+      emitRequestLog({
         method: cfg.method?.toUpperCase() || 'GET',
         url: sanitizeUrl(cfg.url),
         status: 'NETWORK',

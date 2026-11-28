@@ -39,9 +39,11 @@ const ALLOWED = {
   stores: ['types', 'utils', 'api', 'stores'],
   composables: ['types', 'utils', 'api', 'stores', 'composables'],
   components: ['types', 'utils', 'api', 'stores', 'composables', 'components'],
-  views: ['types', 'utils', 'api', 'stores', 'composables', 'components', 'views'],
+  views: ['types', 'utils', 'api', 'stores', 'composables', 'components', 'views', 'router'],
   router: ['types', 'utils', 'api', 'stores', 'components', 'views'],
-  app: ['types', 'utils', 'api', 'stores', 'composables', 'components', 'views', 'app'],
+  app: ['types', 'utils', 'api', 'stores', 'composables', 'components', 'views', 'app', 'router'],
+  // 测试装配层：只做全局 setup/mock，允许触达任意生产层
+  test: ['types', 'utils', 'api', 'stores', 'composables', 'components', 'views', 'router', 'app', 'test'],
   assets: ['assets'],
 }
 

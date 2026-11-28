@@ -63,10 +63,10 @@ const greadme = read('gateway-web/README.md')
 
 console.log('=== A-1 静态环根因：responseInterceptor 静态引 3 个 store ===')
 const ri = read('src/api/http/responseInterceptor.ts')
-check('A-1.1', 'responseInterceptor:12 useNotificationsStore 静态导入（非环成因，保持）',
-  lineOf(ri, "from '../../stores/notifications'") > 0, `line ${lineOf(ri, "from '../../stores/notifications'")}`)
-check('A-1.2', 'responseInterceptor:13 useRequestLogStore 静态导入（非环成因，保持）',
-  lineOf(ri, "from '../../stores/requestLog'") > 0, `line ${lineOf(ri, "from '../../stores/requestLog'")}`)
+check('A-1.1', '【③ 已修】responseInterceptor 不再静态引 stores/notifications（改走 uiEvents 端口）',
+  lineOf(ri, "stores/notifications") === -1 && lineOf(ri, 'emitHttpNotify') > 0)
+check('A-1.2', '【③ 已修】responseInterceptor 不再静态引 stores/requestLog（改走 emitRequestLog）',
+  lineOf(ri, "stores/requestLog") === -1 && lineOf(ri, 'emitRequestLog') > 0)
 check('A-1.3', "【DD-65 已修】responseInterceptor 不再静态引 stores/auth",
   !/from '\.\.\/\.\.\/stores\/auth'/.test(ri || ''))
 check('A-1.4', '同文件已用 void import 断环（跳登录）',
@@ -133,8 +133,8 @@ console.log('\n=== A-4 utils 反向依赖 + api⟷utils 双向 ===')
 const ccNew = read('src/composables/core/commonColumns.ts')
 check('A-4.1', '【DD-86 已修】commonColumns 迁入 composables，utils 不再 → composables',
   read('src/utils/commonColumns.ts') === null && lineOf(ccNew, "@/composables/devices/protocolMeta") > 0)
-check('A-4.2', '【DD-86 已修】ColumnDef 依赖随 commonColumns 迁入 composables，utils 不再 → components',
-  lineOf(ccNew, "@/components/DataTable.vue") > 0)
+check('A-4.2', '【DD-86 已修】ColumnDef 下沉 types/dataTable.ts，composables 不再 → components',
+  lineOf(ccNew, "@/types/dataTable") > 0 && read('src/types/dataTable.ts') !== null)
 const pool = read('src/utils/websocket/pool.ts')
 check('A-4.3', '【DD-86 已修】pool 经 publisher 端口上报，不再直接引 stores/websocket',
   lineOf(pool, 'stores/websocket') === -1)

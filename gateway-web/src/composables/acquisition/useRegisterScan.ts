@@ -19,7 +19,7 @@ import { copyText } from '@/utils/clipboard'
 import { withDiagHint } from '@/utils/diagHints'
 import { useErrorDisplay } from '@/composables/core/useErrorDisplay'
 import { usePolledTask } from '@/composables/core/useTaskProgress'
-import type { ColumnDef } from '@/components/DataTable.vue'
+import type { ColumnDef } from '@/types/dataTable'
 import { actionColumn, timeColumn } from '@/composables/core/commonColumns'
 import { confirmAction } from '@/utils/confirm'
 
