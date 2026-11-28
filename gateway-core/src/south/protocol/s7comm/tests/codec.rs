@@ -438,11 +438,10 @@ async fn tpkt_stream_with_server_bytes(bytes: Vec<u8>) -> tokio::net::TcpStream 
     tokio::net::TcpStream::connect(addr).await.expect("connect")
 }
 
-/// S7-R2：TPKT 必须校验版本 `0x03 0x00` 且总长 ≥4。
+/// S7-R2：TPKT 必须校验版本 `0x03 0x00`、总长 ≥4 且不超过业务上限。
 ///
-/// 阻塞项：当前实现与文档均未给出 TPKT 总长的业务上限（长度字段本身是 u16，
-/// 65535 只是位宽上限，不能当作业务上限），故此处不臆造上限，只钉住版本与下限；
-/// 「声明长度远大于实际数据」时只能靠读满失败返回 IO 错误，不得 panic。
+/// NB-07 定口径：上限取「TPKT 头 4 + 本端 COTP CR 声明的 TPDU 1024」=1028。
+/// 超过上限的声明直接判帧错误，不再按对端声明分配读取预算。
 #[tokio::test]
 async fn read_tpkt_frame_rejects_oversized_length() {
     use crate::south::protocol::CollectorError;
@@ -465,15 +464,58 @@ async fn read_tpkt_frame_rejects_oversized_length() {
         other => panic!("TPKT 总长 <4 应判帧错误，实际 {:?}", other.map(|v| v.len())),
     }
 
-    // 声明 65535 但实际无数据：当前无总长上限，读满失败必须报 IO 错误而不是 panic
+    // 声明 65535（u16 位宽上限）：必须在上限处拒绝，不得进入读取
     let mut stream = tpkt_stream_with_server_bytes(vec![0x03, 0x00, 0xFF, 0xFF]).await;
     match frames::read_tpkt_frame(&mut stream).await {
-        Err(CollectorError::IoError(msg)) => {
-            assert!(msg.contains("TPKT body"), "读满失败原因应可辨识: {msg}")
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("exceeds limit"), "超上限原因应可辨识: {msg}");
         }
-        other => panic!(
-            "声明超长且无数据时应报 IO 错误，实际 {:?}",
-            other.map(|v| v.len())
-        ),
+        other => panic!("声明超长应判帧错误，实际 {:?}", other.map(|v| v.len())),
     }
+
+    // 上限 +1 字节也必须拒绝（严格上限，边界外）
+    let over = (frames::MAX_TPKT_LEN + 1) as u16;
+    let [over_hi, over_lo] = over.to_be_bytes();
+    let mut stream = tpkt_stream_with_server_bytes(vec![0x03, 0x00, over_hi, over_lo]).await;
+    match frames::read_tpkt_frame(&mut stream).await {
+        Err(CollectorError::InvalidFrame(msg)) => {
+            assert!(msg.contains("exceeds limit"), "上限 +1 应被拒绝: {msg}")
+        }
+        other => panic!("上限 +1 应判帧错误，实际 {:?}", other.map(|v| v.len())),
+    }
+
+    // 恰好等于上限：合法帧必须能读满（上限不得误伤合法最大帧）
+    let body_len = frames::MAX_TPKT_LEN - 4;
+    let total = frames::MAX_TPKT_LEN as u16;
+    let [total_hi, total_lo] = total.to_be_bytes();
+    let mut bytes = vec![0x03, 0x00, total_hi, total_lo];
+    bytes.resize(frames::MAX_TPKT_LEN, 0xAA);
+    let mut stream = tpkt_stream_with_server_bytes(bytes).await;
+    let body = frames::read_tpkt_frame(&mut stream)
+        .await
+        .expect("恰好等于上限的 TPKT 应被接受");
+    assert_eq!(body.len(), body_len, "应读满 body，不含 TPKT 头");
+    assert!(body.iter().all(|b| *b == 0xAA), "body 内容不得被改写");
+}
+
+/// S7-R2 / NB-07：上限必须覆盖「协商 PDU 上限 960」对应的合法最大帧。
+///
+/// 合法最大帧 = TPKT 4 + COTP DT 3 + S7 PDU 960 = 967；上限不得小于它，
+/// 否则会把正常的大响应误判为超长。
+// 契约守门：断言对象就是常量之间的关系本身，常量断言属预期，不简化
+#[allow(clippy::assertions_on_constants)]
+#[test]
+fn max_tpkt_len_covers_negotiated_pdu() {
+    let max_legal_frame = 4 + 3 + 960;
+    assert!(
+        frames::MAX_TPKT_LEN >= max_legal_frame,
+        "TPKT 业务上限 {} 必须 >= 合法最大帧 {}（4 头 + 3 COTP + 960 PDU）",
+        frames::MAX_TPKT_LEN,
+        max_legal_frame
+    );
+    assert_eq!(
+        frames::MAX_TPKT_LEN,
+        4 + 1024,
+        "上限口径固定为 TPKT 头 4 + COTP 声明的 TPDU 1024"
+    );
 }

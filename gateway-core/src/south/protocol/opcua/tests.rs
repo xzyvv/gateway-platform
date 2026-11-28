@@ -58,7 +58,10 @@ fn c11_read_failure_threshold_not_too_aggressive() {
 use std::time::Duration;
 
 /// keepalive 周期必须显著小于请求的 Session 超时（否则 server 会在本端探测之前
-/// 就单方面关闭会话），响应超时必须小于探测周期，失败容忍 ≥ 2 避免抖动误触发
+/// 就单方面关闭会话），响应超时必须小于探测周期，失败容忍 ≥ 2 避免抖动误触发。
+///
+/// NB-08：真正要守的是「最坏判定窗口」（阈值 ×（探测周期 + 单次响应等待））
+/// **严格小于**会话超时——否则边界上服务端先关会话、本端仍显示「连接中」。
 // 契约守门：断言对象就是常量取值范围本身，常量断言属预期，不简化
 #[allow(clippy::assertions_on_constants)]
 #[test]
@@ -78,6 +81,17 @@ fn c14_keepalive_timing_within_session_timeout() {
     assert!(
         KEEPALIVE_MAX_CONSECUTIVE_FAILURES >= 2,
         "single probe failure must not tear down the session"
+    );
+    // NB-08：最坏判定窗口必须严格小于会话超时（不是「探测周期 < 会话超时」就够）
+    assert!(
+        KEEPALIVE_WORST_CASE_DETECT_MS < SESSION_TIMEOUT_MS,
+        "keepalive 最坏判定窗口 {}ms（{} 次 ×（{}ms 周期 + {}ms 响应上限））\
+         必须严格小于会话超时 {}ms，否则服务端可能先关会话而本端仍显示连接中",
+        KEEPALIVE_WORST_CASE_DETECT_MS,
+        KEEPALIVE_MAX_CONSECUTIVE_FAILURES,
+        KEEPALIVE_INTERVAL.as_millis(),
+        KEEPALIVE_RESPONSE_TIMEOUT.as_millis(),
+        SESSION_TIMEOUT_MS
     );
 }
 
@@ -209,7 +223,7 @@ async fn drop_aborts_both_tasks_and_clears_connected() {
 //   1) 收到显式 CloseSession 请求（session/manager.rs 的 close_session）；
 //   2) 会话超时到期（check_session_expiry → expire_session）。
 // TCP 断开 / CloseSecureChannel / event loop abort 都**不会**移除会话。
-// 客户端请求的会话超时为 SESSION_TIMEOUT_MS=10s，而观察窗口仅 3s，故
+// 客户端请求的会话超时为 `SESSION_TIMEOUT_MS`（20s），而观察窗口仅 3s，故
 // 「Drop 后 3s 内服务端会话数归零」只能由 CloseSession 送达解释。
 //
 // 计数取法：直接读服务端 ServerHandle 的 diagnostics（需先
@@ -286,7 +300,7 @@ async fn drop_delivers_close_session_to_real_server() {
     // 触发 Drop：应把 CloseSession 送达服务端、移除会话
     drop(a);
 
-    // ≤3s（远小于 10s 会话超时）内服务端会话数必须归零
+    // ≤3s（远小于 `SESSION_TIMEOUT_MS` 会话超时）内服务端会话数必须归零
     let mut released = false;
     for _ in 0..150 {
         if server_session_count(&handle) == 0 {

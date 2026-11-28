@@ -46,6 +46,9 @@ pub(crate) const RET_NOT_FOUND: u8 = 0x05; // 地址不存在
 
 pub(crate) use decode::{decode_value, encode_value};
 pub(crate) use link::{build_cotp_connect, build_setup_comm, read_tpkt_frame};
+// 上限常量仅由测试断言读取（生产代码在 link 内部使用），避免 lib 构建出现未用导入
+#[cfg(test)]
+pub(crate) use link::MAX_TPKT_LEN;
 pub(crate) use read::{
     build_read_var, build_read_var_multi, check_pdu_ref, parse_read_response,
     parse_read_response_multi,

@@ -92,16 +92,39 @@ pub(crate) const READ_FAILURE_THRESHOLD: u32 = 3;
 /// C-14: 向 server 请求的 OPC UA Session 超时（毫秒）。
 /// server 端在此时间内未收到本端任何请求即单方面关闭会话——
 /// keepalive 周期必须显著小于该值。
-pub(crate) const SESSION_TIMEOUT_MS: u32 = 10_000;
+///
+/// NB-08：该值必须**严格大于** keepalive 最坏判定窗口
+/// （`KEEPALIVE_WORST_CASE_DETECT_MS`），否则会出现「服务端已按会话超时关会话、
+/// 本端探测次数还没攒够」，页面一直显示「连接中」。取 20s 对 16s 窗口留 4s 余量。
+pub(crate) const SESSION_TIMEOUT_MS: u32 = 20_000;
 
-/// C-14: keepalive 探测周期（必须 < SESSION_TIMEOUT_MS，取 5s 留 2× 余量）
-pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+/// C-14: keepalive 探测周期（毫秒）。必须小于 SESSION_TIMEOUT_MS。
+const KEEPALIVE_INTERVAL_MS: u32 = 5_000;
 
-/// C-14: 单次 keepalive 探测响应等待上限（小于探测周期）
-pub(crate) const KEEPALIVE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
+/// C-14: 单次 keepalive 探测响应等待上限（毫秒）。必须小于探测周期。
+const KEEPALIVE_RESPONSE_TIMEOUT_MS: u32 = 3_000;
+
+/// C-14: keepalive 探测周期
+pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(KEEPALIVE_INTERVAL_MS as u64);
+
+/// C-14: 单次 keepalive 探测响应等待上限
+pub(crate) const KEEPALIVE_RESPONSE_TIMEOUT: Duration =
+    Duration::from_millis(KEEPALIVE_RESPONSE_TIMEOUT_MS as u64);
 
 /// C-14: 连续探测失败容忍次数（避免网络抖动导致连接抖动）
 pub(crate) const KEEPALIVE_MAX_CONSECUTIVE_FAILURES: u32 = 2;
+
+/// C-14 / NB-08: 从最近一次真实通信到判定「会话已断」的最坏耗时（毫秒）。
+///
+/// 单个探测周期的耗时上限 = 探测周期 + 单次响应等待上限（探测超时后再进入
+/// 下一个 sleep），连续失败达阈值才拆会话，故：
+/// `阈值 × (探测周期 + 响应等待上限)`。该窗口必须严格小于 `SESSION_TIMEOUT_MS`，
+/// 保证「本端先判出断连」而不是「服务端先按会话超时关掉、本端仍显示连接中」。
+///
+/// 仅用于测试锁定上述契约，不参与运行时计算。
+#[cfg(test)]
+pub(crate) const KEEPALIVE_WORST_CASE_DETECT_MS: u32 =
+    (KEEPALIVE_INTERVAL_MS + KEEPALIVE_RESPONSE_TIMEOUT_MS) * KEEPALIVE_MAX_CONSECUTIVE_FAILURES;
 
 /// C-14: keepalive 探测节点——OPC UA 标准 ServerStatus（ns=0;i=2256）
 pub(crate) const SERVER_STATUS_NODE_NUMERIC_ID: u32 = 2256;
