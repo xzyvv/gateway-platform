@@ -311,6 +311,10 @@ pub struct OtaStatusView {
 pub trait OtaTrait: Send + Sync {
     /// 获取 OTA 当前状态（Web 契约视图，不暴露 core 状态枚举）
     fn status(&self) -> OtaStatusView;
+    /// 同步预校验整包（DD-40）：只验包头/CRC/签名，不改状态；返回固件版本
+    fn precheck_firmware(&self, data: &[u8]) -> GatewayResult<u32>;
+    /// 同步预校验差分包：只验包头/签名，不改状态；返回目标版本
+    fn precheck_delta(&self, data: &[u8]) -> GatewayResult<u32>;
     /// 处理完整固件包并执行升级
     fn process_firmware(
         self: Arc<Self>,
@@ -529,6 +533,14 @@ impl OtaTrait for OtaManager {
             progress: info.progress,
             error: info.error,
         }
+    }
+
+    fn precheck_firmware(&self, data: &[u8]) -> GatewayResult<u32> {
+        OtaManager::precheck_firmware(self, data)
+    }
+
+    fn precheck_delta(&self, data: &[u8]) -> GatewayResult<u32> {
+        OtaManager::precheck_delta(self, data)
     }
 
     fn process_firmware(

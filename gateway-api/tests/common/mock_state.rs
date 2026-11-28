@@ -445,6 +445,29 @@ impl OtaTrait for MockOta {
             error: None,
         }
     }
+    fn precheck_firmware(&self, data: &[u8]) -> GatewayResult<u32> {
+        // mock 只复刻上传接口需要区分的分支：包头非法 vs 未签名
+        if data.len() < 12 {
+            return Err(GatewayError::Protocol("firmware too small".into()));
+        }
+        if &data[0..4] != b"GWOT" {
+            return Err(GatewayError::Protocol("invalid firmware magic".into()));
+        }
+        Err(GatewayError::Config(
+            "固件未签名，已拒绝安装（fail-closed；请使用 Ed25519 签名包）".into(),
+        ))
+    }
+    fn precheck_delta(&self, data: &[u8]) -> GatewayResult<u32> {
+        if data.len() < 12 {
+            return Err(GatewayError::Protocol("delta package too small".into()));
+        }
+        if &data[0..4] != b"GWDT" {
+            return Err(GatewayError::Protocol("invalid delta magic".into()));
+        }
+        Err(GatewayError::Config(
+            "差分包未签名，已拒绝安装（fail-closed；请使用 Ed25519 签名包）".into(),
+        ))
+    }
     fn process_firmware(
         self: Arc<Self>,
         _data: Vec<u8>,
@@ -657,6 +680,7 @@ fn build_mock_state_with_devices(
         realtime_buffer: 1024,
         realtime_max_subscribers: 64,
         ota_signing_key: None,
+        ota_public_keys: None,
         rate_limit_per_sec: None,
         cors_origins: None,
         users: Vec::new(),

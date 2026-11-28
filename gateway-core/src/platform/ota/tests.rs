@@ -6,8 +6,31 @@
 //! 且测试永远不会真的重启宿主机。
 use super::*;
 use crate::engine::metrics::Metrics;
+use ring::signature::KeyPair as _;
 use std::path::Path;
+use std::sync::OnceLock;
 use tempfile::TempDir;
+
+/// 测试固定 Ed25519 密钥：`build_firmware` / `build_delta` 默认用它签名，
+/// `new_manager` 也挂同一把公钥，保证正常路径能通过 fail-closed 验签。
+/// 明文种子只用于测试；生产公钥走 `web.ota_public_keys`。
+fn test_ed25519() -> &'static (ring::signature::Ed25519KeyPair, [u8; 32]) {
+    static KEY: OnceLock<(ring::signature::Ed25519KeyPair, [u8; 32])> = OnceLock::new();
+    KEY.get_or_init(|| {
+        let kp = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[7u8; 32])
+            .expect("fixed ed25519 seed");
+        let pk: [u8; 32] = kp
+            .public_key()
+            .as_ref()
+            .try_into()
+            .expect("ed25519 pubkey is 32 bytes");
+        (kp, pk)
+    })
+}
+
+fn test_pubkey() -> [u8; 32] {
+    test_ed25519().1
+}
 
 fn temp_dir() -> (TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -27,7 +50,13 @@ fn new_manager(dir: &Path, signing_key: Option<Vec<u8>>) -> Arc<OtaManager> {
     // 真实块设备节点总是已存在，测试中用空文件模拟节点。
     std::fs::write(dir.join("slot_a.bin"), b"").expect("create slot_a");
     std::fs::write(dir.join("slot_b.bin"), b"").expect("create slot_b");
-    OtaManager::new(partition, staging, signing_key, Arc::new(Metrics::new()))
+    OtaManager::new(
+        partition,
+        staging,
+        signing_key,
+        vec![test_pubkey()],
+        Arc::new(Metrics::new()),
+    )
 }
 
 /// 取 bootloader 环境里**最后一次** `boot_partition` 写入的值。
@@ -44,7 +73,7 @@ fn last_boot_partition(mgr: &OtaManager) -> Option<String> {
 }
 
 /// 构造无签名固件包：[magic][version][crc32][payload]
-fn build_firmware(version: u32, payload: &[u8]) -> Vec<u8> {
+fn build_unsigned_firmware(version: u32, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(HEADER_SIZE + payload.len());
     v.extend_from_slice(&FIRMWARE_MAGIC);
     v.extend_from_slice(&version.to_le_bytes());
@@ -53,9 +82,18 @@ fn build_firmware(version: u32, payload: &[u8]) -> Vec<u8> {
     v
 }
 
-/// 构造带 HMAC-SHA256 签名的固件包：[header][payload][SIG_MAGIC][sig:32]
+/// 构造 Ed25519 签名固件包：[header][payload][FWSG][sig:64]（签名覆盖 header + payload）
+fn build_firmware(version: u32, payload: &[u8]) -> Vec<u8> {
+    let mut v = build_unsigned_firmware(version, payload);
+    let sig = test_ed25519().0.sign(&v);
+    v.extend_from_slice(&ED_SIG_MAGIC);
+    v.extend_from_slice(sig.as_ref());
+    v
+}
+
+/// 构造带 HMAC-SHA256 签名的固件包（旧格式兼容测试）：[header][payload][GSIG][sig:32]
 fn build_signed_firmware(version: u32, payload: &[u8], key: &[u8]) -> Vec<u8> {
-    let mut v = build_firmware(version, payload);
+    let mut v = build_unsigned_firmware(version, payload);
     v.extend_from_slice(&SIG_MAGIC);
     let k = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
     let tag = ring::hmac::sign(&k, payload);
@@ -72,14 +110,33 @@ fn bsdiff_patch(old_fw: &[u8], new_fw: &[u8]) -> Vec<u8> {
     patch
 }
 
-/// 构造差分升级包：[GWDT][new_version][new_crc32][bsdiff_patch]
-fn build_delta(new_version: u32, old_fw: &[u8], new_fw: &[u8]) -> Vec<u8> {
+/// 构造无签名差分升级包：[GWDT][new_version][new_crc32][bsdiff_patch]
+fn build_unsigned_delta(new_version: u32, old_fw: &[u8], new_fw: &[u8]) -> Vec<u8> {
+    build_unsigned_delta_with_crc(new_version, old_fw, new_fw, crypto::crc32(new_fw))
+}
+
+/// 同上，但允许写错 new_crc32（用于「CRC 错但签名对」的用例）
+fn build_unsigned_delta_with_crc(
+    new_version: u32,
+    old_fw: &[u8],
+    new_fw: &[u8],
+    declared_crc: u32,
+) -> Vec<u8> {
     let patch = bsdiff_patch(old_fw, new_fw);
     let mut v = Vec::with_capacity(DELTA_HEADER_SIZE + patch.len());
     v.extend_from_slice(&DELTA_MAGIC);
     v.extend_from_slice(&new_version.to_le_bytes());
-    v.extend_from_slice(&crypto::crc32(new_fw).to_le_bytes());
+    v.extend_from_slice(&declared_crc.to_le_bytes());
     v.extend_from_slice(&patch);
+    v
+}
+
+/// 构造 Ed25519 签名差分升级包（签名覆盖 delta header + patch）
+fn build_delta(new_version: u32, old_fw: &[u8], new_fw: &[u8]) -> Vec<u8> {
+    let mut v = build_unsigned_delta(new_version, old_fw, new_fw);
+    let sig = test_ed25519().0.sign(&v);
+    v.extend_from_slice(&ED_SIG_MAGIC);
+    v.extend_from_slice(sig.as_ref());
     v
 }
 
@@ -213,20 +270,79 @@ async fn rollback_only_allowed_in_pending_reboot() {
 }
 
 #[tokio::test]
-async fn unsigned_firmware_rejected_when_key_configured() {
+async fn unsigned_firmware_rejected_even_with_legacy_key() {
     let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, Some(b"secret-key".to_vec()));
     let err = mgr
         .clone()
-        .process_firmware(build_firmware(6, b"payload"))
+        .process_firmware(build_unsigned_firmware(6, b"payload"))
         .await
         .unwrap_err();
-    assert!(err.message().contains("no signature"), "{}", err.message());
+    assert!(err.message().contains("未签名"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
 }
 
 #[tokio::test]
-async fn signed_firmware_accepted_and_tamper_rejected() {
+async fn unsigned_firmware_rejected_without_any_key() {
+    // DD-40：未配置任何密钥也必须拒绝，不再退化为 CRC32-only
+    let (_dir, dir) = temp_dir();
+    let mgr = new_manager(&dir, None);
+    let err = mgr
+        .clone()
+        .process_firmware(build_unsigned_firmware(6, b"payload"))
+        .await
+        .unwrap_err();
+    assert!(err.message().contains("未签名"), "{}", err.message());
+    assert_eq!(mgr.status().state, OtaState::Failed);
+}
+
+#[tokio::test]
+async fn ed25519_firmware_accepted() {
+    let (_dir, dir) = temp_dir();
+    let mgr = new_manager(&dir, None);
+    mgr.clone()
+        .process_firmware(build_firmware(7, b"ed-payload"))
+        .await
+        .expect("Ed25519 签名固件应通过");
+    assert_eq!(mgr.status().state, OtaState::PendingReboot);
+}
+
+#[tokio::test]
+async fn ed25519_payload_tamper_rejected() {
+    let (_dir, dir) = temp_dir();
+    let mgr = new_manager(&dir, None);
+    let mut tampered = build_firmware(9, b"ed-payload");
+    // 改 payload 并重算 CRC（CRC 能过），但签名仍覆盖原内容 → 验签必须失败
+    tampered[HEADER_SIZE] ^= 0xFF;
+    let crc = crypto::crc32(&tampered[HEADER_SIZE..tampered.len() - ED_SIG_SUFFIX_SIZE]);
+    tampered[8..12].copy_from_slice(&crc.to_le_bytes());
+    let err = mgr.clone().process_firmware(tampered).await.unwrap_err();
+    assert!(err.message().contains("Ed25519"), "{}", err.message());
+    assert_eq!(mgr.status().state, OtaState::Failed);
+}
+
+#[tokio::test]
+async fn ed25519_signature_binds_header_version() {
+    // 只改版本号、不动载荷和 CRC：CRC 仍通过，但版本属于签名范围 → 必须拒绝
+    let (_dir, dir) = temp_dir();
+    let mgr = new_manager(&dir, None);
+    let mut tampered = build_firmware(10, b"x");
+    tampered[4..8].copy_from_slice(&11u32.to_le_bytes());
+    let err = mgr.clone().process_firmware(tampered).await.unwrap_err();
+    assert!(err.message().contains("Ed25519"), "{}", err.message());
+    assert_eq!(mgr.status().state, OtaState::Failed);
+}
+
+#[test]
+fn parse_ota_public_keys_accepts_hex_and_rejects_bad() {
+    let hex: String = test_pubkey().iter().map(|b| format!("{b:02x}")).collect();
+    let keys = parse_ota_public_keys(&[hex]).expect("合法 hex 公钥");
+    assert!(keys.contains(&test_pubkey()));
+    assert!(parse_ota_public_keys(&["not-hex".into()]).is_err());
+}
+
+#[tokio::test]
+async fn legacy_hmac_signed_firmware_accepted_and_tamper_rejected() {
     let key = b"secret-key";
     // 合法签名 → 通过
     let (_dir, dir) = temp_dir();
@@ -241,13 +357,13 @@ async fn signed_firmware_accepted_and_tamper_rejected() {
     // 篡改 payload（CRC 重新计算以绕过 CRC 校验），签名仍用原 payload → 验签失败
     let (_dir2, dir2) = temp_dir();
     let mgr2 = new_manager(&dir2, Some(key.to_vec()));
-    let mut tampered = build_firmware(8, b"evil-payload");
+    let mut tampered = build_unsigned_firmware(8, b"evil-payload");
     tampered.extend_from_slice(&SIG_MAGIC);
     let k = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
     tampered.extend_from_slice(ring::hmac::sign(&k, payload).as_ref());
     let err = mgr2.clone().process_firmware(tampered).await.unwrap_err();
     assert!(
-        err.message().contains("signature") || err.message().contains("tamper"),
+        err.message().contains("验签失败") || err.message().contains("篡改"),
         "{}",
         err.message()
     );
@@ -303,25 +419,28 @@ async fn delta_rejects_crc_mismatch() {
     let old_fw = b"old-fw-abcdef".to_vec();
     let new_fw = b"new-fw-ghijkl-EXTRA".to_vec();
     std::fs::write(dir.join("slot_a.bin"), &old_fw).expect("seed");
-    let mut d = build_delta(2, &old_fw, &new_fw);
-    d[8] ^= 0xFF; // 破坏 new_crc32 字段
+    // 签名合法但声明的 new_crc32 错误 → 打到补丁后校验新固件 CRC 失败
+    let mut d = build_unsigned_delta_with_crc(2, &old_fw, &new_fw, 0xDEAD_BEEF);
+    let sig = test_ed25519().0.sign(&d);
+    d.extend_from_slice(&ED_SIG_MAGIC);
+    d.extend_from_slice(sig.as_ref());
     let err = mgr.clone().process_delta(d).await.unwrap_err();
     assert!(err.message().contains("CRC32"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
 }
 
 #[tokio::test]
-async fn delta_unsigned_rejected_when_key_configured() {
+async fn delta_unsigned_rejected_even_with_legacy_key() {
     let (_dir, dir) = temp_dir();
     let mgr = new_manager(&dir, Some(b"secret-key".to_vec()));
     let old_fw = b"old-fw".to_vec();
     let new_fw = b"new-fw-diff".to_vec();
     let err = mgr
         .clone()
-        .process_delta(build_delta(2, &old_fw, &new_fw))
+        .process_delta(build_unsigned_delta(2, &old_fw, &new_fw))
         .await
         .unwrap_err();
-    assert!(err.message().contains("no signature"), "{}", err.message());
+    assert!(err.message().contains("未签名"), "{}", err.message());
     assert_eq!(mgr.status().state, OtaState::Failed);
 }
 
@@ -354,7 +473,13 @@ fn new_manager_active(dir: &Path, active: char) -> Arc<OtaManager> {
     let staging = staging.to_str().expect("utf8 staging path");
     std::fs::write(dir.join("slot_a.bin"), b"").expect("create slot_a");
     std::fs::write(dir.join("slot_b.bin"), b"").expect("create slot_b");
-    OtaManager::new(partition, staging, None, Arc::new(Metrics::new()))
+    OtaManager::new(
+        partition,
+        staging,
+        None,
+        vec![test_pubkey()],
+        Arc::new(Metrics::new()),
+    )
 }
 
 /// 回归缺陷维度：修复前 `rollback()` 复用「写活动分区反面」的函数，把 `boot_partition`

@@ -29,21 +29,68 @@ pub(crate) async fn ota_upload(
     }
     let is_delta = data.len() >= 4 && &data[0..4] == b"GWDT";
     let upload_type = if is_delta { "delta" } else { "full" };
+    // DD-40 / ROI-43：先同步校验包头 / CRC / 签名，坏包当场拒绝并落审计。
+    // 旧实现一律回 200「uploading」，验签失败也只体现在后台状态里，接口无法区分拒绝与受理。
+    let version = match if is_delta {
+        ota.precheck_delta(&data)
+    } else {
+        ota.precheck_firmware(&data)
+    } {
+        Ok(v) => v,
+        Err(e) => {
+            state.platform.audit.log(
+                "ota.upgrade",
+                "gateway",
+                &format!(
+                    "reject {} firmware ({} bytes): {}",
+                    upload_type,
+                    data.len(),
+                    e
+                ),
+                "api",
+            );
+            return Err(ApiError::bad_request(format!("固件校验失败：{e}")));
+        }
+    };
     // D3: OTA 升级为敏感操作，须落审计（action=ota.upgrade，供自愈事件/审计查询消费）
     state.platform.audit.log(
         "ota.upgrade",
         "gateway",
-        &format!("upload {} firmware ({} bytes)", upload_type, data.len()),
+        &format!(
+            "accept {} firmware v{} ({} bytes)",
+            upload_type,
+            version,
+            data.len()
+        ),
         "api",
     );
+    let audit = state.platform.audit.clone();
     gateway_core::engine::supervision::spawn_catch_unwind("ota_process", async move {
         let result = if is_delta {
             ota.process_delta(data).await
         } else {
             ota.process_firmware(data).await
         };
-        if let Err(e) = result {
-            tracing::error!("OTA {} process failed: {}", upload_type, e);
+        // DD-46：安装结果必须落审计，不能只有开始记录
+        match result {
+            Ok(()) => audit.log(
+                "ota.upgrade",
+                "gateway",
+                &format!("install {} firmware v{}: ok", upload_type, version),
+                "api",
+            ),
+            Err(e) => {
+                tracing::error!("OTA {} process failed: {}", upload_type, e);
+                audit.log(
+                    "ota.upgrade",
+                    "gateway",
+                    &format!(
+                        "install {} firmware v{}: failed: {}",
+                        upload_type, version, e
+                    ),
+                    "api",
+                );
+            }
         }
     });
     Ok(Json(

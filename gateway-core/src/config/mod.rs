@@ -340,6 +340,7 @@ impl Default for WebConfig {
             realtime_buffer: web::default_realtime_buffer(),
             realtime_max_subscribers: web::default_realtime_max_subscribers(),
             ota_signing_key: None,
+            ota_public_keys: None,
             rate_limit_per_sec: None,
             cors_origins: None,
             allow_default_token: web::default_allow_default_token(),

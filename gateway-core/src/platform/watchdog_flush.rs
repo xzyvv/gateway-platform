@@ -200,6 +200,7 @@ mod tests {
             crate::platform::ota::AbPartitionConfig::default(),
             &staging,
             None,
+            Vec::new(),
             Arc::new(crate::engine::metrics::Metrics::new()),
         )
     }

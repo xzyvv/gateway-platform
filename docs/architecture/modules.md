@@ -170,7 +170,7 @@ Rust 侧（`vformula/tests.rs`）与前端侧（`formulaEngine.spec.ts`）读同
 | 模块 | 职责 |
 |---|---|
 | `ntp.rs` | NTP 时间同步 |
-| `ota/` | A/B 分区 OTA 升级，HMAC-SHA256 固件签名验签（`crypto.rs`，密钥来自 `WebConfig::ota_signing_key`，未配置时兼容 CRC32-only），升级失败自动回滚 |
+| `ota/` | A/B 分区 OTA 升级与固件验签：**Ed25519**（公钥来自编译内置 + `WebConfig::ota_public_keys`，签名覆盖包头 + 载荷）为主，旧 HMAC-SHA256（`ota_signing_key`）仅兼容；**无签名/验签失败一律拒绝**（fail-closed），上传接口同步预校验并落审计，升级失败自动回滚 |
 | `gpio.rs` | Linux GPIO 控制（gpiod） |
 | `cellular/` | 蜂窝网络状态查询（含 manager/modem/stub） |
 | `hardware_watchdog.rs` | 软件+硬件看门狗 |

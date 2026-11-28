@@ -128,7 +128,7 @@ async fn ntp_sync_always_reports_synced_because_rtc_fallback_is_not_error() {
 }
 
 #[tokio::test]
-async fn ota_upload_rejects_empty_and_classifies_full_and_delta() {
+async fn ota_upload_rejects_empty_and_unsigned_firmware() {
     let state = common::mock_state::mock_app_state();
     let app = gateway_api::web::build_router(state);
 
@@ -137,25 +137,27 @@ async fn ota_upload_rejects_empty_and_classifies_full_and_delta() {
     assert_eq!(body["code"], 4000);
     assert!(body["message"].as_str().unwrap().contains("empty firmware"));
 
-    // 普通固件 → full（响应被全局信封包裹，业务字段在 data 下）
-    let body = call_raw(
-        &app,
-        "POST",
-        "/api/ota/upload",
-        b"not-a-real-firmware".to_vec(),
-    )
-    .await;
-    assert_eq!(body["code"], 0, "上传固件失败: {body}");
-    assert_eq!(body["data"]["status"], "uploading");
-    assert_eq!(body["data"]["type"], "full");
+    // 合法包头但无签名（空载荷 CRC32=0）→ 当场拒绝，不再回 200「uploading」
+    let mut full = b"GWOT".to_vec();
+    full.extend_from_slice(&1u32.to_le_bytes());
+    full.extend_from_slice(&0u32.to_le_bytes());
+    let body = call_raw(&app, "POST", "/api/ota/upload", full).await;
+    assert_eq!(body["code"], 4000, "无签名固件必须被拒绝: {body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("固件未签名"),
+        "应指明是整包未签名: {body}"
+    );
 
-    // GWDT 魔数 → delta
+    // GWDT 魔数 → 走差分校验分支（差分包头不预先校验 new_crc32）
     let mut delta = b"GWDT".to_vec();
-    delta.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+    delta.extend_from_slice(&1u32.to_le_bytes());
+    delta.extend_from_slice(&0u32.to_le_bytes());
     let body = call_raw(&app, "POST", "/api/ota/upload", delta).await;
-    assert_eq!(body["code"], 0, "上传增量包失败: {body}");
-    assert_eq!(body["data"]["status"], "uploading");
-    assert_eq!(body["data"]["type"], "delta");
+    assert_eq!(body["code"], 4000, "无签名差分包必须被拒绝: {body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("差分包未签名"),
+        "应指明是差分包未签名: {body}"
+    );
 }
 
 #[tokio::test]
@@ -165,11 +167,10 @@ async fn ota_upload_accepts_firmware_larger_than_default_body_limit() {
 
     // 回归：axum 对 Bytes 提取器默认只放行 2MB，真实固件会被框架直接 413
     // （响应不是 API 信封，前端只会看到「升级失败」）。本路由必须单独放开上限。
+    // 内容不是合法固件，但必须进入 handler 并返回信封 4000，而不是 413。
     let payload = vec![0x5Au8; 3 * 1024 * 1024];
     let body = call_raw(&app, "POST", "/api/ota/upload", payload).await;
-    assert_eq!(body["code"], 0, "3MB 固件应被接收，不得 413: {body}");
-    assert_eq!(body["data"]["status"], "uploading");
-    assert_eq!(body["data"]["type"], "full");
+    assert_eq!(body["code"], 4000, "3MB 固件应进入校验，不得 413: {body}");
 }
 
 #[tokio::test]

@@ -4,15 +4,45 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::crypto;
-use super::{OtaManager, OtaState, DELTA_HEADER_SIZE, DELTA_MAGIC, MAX_FIRMWARE_SIZE, SIG_LEN};
+use super::{OtaManager, OtaState, DELTA_HEADER_SIZE, DELTA_MAGIC, MAX_FIRMWARE_SIZE};
 use crate::engine::error::{GatewayError, GatewayResult};
 
 impl OtaManager {
+    /// 纯校验差分包：包头 + 签名（新固件 CRC 需要应用补丁后再算）。
+    ///
+    /// 返回 `(new_version, content_end)`，`content_end` 为包头 + 补丁的结束位置（不含签名后缀）。
+    fn inspect_delta(&self, data: &[u8]) -> GatewayResult<(u32, usize)> {
+        if data.len() < DELTA_HEADER_SIZE {
+            return Err(GatewayError::Protocol("delta package too small".into()));
+        }
+        let magic: [u8; 4] = data[0..4]
+            .try_into()
+            .map_err(|_| GatewayError::Protocol("delta header too small".into()))?;
+        if magic != DELTA_MAGIC {
+            return Err(GatewayError::Protocol("invalid delta magic".into()));
+        }
+        let new_version = u32::from_le_bytes(
+            data[4..8]
+                .try_into()
+                .map_err(|_| GatewayError::Protocol("delta version field corrupt".into()))?,
+        );
+        // content 含差分包头；Ed25519 的签名范围是「包头 + 补丁」
+        let (content, sig) = crypto::split_firmware_signature(data);
+        let patch = &content[DELTA_HEADER_SIZE..];
+        self.verify_package_signature(patch, content, sig, "差分包")?;
+        Ok((new_version, content.len()))
+    }
+
+    /// 供上传接口同步拒绝坏包：只校验，不改状态、不落盘。
+    pub fn precheck_delta(&self, data: &[u8]) -> GatewayResult<u32> {
+        self.inspect_delta(data).map(|(version, _)| version)
+    }
+
     /// 差分升级（bsdiff 4.x 兼容补丁）
     ///
     /// 差分包格式：[delta_magic:4 "GWDT"][new_version:u32][new_crc32:u32][delta_payload...]
-    /// 可选签名后缀：`delta_payload` 之后追加 [SIG_MAGIC:4][hmac_sha256:32]，
-    /// 验签策略与全量包一致（HMAC 覆盖 delta_payload）。
+    /// 签名后缀：新格式 [FWSG][ed25519:64]（覆盖包头 + 补丁）；旧格式 [GSIG][hmac:32] 仅兼容。
+    /// 无签名一律拒绝（fail-closed）。
     ///
     /// 流程：解析包头 → 校验包体大小 → 读取当前活动分区固件作为 diff 源 →
     ///       bsdiff 应用差分得到新固件 → 校验新固件 CRC32 → 写入非活动分区。
@@ -42,61 +72,20 @@ impl OtaManager {
             self.metrics.set_ota_progress(10);
         }
 
-        // 1. 解析包头
-        if data.len() < DELTA_HEADER_SIZE {
-            return self.fail(GatewayError::Protocol("delta package too small".into()));
-        }
-        let magic: [u8; 4] = data[0..4]
-            .try_into()
-            .map_err(|_| GatewayError::Protocol("delta header too small".into()))?;
-        if magic != DELTA_MAGIC {
-            return self.fail(GatewayError::Protocol("invalid delta magic".into()));
-        }
-        let new_version = u32::from_le_bytes(
-            data[4..8]
-                .try_into()
-                .map_err(|_| GatewayError::Protocol("delta version field corrupt".into()))?,
-        );
+        // 1~2. 包头 + 签名校验（DD-40：无签名/验签失败一律拒绝；新固件 CRC 待打补丁后再验）
+        let (new_version, content_end) = match self.inspect_delta(&data) {
+            Ok(v) => v,
+            Err(e) => return self.fail(e),
+        };
+        let delta_payload = &data[DELTA_HEADER_SIZE..content_end];
         let expected_new_crc = u32::from_le_bytes(
             data[8..12]
                 .try_into()
                 .map_err(|_| GatewayError::Protocol("delta crc field corrupt".into()))?,
         );
 
-        // 分离可选签名后缀（与全量包同一 [SIG_MAGIC][sig] 格式），得到纯补丁数据。
-        let (delta_payload, has_sig) = crypto::split_firmware_signature(&data[DELTA_HEADER_SIZE..]);
-
         *self.progress.lock() = 30;
         *self.target_version.lock() = Some(new_version);
-
-        // 2. HMAC-SHA256 验签（策略与全量包一致：签名覆盖 delta_payload）
-        if has_sig {
-            match &self.signing_key {
-                Some(key) => {
-                    let sig_start = DELTA_HEADER_SIZE + delta_payload.len() + 4;
-                    if !crypto::verify_hmac_signature(
-                        delta_payload,
-                        key,
-                        &data[sig_start..sig_start + SIG_LEN],
-                    ) {
-                        return self.fail(GatewayError::Protocol(
-                            "HMAC-SHA256 signature verification FAILED — possible delta tampering"
-                                .into(),
-                        ));
-                    }
-                    tracing::info!("OTA: delta HMAC-SHA256 signature verified OK");
-                }
-                None => {
-                    return self.fail(GatewayError::Config(
-                        "delta has signature but no ota_signing_key configured".into(),
-                    ));
-                }
-            }
-        } else if self.signing_key.is_some() {
-            return self.fail(GatewayError::Config(
-                "ota_signing_key configured but delta has no signature — rejected".into(),
-            ));
-        }
 
         // 3. 读取当前活动分区固件作为 bsdiff 的 source
         *self.state.lock() = OtaState::Verifying;

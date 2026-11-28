@@ -10,6 +10,7 @@ export const DEFAULT_WEB = {
   "realtime_buffer": 1024,
   "realtime_max_subscribers": 64,
   "ota_signing_key": null,
+  "ota_public_keys": null,
   "rate_limit_per_sec": null,
   "cors_origins": null,
   "allow_default_token": true,

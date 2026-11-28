@@ -47,10 +47,20 @@ pub struct WebConfig {
     #[serde(default = "default_realtime_max_subscribers")]
     pub realtime_max_subscribers: usize,
 
-    /// OTA 固件签名密钥（HMAC-SHA256，base64 编码）
-    /// None=不验签（向后兼容 CRC32-only），Some=强制验签
+    /// OTA 旧格式签名密钥（HMAC-SHA256，base64 编码）
+    ///
+    /// 仅为兼容已签发的旧固件包保留；新包请使用 Ed25519（见 `ota_public_keys`）。
+    /// 无签名的固件一律拒绝，与是否配置本字段无关（fail-closed）。
     #[serde(default)]
     pub ota_signing_key: Option<String>,
+
+    /// OTA 固件验签公钥（Ed25519，64 位 hex，可多把实现换钥过渡，上限 8 把）
+    ///
+    /// 与编译内置公钥合并；两者都为空时拒绝一切固件升级（fail-closed）。
+    /// 公钥非机密，落盘不加密；但能改 `config.json` 的人即可更换固件信任根，
+    /// 现场应保证配置目录权限。
+    #[serde(default)]
+    pub ota_public_keys: Option<Vec<String>>,
 
     /// API 速率限制：每秒最大请求数，None=不限
     #[serde(default)]

@@ -125,8 +125,10 @@ pub struct OtaManager {
     partition: AbPartitionConfig,
     /// 固件暂存目录
     staging_dir: PathBuf,
-    /// HMAC-SHA256 签名密钥（None=不验签，向后兼容 CRC32-only）
+    /// HMAC-SHA256 签名密钥（旧格式兼容；None=不接受旧 HMAC 包）
     signing_key: Option<Vec<u8>>,
+    /// Ed25519 验签公钥（内置 + `web.ota_public_keys` 追加）；为空时拒绝一切固件
+    public_keys: Vec<[u8; 32]>,
     /// 1.2: 注入的指标实例
     metrics: Arc<crate::engine::metrics::Metrics>,
     /// bootloader 环境访问后端：写 env / 读 env / 刷盘 / 重启。
@@ -148,11 +150,22 @@ const MAX_FIRMWARE_SIZE: usize = 64 * 1024 * 1024;
 const DELTA_MAGIC: [u8; 4] = [0x47, 0x57, 0x44, 0x54];
 /// 差分升级包头布局：magic(4) + new_version(u32, 4) + new_crc32(u32, 4) = 12 字节
 const DELTA_HEADER_SIZE: usize = 12;
-/// 固件签名后缀 magic: "GSIG"
+/// 固件签名后缀 magic（Ed25519，DD-40 / ROI-43）: "FWSG"
+const ED_SIG_MAGIC: [u8; 4] = [0x46, 0x57, 0x53, 0x47];
+/// Ed25519 签名长度
+const ED_SIG_LEN: usize = 64;
+/// Ed25519 签名后缀总长度: magic(4) + sig(64) = 68
+const ED_SIG_SUFFIX_SIZE: usize = 68;
+/// 验签公钥数量上限：与 license 一致，防恶意配置把 CPU 打满。
+pub const MAX_OTA_PUBLIC_KEYS: usize = 8;
+/// 编译内置的 OTA 验签公钥（产品签名公钥到位后填入）。
+///
+/// 为空表示尚未内置：此时必须通过 `web.ota_public_keys` 提供公钥，否则所有固件
+/// 升级都会被拒绝（fail-closed）。产品公钥属于签名侧信任根，不由代码自行编造。
+pub const BUILTIN_OTA_PUBLIC_KEYS: &[[u8; 32]] = &[];
+/// 固件签名后缀 magic（旧 HMAC，仅兼容）: "GSIG"
 const SIG_MAGIC: [u8; 4] = [0x47, 0x53, 0x49, 0x47];
-/// HMAC-SHA256 签名长度
-const SIG_LEN: usize = 32;
-/// 签名后缀总长度: magic(4) + sig(32) = 36
+/// 旧 HMAC 签名后缀总长度: magic(4) + hmac(32) = 36
 const SIG_SUFFIX_SIZE: usize = 36;
 /// r31-OTA4: PendingReboot 状态持久化标记文件名（位于 staging_dir 内）。
 /// 升级写入完成后创建，rollback/启动后检测到新固件后删除。
@@ -173,12 +186,37 @@ pub fn parse_signing_key(encoded: &str) -> GatewayResult<Vec<u8>> {
         .ok_or_else(|| GatewayError::Config("web.ota_signing_key is not valid base64".into()))
 }
 
+/// 解析 `web.ota_public_keys`（64-hex，同 license 格式），并合并编译内置公钥。
+///
+/// 任一项非法即返回 Err（fail-closed）：配置了验签公钥却因格式错误静默退化，
+/// 等于把「拒绝一切固件」误当成「没配公钥」；数量超上限同样拒绝。
+pub fn parse_ota_public_keys(encoded: &[String]) -> GatewayResult<Vec<[u8; 32]>> {
+    if encoded.len() > MAX_OTA_PUBLIC_KEYS {
+        return Err(GatewayError::Config(format!(
+            "web.ota_public_keys 最多 {MAX_OTA_PUBLIC_KEYS} 把，当前 {}",
+            encoded.len()
+        )));
+    }
+    let mut keys = BUILTIN_OTA_PUBLIC_KEYS.to_vec();
+    for item in encoded {
+        let key = crate::license::parse_pubkey_hex(item).ok_or_else(|| {
+            GatewayError::Config(format!(
+                "web.ota_public_keys 含非法公钥（需 64 位 hex）：{}",
+                item
+            ))
+        })?;
+        keys.push(key);
+    }
+    Ok(keys)
+}
+
 impl OtaManager {
     /// 创建 OTA 管理器
     pub fn new(
         partition: AbPartitionConfig,
         staging_dir: &str,
         signing_key: Option<Vec<u8>>,
+        public_keys: Vec<[u8; 32]>,
         metrics: Arc<crate::engine::metrics::Metrics>,
     ) -> Arc<Self> {
         // P2-d: 原实现 `let _ = create_dir_all(staging_dir)` 静默吞掉创建失败，
@@ -210,6 +248,7 @@ impl OtaManager {
             partition,
             staging_dir: PathBuf::from(staging_dir),
             signing_key,
+            public_keys,
             metrics,
             boot_env,
         })
@@ -238,6 +277,101 @@ impl OtaManager {
     /// 处理固件上传并执行升级
     ///
     /// `data` 为完整固件包（含包头）。
+    /// 纯校验全量固件：包头 + CRC32 + 签名。不改状态、不落盘、不写分区。
+    ///
+    /// 返回 `(version, content_end)`，`content_end` 是包头 + 载荷的结束位置（不含签名后缀）。
+    fn inspect_firmware(&self, data: &[u8]) -> GatewayResult<(u32, usize)> {
+        if data.len() < HEADER_SIZE {
+            return Err(GatewayError::Protocol("firmware too small".into()));
+        }
+        let magic: [u8; 4] = data[0..4]
+            .try_into()
+            .map_err(|_| GatewayError::Protocol("firmware header too small".into()))?;
+        if magic != FIRMWARE_MAGIC {
+            return Err(GatewayError::Protocol("invalid firmware magic".into()));
+        }
+        let version = u32::from_le_bytes(
+            data[4..8]
+                .try_into()
+                .map_err(|_| GatewayError::Protocol("firmware version field corrupt".into()))?,
+        );
+        let expected_crc = u32::from_le_bytes(
+            data[8..12]
+                .try_into()
+                .map_err(|_| GatewayError::Protocol("firmware crc field corrupt".into()))?,
+        );
+        // Bug 27：先分离签名后缀再算 CRC，否则带签名包的 CRC 会把后缀算进去。
+        // 返回值 content 含包头；Ed25519 的签名范围正是「包头 + 载荷」。
+        let (content, sig) = crypto::split_firmware_signature(data);
+        let payload = &content[HEADER_SIZE..];
+        let actual_crc = crypto::crc32(payload);
+        if actual_crc != expected_crc {
+            return Err(GatewayError::Protocol(format!(
+                "CRC32 mismatch: expected {:#010x}, got {:#010x}",
+                expected_crc, actual_crc
+            )));
+        }
+        self.verify_package_signature(payload, content, sig, "固件")?;
+        Ok((version, content.len()))
+    }
+
+    /// 签名策略（DD-40 / ROI-43）：
+    ///
+    /// - **无签名 → 拒绝**（fail-closed，不再保留 CRC32-only 放行）；
+    /// - Ed25519 → 用「内置 + 配置」公钥逐把验证，签名覆盖包头 + 载荷；
+    /// - 旧 HMAC-SHA256 → 仅当配置了 `ota_signing_key` 时接受，只覆盖载荷，保留兼容。
+    fn verify_package_signature(
+        &self,
+        payload: &[u8],
+        content: &[u8],
+        sig: Option<crypto::FirmwareSignature<'_>>,
+        label: &str,
+    ) -> GatewayResult<()> {
+        let Some(sig) = sig else {
+            return Err(GatewayError::Config(format!(
+                "{label}未签名，已拒绝安装（fail-closed；请使用 Ed25519 签名包）"
+            )));
+        };
+        match sig.kind {
+            crypto::SignatureKind::Ed25519 => {
+                if self.public_keys.is_empty() {
+                    return Err(GatewayError::Config(format!(
+                        "{label}为 Ed25519 签名，但未配置验签公钥（web.ota_public_keys）"
+                    )));
+                }
+                if !crypto::verify_ed25519_signature(content, &self.public_keys, sig.bytes) {
+                    return Err(GatewayError::Protocol(format!(
+                        "{label} Ed25519 验签失败——疑似被篡改或公钥不匹配"
+                    )));
+                }
+                tracing::info!("OTA: {label} Ed25519 signature verified OK");
+            }
+            crypto::SignatureKind::Hmac => match &self.signing_key {
+                Some(key) if crypto::verify_hmac_signature(payload, key, sig.bytes) => {
+                    tracing::warn!(
+                        "OTA: {label}使用旧 HMAC-SHA256 签名（仅兼容），建议改用 Ed25519"
+                    );
+                }
+                Some(_) => {
+                    return Err(GatewayError::Protocol(format!(
+                        "{label} HMAC-SHA256 验签失败——疑似被篡改"
+                    )));
+                }
+                None => {
+                    return Err(GatewayError::Config(format!(
+                        "{label}使用旧 HMAC 签名，但未配置 web.ota_signing_key"
+                    )));
+                }
+            },
+        }
+        Ok(())
+    }
+
+    /// 供上传接口同步拒绝坏包：只校验，不改状态、不落盘。
+    pub fn precheck_firmware(&self, data: &[u8]) -> GatewayResult<u32> {
+        self.inspect_firmware(data).map(|(version, _)| version)
+    }
+
     pub async fn process_firmware(self: Arc<Self>, data: Vec<u8>) -> GatewayResult<()> {
         // Bug 136: 固件大小上限——防止恶意上传超大文件撑爆内存（DoS）。
         // 超出则直接拒绝（不进锁，状态保持 Idle）。
@@ -266,76 +400,19 @@ impl OtaManager {
             self.metrics.set_ota_progress(10);
         }
 
-        // 1. 检查包头
-        if data.len() < HEADER_SIZE {
-            return self.fail(GatewayError::Protocol("firmware too small".into()));
-        }
-        let magic: [u8; 4] = data[0..4]
-            .try_into()
-            .map_err(|_| GatewayError::Protocol("firmware header too small".into()))?;
-        if magic != FIRMWARE_MAGIC {
-            return self.fail(GatewayError::Protocol("invalid firmware magic".into()));
-        }
-        let version = u32::from_le_bytes(
-            data[4..8]
-                .try_into()
-                .map_err(|_| GatewayError::Protocol("firmware version field corrupt".into()))?,
-        );
-        let expected_crc = u32::from_le_bytes(
-            data[8..12]
-                .try_into()
-                .map_err(|_| GatewayError::Protocol("firmware crc field corrupt".into()))?,
-        );
-        // Bug 27 修复：先分离签名后缀，再计算 CRC32
-        // 原实现先计算 CRC32（含签名后缀），再 split，导致带签名固件包 CRC 校验失败
-        // 正确顺序：split → CRC32(payload_without_sig) → HMAC 验签
-        let (payload, has_sig) = crypto::split_firmware_signature(&data[HEADER_SIZE..]);
-
         *self.state.lock() = OtaState::Uploading;
         *self.progress.lock() = 30;
-        *self.target_version.lock() = Some(version);
-
-        // 2. CRC32 校验（仅对 payload，不含签名后缀）
         *self.state.lock() = OtaState::Verifying;
         self.metrics.set_ota_progress(50);
         *self.progress.lock() = 50;
-        let actual_crc = crypto::crc32(payload);
-        if actual_crc != expected_crc {
-            return self.fail(GatewayError::Protocol(format!(
-                "CRC32 mismatch: expected {:#010x}, got {:#010x}",
-                expected_crc, actual_crc
-            )));
-        }
 
-        // 2.5 HMAC-SHA256 数字签名验证
-        // 固件包可选签名后缀: [原固件包][SIG_MAGIC:4][hmac_sig:32]
-        // 如果固件包带签名后缀，且配置了 ota_signing_key，则验签
-        // 如果固件包不带签名但配置了 key，拒绝（强制签名）
-        // 如果固件包不带签名且未配置 key，退化为 CRC32-only（向后兼容）
-        if has_sig {
-            match &self.signing_key {
-                Some(key) => {
-                    if !crypto::verify_hmac_signature(
-                        payload,
-                        key,
-                        &data[HEADER_SIZE + payload.len() + 4
-                            ..HEADER_SIZE + payload.len() + 4 + SIG_LEN],
-                    ) {
-                        return self.fail(GatewayError::Protocol("HMAC-SHA256 signature verification FAILED — possible firmware tampering".into()));
-                    }
-                    tracing::info!("OTA: HMAC-SHA256 signature verified OK");
-                }
-                None => {
-                    return self.fail(GatewayError::Config(
-                        "firmware has signature but no ota_signing_key configured".into(),
-                    ));
-                }
-            }
-        } else if self.signing_key.is_some() {
-            return self.fail(GatewayError::Config(
-                "ota_signing_key configured but firmware has no signature — rejected".into(),
-            ));
-        }
+        // 1~2.5 包头 / CRC32 / 签名校验（DD-40：无签名或验签失败一律拒绝）
+        let (version, content_end) = match self.inspect_firmware(&data) {
+            Ok(v) => v,
+            Err(e) => return self.fail(e),
+        };
+        *self.target_version.lock() = Some(version);
+        let payload = &data[HEADER_SIZE..content_end];
 
         // 2.9 固件暂存：将通过校验的固件包落盘，便于断电/重启后重放或事后审计。
         // 暂存失败不影响本次升级（best-effort），仅记录告警。

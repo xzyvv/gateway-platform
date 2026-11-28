@@ -49,10 +49,11 @@ pub(crate) struct AppDeps {
 
 /// 构造 AppState 所需的重依赖：版本库/上行测试历史/OTA/诊断/指标/磁盘历史。
 ///
-/// `ota_signing_key`：由 `web.ota_signing_key`（base64）解码后的 HMAC 密钥。
-/// None = 未配置（CRC32-only 向后兼容）；Some = 强制验签（见 Bug C8）。
+/// `ota_signing_key`：由 `web.ota_signing_key`（base64）解码后的旧 HMAC 密钥，仅兼容旧包。
+/// `ota_public_keys`：内置公钥 + `web.ota_public_keys`，用于 Ed25519 验签（DD-40）。
 pub(crate) fn build_app_state_dependencies(
     ota_signing_key: Option<Vec<u8>>,
+    ota_public_keys: Vec<[u8; 32]>,
     metrics: Arc<Metrics>,
 ) -> Result<AppDeps> {
     let version_store = Arc::new(
@@ -93,6 +94,7 @@ pub(crate) fn build_app_state_dependencies(
         gateway_core::platform::ota::AbPartitionConfig::default(),
         default_ota_staging(),
         ota_signing_key,
+        ota_public_keys,
         metrics.clone(),
     );
     // Bug 155: OtaManager::new 已按 bootloader 环境校正 active_slot；
@@ -193,6 +195,7 @@ pub(crate) fn prepare_web_config(config: &GatewayConfig) -> Result<WebConfig> {
             realtime_buffer: 1024,
             realtime_max_subscribers: gateway_core::config::default_realtime_max_subscribers(),
             ota_signing_key: None,
+            ota_public_keys: None,
             rate_limit_per_sec: None,
             cors_origins: None,
             allow_default_token: true,
@@ -689,7 +692,17 @@ pub(crate) async fn assemble_and_start_services(
         ),
         _ => None,
     };
-    let deps = build_app_state_dependencies(ota_signing_key, gateway_metrics.clone())?;
+    // DD-40 / ROI-43：固件验签公钥 = 编译内置 + web.ota_public_keys（hex）。
+    // 任一把格式非法或超上限 → fail-closed 阻断启动，避免静默降级为「拒绝一切固件」。
+    let extra_ota_keys = config
+        .web
+        .as_ref()
+        .and_then(|w| w.ota_public_keys.as_deref())
+        .unwrap_or(&[]);
+    let ota_public_keys = gateway_core::platform::ota::parse_ota_public_keys(extra_ota_keys)
+        .context("解析 web.ota_public_keys 失败")?;
+    let deps =
+        build_app_state_dependencies(ota_signing_key, ota_public_keys, gateway_metrics.clone())?;
 
     // ===== P4：硬件看门狗 abort 前的 flush 回调接线 =====
     // 看门狗超时 = 进程卡死，此时唯一的补救是在 `std::process::abort()` 前把
